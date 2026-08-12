@@ -1,67 +1,38 @@
 ﻿# bootstrap.ps1
-# 一键初始化脚本：检查工具 → 生成 age 钥匙 → 加密第一个密钥文件 → git init
-# 用法：
-#   pwsh -File bootstrap.ps1                # 交互模式
-#   pwsh -File bootstrap.ps1 -Auto          # 自动模式（全部 yes，不推荐生产用）
+# One-shot project initialization.
+# Usage:
+#   pwsh -File bootstrap.ps1          # interactive
+#   pwsh -File bootstrap.ps1 -Auto    # non-interactive (all yes)
 
+[CmdletBinding()]
 param(
     [switch]$Auto = $false
 )
 
 $ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $true
-
-# 交互式确认辅助
-function Confirm-Prompt {
-    param([string]$Message, [string]$Default = 'Y')
-    if ($Auto) { return $true }
-    $answer = Read-Host $Message
-    if ($answer -eq '') { $answer = $Default }
-    return ($answer -match '^[Yy]')
-}
 
 # ============================
-# 工具函数
+# UTF-8 helpers (avoid PS 5.1 mojibake)
 # ============================
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$script:Utf8Bom = New-Object System.Text.UTF8Encoding($true)
 
-function Write-Banner {
-    param([string]$Text)
-    Write-Host ""
-    Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host "  $Text" -ForegroundColor Cyan
-    Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host ""
+function Write-FileUtf8 {
+    param([string]$Path, [string]$Content)
+    [System.IO.File]::WriteAllText($Path, $Content, $script:Utf8NoBom)
 }
 
-function Test-Tool {
-    param([string]$Name, [string]$InstallHint)
-    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $version = & $Name --version 2>$null | Select-Object -First 1
-        Write-Host "  ✅ $Name : $version" -ForegroundColor Green
-        return $true
-    } else {
-        Write-Host "  ❌ $Name 未安装" -ForegroundColor Red
-        Write-Host "     安装: $InstallHint" -ForegroundColor Yellow
-        return $false
-    }
+function Read-FileUtf8 {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $null }
+    return [System.IO.File]::ReadAllText($Path, $script:Utf8NoBom)
 }
 
-function Read-AgePublicKey {
-    param([string]$KeyFile)
-    if (-not (Test-Path $KeyFile)) { return $null }
-    $content = Get-Content $KeyFile -Raw
-    if ($content -match '# public key: (age1[a-z0-9]+)') {
-        return $matches[1]
-    }
-    return $null
-}
-
-# 用 .NET Process 直接调用外部命令，绕开 PowerShell stderr 错误处理
-function Invoke-NativeCommand {
+# Run a native exe via .NET Process; never lets PS 5.1's stderr trap fire.
+function Invoke-Exe {
     param(
-        [string]$FileName,
-        [string[]]$Arguments
+        [Parameter(Mandatory)] [string]$FileName,
+        [Parameter(Mandatory)] [string[]]$Arguments
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FileName
@@ -71,245 +42,291 @@ function Invoke-NativeCommand {
     $psi.CreateNoWindow = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+    foreach ($a in $Arguments) { [void]$psi.ArgumentList.Add($a) }
     $proc = [System.Diagnostics.Process]::Start($psi)
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
+    $so = $proc.StandardOutput.ReadToEnd()
+    $se = $proc.StandardError.ReadToEnd()
     $proc.WaitForExit()
-    $code = $proc.ExitCode
-    $combined = @()
-    if ($stdout) { $combined += ($stdout -split "`r?`n") }
-    if ($stderr) { $combined += ($stderr -split "`r?`n") }
     return [PSCustomObject]@{
-        ExitCode = $code
-        Output   = $combined
+        ExitCode = $proc.ExitCode
+        StdOut   = $so
+        StdErr   = $se
     }
 }
 
-# ============================
-# 步骤 1：检查工具
-# ============================
+function Confirm-Prompt {
+    param([string]$Message, [string]$Default = 'Y')
+    if ($Auto) { return $true }
+    $a = Read-Host $Message
+    if ($a -eq '') { $a = $Default }
+    return ($a -match '^[Yy]')
+}
 
-Write-Banner "步骤 1/6 · 检查必需工具"
+function Banner {
+    param([string]$Text)
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host "  $Text" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Read-AgePub {
+    param([string]$KeyFile)
+    if (-not (Test-Path $KeyFile)) { return $null }
+    $c = Read-FileUtf8 $KeyFile
+    if ($c -match '# public key: (age1[a-z0-9]+)') { return $matches[1] }
+    return $null
+}
+
+# ============================
+# Step 1: Tool check
+# ============================
+Banner "Step 1/7 - Check required tools"
 
 $toolsOk = $true
-$toolsOk = (Test-Tool "age"     "scoop install age") -and $toolsOk
-$toolsOk = (Test-Tool "sops"    "scoop install sops") -and $toolsOk
-$toolsOk = (Test-Tool "git"     "scoop install git") -and $toolsOk
-$toolsOk = (Test-Tool "task"    "scoop install go-task") -and $toolsOk
+foreach ($pair in @(
+    @{n='age';h='scoop install age OR winget install FiloSottile.age'},
+    @{n='sops';h='scoop install sops OR winget install Mozilla.SOPS'},
+    @{n='git';h='scoop install git'},
+    @{n='task';h='scoop install go-task OR download from https://github.com/go-task/task/releases'}
+)) {
+    $cmd = Get-Command $pair.n -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $v = & $pair.n --version 2>$null | Select-Object -First 1
+        Write-Host "  OK $($pair.n): $v" -ForegroundColor Green
+    } else {
+        Write-Host "  MISSING $($pair.n)" -ForegroundColor Red
+        Write-Host "     install: $($pair.h)" -ForegroundColor Yellow
+        $toolsOk = $false
+    }
+}
 
 if (-not $toolsOk) {
     Write-Host ""
-    Write-Host "❌ 部分工具未安装，请先安装后重试。" -ForegroundColor Red
-    Write-Host "   推荐用 scoop 一键装齐：" -ForegroundColor Yellow
-    Write-Host "   scoop install age sops git go-task" -ForegroundColor Yellow
+    Write-Host "Install missing tools and re-run bootstrap." -ForegroundColor Red
     exit 1
 }
 
 # ============================
-# 步骤 2：创建钥匙目录
+# Step 2: Prepare age key dir
 # ============================
-
-Write-Banner "步骤 2/6 · 准备 age 钥匙目录"
+Banner "Step 2/7 - Prepare age key directory"
 
 $ageDir = Join-Path $env:USERPROFILE ".config\sops\age"
 if (-not (Test-Path $ageDir)) {
     New-Item -Path $ageDir -ItemType Directory -Force | Out-Null
-    Write-Host "  ✅ 已创建 $ageDir" -ForegroundColor Green
+    Write-Host "  Created $ageDir" -ForegroundColor Green
 } else {
-    Write-Host "  ℹ️  目录已存在: $ageDir" -ForegroundColor Gray
+    Write-Host "  Exists: $ageDir" -ForegroundColor Gray
+}
+
+# Also seed SOPS' default key location to keep things working without SOPS_AGE_KEY_FILE.
+$sopsDefaultKeyDir = Join-Path $env:APPDATA "sops\age"
+if (-not (Test-Path $sopsDefaultKeyDir)) {
+    New-Item -Path $sopsDefaultKeyDir -ItemType Directory -Force | Out-Null
 }
 
 # ============================
-# 步骤 3：主钥匙 A
+# Step 3: Main key A
 # ============================
-
-Write-Banner "步骤 3/6 · 主钥匙 A（日常用）"
+Banner "Step 3/7 - Main key A (everyday use)"
 
 $keyA = Join-Path $ageDir "key-a.txt"
 $pubA = $null
 
 if (Test-Path $keyA) {
-    $pubA = Read-AgePublicKey $keyA
-    Write-Host "  ℹ️  主钥匙已存在: $keyA" -ForegroundColor Gray
-    Write-Host "     公钥: $pubA" -ForegroundColor Gray
+    $pubA = Read-AgePub $keyA
+    Write-Host "  Main key A exists: $keyA" -ForegroundColor Gray
+    Write-Host "     public: $pubA" -ForegroundColor Gray
 } else {
-    Write-Host "  🔑 生成主钥匙 A..." -ForegroundColor Cyan
-    $result = Invoke-NativeCommand -FileName "age-keygen" -Arguments @("-o", $keyA)
-    $result.Output | ForEach-Object { Write-Host "     $_" -ForegroundColor Gray }
-    $pubA = Read-AgePublicKey $keyA
+    Write-Host "  Generating main key A..." -ForegroundColor Cyan
+    $r = Invoke-Exe -FileName "age-keygen" -Arguments @("-o", $keyA)
+    Write-Host "     $($r.StdOut.Trim())" -ForegroundColor Gray
+    $pubA = Read-AgePub $keyA
     if (-not $pubA) {
-        Write-Host "  ❌ 生成失败，请手动检查 age-keygen" -ForegroundColor Red
+        Write-Host "  Failed to generate key A" -ForegroundColor Red
         exit 1
     }
-    Write-Host "  ✅ 主钥匙 A 生成成功" -ForegroundColor Green
-    Write-Host "     公钥: $pubA" -ForegroundColor Green
+    Write-Host "  Main key A generated" -ForegroundColor Green
+    Write-Host "     public: $pubA" -ForegroundColor Green
 }
 
-# ============================
-# 步骤 4：备份钥匙 B
-# ============================
+# Mirror key A to SOPS default location (avoids needing SOPS_AGE_KEY_FILE env var)
+Copy-Item $keyA (Join-Path $sopsDefaultKeyDir "keys.txt") -Force
 
-Write-Banner "步骤 4/6 · 备份钥匙 B（强烈建议）"
+# ============================
+# Step 4: Backup key B
+# ============================
+Banner "Step 4/7 - Backup key B (strongly recommended)"
 
 $keyB = Join-Path $ageDir "key-b-backup.txt"
 $pubB = $null
 $createBackup = $false
 
 if (Test-Path $keyB) {
-    $pubB = Read-AgePublicKey $keyB
-    Write-Host "  ℹ️  备份钥匙已存在: $keyB" -ForegroundColor Gray
-    Write-Host "     公钥: $pubB" -ForegroundColor Gray
+    $pubB = Read-AgePub $keyB
+    Write-Host "  Backup key B exists: $keyB" -ForegroundColor Gray
+    Write-Host "     public: $pubB" -ForegroundColor Gray
 } else {
     Write-Host ""
-    Write-Host "  ⚠️  备份钥匙的作用：主钥匙丢了，备份钥匙能解所有文件" -ForegroundColor Yellow
-    Write-Host "  📍 建议把备份钥匙拷贝到 U 盘、保险柜等独立位置" -ForegroundColor Yellow
+    Write-Host "  Backup key unlocks all secrets if main key A is lost." -ForegroundColor Yellow
+    Write-Host "  Recommended: copy to USB drive, safety deposit box, etc." -ForegroundColor Yellow
     Write-Host ""
-    if (Confirm-Prompt "  现在生成备份钥匙 B 吗？[Y/n]") {
-        $createBackup = $true
-    } else {
-        Write-Host "  ⏭️  跳过备份钥匙（不推荐）" -ForegroundColor Yellow
-    }
+    $createBackup = Confirm-Prompt "  Generate backup key B now? [Y/n]"
 }
 
 if ($createBackup) {
-    Write-Host "  🔑 生成备份钥匙 B..." -ForegroundColor Cyan
-    $resultB = Invoke-NativeCommand -FileName "age-keygen" -Arguments @("-o", $keyB)
-    $resultB.Output | ForEach-Object { Write-Host "     $_" -ForegroundColor Gray }
-    $pubB = Read-AgePublicKey $keyB
+    Write-Host "  Generating backup key B..." -ForegroundColor Cyan
+    $r = Invoke-Exe -FileName "age-keygen" -Arguments @("-o", $keyB)
+    Write-Host "     $($r.StdOut.Trim())" -ForegroundColor Gray
+    $pubB = Read-AgePub $keyB
     if ($pubB) {
-        Write-Host "  ✅ 备份钥匙 B 生成成功" -ForegroundColor Green
-        Write-Host "     公钥: $pubB" -ForegroundColor Green
+        Write-Host "  Backup key B generated" -ForegroundColor Green
+        Write-Host "     public: $pubB" -ForegroundColor Green
         Write-Host ""
-        Write-Host "  📋 立即执行以下操作：" -ForegroundColor Yellow
-        Write-Host "     1. 把 $keyB 拷贝到 U 盘" -ForegroundColor Yellow
-        Write-Host "     2. 把公钥和私钥内容都记到 KeePassXC" -ForegroundColor Yellow
-        Write-Host "     3. 验证 U 盘上的钥匙能解开本项目" -ForegroundColor Yellow
+        Write-Host "  IMMEDIATELY do these:" -ForegroundColor Yellow
+        Write-Host "     1. Copy $keyB to a USB drive" -ForegroundColor Yellow
+        Write-Host "     2. Record the public key in your password manager" -ForegroundColor Yellow
     }
 }
 
 # ============================
-# 步骤 5：替换 .sops.yaml 占位符
+# Step 5: Configure .sops.yaml
 # ============================
+Banner "Step 5/7 - Configure .sops.yaml"
 
-Write-Banner "步骤 5/6 · 配置 .sops.yaml"
-
-$sopsConfig = ".sops.yaml"
-if (-not (Test-Path $sopsConfig)) {
-    Write-Host "  ❌ 找不到 $sopsConfig" -ForegroundColor Red
+$sopsConfigPath = Join-Path (Get-Location) ".sops.yaml"
+if (-not (Test-Path $sopsConfigPath)) {
+    Write-Host "  Missing .sops.yaml" -ForegroundColor Red
     exit 1
 }
 
-# 用 .NET 读写文件，UTF-8 无 BOM（避免 PowerShell 5.1 默认编码损坏内容）
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$content = [System.IO.File]::ReadAllText((Resolve-Path $sopsConfig), $utf8NoBom)
-$content = $content -replace '<AGE_PUBLIC_KEY_A>', $pubA
+# Always rewrite with the canonical pattern (idempotent).
+$sopsContent = @"
+# .sops.yaml
+# SOPS encryption rules. Public keys are filled in by bootstrap.ps1.
+# Docs: https://github.com/getsops/sops
+#
+# Note: sops 3.7.x on Windows matches path_regex against the FULL path with
+# Go regexp. We use filename-only patterns for portability.
 
-if ($pubB) {
-    $content = $content -replace '<AGE_PUBLIC_KEY_B>', $pubB
-} else {
-    # No B: comment out that line
-    $content = $content -replace '(\s*)- "<AGE_PUBLIC_KEY_B>"', '$1# - "<NO_BACKUP_KEY_YET>"'
-}
+creation_rules:
+  - path_regex: .*common\.env$
+    key_groups:
+      - age:
+          - "$pubA"
+          $(if ($pubB) { "- `"$pubB`"" } else { "# - \"<NO_BACKUP_KEY_YET>\"" })
 
-[System.IO.File]::WriteAllText((Resolve-Path $sopsConfig), $content, $utf8NoBom)
-Write-Host "  ✅ 已写入主钥匙 A 的公钥" -ForegroundColor Green
-if ($pubB) {
-    Write-Host "  ✅ 已写入备份钥匙 B 的公钥" -ForegroundColor Green
-}
+  - path_regex: .*dev\.env$
+    key_groups:
+      - age:
+          - "$pubA"
+          $(if ($pubB) { "- `"$pubB`"" } else { "# - \"<NO_BACKUP_KEY_YET>\"" })
+
+  - path_regex: .*prod\.env$
+    key_groups:
+      - age:
+          - "$pubA"
+      # For production-grade, replace local key above with cloud KMS:
+      # - alibabakms:
+      #     - xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      # - tencentkms:
+      #     - alias/your-key-alias
+"@
+
+Write-FileUtf8 -Path $sopsConfigPath -Content $sopsContent
+Write-Host "  .sops.yaml updated" -ForegroundColor Green
+if ($pubB) { Write-Host "  Backup key B included" -ForegroundColor Green } else { Write-Host "  Backup key B skipped (single-key risk)" -ForegroundColor Yellow }
 
 # ============================
-# 步骤 6：加密第一个密钥文件
+# Step 6: Encrypt first secret file
 # ============================
+Banner "Step 6/7 - Encrypt the first secret file"
 
-Write-Banner "步骤 6/6 · 加密第一个密钥文件"
-
-$exampleFile = "secrets\common.yaml.example"
-$secretFile = "secrets\common.yaml"
+$exampleFile = Join-Path (Get-Location) "secrets\common.env.example"
+$secretFile = Join-Path (Get-Location) "secrets\common.env"
 
 if (-not (Test-Path $exampleFile)) {
-    Write-Host "  ❌ 找不到 $exampleFile" -ForegroundColor Red
+    Write-Host "  Missing $exampleFile" -ForegroundColor Red
     exit 1
 }
 
 if (Test-Path $secretFile) {
-    Write-Host "  ℹ️  $secretFile 已存在，跳过创建" -ForegroundColor Gray
+    Write-Host "  $secretFile already exists, skipping creation" -ForegroundColor Gray
 } else {
-    Write-Host "  📝 基于 example 创建 $secretFile..." -ForegroundColor Cyan
-    Copy-Item $exampleFile $secretFile
-    Write-Host "  🔒 用 SOPS 加密..." -ForegroundColor Cyan
-    sops --encrypt --in-place $secretFile
-    Write-Host "  ✅ 加密完成" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "  💡 提示：以后编辑密钥用 'task secrets:edit' 或 'sops secrets\common.yaml'" -ForegroundColor Cyan
+    Write-Host "  Copying example to $secretFile..." -ForegroundColor Cyan
+    $exampleContent = Read-FileUtf8 $exampleFile
+    Write-FileUtf8 -Path $secretFile -Content $exampleContent
+    Write-Host "  Encrypting..." -ForegroundColor Cyan
+    $r = Invoke-Exe -FileName "sops" -Arguments @("--encrypt", "--in-place", $secretFile)
+    if ($r.ExitCode -ne 0) {
+        Write-Host "  sops failed: $($r.StdErr)" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Encrypted successfully" -ForegroundColor Green
 }
 
 # ============================
-# 收尾：git 初始化
+# Step 7: Init git
 # ============================
+Banner "Step 7/7 - Initialize git"
 
-Write-Host ""
-if (Confirm-Prompt "现在初始化 git 仓库并提交吗？[Y/n]") {
-    Write-Host ""
-    Write-Host "  📦 初始化 git..." -ForegroundColor Cyan
-
-    # Auto-configure git user if missing (避免 Author identity unknown)
+if (Confirm-Prompt "Initialize git repo and commit? [Y/n]") {
+    # Auto-configure git user if missing
     $userName = git config --global user.name 2>$null
     $userEmail = git config --global user.email 2>$null
     if (-not $userName) {
         $defaultName = if ($env:USERNAME) { $env:USERNAME } else { "Developer" }
         git config --global user.name $defaultName
-        Write-Host "     已设 user.name = $defaultName" -ForegroundColor Gray
+        Write-Host "  set user.name = $defaultName" -ForegroundColor Gray
     }
     if (-not $userEmail) {
         $defaultEmail = "$($env:USERNAME)@localhost"
         git config --global user.email $defaultEmail
-        Write-Host "     已设 user.email = $defaultEmail" -ForegroundColor Gray
+        Write-Host "  set user.email = $defaultEmail" -ForegroundColor Gray
     }
 
     if (-not (Test-Path ".git")) {
         git init | Out-Null
     }
     git add -A
-    # 临时关闭 PS 5.1 的 stderr 错误处理（git 输出 LF 警告到 stderr）
+
     $prevPref = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $commitOutput = git commit -m "feat: bootstrap project with SOPS secret management" 2>&1
+        $commitOut = git commit -m "feat: bootstrap project with SOPS secret management" 2>&1
     } finally {
         $ErrorActionPreference = $prevPref
     }
-    $commitOutput | ForEach-Object { Write-Host "     $_" -ForegroundColor Gray }
-    $lastCode = $LASTEXITCODE
-    if ($lastCode -eq 0) {
-        Write-Host "  ✅ 已提交" -ForegroundColor Green
+    $commitOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Committed" -ForegroundColor Green
     } else {
-        Write-Host "  ⚠️  git commit 返回 $lastCode，请手动检查" -ForegroundColor Yellow
+        Write-Host "  git commit returned $LASTEXITCODE (manual check needed)" -ForegroundColor Yellow
     }
 }
 
 # ============================
-# 完成
+# Done
 # ============================
+Banner "Bootstrap complete"
 
-Write-Banner "🎉 初始化完成！"
-
-Write-Host "  接下来可以做的：" -ForegroundColor Cyan
+Write-Host "  Next steps:" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  1. 验证 direnv（首次进入项目会提示 direnv allow）" -ForegroundColor White
-Write-Host "     cd $PWD" -ForegroundColor Gray
-Write-Host "     direnv allow" -ForegroundColor Gray
-Write-Host "     echo `$env:DATABASE_URL" -ForegroundColor Gray
+Write-Host "  1. Copy backup key B to a USB drive (if not already done)" -ForegroundColor White
 Write-Host ""
-Write-Host "  2. 启动应用看效果" -ForegroundColor White
+Write-Host "  2. Start the dev environment:" -ForegroundColor White
 Write-Host "     task dev" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  3. 推送到 GitHub" -ForegroundColor White
+Write-Host "  3. Edit encrypted secrets anytime:" -ForegroundColor White
+Write-Host "     sops secrets\common.env" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  4. Push to GitHub:" -ForegroundColor White
 Write-Host "     git remote add origin https://github.com/you/my-first-app.git" -ForegroundColor Gray
 Write-Host "     git push -u origin main" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  4. 重要：现在就把备份钥匙 B 拷贝到 U 盘" -ForegroundColor Yellow
-Write-Host "     主钥匙丢失 + 没有备份 = 所有密钥永久丢失" -ForegroundColor Yellow
+Write-Host "  5. Restart PowerShell so new tools are in PATH" -ForegroundColor White
 Write-Host ""
-Write-Host "  详细文档： C:\home\dev-system\README.md" -ForegroundColor Cyan
+Write-Host "  System docs: C:\home\dev-system\README.md" -ForegroundColor Cyan
 Write-Host ""

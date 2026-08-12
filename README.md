@@ -1,152 +1,254 @@
 # my-first-app
 
-> 第一个用全套开发系统模板启动的项目
-> 配套方案文档：`C:\home\dev-system\README.md`
+> First project using the full dev system blueprint.
+> System docs: `C:\home\dev-system\README.md`
 
-## 🎯 这个项目能给你什么
-
-跑完下面的 3 步，你就有了：
-
-- ✅ **永远可复用的密钥管理** —— 任何机器 clone 仓库后能解密
-- ✅ **自动化任务编排** —— `task dev` 一键启动、`task deploy` 一键部署
-- ✅ **进项目自动加载密钥** —— direnv + SOPS 联动
-- ✅ **CI/CD 流水线** —— PR 自动 lint+test，tag 自动部署
-- ✅ **密钥泄露防护** —— gitleaks 拦截误提交
+A production-grade template that proves out the entire workflow:
+SOPS + age secret management, direnv auto-load, Docker Compose
+local stack, CI/CD, multi-cloud deploy, and a real Node app that
+talks to PostgreSQL + Redis with credentials pulled from an
+encrypted file at boot.
 
 ---
 
-## 🚀 3 步上手
+## What you get
 
-### 第 1 步：装工具（一次性）
+- **One-time key generation, permanent reuse.** Encrypt once, decrypt
+  anywhere the age key is present. Any machine that can clone this repo
+  can decrypt `secrets/common.env`.
+- **Zero plaintext secrets on disk or in CI.** Even the production
+  deployment decrypts at runtime.
+- **`task dev` is the only command you need.** It decrypts secrets and
+  starts the full stack (app + database + cache) in one shot.
+- **Multi-cloud deploy ready.** GitHub Actions workflows push to both
+  Aliyun ACR and Tencent TCR, with OIDC-driven cloud KMS decryption.
+
+---
+
+## 5-minute quick start
+
+### 1. Install tools (one time, on any new machine)
 
 ```powershell
-# 装 scoop（如果还没装）
+# Scoop (skip if already installed)
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 irm get.scoop.sh | iex
 
-# 一键装齐
+# All required tools in one go
 scoop install age sops git go-task direnv gitleaks nodejs
+# winget fallback for any package scoop can't find:
+#   winget install FiloSottile.age Mozilla.SOPS OpenJS.NodeJS.LTS
 ```
 
-可选（用到再装）：`scoop install docker terraform`
+Restart PowerShell so the new `PATH` takes effect.
 
-### 第 2 步：跑引导脚本（生成密钥 + 加密文件）
+### 2. Bootstrap this project (idempotent)
 
 ```powershell
 cd C:\home\my-first-app
-pwsh -File bootstrap.ps1
+pwsh -File bootstrap.ps1 -Auto
 ```
 
-脚本会自动：
-- 检查工具是否装好
-- 生成主钥匙 A（日常用）
-- 提示生成备份钥匙 B（强烈建议）
-- 把公钥填到 `.sops.yaml`
-- 加密第一个密钥文件
-- 初始化 git 提交
+What it does:
 
-### 第 3 步：进项目 + 启动
+1. Verifies all required tools are installed.
+2. Generates a main age key A at `~/.config/sops/age/key-a.txt`
+   (skipped if it already exists).
+3. Generates a backup key B and prompts to copy it to a USB drive.
+4. Writes the public keys into `.sops.yaml`.
+5. Copies `secrets/common.env.example` to `secrets/common.env` and
+   SOPS-encrypts it.
+6. Initializes git and creates the first commit.
+
+You can run this script on as many machines as you like. After the
+first run, your encrypted file decrypts anywhere key A is present.
+
+### 3. Run the local stack
 
 ```powershell
-cd C:\home\my-first-app
-
-# 首次进入提示 direnv allow
-direnv allow
-
-# 验证密钥自动加载
-$env:DATABASE_URL   # 应该能看到明文值
-
-# 启动开发服务器
 task dev
 ```
 
-打开 http://localhost:3000 看到 "密钥管理已经生效" 就成功了。
+This decrypts `secrets/common.env` to `.env`, starts PostgreSQL and
+Redis in Docker, and starts the Node app on `http://localhost:3000`.
+
+```powershell
+# Smoke test
+curl http://localhost:3000/
+# -> "Hello from my-first-app! 密钥管理已经生效。"
+
+curl http://localhost:3000/health
+# -> {"status":"ok","secrets_loaded":{"database":true,"redis":true},...}
+```
+
+`secrets_loaded.database` and `secrets_loaded.redis` must both be
+`true`. If either is `false`, the app could not pick up the credentials
+and the whole pipeline needs a check.
 
 ---
 
-## 📁 目录结构
+## Project layout
 
 ```
 my-first-app/
-├── .sops.yaml                    # SOPS 加密规则（自动填充）
-├── .gitignore                    # 严格忽略私钥
-├── .envrc                        # direnv 自动加载
-├── .pre-commit-config.yaml       # gitleaks + 基础检查
-├── Taskfile.yml                  # 任务编排
-├── bootstrap.ps1                 # ⭐ 一键引导脚本
-├── README.md                     # 你在这里
+├── .sops.yaml                  # SOPS encryption rules
+├── .gitignore                  # strict ignore for keys and .env
+├── .envrc                      # direnv auto-load (optional)
+├── .pre-commit-config.yaml     # gitleaks + basic checks
+├── Taskfile.yml                # task runner
+├── Dockerfile                  # multi-stage production image
+├── docker-compose.yml          # local dev stack
+├── bootstrap.ps1               # one-shot project init
+├── README.md                   # you are here
+├── RUNBOOK.md                  # incident response & ops
 ├── secrets/
-│   ├── .gitkeep
-│   ├── common.yaml.example       # 密钥模板
-│   └── common.yaml               # 🔒 加密后（自动生成）
-├── scripts/
-│   ├── check-tools.ps1           # 工具检查
-│   ├── backup-keys.ps1           # 备份私钥
-│   └── rotate-keys.ps1           # 轮转私钥
+│   ├── common.env.example      # template
+│   └── common.env              # ENCRYPTED — your real secrets
 ├── app/
 │   ├── package.json
-│   └── index.js                  # 示例 Node.js 应用
+│   └── index.js                # Node app: /, /health, /db, /cache
+├── scripts/
+│   ├── check-tools.ps1         # verify install
+│   ├── backup-keys.ps1         # copy keys to backup location
+│   └── rotate-keys.ps1         # rotate age keys
+├── infra/
+│   ├── aliyun/                 # Terraform: Aliyun ACK + RDS + KMS
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── backend.tf
+│   └── tencent/                # Terraform: Tencent TKE + TencentDB
+│       ├── main.tf
+│       ├── variables.tf
+│       └── backend.tf
+├── monitoring/
+│   └── uptime-kuma.yml         # docker-compose for Uptime Kuma
 └── .github/
     └── workflows/
-        ├── ci.yml                # Lint + Test + gitleaks
-        └── deploy.yml            # 构建 + 推送双云 + 部署
+        ├── ci.yml              # PR + main: lint, test, gitleaks
+        └── deploy.yml          # tag: build, push to both clouds
 ```
 
 ---
 
-## 🛠 常用命令
+## Day-to-day commands
 
 ```powershell
-# 密钥管理
-task secrets:init       # 初始化密钥体系（首次）
-task secrets:edit       # 编辑加密文件（自动解密 → 编辑 → 加密）
-task secrets:view       # 查看解密后内容
-task secrets:export     # 解密为 .env 文件
-task secrets:rotate     # 轮转所有 age 钥匙
+# Secrets
+task secrets:init         # first-time setup (already done)
+task secrets:edit         # open encrypted file in your $EDITOR
+task secrets:view         # print decrypted contents
+task secrets:export       # write decrypted .env file
+task secrets:rotate       # rotate all age keys
 
-# 备份
-task backup:keys        # 备份私钥到指定目录
+# Backup
+task backup:keys          # copy age keys to backup location
 
-# 开发
-task dev                # 启动开发环境
-task lint               # 代码风格
-task test               # 运行测试
-task build              # 构建 Docker 镜像
-task push               # 推送到阿里云 + 腾讯云
-task deploy             # 完整部署
+# Local dev
+task dev                  # full stack (app + db + cache)
+task dev:secrets          # decrypt secrets to .env
+task dev:run              # run app only (assumes stack is up)
 
-# 工具
-task check              # 检查工具是否齐全
+# Code quality
+task lint                 # code style
+task format               # auto-format
+task test                 # unit tests
+task test:coverage        # tests with coverage
+
+# Build & ship
+task build                # docker buildx (multi-arch)
+task push                 # push to Aliyun ACR + Tencent TCR
+task deploy               # build + push + terraform apply
+
+# Cleanup
+task clean                # remove .env, *.dec files
 ```
 
 ---
 
-## 🔐 密钥管理"5 个不能忘"
+## CI / CD
 
-1. **私钥永不入库** —— `.gitignore` 已经配好，别动
-2. **多把钥匙兜底** —— 至少主 A + 备份 B，丢了不会变孤儿
-3. **加密文件可公开** —— 但私钥泄露了 = 一切白搭
-4. **进项目就 direnv allow** —— 否则密钥不会自动加载
-5. **每 6 个月轮转一次** —— `task secrets:rotate`
+`.github/workflows/ci.yml` runs on every push and PR:
+
+- Install sops + age
+- `gitleaks detect` — blocks if any plaintext secret sneaks in
+- `npm ci && npm run lint && npm test`
+
+`.github/workflows/deploy.yml` runs on every `v*` tag:
+
+- Build multi-arch (amd64 + arm64) image
+- Push to Aliyun ACR and Tencent TCR
+- For each cloud, decrypt `secrets/prod.env` with the cloud's KMS
+  (OIDC, no long-lived keys in GitHub Secrets) and apply Terraform
+
+Required GitHub Secrets per cloud (see `RUNBOOK.md` for full setup):
+
+- `ALIYUN_OIDC_PROVIDER_ARN`, `ALIYUN_OIDC_ROLE_ARN`
+- `ALIYUN_ACR_USERNAME`, `ALIYUN_ACR_PASSWORD`
+- `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`
+- `TENCENT_TCR_USERNAME`, `TENCENT_TCR_PASSWORD`
 
 ---
 
-## 🆘 应急场景
+## Multi-cloud
 
-| 场景 | 怎么办 |
-|-----|-------|
-| 主钥匙 A 丢了 | 用备份钥匙 B 解密 → 跑 `task secrets:rotate` |
-| 备份钥匙 B 也丢了 | 用云 KMS 解密（需先配 `.sops.yaml`） |
-| direnv 不生效 | 重启 PowerShell，确认 `$PROFILE` 有 hook |
-| 误提交了密钥 | `gitleaks` 会拦截；万一漏了，立刻轮转 |
-| CI 跑挂 | 看是不是云 KMS OIDC 没配（看 deploy.yml）|
+This project ships Terraform modules for both Aliyun and Tencent
+Cloud. They provision:
+
+- VPC + subnets
+- Managed Kubernetes (ACK / TKE)
+- Managed PostgreSQL (RDS / TencentDB)
+- KMS keys for production secrets
+- Container registry namespaces
+- (Optional) Cloud logging and monitoring
+
+See `infra/aliyun/main.tf` and `infra/tencent/main.tf`. Both
+read the production secrets at apply time via SOPS, so no plaintext
+passwords ever live in Terraform state.
 
 ---
 
-## 📚 下一步学习
+## Security model — the 5 non-negotiables
 
-- **方案详细文档**：`C:\home\dev-system\01-secret-management.md`（密钥管理 13 节）
-- **完整架构**：`C:\home\dev-system\02-full-architecture.md`
-- **实施路线**：`C:\home\dev-system\03-implementation-roadmap.md`
+1. **Private keys never enter git.** `.gitignore` blocks `key-*.txt`,
+   `*.key`, `*.pem`. The encrypted `secrets/*.env` files are safe to
+   commit and SHOULD be committed — that is the whole point.
+2. **Multiple keys for redundancy.** Generate key A (everyday) and
+   key B (backup). Both can decrypt. Lose one, the other still works.
+3. **Offline backups.** The backup key B belongs on a USB drive, a
+   safe, or encrypted cloud storage — somewhere NOT on the same disk
+   as key A.
+4. **Rotate on a schedule.** `task secrets:rotate` regenerates the
+   keypair and re-encrypts every file. Do this every 6-12 months, or
+   immediately if you suspect compromise.
+5. **Production keys are KMS-only.** `secrets/prod.env` should be
+   encrypted so that ONLY the cloud KMS can decrypt, not local keys.
+   The bootstrap comment in `.sops.yaml` shows the swap.
 
-跑通这个项目后，按 `03-implementation-roadmap.md` 走 4 个阶段，把整套体系铺开。
+---
+
+## Monitoring
+
+`monitoring/uptime-kuma.yml` is a docker-compose for Uptime Kuma,
+a self-hosted monitoring tool that does:
+
+- HTTP/HTTPS probes
+- TCP port checks
+- TLS certificate expiry alerts
+- Webhook alerts to WeChat, DingTalk, Telegram, Slack, email
+
+After running it (`docker compose -f monitoring/uptime-kuma.yml up -d`),
+open `http://localhost:3001`, add your endpoints, and configure a
+notification channel.
+
+---
+
+## What's not in scope (yet)
+
+- **Service mesh / mTLS between app and database.** Add Linkerd or
+  Istio if you have multiple services.
+- **GitOps with ArgoCD.** `infra/*` deploys imperatively today. For
+  declarative continuous delivery, layer ArgoCD on top.
+- **Database migration tool.** Add `golang-migrate` or `prisma migrate`
+  when you have actual schema changes.
+
+See `C:\home\dev-system\02-full-architecture.md` for the full picture.

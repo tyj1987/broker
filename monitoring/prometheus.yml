@@ -1,0 +1,13 @@
+# monitoring/prometheus.yml
+# Config for the optional Prometheus + Grafana stack.
+# Enable with: docker compose -f monitoring/uptime-kuma.yml --profile metrics up -d
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'my-first-app'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:3000']

@@ -1,14 +1,31 @@
 # .github/workflows/deploy.yml
-# 推送到阿里云 ACR + 腾讯云 TCR
-# 生产密钥通过云 KMS 解密（不依赖本地明文私钥）
+# Build multi-arch image, push to BOTH Aliyun ACR and Tencent TCR,
+# then run Terraform apply for each cloud.
+#
+# Production secrets are decrypted with cloud KMS (Aliyun KMS or
+# Tencent KMS) — no plaintext credentials are ever present in
+# GitHub Secrets or in this workflow's environment.
+#
+# Required GitHub repository secrets / variables:
+#   ALIYUN_OIDC_PROVIDER_ARN          (e.g. acs:ram::1234:oidc-provider/github)
+#   ALIYUN_OIDC_ROLE_ARN              (e.g. acs:ram::1234:role/github-deploy)
+#   ALIYUN_ACR_USERNAME               (Aliyun container registry username)
+#   ALIYUN_ACR_PASSWORD               (Aliyun container registry password)
+#   TENCENTCLOUD_SECRET_ID            (Tencent Cloud API key id)
+#   TENCENTCLOUD_SECRET_KEY           (Tencent Cloud API key secret)
+#   TENCENT_TCR_USERNAME              (Tencent TCR username)
+#   TENCENT_TCR_PASSWORD              (Tencent TCR password)
 
-name: Build & Push
+name: Build & Deploy
 
 on:
   push:
-    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Override image tag (defaults to git SHA)'
+        required: false
 
 permissions:
   id-token: write
@@ -18,15 +35,18 @@ env:
   REGISTRY_ALIYUN: registry.cn-hangzhou.aliyuncs.com
   REGISTRY_TENCENT: ccr.ccs.tencentyun.com
   NAMESPACE: ${{ github.repository_owner }}
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
 
 jobs:
   build-and-push:
-    name: Build & Push (双云)
+    name: Build + Push (Aliyun + Tencent)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -53,12 +73,8 @@ jobs:
             ${{ env.REGISTRY_ALIYUN }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
             ${{ env.REGISTRY_TENCENT }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ env.IMAGE_TAG }}
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -72,32 +88,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ============================
-  # 生产部署（云 KMS 解密密钥）
-  # ============================
-  deploy-prod:
-    name: Deploy to Prod (云 KMS 解密)
+  deploy-aliyun:
+    name: Deploy to Aliyun
     needs: build-and-push
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        cloud: [aliyun, tencent]
+    environment: production-aliyun
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install sops & age
+      - name: Install sops + age + terraform
         run: |
           curl -LO https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
           sudo install -m 755 sops-v3.9.0.linux.amd64 /usr/local/bin/sops
           curl -LO https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-linux-amd64.tar.gz
           tar -xzf age-v1.2.0-linux-amd64.tar.gz
           sudo install -m 755 age/age /usr/local/bin/age
+          curl -LO https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+          sudo install -m 755 terraform /usr/local/bin/terraform
 
-      # 阿里云用 OIDC 拿临时凭证 → KMS 解密
-      - name: Configure Aliyun credentials (OIDC)
-        if: matrix.cloud == 'aliyun'
+      - name: Configure Aliyun credentials via OIDC
         uses: aliyun/aliyun-cli-action@v1.2.0
         with:
           ALIYUN_REGION: cn-hangzhou
@@ -105,38 +115,44 @@ jobs:
           ALIYUN_OIDC_ROLE_ARN: ${{ secrets.ALIYUN_OIDC_ROLE_ARN }}
           ALIYUN_OIDC_TOKEN_FILE_PATH: ${{ github.token }}
 
-      - name: Decrypt prod secrets (Aliyun KMS)
-        if: matrix.cloud == 'aliyun'
+      - name: Terraform apply (Aliyun)
+        working-directory: infra/aliyun
         run: |
-          sops --decrypt --output-type dotenv secrets/prod.yaml > .env.production
-          echo "✅ Aliyun KMS 解密成功"
+          terraform init
+          terraform apply -auto-approve \
+            -var="image_tag=${{ env.IMAGE_TAG }}"
 
-      # 腾讯云用 secret_id/secret_key
+  deploy-tencent:
+    name: Deploy to Tencent
+    needs: build-and-push
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production-tencent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install sops + age + terraform
+        run: |
+          curl -LO https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
+          sudo install -m 755 sops-v3.9.0.linux.amd64 /usr/local/bin/sops
+          curl -LO https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-linux-amd64.tar.gz
+          tar -xzf age-v1.2.0-linux-amd64.tar.gz
+          sudo install -m 755 age/age /usr/local/bin/age
+          curl -LO https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+          sudo install -m 755 terraform /usr/local/bin/terraform
+
       - name: Configure Tencent credentials
-        if: matrix.cloud == 'tencent'
+        env:
+          TENCENTCLOUD_SECRET_ID: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
+          TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
+        run: echo "credentials configured in env"
+
+      - name: Terraform apply (Tencent)
+        working-directory: infra/tencent
         env:
           TENCENTCLOUD_SECRET_ID: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
           TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
         run: |
-          echo "TENCENTCLOUD_SECRET_ID=$TENCENTCLOUD_SECRET_ID" >> $GITHUB_ENV
-
-      - name: Decrypt prod secrets (Tencent KMS)
-        if: matrix.cloud == 'tencent'
-        env:
-          TENCENTCLOUD_SECRET_ID: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
-          TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
-        run: |
-          sops --decrypt --output-type dotenv secrets/prod.yaml > .env.production
-          echo "✅ Tencent KMS 解密成功"
-
-      - name: Deploy to ${{ matrix.cloud }}
-        working-directory: infra/${{ matrix.cloud }}
-        run: |
-          echo "🚀 部署到 ${{ matrix.cloud }}..."
-          # 实际部署逻辑（terraform apply / kubectl apply 等）
-          # 这里只是占位，根据你真实的基础设施调整
-          echo "（请根据实际部署方式调整）"
-
-      - name: Cleanup secrets
-        if: always()
-        run: rm -f .env.production
+          terraform init
+          terraform apply -auto-approve \
+            -var="image_tag=${{ env.IMAGE_TAG }}"

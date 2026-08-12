@@ -70,6 +70,10 @@ creation_rules:
     key_groups:
       - age:
           - "$AGE_PUB"
+  - path_regex: .*\.json\$
+    key_groups:
+      - age:
+          - "$AGE_PUB"
 EOF
 
 # ----- 5. PKI -----

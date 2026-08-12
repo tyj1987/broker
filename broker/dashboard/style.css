@@ -204,3 +204,43 @@ td code { font-size: 0.8rem; }
   main { padding: 16px 12px 50px; }
   header { padding: 14px 16px 8px; }
 }
+
+/* ---------- Admin toolbar (Phase 1.1) ---------- */
+.admin-toolbar {
+  display: flex; gap: 10px; align-items: center; margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.admin-toolbar .admin-count { margin-left: auto; font-size: 0.85rem; }
+
+/* ---------- Modal (Phase 1.1) ---------- */
+.modal {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; padding: 20px;
+}
+.modal[hidden] { display: none !important; }
+.modal-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 22px; width: 100%; max-width: 560px; max-height: 90vh; overflow: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.modal-card h3 { margin: 0 0 16px; font-size: 1.1rem; }
+.modal-card label {
+  display: block; margin-bottom: 14px; font-size: 0.85rem; color: var(--muted);
+}
+.modal-card input,
+.modal-card select,
+.modal-card textarea {
+  display: block; width: 100%; margin-top: 6px;
+  background: var(--bg-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; font-size: 0.95rem; font-family: var(--mono);
+}
+.modal-card textarea { resize: vertical; min-height: 80px; }
+.modal-card input:focus,
+.modal-card select:focus,
+.modal-card textarea:focus { outline: none; border-color: var(--accent); }
+.modal-card input:disabled { opacity: 0.6; cursor: not-allowed; }
+.modal-actions {
+  display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px;
+}

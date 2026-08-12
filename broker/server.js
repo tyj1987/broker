@@ -7,7 +7,7 @@
 //   PORT=8443 CONFIG_PATH=/opt/broker/secrets/broker.yaml AGE_KEY_FILE=/opt/broker/pki/age.key node server.js
 
 import { createServer as createHttpsServer } from 'node:https';
-import { readFileSync, existsSync, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -23,6 +23,7 @@ const PORT           = parseInt(process.env.PORT || '8443', 10);
 const HOST           = process.env.HOST || '0.0.0.0';
 const CONFIG_PATH    = process.env.CONFIG_PATH || resolvePath(__dirname, '../secrets/broker.yaml');
 const SECRETS_PATH   = process.env.SECRETS_PATH || resolvePath(__dirname, '../secrets/common.env');
+const SECRETS_META_PATH = process.env.SECRETS_META_PATH || resolvePath(__dirname, '../secrets/secrets-meta.json');
 const PKI_DIR        = process.env.PKI_DIR || resolvePath(__dirname, '../pki');
 const AGE_KEY_FILE   = process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE;
 const AUDIT_DIR      = process.env.AUDIT_DIR || resolvePath(__dirname, '../audit');
@@ -90,6 +91,55 @@ function sopsDecrypt(filePath) {
   });
 }
 
+// Atomic SOPS encrypt: write plaintext to .tmp, sops --encrypt --in-place, then rename.
+// Returns when the file is durably encrypted. If any step fails, the .tmp is left
+// on disk for forensics and the original file is untouched.
+//
+// IMPORTANT: tmp file must keep the same extension as the target (.env, .yaml, .json)
+// so .sops.yaml path_regex rules still match during the sops encrypt call.
+function sopsEncryptAtomic(targetPath, plaintext) {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    if (AGE_KEY_FILE) env.SOPS_AGE_KEY_FILE = AGE_KEY_FILE;
+    // Build tmp path: /opt/x/common.env  ->  /opt/x/.common.env.tmp.123.456
+    // (dot-prefix + insert before extension so SOPS still sees the same extension)
+    const dir = dirname(targetPath);
+    const base = targetPath.slice(dir.length + 1);  // e.g. "common.env"
+    const dot = base.lastIndexOf('.');
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : '';
+    const tmpPath = join(dir, `.${stem}.tmp.${process.pid}.${Date.now()}${ext}`);
+    try {
+      writeFileSync(tmpPath, plaintext, { encoding: 'utf8', mode: 0o600 });
+    } catch (e) {
+      return reject(new Error(`write tmp failed: ${e.message}`));
+    }
+    const args = ['--encrypt', '--in-place', tmpPath];
+    if (existsSync(AGE_KEY_FILE)) {
+      const pub = readFileSync(AGE_KEY_FILE, 'utf8').match(/public key: (\S+)/)?.[1];
+      if (pub) args.unshift('--age', pub);
+    }
+    const child = spawn('sops', args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let err = '';
+    child.stderr.on('data', d => err += d.toString());
+    child.on('error', e => reject(new Error(`sops spawn failed: ${e.message}. Is sops installed?`)));
+    child.on('close', code => {
+      if (code !== 0) {
+        // leave tmp for forensics, but DON'T touch the original file
+        try { unlinkSync(tmpPath); } catch {}
+        return reject(new Error(`sops encrypt failed (code ${code}): ${err}; tmp cleaned at ${tmpPath}`));
+      }
+      try {
+        renameSync(tmpPath, targetPath);
+        resolve();
+      } catch (e) {
+        try { unlinkSync(tmpPath); } catch {}
+        reject(new Error(`rename tmp to target failed: ${e.message}; tmp cleaned`));
+      }
+    });
+  });
+}
+
 // ============================================================
 // Config loader
 // ============================================================
@@ -131,6 +181,62 @@ async function loadSecrets() {
 function getSecret(name) {
   return SECRET_CACHE.get(name);
 }
+
+// ============================================================
+// Secret metadata (admin-edited via web UI; persisted to secrets-meta.json SOPS-encrypted)
+// Schema: { "<NAME>": { type, description, created_at, updated_at, updated_by } }
+// File is optional: if missing on disk, SECRET_META stays empty and a fresh one
+// is created on first admin write.
+// ============================================================
+let SECRET_META = new Map();  // name -> { type, description, created_at, updated_at, updated_by }
+
+async function loadSecretMeta() {
+  if (!existsSync(SECRETS_META_PATH)) {
+    console.log(`[meta] ${SECRETS_META_PATH} not found; starting with empty secret metadata (admin UI will create it on first write)`);
+    SECRET_META = new Map();
+    return;
+  }
+  try {
+    const text = await sopsDecrypt(SECRETS_META_PATH);
+    const obj = JSON.parse(text);
+    SECRET_META = new Map(Object.entries(obj || {}));
+    console.log(`[meta] Loaded metadata for ${SECRET_META.size} secrets from ${SECRETS_META_PATH}`);
+  } catch (e) {
+    console.error(`[meta] Failed to load ${SECRETS_META_PATH}: ${e.message}`);
+    console.error('[meta] Starting with empty metadata; admin UI may need to re-enter metadata for existing secrets');
+    SECRET_META = new Map();
+  }
+}
+
+async function persistSecretMeta() {
+  const obj = Object.fromEntries(SECRET_META);
+  const text = JSON.stringify(obj, null, 2) + '\n';
+  await sopsEncryptAtomic(SECRETS_META_PATH, text);
+}
+
+// Validate a secret name: same rules as common.env KEY= (uppercase, digits, dot, underscore)
+const SECRET_NAME_RE = /^[A-Z0-9_][A-Z0-9_.]{0,127}$/;
+function isValidSecretName(name) {
+  return typeof name === 'string' && SECRET_NAME_RE.test(name);
+}
+
+// Whitelisted secret types — keep this tight; the UI shows a dropdown of these.
+// Adding a new type requires updating both this list and dashboard/admin/secrets.js
+const ALLOWED_SECRET_TYPES = new Set([
+  'custom',
+  'github_pat', 'gitlab_pat', 'gitee_pat',
+  'openai_key', 'anthropic_key', 'google_ai_key', 'mistral_key', 'cohere_key',
+  'deepseek_key', 'zhipu_key', 'moonshot_key', 'qwen_key',
+  'aliyun_ak', 'tencent_sk', 'aws_access_key', 'gcp_service_account',
+  'cloudflare_token',
+  'ssh_private_key', 'ssh_public_key',
+  'database_url', 'redis_url', 'mongodb_url',
+  'smtp_password', 'sendgrid_key', 'mailgun_key',
+  'slack_webhook', 'discord_webhook', 'feishu_webhook', 'dingtalk_webhook', 'telegram_bot_token',
+  'sentry_dsn', 'datadog_key',
+  'stripe_secret_key', 'wechat_pay_key',
+  'jwt_secret', 'oauth_client_secret', 'random_string',
+]);
 
 // ============================================================
 // Audit log
@@ -641,8 +747,18 @@ async function handle(req, res) {
   }
 
   // ----- Public: static dashboard assets (the login page must load without a client cert) -----
-  if (m === 'GET' && (p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css')) {
-    const map = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css' };
+  // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
+  if (m === 'GET' && (
+    p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' ||
+    p === '/admin/secrets.js'
+  )) {
+    const map = {
+      '/': 'index.html',
+      '/index.html': 'index.html',
+      '/app.js': 'app.js',
+      '/style.css': 'style.css',
+      '/admin/secrets.js': 'admin/secrets.js',
+    };
     const f = join(__dirname, 'dashboard', map[p]);
     if (existsSync(f)) {
       const body = readFileSync(f);
@@ -799,6 +915,169 @@ async function handle(req, res) {
     return send(res, 200, { name: body.name, value: v });
   }
 
+  // ============================================================
+  // Admin: Secrets CRUD (Phase 1.1)
+  // All endpoints below require admin role.
+  // Audit emits action: 'secret_admin' with sub-action in {create, update, delete}.
+  // ============================================================
+
+  // Helper: persist common.env atomically.
+  // Format: KEY=VALUE per line. Values are NOT quoted unless they contain newlines
+  // or leading/trailing whitespace (we always quote, for safety).
+  async function persistCommonEnv() {
+    const lines = [];
+    for (const [name, value] of SECRET_CACHE.entries()) {
+      // Always quote; escape backslashes and double-quotes inside value.
+      const safe = String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      lines.push(`${name}="${safe}"`);
+    }
+    const text = lines.join('\n') + '\n';
+    await sopsEncryptAtomic(SECRETS_PATH, text);
+  }
+
+  // ----- GET /api/v1/admin/secrets -----
+  if (m === 'GET' && p === '/api/v1/admin/secrets') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const out = [];
+    for (const [name, meta] of SECRET_META.entries()) {
+      out.push({
+        name,
+        type: meta.type || 'custom',
+        description: meta.description || '',
+        created_at: meta.created_at || null,
+        updated_at: meta.updated_at || null,
+        updated_by: meta.updated_by || null,
+        has_value: SECRET_CACHE.has(name),
+      });
+    }
+    // Include names that exist in SECRET_CACHE but have no metadata (legacy entries)
+    for (const name of SECRET_CACHE.keys()) {
+      if (!SECRET_META.has(name)) {
+        out.push({
+          name,
+          type: 'custom',
+          description: '(无元数据，请补充)',
+          created_at: null,
+          updated_at: null,
+          updated_by: null,
+          has_value: true,
+        });
+      }
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    audit({ action: 'admin_secrets_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
+    return send(res, 200, { secrets: out });
+  }
+
+  // ----- POST /api/v1/admin/secrets (create) -----
+  if (m === 'POST' && p === '/api/v1/admin/secrets') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const body = await readBody(req) || {};
+    const { name, value, type, description } = body;
+    if (!isValidSecretName(name)) {
+      return jsonError(res, 400, 'Invalid secret name. Use [A-Z0-9_.], must start with letter/digit/underscore, max 128 chars.');
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      return jsonError(res, 400, 'Missing or empty {value}');
+    }
+    if (SECRET_CACHE.has(name) || SECRET_META.has(name)) {
+      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
+      return jsonError(res, 409, `Secret ${name} already exists. Use PUT to update.`);
+    }
+    const finalType = ALLOWED_SECRET_TYPES.has(type) ? type : 'custom';
+    const now = new Date().toISOString();
+    const who = ctx.cn || 'admin';
+    SECRET_CACHE.set(name, value);
+    SECRET_META.set(name, { type: finalType, description: description || '', created_at: now, updated_at: now, updated_by: who });
+    try {
+      await persistCommonEnv();
+      await persistSecretMeta();
+    } catch (e) {
+      // rollback in-memory state so we don't drift from disk
+      SECRET_CACHE.delete(name);
+      SECRET_META.delete(name);
+      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, type: finalType, status: 'ok' });
+    return send(res, 200, { ok: true, name, type: finalType });
+  }
+
+  // ----- PUT /api/v1/admin/secrets/:name (update value or metadata) -----
+  const updateMatch = p.match(/^\/api\/v1\/admin\/secrets\/([A-Za-z0-9_.]+)$/);
+  if (m === 'PUT' && updateMatch && updateMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = updateMatch[1];
+    if (!SECRET_CACHE.has(name) && !SECRET_META.has(name)) {
+      return jsonError(res, 404, `Secret ${name} not found`);
+    }
+    const body = await readBody(req) || {};
+    const meta = SECRET_META.get(name) || { type: 'custom', description: '', created_at: new Date().toISOString() };
+    const newMeta = { ...meta };
+    let valueChanged = false;
+    if (body.value !== undefined) {
+      if (typeof body.value !== 'string') return jsonError(res, 400, '{value} must be a string');
+      SECRET_CACHE.set(name, body.value);
+      valueChanged = true;
+    }
+    if (body.type !== undefined) {
+      if (!ALLOWED_SECRET_TYPES.has(body.type)) return jsonError(res, 400, `Unknown type: ${body.type}`);
+      newMeta.type = body.type;
+    }
+    if (body.description !== undefined) {
+      newMeta.description = String(body.description);
+    }
+    const now = new Date().toISOString();
+    newMeta.updated_at = now;
+    newMeta.updated_by = ctx.cn || 'admin';
+    if (!newMeta.created_at) newMeta.created_at = meta.created_at || now;
+    SECRET_META.set(name, newMeta);
+    try {
+      if (valueChanged) await persistCommonEnv();
+      await persistSecretMeta();
+    } catch (e) {
+      // best-effort rollback: revert in-memory to pre-update
+      if (valueChanged) {
+        const orig = body._origValue !== undefined ? body._origValue : null;
+        if (orig !== null) SECRET_CACHE.set(name, orig); else SECRET_CACHE.delete(name);
+      }
+      SECRET_META.set(name, meta);
+      audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, value_changed: valueChanged, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
+  // ----- DELETE /api/v1/admin/secrets/:name -----
+  if (m === 'DELETE' && updateMatch && updateMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = updateMatch[1];
+    if (!SECRET_CACHE.has(name) && !SECRET_META.has(name)) {
+      return jsonError(res, 404, `Secret ${name} not found`);
+    }
+    const oldMeta = SECRET_META.get(name);
+    const hadValue = SECRET_CACHE.has(name);
+    SECRET_CACHE.delete(name);
+    SECRET_META.delete(name);
+    try {
+      if (hadValue) await persistCommonEnv();
+      await persistSecretMeta();
+    } catch (e) {
+      // best-effort rollback
+      if (hadValue) {
+        // we don't have the original value in memory after delete; rebuild from existing on disk failed.
+        // For now, log and accept that disk state is the source of truth; restart to recover.
+        console.error(`[admin] delete ${name} persist failed; in-memory cleared, disk may still hold it. Restart broker to reload.`, e.message);
+      }
+      SECRET_META.set(name, oldMeta);
+      audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}; in-memory may be inconsistent. Restart broker.`);
+    }
+    audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
   // ----- POST /api/v1/proxy/:service -----
   const proxyMatch = p.match(/^\/api\/v1\/proxy\/([a-z0-9_-]+)$/);
   if (m === 'POST' && proxyMatch) {
@@ -853,6 +1132,7 @@ async function handle(req, res) {
     try {
       await loadConfig();
       await loadSecrets();
+      await loadSecretMeta();
       audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
       return send(res, 200, { reloaded: true, services: Object.keys(CONFIG.services), secrets: SECRET_CACHE.size });
     } catch (err) {
@@ -970,6 +1250,7 @@ function start() {
   try {
     await loadConfig();
     await loadSecrets();
+    await loadSecretMeta();
     start();
   } catch (err) {
     console.error('[bootstrap] failed:', err.message);

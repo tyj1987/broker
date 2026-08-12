@@ -3,14 +3,13 @@
 
 variable "region" {
   type        = string
-  default     = "cn-hangzhou"
+  default     = "cn-beijing"
   description = "Aliyun region"
 }
 
 variable "admin_cidr" {
   type        = string
   description = "你的办公出口 IP CIDR, 例如 203.0.113.5/32. SSH 只能从这里进"
-  # 用 tfvars 覆盖
 }
 
 variable "ssh_password" {
@@ -27,6 +26,12 @@ variable "image_id" {
 
 variable "broker_domain" {
   type        = string
-  default     = "broker.example.com"
+  default     = "broker.52trz.com"
   description = "broker 域名（用于服务端证书 SAN）"
+}
+
+variable "broker_alt_names" {
+  type        = list(string)
+  default     = ["localhost", "127.0.0.1"]
+  description = "broker 服务端证书的额外 SAN（DNS / IP）"
 }

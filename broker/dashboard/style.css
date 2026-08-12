@@ -1,0 +1,182 @@
+/* Secret Broker Dashboard - 简洁专业的暗色主题 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #0f1115;
+  color: #e6e6e6;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+header {
+  background: linear-gradient(135deg, #1a1d24 0%, #232830 100%);
+  padding: 24px 32px;
+  border-bottom: 1px solid #2d333b;
+}
+header h1 {
+  font-size: 24px;
+  color: #f0f6fc;
+  margin-bottom: 4px;
+}
+.subtitle { color: #8b949e; font-size: 13px; }
+.identity {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(110, 118, 129, 0.1);
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  color: #c9d1d9;
+  display: inline-block;
+}
+
+.tabs {
+  display: flex;
+  background: #161b22;
+  border-bottom: 1px solid #2d333b;
+  padding: 0 32px;
+}
+.tab-btn {
+  background: none;
+  border: none;
+  color: #8b949e;
+  padding: 12px 20px;
+  cursor: pointer;
+  font-size: 14px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.tab-btn:hover { color: #c9d1d9; }
+.tab-btn.active {
+  color: #58a6ff;
+  border-bottom-color: #58a6ff;
+}
+
+main { padding: 24px 32px; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+.card h2 {
+  font-size: 18px;
+  color: #f0f6fc;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #30363d;
+  padding-bottom: 8px;
+}
+.card h3 {
+  font-size: 14px;
+  color: #c9d1d9;
+  margin: 16px 0 8px;
+}
+.hint { color: #8b949e; font-size: 13px; margin-bottom: 12px; }
+.hint code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; }
+
+.btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.btn:hover { background: #30363d; }
+.btn-danger { background: #6e1c1c; border-color: #8b2c2c; color: #f0f6fc; }
+.btn-danger:hover { background: #8b2c2c; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #21262d;
+}
+th { color: #8b949e; font-weight: 600; }
+tbody tr:hover { background: rgba(110,118,129,0.05); }
+code {
+  font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  background: rgba(110,118,129,0.15);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.form-row, .filter-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0;
+  flex-wrap: wrap;
+}
+.form-row label, .filter-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #8b949e;
+}
+input[type="text"], input[type="number"], input[type="datetime-local"] {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 200px;
+}
+input:focus { outline: none; border-color: #58a6ff; }
+
+.result {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #c9d1d9;
+  margin-top: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.status-ok { color: #56d364; }
+.status-error { color: #f85149; }
+.status-denied { color: #d29922; }
+
+pre {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+pre code { background: transparent; padding: 0; }
+
+ul { margin-left: 20px; color: #c9d1d9; }
+li { margin: 6px 0; }
+
+footer {
+  padding: 16px 32px;
+  border-top: 1px solid #2d333b;
+  color: #8b949e;
+  font-size: 12px;
+  text-align: center;
+}
+footer a { color: #58a6ff; text-decoration: none; }
+footer a:hover { text-decoration: underline; }

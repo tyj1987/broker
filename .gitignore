@@ -60,3 +60,27 @@ tmp/
 #   sops:
 #     age: [...]
 # 这是 SOPS 密文，入库安全。Encrypted secrets ARE safe to commit.
+
+# ============================
+# Secret Broker 特定 / Secret Broker specific
+# ============================
+# PKI 证书和私钥（ca.crt 例外，需要分发给客户端）
+pki/**/*.key
+pki/**/*.crt
+pki/**/*.csr
+pki/**/*.ext
+pki/**/crl.pem
+pki/**/index.txt*
+pki/**/serial*
+pki/**/openssl.cnf
+# 但保留 ca.crt（要分发）
+!pki/ca/ca.crt
+!pki/ca/.gitkeep
+
+# Audit 日志
+audit/*.jsonl
+audit/*.log
+
+# 客户端配置（含 cert 路径）
+.broker/
+

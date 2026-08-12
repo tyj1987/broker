@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secret Broker / 密钥代理</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🔐 Secret Broker</h1>
+    <p class="subtitle">mTLS 凭据代理 · v2.0</p>
+    <div id="identity" class="identity"></div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="secrets">密钥 / Secrets</button>
+    <button class="tab-btn" data-tab="audit">审计 / Audit</button>
+    <button class="tab-btn" data-tab="rotate">轮转 / Rotate</button>
+    <button class="tab-btn" data-tab="docs">文档 / Docs</button>
+  </nav>
+
+  <main>
+    <!-- Secrets tab -->
+    <section id="tab-secrets" class="tab-content active">
+      <div class="card">
+        <h2>可见密钥 / Visible Secrets</h2>
+        <p class="hint">这些是你当前客户端证书被授权访问的密钥名。点击 <code>resolve</code> 拉明文（受审计）。</p>
+        <button id="btn-refresh-secrets" class="btn">刷新 / Refresh</button>
+        <table id="secrets-table">
+          <thead><tr><th>Name</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Audit tab -->
+    <section id="tab-audit" class="tab-content">
+      <div class="card">
+        <h2>审计日志 / Audit Log</h2>
+        <p class="hint">只读视图，按时间倒序。<strong>需要 admin 角色。</strong></p>
+        <div class="filter-row">
+          <label>Limit: <input id="audit-limit" type="number" value="50" min="1" max="500"></label>
+          <label>Since: <input id="audit-since" type="datetime-local"></label>
+          <button id="btn-refresh-audit" class="btn">刷新 / Refresh</button>
+        </div>
+        <table id="audit-table">
+          <thead><tr><th>时间</th><th>客户端</th><th>动作</th><th>目标</th><th>状态</th><th>延迟</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Rotate tab -->
+    <section id="tab-rotate" class="tab-content">
+      <div class="card">
+        <h2>触发密钥轮转 / Trigger Rotation</h2>
+        <p class="hint">轮转是手动流程：参考 <code>RUNBOOK.md</code> 在 GitHub/阿里云/etc. 重新签发后，回到 broker 更新 <code>secrets/common.env</code> 并 reload。</p>
+        <div class="form-row">
+          <label>Secret name: <input id="rotate-name" placeholder="e.g. github.pat" type="text"></label>
+          <button id="btn-rotate" class="btn btn-danger">触发 / Trigger</button>
+        </div>
+        <pre id="rotate-result" class="result"></pre>
+      </div>
+    </section>
+
+    <!-- Docs tab -->
+    <section id="tab-docs" class="tab-content">
+      <div class="card">
+        <h2>快速上手 / Quick Start</h2>
+        <h3>从客户端调用 / From a client</h3>
+        <pre><code># 健康检查
+secret-broker health
+
+# 代理模式（AI 推荐，密钥不离开 broker）
+secret-broker proxy github GET /repos/tyj1987/sops-age-template
+
+# 注入环境变量运行子进程
+secret-broker exec --env "GH_TOKEN" -- git push origin main
+
+# 拉明文（仅白名单）
+secret-broker get github.pat</code></pre>
+
+        <h3>管理员操作 / Admin operations</h3>
+        <pre><code># 签发新客户端证书
+secret-broker pki issue-client --cn client.tyj-laptop --role developer --register
+
+# 吊销证书
+secret-broker pki revoke --fingerprint AB:CD:EF:...
+
+# 列出所有客户端
+secret-broker pki list</code></pre>
+
+        <h3>安全模型 / Security model</h3>
+        <ul>
+          <li>AI 客户端永远不直接拿到明文密钥。代理模式下，AI 只看到外部 API 的请求/响应。</li>
+          <li>mTLS 双向认证：每台设备一张 client cert，丢失可秒吊销。</li>
+          <li>所有 resolve / proxy / rotate 调用都落审计日志 <code>audit/audit-YYYY-MM-DD.jsonl</code>。</li>
+          <li>策略引擎：每个客户端有 <code>allowed_resolve</code> / <code>allowed_proxy</code> 白名单。</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Secret Broker v2.0 · <a href="/api/v1/identity" id="api-link">JSON API</a> · <a href="/health">/health</a></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

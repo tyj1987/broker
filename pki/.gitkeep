@@ -1,0 +1,6 @@
+# PKI 目录结构
+# certs/ 目录会在 init-ca.sh 之后自动创建
+#   ca/         - 根 CA（私钥严禁外泄）
+#   server/     - broker 服务端证书
+#   clients/    - 客户端证书（每台设备一张）
+# .crt 和 .key 都不进 git（见 .gitignore）

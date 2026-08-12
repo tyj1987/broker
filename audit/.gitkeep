@@ -1,0 +1,3 @@
+# 审计日志目录
+# broker 启动时会自动写 audit-YYYY-MM-DD.jsonl
+# 不要把 .jsonl 文件 commit 到 git

@@ -1,0 +1,7 @@
+# Age 私钥目录
+# 把你的主 age 私钥放这里，文件名叫 age.key
+# 权限：chmod 600 age.key (Linux/Mac) 或 icacls age.key /inheritance:r /grant:r "$env:USERNAME:R" (Windows)
+#
+# 备份: scripts/backup-keys.ps1 会扫描所有 .key 文件
+# 多钥匙冗余: SOPS 支持一个文件用多个公钥加密，A 解不了 B 还能解
+# 详见 README.md

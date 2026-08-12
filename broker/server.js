@@ -190,36 +190,50 @@ function readAudit({ since, limit = 100 } = {}) {
 }
 
 // ============================================================
-// Policy engine
+// Session tokens (for dashboard / browser usage; mTLS is still supported)
 // ============================================================
-function getClientContext(socket) {
-  // Use getPeerCertificate() method (peerCertificate property may not be populated
-  // synchronously on TLSSocket in all Node versions; the method is canonical).
-  let cert = null;
-  try {
-    if (typeof socket.getPeerCertificate === 'function') {
-      cert = socket.getPeerCertificate(true);
-    } else if (socket.peerCertificate) {
-      cert = socket.peerCertificate;
-    }
-  } catch (e) {
+const SESSIONS = new Map();  // token -> { cn, fp, role, clientName, expiresAt }
+const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 min
+const SESSION_HEADER = 'x-auth-token';
+
+function makeSession(ctx) {
+  const token = randomUUID();
+  SESSIONS.set(token, {
+    cn: ctx.cn,
+    fp: ctx.fp,
+    role: ctx.client.role,
+    clientName: ctx.clientName,
+    cert: ctx.cert,
+    client: ctx.client,
+    expiresAt: Date.now() + SESSION_TTL_MS,
+    createdAt: Date.now(),
+  });
+  return token;
+}
+
+function getSession(req) {
+  const t = req.headers[SESSION_HEADER];
+  if (!t) return null;
+  const s = SESSIONS.get(t);
+  if (!s) return null;
+  if (Date.now() > s.expiresAt) {
+    SESSIONS.delete(t);
     return null;
   }
-  if (!cert || !cert.subject) return null;
-  const cn = cert.subject.CN;
-  const fp = cert.fingerprint256;
-  if (!cn || !fp) return null;
-  // lookup in config (match by fingerprint)
-  let matched = null;
-  let matchedBy = null;
-  for (const [name, c] of Object.entries(CONFIG.clients)) {
-    if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fp.toUpperCase()) {
-      matched = c;
-      matchedBy = name;
-      break;
-    }
-  }
-  return { cn, fp, client: matched, clientName: matchedBy, certSubject: cert.subject };
+  // sliding expiration
+  s.expiresAt = Date.now() + SESSION_TTL_MS;
+  return s;
+}
+
+function deleteSession(token) {
+  if (token) SESSIONS.delete(token);
+}
+
+
+function getClientContext(socket) {
+  // Kept for back-compat with places that still pass req.socket.
+  // New code should use getIdentity(req) which handles both mTLS and session.
+  return getIdentity({ socket });
 }
 
 function checkPathAllowed(pattern, path) {
@@ -261,6 +275,21 @@ function canProxy(ctx, serviceName, path) {
 // Rate limit (in-memory, per-fingerprint)
 // ============================================================
 const RATE_BUCKETS = new Map();
+
+// timing-safe string compare (for password check)
+async function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) {
+    // still consume time on the longest length to avoid early-reject timing leak
+    let dummy = 0;
+    for (let i = 0; i < Math.max(a.length, b.length); i++) dummy |= 0;
+    return false;
+  }
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
 function rateLimit(ctx) {
   if (!ctx.client) return true;  // fail at canResolve/canProxy later
   const limit = ctx.client.rate_limit || '100/hour';
@@ -567,7 +596,7 @@ async function handle(req, res) {
   }
 
   // ----- Everything below needs mTLS auth -----
-  const ctx = getClientContext(req.socket);
+  const ctx = getIdentity(req);
   if (!ctx || !ctx.certSubject) {
     audit({ action: 'connect', status: 'denied', reason: 'no_client_cert', remote: req.socket.remoteAddress });
     return jsonError(res, 401, 'mTLS client certificate required');
@@ -581,6 +610,47 @@ async function handle(req, res) {
     return jsonError(res, 429, 'Rate limit exceeded');
   }
 
+  // ----- POST /api/v1/login (mTLS cert + password -> session token) -----
+  if (m === 'POST' && p === '/api/v1/login') {
+    // mTLS only for login (to prevent password-only brute force from anywhere)
+    if (ctx.via !== 'mtls') {
+      return jsonError(res, 401, 'mTLS client certificate required for /login');
+    }
+    const body = await readBody(req) || {};
+    const password = body.password;
+    if (!password) return jsonError(res, 400, 'Missing {password}');
+    // verify password (timing-safe compare against per-client password hash)
+    const expected = ctx.client.password;
+    if (!expected) return jsonError(res, 403, 'No password configured for this client');
+    const ok = await timingSafeEqual(password, expected);
+    if (!ok) {
+      audit({ action: 'login', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_password' });
+      return jsonError(res, 401, 'Bad password');
+    }
+    const token = makeSession({ cn: ctx.cn, fp: ctx.fp, client: ctx.client, clientName: ctx.clientName, cert: { subject: ctx.certSubject } });
+    audit({ action: 'login', cn: ctx.cn, fp: ctx.fp, status: 'ok', via: 'mtls' });
+    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    return send(res, 200, {
+      token,
+      expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      cn: ctx.cn,
+      role: ctx.client.role,
+      via: 'session',
+    });
+  }
+
+  // ----- POST /api/v1/logout (drop session token) -----
+  if (m === 'POST' && p === '/api/v1/logout') {
+    const token = req.headers[SESSION_HEADER] || (req.headers.cookie || '').match(/broker_session=([^;]+)/)?.[1];
+    if (token) {
+      const s = SESSIONS.get(token);
+      if (s) audit({ action: 'logout', cn: s.cn, fp: s.fp, status: 'ok' });
+      deleteSession(token);
+    }
+    res.setHeader('Set-Cookie', 'broker_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+    return send(res, 200, { logged_out: true });
+  }
+
   // ----- GET /api/v1/identity -----
   if (m === 'GET' && p === '/api/v1/identity') {
     return send(res, 200, {
@@ -589,6 +659,7 @@ async function handle(req, res) {
       role: ctx.client.role,
       client_name: ctx.clientName,
       cert_subject: ctx.certSubject,
+      via: ctx.via,
     });
   }
 
@@ -711,9 +782,48 @@ async function handle(req, res) {
 }
 
 // ============================================================
-// mTLS HTTPS server
+// Identity: try session token first (for dashboard / browser), then mTLS
 // ============================================================
-function start() {
+function getIdentity(req) {
+  // 1. session token (from dashboard / browser)
+  const session = getSession(req);
+  if (session) {
+    return {
+      cn: session.cn,
+      fp: session.fp,
+      client: session.client,
+      clientName: session.clientName,
+      certSubject: session.cert?.subject || { CN: session.cn },
+      via: 'session',
+    };
+  }
+  // 2. mTLS client cert (from CLI / scripts)
+  const peer = req.socket.peerCertificate;
+  let cert = null;
+  if (typeof req.socket.getPeerCertificate === 'function') {
+    cert = req.socket.getPeerCertificate(true);
+  } else if (peer) {
+    cert = peer;
+  }
+  if (!cert || !cert.subject) return null;
+  const cn = cert.subject.CN;
+  const fp = cert.fingerprint256;
+  if (!cn || !fp) return null;
+  let matched = null, matchedBy = null;
+  for (const [name, c] of Object.entries(CONFIG.clients)) {
+    if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fp.toUpperCase()) {
+      matched = c; matchedBy = name; break;
+    }
+  }
+  if (!matched) return null;
+  return {
+    cn, fp, client: matched, clientName: matchedBy,
+    certSubject: cert.subject,
+    via: 'mtls',
+  };
+}
+
+
   const tlsOpts = {
     cert: readFileSync(TLS_CERT),
     key: readFileSync(TLS_KEY),

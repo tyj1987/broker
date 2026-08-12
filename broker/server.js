@@ -212,7 +212,8 @@ function makeSession(ctx) {
 }
 
 function getSession(req) {
-  const t = req.headers[SESSION_HEADER];
+  const t = req.headers[SESSION_HEADER]
+    || (req.headers.cookie || '').match(/broker_session=([^;]+)/)?.[1];
   if (!t) return null;
   const s = SESSIONS.get(t);
   if (!s) return null;

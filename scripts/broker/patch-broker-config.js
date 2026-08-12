@@ -68,5 +68,10 @@ if (admin) {
 
 const header = '# broker.yaml - Secret Broker 服务端配置（SOPS 加密）\n'
   + '# services = 可代理的外部 API；clients = 证书指纹 + 权限 + 登录密码\n';
-fs.writeFileSync(path, header + YAML.stringify(doc));
+let out = header + YAML.stringify(doc);
+// SOPS (go-yaml) parses bare YYYY-MM-DD as time.Time and fails to walk it —
+// re-quote date-like scalars and mustache templates after stringify.
+out = out.replace(/^(\s*[^#].*?):\s*(\d{4}-\d{2}-\d{2})\s*$/gm, '$1: "$2"');
+out = out.replace(/^(\s*[^#].*?):\s*(Bearer\s+\{\{secret\}\})\s*$/gm, '$1: "$2"');
+fs.writeFileSync(path, out);
 console.log('patched services:', Object.keys(doc.services).join(', '));

@@ -9,11 +9,10 @@ vars:
   APP_NAME: my-first-app
   REGISTRY_ALIYUN: registry.cn-hangzhou.aliyuncs.com/your-ns
   REGISTRY_TENCENT: ccr.ccs.tencentyun.com/your-ns
-  AGE_KEY_DIR: '{{.USERPROFILE | default "~"}}\.config\sops\age'
 
 tasks:
   default:
-    desc: 列出所有任务
+    desc: List all tasks
     cmds:
       - task --list
 
@@ -21,7 +20,7 @@ tasks:
   # 工具检查
   # ============================
   check:
-    desc: 检查必需工具
+    desc: Check required tools
     cmds:
       - pwsh -File scripts/check-tools.ps1
 
@@ -29,100 +28,92 @@ tasks:
   # 密钥管理
   # ============================
   secrets:init:
-    desc: 初始化密钥体系（生成 age 钥匙 + 加密第一个文件）
+    desc: Initialize secret system (generate age keys + encrypt first file)
     cmds:
       - pwsh -File bootstrap.ps1
 
   secrets:edit:
-    desc: 编辑 common.yaml（自动解密 → 编辑 → 加密）
+    desc: Edit common.env (auto decrypt -> edit -> encrypt)
     cmds:
-      - sops secrets/common.yaml
+      - sops secrets/common.env
 
   secrets:view:
-    desc: 查看解密后的密钥（不推荐日常用）
+    desc: View decrypted secrets
     cmds:
-      - sops --decrypt secrets/common.yaml
+      - sops --decrypt secrets/common.env
 
   secrets:export:
-    desc: 解密到 .env 文件（用于不支持 SOPS 的工具）
+    desc: Decrypt to .env file (for tools that do not understand SOPS)
     cmds:
-      - sops --decrypt --output-type dotenv secrets/common.yaml > .env.decrypted
-      - echo "✅ .env.decrypted 已生成（已加入 .gitignore）"
+      - sops --decrypt --output-type dotenv secrets/common.env > .env
+      - echo "✅ .env generated (gitignored)"
 
   secrets:rotate:
-    desc: 轮转所有 age 钥匙（删旧公钥 + 加新公钥 + 重加密）
+    desc: Rotate all age keys
     cmds:
       - pwsh -File scripts/rotate-keys.ps1
 
   # ============================
-  # 备份
+  # Backup
   # ============================
   backup:keys:
-    desc: 备份 age 私钥到指定目录
+    desc: Backup age private keys
     cmds:
       - pwsh -File scripts/backup-keys.ps1
 
   # ============================
-  # 开发
+  # Development
   # ============================
   dev:
-    desc: 启动开发环境
-    cmds:
-      - task:dev:deps
-      - task:dev:run
+    desc: Start dev environment (auto-decrypt secrets + run app)
+    deps: [dev:secrets, dev:run]
 
-  dev:deps:
-    desc: 安装依赖
+  dev:secrets:
+    desc: Decrypt secrets to .env for the app
     cmds:
-      - cd app && npm install
-    platforms: [windows, linux, darwin]
+      - sops --decrypt --output-type dotenv secrets/common.env > .env
 
   dev:run:
-    desc: 启动开发服务器
+    desc: Run the Node.js app
     cmds:
-      - cd app && npm run dev
-    ignore_error: true
+      - cd app && node --env-file=../.env index.js
 
   # ============================
-  # 代码质量
+  # Code quality
   # ============================
   lint:
-    desc: 代码风格检查
+    desc: Lint code
     cmds:
       - cd app && npm run lint
-    platforms: [windows, linux, darwin]
 
   format:
-    desc: 自动格式化代码
+    desc: Format code
     cmds:
       - cd app && npm run format
-    platforms: [windows, linux, darwin]
 
   # ============================
-  # 测试
+  # Tests
   # ============================
   test:
-    desc: 运行测试
+    desc: Run tests
     cmds:
       - cd app && npm test
-    platforms: [windows, linux, darwin]
 
   test:coverage:
-    desc: 测试 + 覆盖率报告
+    desc: Run tests with coverage
     cmds:
       - cd app && npm run test:coverage
-    platforms: [windows, linux, darwin]
 
   # ============================
-  # 构建
+  # Build
   # ============================
   build:
-    desc: 构建 Docker 镜像（多架构）
+    desc: Build Docker image (multi-arch)
     cmds:
       - docker buildx build --platform linux/amd64,linux/arm64 -t {{.APP_NAME}}:{{.TAG | default "latest"}} --load .
 
   push:
-    desc: 推送到阿里云 + 腾讯云
+    desc: Push to Aliyun ACR + Tencent TCR
     cmds:
       - docker tag {{.APP_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_ALIYUN}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
       - docker tag {{.APP_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_TENCENT}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
@@ -130,29 +121,20 @@ tasks:
       - docker push {{.REGISTRY_TENCENT}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
 
   # ============================
-  # 部署
+  # Deploy
   # ============================
   deploy:
-    desc: 完整部署（build + push + terraform apply）
+    desc: Full deploy (build + push + terraform apply)
     cmds:
       - task:build
       - task:push
       - cd infra/aliyun && terraform init && terraform apply -auto-approve
 
   # ============================
-  # 清理
+  # Cleanup
   # ============================
   clean:
-    desc: 清理临时文件
+    desc: Clean temp files
     cmds:
-      - rm -f .env.decrypted *.dec.yaml
+      - rm -f .env *.dec.yaml
       - docker system prune -f
-
-  # ============================
-  # 文档
-  # ============================
-  docs:view:
-    desc: 在浏览器中打开方案文档
-    cmds:
-      - start C:\home\dev-system\README.md
-    platforms: [windows]

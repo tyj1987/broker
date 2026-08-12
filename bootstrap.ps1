@@ -299,15 +299,18 @@ Banner "Step 7/7 - Initialize git / 初始化 git"
 if (Confirm-Prompt "Initialize git repo and commit? [Y/n] / 初始化 git 仓库并提交？") {
     $userName = git config --global user.name 2>$null
     $userEmail = git config --global user.email 2>$null
-    if (-not $userName) {
-        $defaultName = if ($env:USERNAME) { $env:USERNAME } else { "Developer" }
-        git config --global user.name $defaultName
-        Write-Host "  set user.name = $defaultName" -ForegroundColor Gray
-    }
-    if (-not $userEmail) {
-        $defaultEmail = "$($env:USERNAME)@localhost"
-        git config --global user.email $defaultEmail
-        Write-Host "  set user.email = $defaultEmail" -ForegroundColor Gray
+    if (-not $userName -or -not $userEmail) {
+        Write-Host ""
+        Write-Host "  ⚠️  git user.name / user.email is not set. / 未配置。" -ForegroundColor Yellow
+        Write-Host "  Please run first / 请先执行：" -ForegroundColor Yellow
+        Write-Host "     git config --global user.name  \"your-name\"" -ForegroundColor Yellow
+        Write-Host "     git config --global user.email \"you@example.com\"" -ForegroundColor Yellow
+        $userName = Read-Host "  user.name"
+        $userEmail = Read-Host "  user.email"
+        git config --global user.name $userName
+        git config --global user.email $userEmail
+        Write-Host "  set user.name = $userName" -ForegroundColor Gray
+        Write-Host "  set user.email = $userEmail" -ForegroundColor Gray
     }
 
     if (-not (Test-Path ".git")) {

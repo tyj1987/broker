@@ -1,10 +1,12 @@
 # .sops.yaml
-# SOPS encryption rules. bootstrap.ps1 fills in the public keys.
-# Docs: https://github.com/getsops/sops
+# SOPS encryption rules. Public keys are filled in by bootstrap.ps1.
+# SOPS 加密规则。公钥由 bootstrap.ps1 自动填入。
+# Docs / 文档: https://github.com/getsops/sops
 #
-# Note on Windows: sops 3.7.x matches path_regex against the full file path
-# using Go regexp. We use filename patterns (.*common\.env$) for portability
-# across Windows and Linux.
+# Note: sops 3.7.x on Windows matches path_regex against the FULL path with
+# Go regexp. We use filename-only patterns for portability.
+# 注意：sops 3.7.x 在 Windows 下用 Go 正则匹配完整路径，
+# 这里用纯文件名模式方便 Windows / Linux 通用。
 
 creation_rules:
   - path_regex: .*common\.env$
@@ -23,3 +25,9 @@ creation_rules:
     key_groups:
       - age:
           - "age1lm7kxfcgjm66ayh4k6tjzaf0d7ns60w3ssz65dhvzfdfnptf5dhquma7ma"
+      # For production-grade, replace local key above with cloud KMS:
+      # 生产环境推荐改成只允许云 KMS 解密（把上面 A 那行删掉）：
+      # - alibabakms:
+      #     - xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      # - tencentkms:
+      #     - alias/your-key-alias

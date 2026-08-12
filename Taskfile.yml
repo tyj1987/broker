@@ -1,7 +1,8 @@
 # Taskfile.yml
-# 跨平台任务编排（替代 Makefile）
-# 用法：task --list / task <name>
-# 安装：scoop install go-task
+# Cross-platform task runner (replaces Makefile).
+# 跨平台任务编排（替代 Makefile）。
+# Usage / 用法: task --list / task <name>
+# Install / 安装: scoop install go-task
 
 version: '3'
 
@@ -12,108 +13,108 @@ vars:
 
 tasks:
   default:
-    desc: List all tasks
+    desc: List all tasks / 列出所有任务
     cmds:
       - task --list
 
   # ============================
-  # 工具检查
+  # 工具检查 / Tool check
   # ============================
   check:
-    desc: Check required tools
+    desc: Check required tools / 检查必需工具
     cmds:
       - pwsh -File scripts/check-tools.ps1
 
   # ============================
-  # 密钥管理
+  # 密钥管理 / Secrets
   # ============================
   secrets:init:
-    desc: Initialize secret system (generate age keys + encrypt first file)
+    desc: Initialize secret system (generate age keys + encrypt first file) / 初始化密钥体系（生成 age 钥匙 + 加密第一个文件）
     cmds:
       - pwsh -File bootstrap.ps1
 
   secrets:edit:
-    desc: Edit common.env (auto decrypt -> edit -> encrypt)
+    desc: Edit common.env (auto decrypt -> edit -> encrypt) / 编辑 common.env（自动解密 → 编辑 → 加密）
     cmds:
       - sops secrets/common.env
 
   secrets:view:
-    desc: View decrypted secrets
+    desc: View decrypted secrets / 查看解密后内容
     cmds:
       - sops --decrypt secrets/common.env
 
   secrets:export:
-    desc: Decrypt to .env file (for tools that do not understand SOPS)
+    desc: Decrypt to .env file (for tools that do not understand SOPS) / 解密到 .env 文件（给不认 SOPS 的工具用）
     cmds:
       - sops --decrypt --output-type dotenv secrets/common.env > .env
-      - echo "✅ .env generated (gitignored)"
+      - echo "OK .env generated (gitignored) / .env 已生成（已 gitignore）"
 
   secrets:rotate:
-    desc: Rotate all age keys
+    desc: Rotate all age keys / 轮转所有 age 钥匙
     cmds:
       - pwsh -File scripts/rotate-keys.ps1
 
   # ============================
-  # Backup
+  # 备份 / Backup
   # ============================
   backup:keys:
-    desc: Backup age private keys
+    desc: Backup age private keys / 备份 age 私钥
     cmds:
       - pwsh -File scripts/backup-keys.ps1
 
   # ============================
-  # Development
+  # 本地开发 / Development
   # ============================
   dev:
-    desc: Start dev environment (auto-decrypt secrets + run app)
+    desc: Start dev environment (auto-decrypt secrets + run app) / 启动开发环境（自动解密密钥 + 跑应用）
     deps: [dev:secrets, dev:run]
 
   dev:secrets:
-    desc: Decrypt secrets to .env for the app
+    desc: Decrypt secrets to .env for the app / 解密密钥到 .env
     cmds:
       - sops --decrypt --output-type dotenv secrets/common.env > .env
 
   dev:run:
-    desc: Run the Node.js app
+    desc: Run the Node.js app / 跑 Node 应用
     cmds:
       - cd app && node --env-file=../.env index.js
 
   # ============================
-  # Code quality
+  # 代码质量 / Code quality
   # ============================
   lint:
-    desc: Lint code
+    desc: Lint code / 代码风格
     cmds:
       - cd app && npm run lint
 
   format:
-    desc: Format code
+    desc: Format code / 格式化代码
     cmds:
       - cd app && npm run format
 
   # ============================
-  # Tests
+  # 测试 / Tests
   # ============================
   test:
-    desc: Run tests
+    desc: Run tests / 跑测试
     cmds:
       - cd app && npm test
 
   test:coverage:
-    desc: Run tests with coverage
+    desc: Run tests with coverage / 跑测试 + 覆盖率
     cmds:
       - cd app && npm run test:coverage
 
   # ============================
-  # Build
+  # 构建 / Build
   # ============================
   build:
-    desc: Build Docker image (multi-arch)
+    desc: Build Docker image (multi-arch) / 构建 Docker 镜像（多架构）
     cmds:
       - docker buildx build --platform linux/amd64,linux/arm64 -t {{.APP_NAME}}:{{.TAG | default "latest"}} --load .
 
   push:
-    desc: Push to Aliyun ACR + Tencent TCR
+    desc: Push to Aliyun ACR + Tencent TCR / 推送到阿里云 ACR + 腾讯云 TCR
     cmds:
       - docker tag {{.APP_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_ALIYUN}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
       - docker tag {{.APP_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_TENCENT}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
@@ -121,20 +122,20 @@ tasks:
       - docker push {{.REGISTRY_TENCENT}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
 
   # ============================
-  # Deploy
+  # 部署 / Deploy
   # ============================
   deploy:
-    desc: Full deploy (build + push + terraform apply)
+    desc: Full deploy (build + push + terraform apply) / 完整部署
     cmds:
       - task:build
       - task:push
       - cd infra/aliyun && terraform init && terraform apply -auto-approve
 
   # ============================
-  # Cleanup
+  # 清理 / Cleanup
   # ============================
   clean:
-    desc: Clean temp files
+    desc: Clean temp files / 清理临时文件
     cmds:
       - rm -f .env *.dec.yaml
       - docker system prune -f

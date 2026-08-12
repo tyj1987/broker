@@ -1,22 +1,24 @@
 # .pre-commit-config.yaml
-# 安装：pip install pre-commit && pre-commit install
-# 手动跑：pre-commit run --all-files
+# Pre-commit hooks. / pre-commit 钩子。
+# Install / 安装: pip install pre-commit && pre-commit install
+# Run manually / 手动跑: pre-commit run --all-files
 
 repos:
-  # 通用：gitleaks 防密钥误提交
+  # 通用：gitleaks 防密钥误提交 / Block plaintext secrets
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.4
     hooks:
       - id: gitleaks
 
-  # 通用：基础文件检查
+  # 通用：基础文件检查 / Basic file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-        # SOPS 加密文件含 ENC[] 标记，关闭严格模式
+        # SOPS 加密文件含 ENC[] 标记，关掉严格模式
+        # SOPS-encrypted files contain ENC[] markers; relax strict mode
         args: ['--allow-multiple-documents']
       - id: check-merge-conflict
       - id: detect-private-key

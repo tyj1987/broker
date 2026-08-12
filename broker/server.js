@@ -326,20 +326,145 @@ function jsonError(res, status, msg) {
 }
 
 // ============================================================
-// Upstream client: inject creds and forward
+// Aliyun / Tencent IMDS + STS token (no long-lived AK needed)
 // ============================================================
-async function callUpstream(serviceCfg, method, path, query, headers, body) {
-  // Build URL
-  const url = new URL(path, serviceCfg.upstream);
-  if (query && typeof query === 'object') {
-    for (const [k, v] of Object.entries(query)) {
-      if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
-    }
-  }
+const IMDS_TIMEOUT_MS = 2000;
+const STS_CACHE = new Map();  // roleName -> { token, expiresAt }
 
+async function _imdsFetch(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), IMDS_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) throw new Error(`IMDS ${r.status}`);
+    return r;
+  } finally { clearTimeout(t); }
+}
+
+// Try to get the instance-attached RAM role name. Returns null if not on ECS.
+async function getAliyunRamRole() {
+  try {
+    const r = await _imdsFetch('http://100.100.100.200/latest/meta-data/ram/security-credentials/');
+    const txt = (await r.text()).trim();
+    if (!txt || txt === 'Not Found' || txt.startsWith('<!')) return null;
+    // IMDS sometimes returns the role name directly, sometimes JSON-wrapped.
+    return txt.replace(/^"|"$/g, '');
+  } catch (e) {
+    return null;
+  }
+}
+
+// Get STS credentials (cached until near expiry)
+async function getAliyunStsToken(roleName) {
+  const cached = STS_CACHE.get(roleName);
+  if (cached && Date.now() < cached.expiresAt - 60_000) return cached;
+  const r = await _imdsFetch(`http://100.100.100.200/latest/meta-data/ram/security-credentials/${encodeURIComponent(roleName)}`);
+  const j = await r.json();
+  if (j.Code && j.Code !== 'Success') throw new Error(`STS failed: ${j.Code} ${j.Message}`);
+  const token = {
+    accessKeyId: j.AccessKeyId,
+    accessKeySecret: j.AccessKeySecret,
+    securityToken: j.SecurityToken,
+    expiresAt: new Date(j.Expiration).getTime(),
+    code: j.Code,
+  };
+  STS_CACHE.set(roleName, token);
+  return token;
+}
+
+async function getAliyunCreds(credentialSource) {
+  // credentialSource: "imds" | "sops" (default sops)
+  if (credentialSource === 'imds') {
+    const role = await getAliyunRamRole();
+    if (!role) throw new Error('IMDS: no RAM role attached to this instance. Run on ECS with instance profile.');
+    return await getAliyunStsToken(role);
+  }
+  // SOPS-based: just return the AK/SK from the secret cache
+  return null;  // caller will fall back to getSecret()
+}
+
+// ============================================================
+// Aliyun OpenAPI v2 signature
+// https://help.aliyun.com/document_detail/315526.htm
+// ============================================================
+import { createHmac } from 'node:crypto';
+
+function aliyunPercentEncode(s) {
+  // Aliyun encoding: encodeURIComponent then replace !*()' with their hex
+  return encodeURIComponent(s)
+    .replace(/\+/g, '%20')
+    .replace(/\*/g, '%2A')
+    .replace(/%7E/g, '~');  // ~ 已经是 %7E 了，encodeURIComponent 会编码为 %7E
+}
+
+function aliyunV2Sign(method, params, accessKeySecret) {
+  // 1. Sort params by key
+  const sortedKeys = Object.keys(params).sort();
+  // 2. Build canonicalized query string
+  const canonical = sortedKeys
+    .map(k => `${aliyunPercentEncode(k)}=${aliyunPercentEncode(params[k])}`)
+    .join('&');
+  // 3. StringToSign
+  const stringToSign = `${method}&${aliyunPercentEncode('/')}&${aliyunPercentEncode(canonical)}`;
+  // 4. Sign
+  const signature = createHmac('sha1', `${accessKeySecret}&`)
+    .update(stringToSign)
+    .digest('base64');
+  return signature;
+}
+
+// Build a signed aliyun_v2 URL (query params merged with Signature etc.)
+function buildAliyunSignedUrl(upstream, action, query, region, creds) {
+  const params = {
+    Format: 'JSON',
+    Version: '2014-05-26',
+    AccessKeyId: creds.accessKeyId,
+    SignatureMethod: 'HMAC-SHA1',
+    Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    SignatureVersion: '1.0',
+    SignatureNonce: randomUUID(),
+    Action: action,
+    ...(region ? { RegionId: region } : {}),
+    ...(query || {}),
+  };
+  // Some OpenAPIs also want ServiceCode/Product. Caller can set Service param.
+  // Aliyun requires "Signature" param without signing itself
+  const sig = aliyunV2Sign('GET', params, creds.accessKeySecret);
+  const url = new URL('/', upstream);
+  // add all params
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
+  }
+  url.searchParams.set('Signature', sig);
+  // IMDS-style STS also requires SecurityToken
+  if (creds.securityToken) {
+    url.searchParams.set('SecurityToken', creds.securityToken);
+  }
+  return url;
+}
+
+// Extract Aliyun Action from a path like "/?Action=DescribeInstances"
+// or "/DescribeInstances" (for ECS-style). The broker.yaml maps service→Action via
+// `action` field; if not set, the body.path is used.
+function getAliyunAction(path, serviceCfg) {
+  if (serviceCfg.action) return serviceCfg.action;
+  // try to extract from query string
+  try {
+    const u = new URL(path, 'http://x/');
+    if (u.searchParams.get('Action')) return u.searchParams.get('Action');
+  } catch {}
+  return null;
+}
+
+
+async function callUpstream(serviceCfg, method, path, query, headers, body) {
   // Resolve all secrets used by this service
   const injectHeaders = { ...(serviceCfg.inject_headers || {}) };
-  if (serviceCfg.token_secret) {
+  let url = null;
+
+  if (serviceCfg.type === 'bearer' || serviceCfg.type === 'github_token' || serviceCfg.type === 'header') {
+    // Simple bearer/header auth: resolve a single secret and inject as header
+    if (!serviceCfg.token_secret) throw new Error(`Service ${serviceCfg.name || '?'} missing token_secret`);
     const token = getSecret(serviceCfg.token_secret);
     if (!token) throw new Error(`Secret ${serviceCfg.token_secret} not loaded`);
     if (serviceCfg.type === 'bearer') {
@@ -350,17 +475,30 @@ async function callUpstream(serviceCfg, method, path, query, headers, body) {
       const tpl = serviceCfg.header_value_template || 'Bearer {{secret}}';
       injectHeaders[serviceCfg.header_name || 'Authorization'] = tpl.replace('{{secret}}', token);
     }
-  }
-  // aliyun_v2 / tencent 云 API 走签名（简化版：透传 access_key + secret 给签名函数）
-  if (serviceCfg.type === 'aliyun_v2' || serviceCfg.type === 'tencent_v3') {
-    const ak = getSecret(serviceCfg.access_key_secret);
-    const sk = getSecret(serviceCfg.access_secret_secret);
-    if (!ak || !sk) throw new Error('Aliyun/Tencent access_key or access_secret not loaded');
-    // 简化实现：把签名所需参数透传到 upstream 的 query string（生产应实现完整签名算法）
-    injectHeaders['X-Broker-Provider'] = serviceCfg.type;
-    injectHeaders['X-Broker-Access-Key'] = ak;
-    // access_secret 只在内存中使用，不写入 headers，签名由上游完成
-    serviceCfg._runtime = { ak, sk };
+    // Build URL: caller-provided path + query against upstream
+    url = new URL(path, serviceCfg.upstream);
+    if (query && typeof query === 'object') {
+      for (const [k, v] of Object.entries(query)) {
+        if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
+      }
+    }
+  } else if (serviceCfg.type === 'aliyun_v2') {
+    // Aliyun OpenAPI v2: pull creds from IMDS (preferred) or SOPS, then sign
+    let creds = null;
+    if (serviceCfg.credential_source === 'imds') {
+      creds = await getAliyunCreds('imds');
+    } else {
+      // sops-based
+      const ak = getSecret(serviceCfg.access_key_secret);
+      const sk = getSecret(serviceCfg.access_secret_secret);
+      if (!ak || !sk) throw new Error('Aliyun access_key or access_secret not loaded');
+      creds = { accessKeyId: ak, accessKeySecret: sk };
+    }
+    const action = getAliyunAction(path, serviceCfg);
+    if (!action) throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
+    url = buildAliyunSignedUrl(serviceCfg.upstream, action, query, serviceCfg.region, creds);
+  } else {
+    throw new Error(`Unsupported service type: ${serviceCfg.type}`);
   }
 
   // Build outgoing request

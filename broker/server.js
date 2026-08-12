@@ -312,8 +312,11 @@ function getSecretField(name, fieldName) {
 
 // ============================================================
 // Secret name validation
+// Allow: A-Z a-z 0-9 _ . -
+// First char must be letter, digit, or underscore (no leading dot/dash)
+// Max 128 chars
 // ============================================================
-const SECRET_NAME_RE = /^[A-Z0-9_][A-Z0-9_.]{0,127}$/;
+const SECRET_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$/;
 function isValidSecretName(name) {
   return typeof name === 'string' && SECRET_NAME_RE.test(name);
 }
@@ -1002,7 +1005,6 @@ async function handle(req, res) {
       audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'not_found' });
       return jsonError(res, 404, `Secret ${body.name} not loaded`);
     }
-    // Backward compat: return { value } for single-field (value), full { fields } for multi-field
     const field = body.field;
     if (field) {
       const v = entry.fields?.[field];
@@ -1010,16 +1012,23 @@ async function handle(req, res) {
         return jsonError(res, 404, `Field ${field} not found in secret ${body.name}`);
       }
       audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, field, status: 'ok' });
-      return send(res, 200, { name: body.name, field, value: v });
+      return send(res, 200, { name: body.name, field, value: v, type: entry.type });
     }
-    // No field specified: for backward compat, return value=string if there's a 'value' field,
-    // otherwise return the full fields object.
-    if (entry.fields && 'value' in entry.fields) {
-      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
-      return send(res, 200, { name: body.name, value: entry.fields.value, type: entry.type });
+    // No field specified: return a `value` that's always a non-empty string for backward compat.
+    // - single field (named "value" or any single field): return that value
+    // - multi-field: return JSON of all fields
+    // Plus always include `fields` for apps that want structured access.
+    const fieldNames = Object.keys(entry.fields || {});
+    let value = '';
+    if (fieldNames.length === 1) {
+      const v = entry.fields[fieldNames[0]];
+      value = v === null || v === undefined ? '' : String(v);
+    } else if (fieldNames.length > 1) {
+      // multi-field: serialize as JSON for the legacy `value` consumers (e.g. old CLI `get`)
+      value = JSON.stringify(entry.fields);
     }
     audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
-    return send(res, 200, { name: body.name, type: entry.type, fields: entry.fields });
+    return send(res, 200, { name: body.name, type: entry.type, value, fields: entry.fields });
   }
 
   // ============================================================
@@ -1068,7 +1077,7 @@ async function handle(req, res) {
     const body = await readBody(req) || {};
     const { name, type, description, fields } = body;
     if (!isValidSecretName(name)) {
-      return jsonError(res, 400, 'Invalid secret name. Use [A-Z0-9_.], max 128 chars.');
+      return jsonError(res, 400, 'Invalid secret name. Use [A-Za-z0-9_.-], must start with letter/digit/underscore, max 128 chars.');
     }
     if (!type || !ALLOWED_SECRET_TYPES.has(type)) {
       return jsonError(res, 400, `Unknown type: ${type}`);
@@ -1102,7 +1111,10 @@ async function handle(req, res) {
   }
 
   // ----- PUT /api/v1/admin/secrets/:name (update) -----
-  const updateMatch = p.match(/^\/api\/v1\/admin\/secrets\/([A-Za-z0-9_.]+)$/);
+  // Match the create endpoint's SECRET_NAME_RE exactly, so any name POST accepts
+  // is also routable via PUT/DELETE. The previous hard-coded `[A-Za-z0-9_.]+`
+  // silently 404'd for names containing hyphens (e.g. `aliyun-1786567607488`).
+  const updateMatch = p.match(/^\/api\/v1\/admin\/secrets\/([A-Za-z0-9_][A-Za-z0-9_.\-]{0,127})$/);
   if (m === 'PUT' && updateMatch && updateMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const name = updateMatch[1];

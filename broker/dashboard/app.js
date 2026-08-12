@@ -92,6 +92,9 @@ $$('.tab-btn').forEach(btn => {
     $$('.tab-content').forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
     $(`#tab-${btn.dataset.tab}`).classList.add('active');
+    // Refresh data for tabs that need it (avoid stale data after admin write)
+    if (btn.dataset.tab === 'secrets') loadSecrets();
+    if (btn.dataset.tab === 'audit') loadAudit();
   });
 });
 
@@ -322,32 +325,155 @@ async function loadSecrets() {
     for (const name of list) {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td><code>${escapeHtml(name)}</code></td>
-        <td><button class="btn btn-sm" data-name="${escapeHtml(name)}">resolve</button></td>`;
+        <td><button class="btn btn-sm" data-act="show" data-name="${escapeHtml(name)}">显示 / Show</button>
+            <button class="btn btn-sm" data-act="copy" data-name="${escapeHtml(name)}">复制 / Copy</button></td>`;
       tbody.appendChild(tr);
     }
     tbody.querySelectorAll('button[data-name]').forEach(btn => {
-      btn.addEventListener('click', () => resolveSecret(btn.dataset.name, btn));
+      btn.addEventListener('click', () => {
+        if (btn.dataset.act === 'show') showSecretValue(btn.dataset.name, btn);
+        else if (btn.dataset.act === 'copy') copySecretValue(btn.dataset.name, btn);
+      });
     });
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="2" class="status-error">${escapeHtml(e.message)}</td></tr>`;
   }
 }
 
-async function resolveSecret(name, btn) {
+async function showSecretValue(name, btn) {
+  const oldText = btn.textContent;
   btn.disabled = true; btn.textContent = '...';
   try {
     const r = await api('/api/v1/secrets/resolve', { method: 'POST', body: JSON.stringify({ name }) });
-    const masked = r.value.length > 8 ? r.value.slice(0, 4) + '****' + r.value.slice(-4) : '****';
-    btn.textContent = `已取 (${masked})`;
-    if (confirm(`密钥 ${name} 已取到 (${masked})\n完整值复制到剪贴板吗？（会写入剪贴板，建议用完清除）`)) {
-      await navigator.clipboard.writeText(r.value);
+    showSecretModal(name, r);
+    btn.textContent = oldText;
+  } catch (e) {
+    alert(`Resolve 失败: ${e.message}`);
+    btn.textContent = oldText;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function copySecretValue(name, btn) {
+  const oldText = '复制 / Copy';
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    const r = await api('/api/v1/secrets/resolve', { method: 'POST', body: JSON.stringify({ name }) });
+    // Always copy JSON for multi-field secrets so user gets full context
+    const toCopy = r.fields && Object.keys(r.fields).length > 1
+      ? JSON.stringify(r.fields, null, 2)
+      : r.value;
+    try {
+      await navigator.clipboard.writeText(toCopy);
+      btn.textContent = '已复制 ✓';
+      setTimeout(() => { btn.textContent = oldText; btn.disabled = false; }, 1500);
+      return;
+    } catch (clipErr) {
+      // Clipboard API often fails in non-HTTPS or non-focused contexts.
+      // Show the manual-copy fallback modal, but re-enable the button so the
+      // user can also retry the clipboard API from the modal's own "再试一次" button.
+      showSecretModal(name, r, toCopy);
+      btn.textContent = oldText;
+      btn.disabled = false;
+      return;
     }
   } catch (e) {
-    btn.textContent = '失败';
     alert(`Resolve 失败: ${e.message}`);
-  } finally {
-    setTimeout(() => { btn.disabled = false; btn.textContent = 'resolve'; }, 3000);
+    btn.textContent = oldText;
+    btn.disabled = false;
   }
+}
+
+function showSecretModal(name, resolveResult, preselectedForCopy) {
+  // Reuse the secret-modal for displaying the value (with select+copy)
+  const modal = $('#secret-modal');
+  const title = $('#secret-modal-title');
+  const f = $('#secret-form');
+  f.reset();
+  $('#sf-name').value = name;
+  $('#sf-name').disabled = true;
+  $('#sf-type').value = resolveResult.type || 'custom';
+  $('#sf-type').disabled = true;
+  $('#sf-description').value = '(当前查看模式 — 无法编辑)';
+  $('#sf-description').disabled = true;
+  // Build display in fields-container (use .sf-field wrapper for consistency with edit mode)
+  const container = $('#sf-fields-container');
+  container.innerHTML = '';
+  const fields = resolveResult.fields || {};
+  const fieldNames = Object.keys(fields);
+  for (const fname of fieldNames) {
+    const val = fields[fname];
+    const wrap = document.createElement('div');
+    wrap.className = 'sf-field';
+    wrap.dataset.field = fname;
+    const isMulti = fieldNames.length > 1;
+    const display = isMulti
+      ? `<pre class="sf-display-value">${escapeHtml(String(val == null ? '' : val))}</pre>`
+      : `<input type="text" value="${escapeHtml(String(val == null ? '' : val))}" readonly class="sf-display-value">`;
+    wrap.innerHTML = `<div class="sf-field-label"><div class="sf-field-label-text">${escapeHtml(fname)}${isMulti ? '' : ' (只读)'}</div>${display}</div>`;
+    container.appendChild(wrap);
+  }
+  // If clipboard failed, replace the field display with a prominent copy area
+  // and pre-select the text so Ctrl+C / Cmd+C copies immediately.
+  const errEl = $('#sf-error');
+  if (preselectedForCopy) {
+    container.innerHTML = `
+      <div class="sf-field" style="grid-column: 1 / -1">
+        <div class="sf-field-label">
+          <div class="sf-field-label-text">剪贴板被浏览器拦截 — 请手动复制 / Clipboard blocked — copy manually</div>
+          <textarea id="copy-fallback" readonly rows="10"
+            style="width:100%;font-family:var(--mono);font-size:13px;padding:10px;border:1px solid var(--border);border-radius:4px;background:#0a0a0a;color:#e0e0e0"
+            onclick="this.select();" onfocus="this.select();">${escapeHtml(preselectedForCopy)}</textarea>
+          <div class="hint" style="margin-top:6px">
+            <button type="button" class="btn btn-sm" id="btn-retry-copy">再试一次复制 / Retry clipboard</button>
+            <button type="button" class="btn btn-sm" id="btn-select-all">全选 / Select all</button>
+          </div>
+        </div>
+      </div>`;
+    errEl.hidden = true;
+    title.textContent = `复制 / Copy: ${name}`;
+    // Auto-select the textarea contents after the modal renders
+    setTimeout(() => {
+      const ta = $('#copy-fallback');
+      if (ta) { ta.focus(); ta.select(); }
+      // Wire up the action buttons
+      const retry = $('#btn-retry-copy');
+      if (retry) retry.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(preselectedForCopy);
+          retry.textContent = '已复制 ✓ / Copied!';
+          setTimeout(() => closeSecretModalClean(), 1000);
+        } catch (e) {
+          retry.textContent = '还是不行 — 用全选 / Still blocked — use select all';
+        }
+      });
+      const sel = $('#btn-select-all');
+      if (sel) sel.addEventListener('click', () => {
+        const ta = $('#copy-fallback');
+        if (ta) { ta.focus(); ta.select(); }
+      });
+    }, 50);
+  } else {
+    errEl.hidden = true;
+    title.textContent = `查看密钥 / View: ${name}`;
+  }
+  // Hide save button (this is view mode); cancel becomes "Close"
+  $('#btn-save-secret').style.display = 'none';
+  $('#btn-cancel-secret').textContent = '关闭 / Close';
+  modal.hidden = false;
+}
+
+function closeSecretModalClean() {
+  const modal = $('#secret-modal');
+  modal.hidden = true;
+  $('#sf-name').disabled = false;
+  $('#sf-type').disabled = false;
+  $('#sf-description').disabled = false;
+  $('#btn-save-secret').style.display = '';
+  $('#btn-cancel-secret').textContent = '取消 / Cancel';
+  $('#sf-fields-container').innerHTML = '';
+  $('#sf-error').hidden = true;
 }
 
 $('#btn-refresh-secrets').addEventListener('click', loadSecrets);

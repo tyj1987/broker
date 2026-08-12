@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=20260812d">
+  <link rel="stylesheet" href="style.css?v=20260812f">
 </head>
 <body>
 
@@ -143,36 +143,6 @@
             <tbody></tbody>
           </table>
         </div>
-        <!-- Secret edit/new modal -->
-        <div id="secret-modal" class="modal" hidden>
-          <div class="modal-card">
-            <h3 id="secret-modal-title">新增密钥 / New Secret</h3>
-            <p id="secret-modal-type-desc" class="hint"></p>
-            <form id="secret-form" autocomplete="off">
-              <label>名称 / Name
-                <input id="sf-name" type="text" required pattern="[A-Za-z0-9_.]+" maxlength="128" placeholder="GITHUB_PAT">
-                <span class="hint">规范：<code>[A-Z0-9_.]</code>。保存后不可修改。</span>
-              </label>
-              <label>类型 / Type
-                <select id="sf-type" required>
-                  <!-- dynamically populated from /api/v1/admin/types -->
-                </select>
-              </label>
-              <label>描述 / Description (可选)
-                <input id="sf-description" type="text" maxlength="200" placeholder="用途说明 / 备注">
-              </label>
-              <fieldset id="sf-fields">
-                <legend>字段 / Fields <span class="muted">(按所选类型动态生成)</span></legend>
-                <div id="sf-fields-container"></div>
-              </fieldset>
-              <div id="sf-error" class="status-error" hidden></div>
-              <div class="modal-actions">
-                <button type="button" class="btn" id="btn-cancel-secret">取消 / Cancel</button>
-                <button type="submit" class="btn btn-primary" id="btn-save-secret">保存 / Save</button>
-              </div>
-            </form>
-          </div>
-        </div>
       </section>
 
       <!-- ===== Docs tab ===== -->
@@ -215,7 +185,38 @@ secret-broker get github.pat</code></pre>
     </footer>
   </section>
 
-  <script src="app.js?v=20260812d"></script>
-  <script src="admin/secrets.js?v=20260812d"></script>
+  <!-- ===== Global Modal (Phase 1.1: moved out of tab-content so it works from any tab) ===== -->
+  <div id="secret-modal" class="modal" hidden>
+    <div class="modal-card">
+      <h3 id="secret-modal-title">新增密钥 / New Secret</h3>
+      <p id="secret-modal-type-desc" class="hint"></p>
+      <form id="secret-form" autocomplete="off">
+        <label>名称 / Name
+          <input id="sf-name" type="text" required pattern="[A-Za-z0-9_.\-]+" maxlength="128" placeholder="GITHUB_PAT">
+          <span class="hint">规范：<code>[A-Z0-9_.-]</code>，1-128 字符。保存后不可修改。</span>
+        </label>
+        <label>类型 / Type
+          <select id="sf-type" required>
+            <!-- dynamically populated from /api/v1/admin/types -->
+          </select>
+        </label>
+        <label>描述 / Description (可选)
+          <input id="sf-description" type="text" maxlength="200" placeholder="用途说明 / 备注">
+        </label>
+        <fieldset id="sf-fields">
+          <legend>字段 / Fields <span class="muted">(按所选类型动态生成)</span></legend>
+          <div id="sf-fields-container"></div>
+        </fieldset>
+        <div id="sf-error" class="status-error" hidden></div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="btn-cancel-secret">取消 / Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-save-secret">保存 / Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js?v=20260812f"></script>
+  <script src="admin/secrets.js?v=20260812f"></script>
 </body>
 </html>

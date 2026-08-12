@@ -334,8 +334,16 @@
     $('#secret-modal').hidden = true;
     // Security: clear all field values from DOM
     $$('#sf-fields-container input, #sf-fields-container textarea').forEach(el => { el.value = ''; });
+    $('#sf-fields-container').innerHTML = '';
     $('#sf-name').disabled = false;
     $('#sf-type').disabled = false;
+    $('#sf-description').disabled = false;
+    $('#btn-save-secret').style.display = '';
+    $('#btn-cancel-secret').textContent = '取消 / Cancel';
+    $('#sf-error').hidden = true;
+    // Reset modal title so copy/view modal titles don't leak into the next open
+    const title = $('#secret-modal-title');
+    if (title) title.textContent = '新增密钥 / New Secret';
     editingName = null;
   }
 

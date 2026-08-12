@@ -277,3 +277,13 @@ td code { font-size: 0.8rem; }
   display: flex; align-items: center; gap: 6px; padding: 6px 0;
 }
 .sf-field-checkbox input { width: auto !important; margin: 0; }
+.sf-display-value {
+  display: block; width: 100%; margin-top: 4px;
+  background: var(--bg-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 9px; font-size: 0.9rem; font-family: var(--mono);
+  word-break: break-all; white-space: pre-wrap;
+}
+pre.sf-display-value {
+  resize: vertical; min-height: 38px; max-height: 200px; overflow: auto;
+}

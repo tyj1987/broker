@@ -19,6 +19,9 @@
 
 * { box-sizing: border-box; }
 
+/* 让 [hidden] 永远生效，防止 .login-wrap 的 display:flex 覆盖 */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);

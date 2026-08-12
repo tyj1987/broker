@@ -1,309 +1,371 @@
-# my-first-app / 我的第一个应用
+# sops-age-template / SOPS+age 密钥模板
 
-> First project using the full dev system blueprint.
-> 使用完整开发系统蓝图的第一个项目。
->
-> System docs / 系统文档: `C:\home\dev-system\README.md`
+> **v2.0 新增 Secret Broker**：把"AI 安全使用密钥"变成"AI 不接触密钥"。
+> AI 客户端通过 mTLS HTTPS 调用 broker，让 broker 替它调 GitHub / 阿里云 / 腾讯云 / SSH，
+> 明文密钥永远只在 broker 内存里。
 
-A production-grade template that proves out the entire workflow:
-SOPS + age secret management, direnv auto-load, Docker Compose
-local stack, CI/CD, multi-cloud deploy, and a real Node app that
-talks to PostgreSQL + Redis with credentials pulled from an
-encrypted file at boot.
+> **System docs / 系统文档**: `C:\home\dev-system\README.md`
+> **架构详解 / Architecture deep-dive**: [`docs/04-secret-broker.md`](../dev-system/04-secret-broker.md)
 
-生产级模板，跑通整个工作流：SOPS + age 密钥管理、direnv 自动加载、
-Docker Compose 本地栈、CI/CD、多云部署，以及一个真正连 PostgreSQL +
-Redis（凭据从加密文件运行时解密）的 Node 应用。
+A production-grade template that combines **SOPS+age secret management** with a
+**Secret Broker** (mTLS HTTPS credential proxy). Deploy to **Aliyun + Tencent**,
+push to **dual container registries**, ship via **GitHub Actions**.
 
----
-
-## What you get / 能力清单
-
-- **One-time key generation, permanent reuse.** Encrypt once, decrypt
-  anywhere the age key is present. Any machine that can clone this repo
-  can decrypt `secrets/common.env`.
-
-  **一次生成钥匙，永久复用。** 在任一台有 age 钥匙的机器上 clone 仓库
-  就能解密 `secrets/common.env`。
-
-- **Zero plaintext secrets on disk or in CI.** Even the production
-  deployment decrypts at runtime via cloud KMS.
-
-  **磁盘和 CI 中无明文密钥。** 生产部署也通过云 KMS 在运行时解密。
-
-- **`task dev` is the only command you need.** It decrypts secrets and
-  starts the full stack (app + database + cache) in one shot.
-
-  **`task dev` 是你唯一需要敲的命令。** 自动解密密钥 + 启动完整栈
-  （app + 数据库 + 缓存）。
-
-- **Multi-cloud deploy ready.** GitHub Actions workflows push to both
-  Aliyun ACR and Tencent TCR, with OIDC-driven cloud KMS decryption.
-
-  **多云部署就绪。** GitHub Actions 同时推阿里云 ACR 和腾讯云 TCR，
-  云 KMS 走 OIDC 鉴权解密。
+生产级模板：把 **SOPS+age 静态密钥管理** 升级为 **Secret Broker 动态凭据代理**。
+双云（阿里云 + 腾讯云）部署、双 registry 推送、GitHub Actions 全自动。
 
 ---
 
-## 5-minute quick start / 5 分钟上手
+## ✨ What you get / 能力清单
 
-### 1. Install tools (one time, on any new machine)
-### 1. 装工具（一次性，任何新机器都要）
+### 核心：Secret Broker（v2.0）
 
-```powershell
-# Scoop (skip if already installed) / Scoop（已装则跳过）
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-irm get.scoop.sh | iex
+- **mTLS 双向认证** — 每台设备一张客户端证书，丢失可秒吊销
+- **代理模式（AI 推荐）** — AI 调外部 API 时，明文密钥永远不离开 broker 内存
+- **SOPS 加密存储** — 复用上一代 SOPS+age 体系，不引入新依赖
+- **全量审计** — JSON Lines 日志记录每个 resolve/proxy/rotate 调用
+- **策略引擎** — 客户端按 cert fingerprint 细粒度白名单
+- **轻量 Dashboard** — 浏览可见密钥、查审计、触发 rotate
 
-# All required tools in one go / 一次性装齐
-scoop install age sops git go-task direnv gitleaks nodejs
-# winget fallback for any package scoop can't find:
-# winget 后备方案：
-#   winget install FiloSottile.age Mozilla.SOPS OpenJS.NodeJS.LTS
-```
+### 三种使用模式
 
-Restart PowerShell so the new `PATH` takes effect.
-重启 PowerShell 让新 `PATH` 生效。
+| 模式 | 命令 | AI 接触明文? |
+|---|---|---|
+| **Proxy**（推荐） | `secret-broker proxy github GET /repos/x/y` | ❌ |
+| **Exec** | `secret-broker exec --env "GH_TOKEN" -- git push` | ❌ |
+| **Get** | `secret-broker get github.pat` | ⚠️ 白名单 |
 
-### 2. Bootstrap this project (idempotent)
-### 2. 引导本项目（幂等）
+### 基础设施（沿用 v1.x）
 
-```powershell
-cd C:\home\my-first-app
-pwsh -File bootstrap.ps1
-```
-
-What it does / 做的事：
-
-1. Verifies all required tools are installed. / 检查必需工具是否装好。
-2. Generates a main age key A at `~/.config/sops/age/key-a.txt`
-   (skipped if it already exists). / 在 `~/.config/sops/age/key-a.txt`
-   生成主钥匙 A（已存在则跳过）。
-3. Generates a backup key B and prompts to copy it to a USB drive.
-   / 生成备份钥匙 B 并提示拷到 U 盘。
-4. Writes the public keys into `.sops.yaml`. / 把公钥写进 `.sops.yaml`。
-5. Copies `secrets/common.env.example` to `secrets/common.env` and
-   SOPS-encrypts it. / 复制 example 到 `secrets/common.env` 并 SOPS 加密。
-6. Initializes git and creates the first commit. / 初始化 git 并首次提交。
-
-You can run this script on as many machines as you like. After the
-first run, your encrypted file decrypts anywhere key A is present.
-这个脚本可以在任意多台机器上跑。首次跑完后，只要有钥匙 A 的地方就能解密。
-
-### 3. Run the local stack / 3. 跑本地栈
-
-```powershell
-task dev
-```
-
-This decrypts `secrets/common.env` to `.env`, starts PostgreSQL and
-Redis in Docker, and starts the Node app on `http://localhost:3000`.
-
-这会把 `secrets/common.env` 解密成 `.env`，启动 PostgreSQL + Redis
-容器，并在 `http://localhost:3000` 启动 Node 应用。
-
-```powershell
-# Smoke test / 冒烟测试
-curl http://localhost:3000/
-# -> "Hello from my-first-app! 密钥管理已经生效。"
-
-curl http://localhost:3000/health
-# -> {"status":"ok","secrets_loaded":{"database":true,"redis":true},...}
-```
-
-`secrets_loaded.database` and `secrets_loaded.redis` must both be
-`true`. If either is `false`, the app could not pick up the credentials
-and the whole pipeline needs a check.
-
-`secrets_loaded.database` 和 `secrets_loaded.redis` 必须都是 `true`。
-如果任一是 `false`，说明应用没拿到凭据，整个链路需要排查。
+- **多云** — Aliyun ECS + Tencent CVM 镜像双活（broker 主备）
+- **零明文** — GitHub Secrets 全部通过 OIDC 临时令牌
+- **多钥匙冗余** — 主 age key + 备份 key，SOPS 双重加密
+- **本地一键** — `bootstrap.ps1` idempotent 引导
+- **完整 CI** — gitleaks 扫密 + Node test + Terraform validate + Docker build
 
 ---
 
-## Project layout / 项目结构
+## 🚀 Quick start / 快速上手
+
+### 1. 在 broker 服务器（云端）引导
+
+```powershell
+# 一次性：克隆仓库
+git clone https://github.com/tyj1987/sops-age-template.git C:\home\broker-server
+cd C:\home\broker-server
+
+# 引导 SOPS+age
+iex (Get-Content .\bootstrap.ps1 -Raw)
+
+# 初始化 PKI
+.\scripts\broker\init-ca.ps1
+.\scripts\broker\issue-server-cert.ps1 -Domain broker.yourdomain.com -AltNames "localhost,127.0.0.1"
+.\scripts\broker\issue-client-cert.ps1 -CN client.tyj-laptop -Role developer -RegisterToConfig
+
+# 准备 SOPS 加密的密钥
+notepad .\secrets\common.env        # 写明文
+sops --encrypt --in-place .\secrets\common.env
+Copy-Item .\secrets\broker.yaml.example .\secrets\broker.yaml
+notepad .\secrets\broker.yaml        # 配置 services 和 clients
+sops --encrypt --in-place .\secrets\broker.yaml
+
+# 启动
+docker compose up -d broker
+```
+
+### 2. 在 AI 客户端（你的笔记本）使用
+
+```powershell
+# 把客户端证书从 broker 服务器 scp 过来
+scp broker:~/pki/clients/client.laptop.{crt,key} C:\Users\User\.broker\
+scp broker:~/pki/ca/ca.crt C:\Users\User\.broker\
+
+# 写客户端配置
+@"
+{
+  "endpoint": "https://broker.yourdomain.com:8443",
+  "client_cert": "C:\\Users\\User\\.broker\\client.laptop.crt",
+  "client_key":  "C:\\Users\\User\\.broker\\client.laptop.key",
+  "ca_cert":     "C:\\Users\\User\\.broker\\ca.crt"
+}
+"@ | Out-File C:\Users\User\.broker\config.json -Encoding UTF8
+
+# 健康检查
+node C:\path\to\cli\secret-broker.js health
+# { "status": "ok", "sops_loaded": true, ... }
+
+# AI 调用 GitHub（AI 看不到 PAT）
+node secret-broker.js proxy github GET /repos/tyj1987/sops-age-template
+
+# AI 执行 git push（密钥注入子进程，子进程结束即丢）
+node secret-broker.js exec --env "GH_TOKEN" -- git push origin main
+```
+
+### 3. Dashboard
+
+浏览器打开 `https://broker.yourdomain.com:8443/`（同样需要 mTLS 客户端证书）。
+在浏览器里把 `client.laptop.crt` 导入浏览器证书库即可。
+
+---
+
+## 🏗️ Architecture / 架构
 
 ```
-my-first-app/
-├── .sops.yaml                  # SOPS 加密规则 / SOPS encryption rules
-├── .gitignore                  # 严格忽略私钥 / strict ignore for keys
-├── .envrc                      # direnv 自动加载 / direnv auto-load
-├── .pre-commit-config.yaml     # gitleaks + 基础检查 / gitleaks + basic checks
-├── Taskfile.yml                # 任务编排 / task runner
-├── Dockerfile                  # 多阶段生产镜像 / multi-stage production image
-├── docker-compose.yml          # 本地开发栈 / local dev stack
-├── bootstrap.ps1               # 一键引导 / one-shot project init
-├── README.md                   # 你在这里 / you are here
-├── RUNBOOK.md                  # 应急响应与运维 / incident response & ops
-├── secrets/
-│   ├── common.env.example      # 模板 / template
-│   └── common.env              # 加密的（提交进 Git 没问题）/ ENCRYPTED — safe to commit
-├── app/
+┌─────────────────────────────────────────────────────┐
+│ Aliyun ECS / Tencent CVM (2C2G, ¥50/月)            │
+│                                                     │
+│  ┌──────────────────────────────────────────┐      │
+│  │ Docker                                    │      │
+│  │  ┌─────────────────────────────────────┐ │      │
+│  │  │ secret-broker (Node 20, mTLS HTTPS) │ │      │
+│  │  │  :8443                               │ │      │
+│  │  │                                     │ │      │
+│  │  │  /health, /api/v1/identity          │ │      │
+│  │  │  /api/v1/secrets (list+resolve)     │ │      │
+│  │  │  /api/v1/proxy/:service  🛡️         │ │      │
+│  │  │  /api/v1/audit, /api/v1/rotate      │ │      │
+│  │  │  /  (static dashboard)              │ │      │
+│  │  └─────────────────────────────────────┘ │      │
+│  │                                            │      │
+│  │  /opt/broker/data/                         │      │
+│  │    ├── secrets/  (SOPS encrypted)          │      │
+│  │    ├── pki/      (CA + server + clients)   │      │
+│  │    ├── age/      (age private key)          │      │
+│  │    └── audit/    (JSON Lines)              │      │
+│  └──────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────┘
+         ▲
+         │  mTLS (client cert + key)
+         │
+   ┌─────┴──────┬──────────┬──────────┐
+   │            │          │          │
+你的笔记本    家里台式机   CI runner   手机 SSH
+
+# 数据流 / Data flow:
+# AI 客户端 → POST /api/v1/proxy/github → broker 解密 PAT
+# → 注入 Authorization 头 → 转发 api.github.com
+# → 返回响应 → 写 audit.jsonl → AI 收到响应（无 PAT）
+```
+
+详细架构、API 协议、策略引擎、PKI 设计见 [`docs/04-secret-broker.md`](../dev-system/04-secret-broker.md)。
+
+---
+
+## 📂 Repository layout / 仓库结构
+
+```
+sops-age-template/
+├── broker/                          # 🆕 Secret Broker 服务端
+│   ├── server.js                    # mTLS HTTPS + 路由 + 代理
 │   ├── package.json
-│   └── index.js                # Node 应用：/, /health, /db, /cache
+│   ├── Dockerfile
+│   └── dashboard/                   # 静态 Dashboard
+│       ├── index.html
+│       ├── app.js
+│       └── style.css
+├── cli/                             # 🆕 客户端 CLI
+│   ├── secret-broker.js             # proxy / exec / get / pki
+│   └── package.json
+├── pki/                             # 🆕 PKI（CA + 证书，gitignore）
+│   ├── ca/  server/  clients/
+├── age/                             # 🆕 age 私钥（gitignore）
+├── audit/                           # 🆕 审计日志（gitignore）
+├── secrets/
+│   ├── common.env                   # SOPS 加密的明文密钥
+│   ├── common.env.example
+│   ├── broker.yaml.example          # 🆕 broker 配置模板
+│   └── common.yaml.example
 ├── scripts/
-│   ├── check-tools.ps1         # 工具检查 / verify install
-│   ├── backup-keys.ps1         # 备份私钥 / copy keys to backup location
-│   ├── rotate-keys.ps1         # 轮转 age 钥匙 / rotate age keys
-│   └── install-direnv-hook.ps1 # 装 direnv PowerShell hook
+│   ├── check-tools.ps1
+│   ├── backup-keys.ps1
+│   ├── rotate-keys.ps1
+│   ├── install-direnv-hook.ps1
+│   └── broker/                      # 🆕 PKI 工具
+│       ├── init-ca.ps1
+│       ├── issue-server-cert.ps1
+│       ├── issue-client-cert.ps1
+│       └── revoke-cert.ps1
+├── app/                             # 上一代 demo app
+│   ├── index.js
+│   └── package.json
 ├── infra/
-│   ├── aliyun/                 # Terraform: 阿里云 ACK + RDS + KMS
-│   └── tencent/                # Terraform: 腾讯云 TKE + TencentDB
+│   ├── aliyun/
+│   │   ├── main.tf                  # demo app (ACK)
+│   │   ├── broker.tf                # 🆕 broker ECS
+│   │   ├── broker-variables.tf
+│   │   ├── cloud-init.sh
+│   │   └── app.yaml
+│   └── tencent/
+│       ├── main.tf                  # demo app (TKE)
+│       ├── broker.tf                # 🆕 broker CVM
+│       ├── broker-variables.tf
+│       └── app.yaml
 ├── monitoring/
-│   └── uptime-kuma.yml         # docker-compose for Uptime Kuma
-└── .github/
-    └── workflows/
-        ├── ci.yml              # PR + main: lint, test, gitleaks
-        └── deploy.yml          # tag: build, push to both clouds
+│   ├── prometheus.yml
+│   └── uptime-kuma.yml
+├── .github/workflows/
+│   ├── ci.yml                       # 🆕 broker-test + image-build
+│   └── deploy.yml                   # 🆕 推送双云 + 双 Terraform apply
+├── docker-compose.yml               # 🆕 broker 主 + 可选 app
+├── Dockerfile                       # demo app
+├── bootstrap.ps1
+├── .sops.yaml
+├── .envrc
+└── README.md (本文件)
 ```
 
 ---
 
-## Day-to-day commands / 日常命令
+## 🛠️ Development / 开发
+
+### 本地跑 broker（端到端测试）
 
 ```powershell
-# Secrets / 密钥管理
-task secrets:init         # 首次设置（已完成）/ first-time setup (already done)
-task secrets:edit         # 用编辑器打开加密文件 / open encrypted file in $EDITOR
-task secrets:view         # 打印解密后内容 / print decrypted contents
-task secrets:export       # 写出 .env 文件 / write decrypted .env file
-task secrets:rotate       # 轮转所有 age 钥匙 / rotate all age keys
+# 1. 准备 PKI（一次性）
+.\scripts\broker\init-ca.ps1
+.\scripts\broker\issue-server-cert.ps1 -Domain localhost -AltNames "localhost,127.0.0.1"
+.\scripts\broker\issue-client-cert.ps1 -CN client.test -Role developer
 
-# Backup / 备份
-task backup:keys          # 拷贝 age 钥匙到备份位置 / copy age keys to backup location
+# 2. 准备密钥
+$env:SOPS_AGE_KEY_FILE = "C:\Users\User\.config\sops\age\key.txt"
+"test-secret-123" | sops --encrypt --input-type plaintext --output-type dotenv /dev/stdin | Out-File secrets\test.env
+# 或用现有 common.env
 
-# Local dev / 本地开发
-task dev                  # 完整栈（app + db + cache）/ full stack
-task dev:secrets          # 解密到 .env / decrypt secrets to .env
-task dev:run              # 只跑应用（假设栈已起）/ run app only
+# 3. 写 broker.yaml
+@"
+services:
+  github:
+    type: github_token
+    token_secret: github.pat
+    upstream: https://api.github.com
+clients:
+  client.test:
+    cert_fingerprint_sha256: "<填 issue-client-cert.ps1 输出的指纹>"
+    role: developer
+    allowed_proxy:
+      - service: github
+        paths: [".*"]
+"@ | Out-File secrets\broker.yaml -Encoding UTF8
+sops --encrypt --in-place secrets\broker.yaml
 
-# Code quality / 代码质量
-task lint                 # 代码风格 / code style
-task format               # 自动格式化 / auto-format
-task test                 # 单元测试 / unit tests
-task test:coverage        # 测试 + 覆盖率 / tests with coverage
+# 4. 启动
+docker compose up -d broker
 
-# Build & ship / 构建 & 发布
-task build                # docker buildx（多架构）/ multi-arch
-task push                 # 推送到阿里云 ACR + 腾讯云 TCR
-task deploy               # build + push + terraform apply
+# 5. 测试
+node cli\secret-broker.js health
+node cli\secret-broker.js proxy github GET /
+```
 
-# Cleanup / 清理
-task clean                # 删 .env 等临时文件 / remove .env, *.dec files
+### Taskfile 任务
+
+```powershell
+task --list
+# 上一代 app:
+#   task dev          - 解密 secrets + 启动 docker compose
+#   task decrypt      - sops 解密到 .env
+#   task encrypt      - sops 加密 .env -> secrets/
+#   task backup-keys  - 备份 age 私钥到加密 zip
+#   task rotate-keys  - 轮转 age 私钥并重加密所有 secrets
+# broker 相关:
+#   task broker:init-ca           - 初始化根 CA
+#   task broker:issue-server      - 签发服务端证书
+#   task broker:issue-client CN=x - 签发客户端证书
+#   task broker:revoke FP=xx      - 吊销证书
+#   task broker:up                - docker compose up broker
+#   task broker:logs              - 看 broker 日志
+#   task broker:audit             - 看审计日志
 ```
 
 ---
 
-## CI / CD
+## 🚢 Deploy / 部署
 
-`.github/workflows/ci.yml` runs on every push and PR:
-每次 push 和 PR 都跑：
+### 双云（阿里云主 + 腾讯云备）
 
-- Install sops + age / 装 sops + age
-- `gitleaks detect` — blocks if any plaintext secret sneaks in
-  拦截任何明文密钥漏出
-- `npm ci && npm run lint && npm test`
+```bash
+# 1. 配置 GitHub repo secrets
+#    ALIYUN_OIDC_PROVIDER_ARN, ALIYUN_OIDC_ROLE_ARN
+#    ALIYUN_ACR_USERNAME, ALIYUN_ACR_PASSWORD
+#    TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY
+#    TENCENT_TCR_USERNAME, TENCENT_TCR_PASSWORD
 
-`.github/workflows/deploy.yml` runs on every `v*` tag:
-每个 `v*` tag 触发：
+# 2. 推 tag 触发自动部署
+git tag v2.0.0
+git push origin v2.0.0
 
-- Build multi-arch (amd64 + arm64) image / 多架构构建
-- Push to Aliyun ACR and Tencent TCR / 推送到两家云
-- For each cloud, decrypt `secrets/prod.env` with the cloud's KMS
-  (OIDC, no long-lived keys in GitHub Secrets) and apply Terraform
-  每家云用 KMS 解密 `secrets/prod.env`（OIDC，GitHub Secrets 无长期 key）并 apply Terraform
+# 3. GitHub Actions 自动：
+#    - build broker 镜像
+#    - push 到 registry.cn-hangzhou.aliyuncs.com/tyj1987/sops-age-template-broker
+#    - push 到 ccr.ccs.tencentyun.com/tyj1987/sops-age-template-broker
+#    - terraform apply aliyun/broker.tf  (主 broker)
+#    - terraform apply tencent/broker.tf (备 broker)
+```
 
-Required GitHub Secrets per cloud (see `RUNBOOK.md` for full setup):
-每家云需要的 GitHub Secrets（完整配置见 `RUNBOOK.md`）：
+### Failover
 
-- `ALIYUN_OIDC_PROVIDER_ARN`, `ALIYUN_OIDC_ROLE_ARN`
-- `ALIYUN_ACR_USERNAME`, `ALIYUN_ACR_PASSWORD`
-- `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`
-- `TENCENT_TCR_USERNAME`, `TENCENT_TCR_PASSWORD`
+阿里云 broker 挂时：
+```powershell
+# 在腾讯云 ECS 上
+ssh ubuntu@<tencent-broker-ip>
+cd /opt/secret-broker
+# 同步主 broker 的状态
+rsync -avz root@<aliyun-broker>:/opt/secret-broker/{secrets,pki,age,audit} ./
+docker compose up -d broker
 
----
-
-## Multi-cloud / 多云
-
-This project ships Terraform modules for both Aliyun and Tencent
-Cloud. They provision:
-本项目含阿里云和腾讯云的 Terraform 模块，配置：
-
-- VPC + subnets / VPC + 子网
-- Managed Kubernetes (ACK / TKE) / 托管 K8s
-- Managed PostgreSQL (RDS / TencentDB) / 托管 PG
-- KMS keys for production secrets / 生产密钥的 KMS
-- Container registry namespaces / 容器仓库命名空间
-- (Optional) Cloud logging and monitoring / （可选）云日志和监控
-
-See `infra/aliyun/main.tf` and `infra/tencent/main.tf`. Both
-read the production secrets at apply time via SOPS, so no plaintext
-passwords ever live in Terraform state.
-详见两个 `main.tf`。两者都在 apply 时通过 SOPS 读生产密钥，Terraform
-state 里不会有明文密码。
+# DNS 切换: broker.yourdomain.com -> <tencent-broker-ip>
+```
 
 ---
 
-## Security model — the 5 non-negotiables / 5 条铁律
+## 🔒 Security model / 安全模型
 
-1. **Private keys never enter git.** `.gitignore` blocks `key-*.txt`,
-   `*.key`, `*.pem`. The encrypted `secrets/*.env` files are safe to
-   commit and SHOULD be committed — that is the whole point.
-   **私钥永不入库。** `.gitignore` 屏蔽 `key-*.txt`、`*.key`、`*.pem`。
-   加密的 `secrets/*.env` 入库是安全的，而且应该入库——这才是这套系统的意义。
+**绝对不能违反的规则** / Hard rules:
 
-2. **Multiple keys for redundancy.** Generate key A (everyday) and
-   key B (backup). Both can decrypt. Lose one, the other still works.
-   **多把钥匙兜底。** 生成 A（日常）和 B（备份），任一能解。丢一把还有另一把。
+1. **AI 永远不接触明文密钥** — 默认 proxy 模式，exec 模式密钥只活子进程内
+2. **客户端证书是设备绑定的** — 丢失笔记本立刻 `secret-broker pki revoke`
+3. **CA 私钥不出 broker 服务器** — `pki/ca/ca.key` 严禁 scp
+4. **age 私钥不能进 git** — 已加 `.gitignore`，如发现泄漏立即 rotate
+5. **每个客户端有显式 ACL** — 不在 `clients:` 段里的 cert 全部 403
 
-3. **Offline backups.** The backup key B belongs on a USB drive, a
-   safe, or encrypted cloud storage — somewhere NOT on the same disk
-   as key A.
-   **离线备份。** 备份钥匙 B 必须放在与 A **不同**物理位置——U 盘、保险柜、加密云盘。
+### 审计
 
-4. **Rotate on a schedule.** `task secrets:rotate` regenerates the
-   keypair and re-encrypts every file. Do this every 6-12 months, or
-   immediately if you suspect compromise.
-   **定期轮转。** `task secrets:rotate` 重新生成钥匙对并重加密所有文件。
-   6-12 个月一次，或怀疑泄露时立即。
+```powershell
+# 看最近 100 条审计
+node cli\secret-broker.js health
+# 直接看 broker 的 audit 目录（在服务器上）
+Get-Content audit\audit-2026-08-12.jsonl | Select-Object -Last 20
+```
 
-5. **Production keys are KMS-only.** `secrets/prod.env` should be
-   encrypted so that ONLY the cloud KMS can decrypt, not local keys.
-   The bootstrap comment in `.sops.yaml` shows the swap.
-   **生产密钥仅 KMS 能解。** `secrets/prod.env` 应该加密成只有云 KMS 能解，
-   本地钥匙解不开。`.sops.yaml` 的注释里有切换示例。
-
----
-
-## Monitoring / 监控
-
-`monitoring/uptime-kuma.yml` is a docker-compose for Uptime Kuma,
-a self-hosted monitoring tool that does:
-Uptime Kuma 是自托管监控工具，支持：
-
-- HTTP/HTTPS probes / HTTP/HTTPS 拨测
-- TCP port checks / TCP 端口检查
-- TLS certificate expiry alerts / TLS 证书过期提醒
-- Webhook alerts to WeChat, DingTalk, Telegram, Slack, email
-  告警推送到微信/钉钉/Telegram/Slack/邮件
-
-After running it (`docker compose -f monitoring/uptime-kuma.yml up -d`),
-open `http://localhost:3001`, add your endpoints, and configure a
-notification channel.
-跑起来后打开 `http://localhost:3001` 加端点、配告警渠道。
+每条事件格式：
+```json
+{
+  "ts": "2026-08-12T13:45:23.123Z",
+  "id": "uuid",
+  "action": "proxy",
+  "cn": "client.tyj-laptop",
+  "fp": "AB:CD:...",
+  "service": "github",
+  "method": "GET",
+  "path": "/repos/tyj1987/x",
+  "upstream_status": 200,
+  "latency_ms": 234,
+  "status": "ok"
+}
+```
 
 ---
 
-## What's not in scope (yet) / 暂未涵盖
+## 📚 Docs / 文档
 
-- **Service mesh / mTLS between app and database.** Add Linkerd or
-  Istio if you have multiple services.
-  **服务网格 / mTLS。** 多个服务时再加 Linkerd 或 Istio。
-- **GitOps with ArgoCD.** `infra/*` deploys imperatively today. For
-  declarative continuous delivery, layer ArgoCD on top.
-  **GitOps。** 当前是命令式 apply，要声明式持续交付再叠 ArgoCD。
-- **Database migration tool.** Add `golang-migrate` or `prisma migrate`
-  when you have actual schema changes.
-  **数据库迁移工具。** 有 schema 变更时加 `golang-migrate` 或 `prisma migrate`。
+- [系统方案 README](../dev-system/README.md) - 全套设计文档索引
+- [01-secret-management.md](../dev-system/01-secret-management.md) - SOPS+age 详解
+- [02-full-architecture.md](../dev-system/02-full-architecture.md) - 完整架构
+- [03-implementation-roadmap.md](../dev-system/03-implementation-roadmap.md) - 实施路线图
+- [04-secret-broker.md](../dev-system/04-secret-broker.md) - 🆕 Secret Broker 架构详解
+- [RUNBOOK.md](./RUNBOOK.md) - 运维手册
 
-See `C:\home\dev-system\02-full-architecture.md` for the full picture.
-完整架构见 `C:\home\dev-system\02-full-architecture.md`。
+---
+
+## 📝 License
+
+MIT

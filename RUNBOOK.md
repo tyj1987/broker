@@ -230,6 +230,62 @@ $env:TENCENTCLOUD_SECRET_KEY = "..."
 task deploy TAG=v1.0.0
 ```
 
+### Secret Broker: public access via Cloudflare Tunnel
+### Secret Broker：Cloudflare Tunnel 公网暴露
+
+Public entry: `https://broker.52trz.com` → Cloudflare edge → tunnel →
+ECS `127.0.0.1:8443`. Secrets never leave the broker; TLS terminates
+at the CF edge, so browsers see a trusted cert without installing the
+self-signed CA.
+公网入口：`https://broker.52trz.com` → Cloudflare 边缘 → 隧道 → ECS
+`127.0.0.1:8443`。明文密钥永不离开发送端；TLS 在 CF 边缘终结，浏览器看到的是
+受信证书，不需要安装自签 CA。
+
+Key files on the ECS / ECS 上关键文件：
+
+| Path / 路径 | Purpose / 用途 |
+|---|---|
+| `/etc/cloudflared/config.yml` | tunnel ingress: `broker.52trz.com -> https://127.0.0.1:8443`（`noTLSVerify: true`，自签 origin） |
+| `/etc/systemd/system/cloudflared-secret-broker.service` | systemd unit, auto-start on boot |
+| `/root/.cloudflared/e26e5c58-….json` | tunnel credentials (keep secret) |
+| `/root/.cloudflared/cert.pem` | zone-level origin cert (from `cloudflared tunnel login`) |
+
+Day-to-day ops / 日常操作：
+
+```bash
+ssh 52trz
+systemctl status cloudflared-secret-broker     # status
+journalctl -u cloudflared-secret-broker -f     # follow logs
+systemctl restart cloudflared-secret-broker    # restart
+```
+
+Add another hostname / 增加新的域名入口：
+`cloudflared tunnel route dns secret-broker other.52trz.com`，再往
+`/etc/cloudflared/config.yml` 的 `ingress` 加一条，然后
+`systemctl restart cloudflared-secret-broker`。
+
+Local-machine note (China network) / 本机注意（国内网络）：
+Some Cloudflare anycast IP ranges (`104.21.x` / `172.67.x`) are
+interfered with on this machine — requests got hijacked to a wrong
+certificate. Fix: pin a working IP in `C:\Windows\System32\drivers\etc\hosts`:
+`104.16.132.229 broker.52trz.com`. Re-verify the IP with
+`curl -sk --resolve broker.52trz.com:443:<ip> https://broker.52trz.com/health`
+before relying on it (CF IPs can change).
+本机访问 broker.52trz.com 时，部分 Cloudflare anycast 段（`104.21.x`/`172.67.x`）
+会被中间层劫持（返回错误证书）。已在 hosts 固定可用 IP：
+`104.16.132.229 broker.52trz.com`。换 IP 前先按上面命令验证。
+
+Security notes / 安全提示：
+- Password login is protected by a 5-fail → 15-min lockout; sessions are
+  30-min sliding. / 密码登录有 5 次失败锁 15 分钟；会话 30 分钟滑动过期。
+- All requests arrive via the tunnel as `127.0.0.1`; real client IP is
+  in the `cf-connecting-ip` header (not yet surfaced in the audit log).
+  / 所有请求经隧道到达，显示为 127.0.0.1；真实客户端 IP 在
+  `cf-connecting-ip` 头里（暂未写进审计日志）。
+- Optional hardening: wrap the hostname in Cloudflare Access (Zero Trust)
+  for a second factor before the password. / 可选加固：用 Cloudflare
+  Access（Zero Trust）给域名套第二层认证。
+
 ---
 
 ## 6. Incident response / 6. 应急响应

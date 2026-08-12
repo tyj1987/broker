@@ -1,0 +1,17 @@
+{
+  "name": "my-first-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "First project using the dev system blueprint",
+  "scripts": {
+    "dev": "node index.js",
+    "start": "node index.js",
+    "lint": "echo \"Add your linter here (eslint/biome)\"",
+    "format": "echo \"Add your formatter here (prettier/biome)\"",
+    "test": "echo \"Add your tests here (vitest/jest)\"",
+    "test:coverage": "echo \"Add coverage command here\""
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

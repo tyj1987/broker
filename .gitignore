@@ -1,0 +1,60 @@
+# .gitignore
+# ============================
+# 绝对不能入库的（硬性红线）
+# ============================
+
+# age / SOPS 私钥
+*.key
+key-*.txt
+*.age.key
+sops/age/
+
+# 临时解密产物
+*.dec.yaml
+*.dec.yml
+*.dec.env
+.env.decrypted
+.env.local
+.env.*.local
+.env
+
+# SSH / TLS 私钥
+*.pem
+id_rsa
+id_ed25519
+*.p12
+*.pfx
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Node / Python / Go 通用
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+dist/
+build/
+*.log
+coverage/
+.nyc_output/
+
+# 任务临时文件
+tmp/
+.tmp/
+
+# ============================
+# 加密文件可以入（显式放行）
+# ============================
+# 加密后的 .yaml / .env 不会触发上述规则，但建议统一命名
+# 已加密的 secrets/common.yaml 格式：
+#   DATABASE_URL: ENC[AES256_GCM,...]
+#   sops:
+#     age: [...]
+# 这种是 SOPS 密文，入库安全

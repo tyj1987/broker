@@ -1,0 +1,31 @@
+# .sops.yaml
+# SOPS encryption rules — bootstrap.ps1 fills in the public keys automatically.
+# Docs: https://github.com/getsops/sops
+
+creation_rules:
+  # Common secrets (used in dev + prod)
+  - path_regex: secrets/common\.(yaml|yml|env)$
+    key_groups:
+      - age:
+          # Main key A (bootstrap fills in)
+          - "age1lm7kxfcgjm66ayh4k6tjzaf0d7ns60w3ssz65dhvzfdfnptf5dhquma7ma"
+          # Backup key B (strongly recommended, bootstrap prompts to generate)
+          - "age16l7uzx7nn2deua95zefd0ygacvxgfk6yrk69qnpdeqxe93l7nckqghjjnq"
+
+  # Local dev only
+  - path_regex: secrets/dev\.(yaml|yml|env)$
+    key_groups:
+      - age:
+          - "age1lm7kxfcgjm66ayh4k6tjzaf0d7ns60w3ssz65dhvzfdfnptf5dhquma7ma"
+          - "age16l7uzx7nn2deua95zefd0ygacvxgfk6yrk69qnpdeqxe93l7nckqghjjnq"
+
+  # Prod only (recommend switching to cloud KMS only)
+  - path_regex: secrets/prod\.(yaml|yml|env)$
+    key_groups:
+      - age:
+          - "age1lm7kxfcgjm66ayh4k6tjzaf0d7ns60w3ssz65dhvzfdfnptf5dhquma7ma"
+      # Enable cloud KMS for prod (replace local key above with KMS only):
+      # - alibabakms:
+      #     - xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      # - tencentkms:
+      #     - alias/your-key-alias

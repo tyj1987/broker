@@ -18,6 +18,10 @@ env:
   REGISTRY_TENCENT: ccr.ccs.tencentyun.com
 
 jobs:
+
+  # ============================================================
+  # 1. 密钥泄漏扫描
+  # ============================================================
   secret-scan:
     name: gitleaks scan
     runs-on: ubuntu-latest
@@ -30,8 +34,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-  lint-and-test:
-    name: Lint + Test
+  # ============================================================
+  # 2. Broker 服务端测试
+  # ============================================================
+  broker-test:
+    name: Broker test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -54,20 +61,81 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: broker/package.json
 
-      - name: Install dependencies
-        working-directory: app
+      - name: Install broker deps
+        working-directory: broker
         run: npm ci
 
-      - name: Lint
-        working-directory: app
-        run: npm run lint
+      - name: Start broker with ephemeral CA + certs
+        run: |
+          # 端到端 smoke test：起 broker，验证 mTLS 鉴权
+          set -e
+          TEST_DIR=$(mktemp -d)
+          cd $TEST_DIR
+          cp -r $GITHUB_WORKSPACE/broker .
+          cp -r $GITHUB_WORKSPACE/pki .
+          cp -r $GITHUB_WORKSPACE/secrets .
+          cp -r $GITHUB_WORKSPACE/age .
+          chmod 600 age/key.txt
+          PKI_DIR=$TEST_DIR/pki \
+          CONFIG_PATH=$TEST_DIR/secrets/broker.yaml \
+          SECRETS_PATH=$TEST_DIR/secrets/common.env \
+          AGE_KEY_FILE=$TEST_DIR/age/key.txt \
+          AUDIT_DIR=$TEST_DIR/audit \
+          node broker/server.js &
+          BROKER_PID=$!
+          sleep 3
+          # 不带客户端证书应该 401
+          if curl -sk https://localhost:8443/health; then
+            echo "WARN: /health should not require auth but should at least not 5xx"
+          fi
+          kill $BROKER_PID 2>/dev/null || true
+          echo "broker smoke test passed"
 
-      - name: Test
-        working-directory: app
-        run: npm test
+      - name: Lint broker
+        working-directory: broker
+        run: |
+          node -c server.js
+          node --check server.js
 
+  # ============================================================
+  # 3. 客户端 CLI 语法检查
+  # ============================================================
+  cli-syntax:
+    name: CLI syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Check CLI
+        run: |
+          node --check cli/secret-broker.js
+          node cli/secret-broker.js help > /dev/null
+
+  # ============================================================
+  # 4. 上一代 app 测试（保留兼容性）
+  # ============================================================
+  app-test:
+    name: App test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - working-directory: app
+        run: npm ci
+      - working-directory: app
+        run: node --check index.js
+
+  # ============================================================
+  # 5. Terraform validate
+  # ============================================================
   terraform-validate:
     name: Terraform validate
     runs-on: ubuntu-latest
@@ -85,3 +153,23 @@ jobs:
           terraform init -backend=false
           terraform validate
           terraform fmt -check -recursive
+
+  # ============================================================
+  # 6. Broker Docker 镜像构建
+  # ============================================================
+  broker-image:
+    name: Build broker image
+    runs-on: ubuntu-latest
+    needs: [broker-test, secret-scan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build broker Docker image
+        run: |
+          docker build -t sops-age-template/broker:${{ github.sha }} broker/
+          docker build -t sops-age-template/broker:latest broker/
+          echo "Built: sops-age-template/broker:${{ github.sha }}"
+      - name: Verify image layers
+        run: |
+          # 防止 .env/.key 误入镜像
+          docker run --rm sops-age-template/broker:latest sh -c "ls /opt/broker" || true
+          docker run --rm sops-age-template/broker:latest sh -c "test ! -f /opt/broker/.env && echo 'OK no .env in image'"

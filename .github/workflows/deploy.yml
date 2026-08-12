@@ -1,20 +1,17 @@
 # .github/workflows/deploy.yml
-# Build multi-arch image, push to BOTH Aliyun ACR and Tencent TCR,
-# then run Terraform apply for each cloud.
+# 打包 + 推送 broker 镜像到双云 registry + 双云 Terraform apply
+# 触发：v* tag push 或手动 dispatch
 #
-# Production secrets are decrypted with cloud KMS (Aliyun KMS or
-# Tencent KMS) — no plaintext credentials are ever present in
-# GitHub Secrets or in this workflow's environment.
-#
-# Required GitHub repository secrets / variables:
-#   ALIYUN_OIDC_PROVIDER_ARN          (e.g. acs:ram::1234:oidc-provider/github)
-#   ALIYUN_OIDC_ROLE_ARN              (e.g. acs:ram::1234:role/github-deploy)
-#   ALIYUN_ACR_USERNAME               (Aliyun container registry username)
-#   ALIYUN_ACR_PASSWORD               (Aliyun container registry password)
-#   TENCENTCLOUD_SECRET_ID            (Tencent Cloud API key id)
-#   TENCENTCLOUD_SECRET_KEY           (Tencent Cloud API key secret)
-#   TENCENT_TCR_USERNAME              (Tencent TCR username)
-#   TENCENT_TCR_PASSWORD              (Tencent TCR password)
+# 凭据通过 OIDC 获取，永不进 GitHub Secrets 明文
+# Required GitHub repository secrets (encrypted):
+#   ALIYUN_OIDC_PROVIDER_ARN        e.g. acs:ram::1234:oidc-provider/github
+#   ALIYUN_OIDC_ROLE_ARN            e.g. acs:ram::1234:role/github-deploy
+#   ALIYUN_ACR_USERNAME             Aliyun container registry username
+#   ALIYUN_ACR_PASSWORD             Aliyun container registry password
+#   TENCENTCLOUD_SECRET_ID          Tencent Cloud API key id
+#   TENCENTCLOUD_SECRET_KEY         Tencent Cloud API key secret
+#   TENCENT_TCR_USERNAME            Tencent TCR username
+#   TENCENT_TCR_PASSWORD            Tencent TCR password
 
 name: Build & Deploy
 
@@ -35,10 +32,14 @@ env:
   REGISTRY_ALIYUN: registry.cn-hangzhou.aliyuncs.com
   REGISTRY_TENCENT: ccr.ccs.tencentyun.com
   NAMESPACE: ${{ github.repository_owner }}
-  IMAGE_NAME: ${{ github.event.repository.name }}
-  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
+  IMAGE_NAME: sops-age-template-broker
+  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.ref_name }}
 
 jobs:
+
+  # ============================================================
+  # 1. Build + Push 到双 registry
+  # ============================================================
   build-and-push:
     name: Build + Push (Aliyun + Tencent)
     runs-on: ubuntu-latest
@@ -76,20 +77,23 @@ jobs:
             type=raw,value=${{ env.IMAGE_TAG }}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build and push broker image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          context: ./broker
+          file: ./broker/Dockerfile
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ============================================================
+  # 2. 部署到阿里云
+  # ============================================================
   deploy-aliyun:
-    name: Deploy to Aliyun
+    name: Deploy broker to Aliyun
     needs: build-and-push
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -104,6 +108,7 @@ jobs:
           curl -LO https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-linux-amd64.tar.gz
           tar -xzf age-v1.2.0-linux-amd64.tar.gz
           sudo install -m 755 age/age /usr/local/bin/age
+          sudo install -m 755 age/age-keygen /usr/local/bin/age-keygen
           curl -LO https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
           sudo install -m 755 terraform /usr/local/bin/terraform
 
@@ -115,15 +120,19 @@ jobs:
           ALIYUN_OIDC_ROLE_ARN: ${{ secrets.ALIYUN_OIDC_ROLE_ARN }}
           ALIYUN_OIDC_TOKEN_FILE_PATH: ${{ github.token }}
 
-      - name: Terraform apply (Aliyun)
+      - name: Terraform apply broker (Aliyun)
         working-directory: infra/aliyun
+        env:
+          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
         run: |
           terraform init
-          terraform apply -auto-approve \
-            -var="image_tag=${{ env.IMAGE_TAG }}"
+          terraform apply -auto-approve
 
+  # ============================================================
+  # 3. 部署到腾讯云
+  # ============================================================
   deploy-tencent:
-    name: Deploy to Tencent
+    name: Deploy broker standby to Tencent
     needs: build-and-push
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -138,6 +147,7 @@ jobs:
           curl -LO https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-linux-amd64.tar.gz
           tar -xzf age-v1.2.0-linux-amd64.tar.gz
           sudo install -m 755 age/age /usr/local/bin/age
+          sudo install -m 755 age/age-keygen /usr/local/bin/age-keygen
           curl -LO https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
           sudo install -m 755 terraform /usr/local/bin/terraform
 
@@ -147,12 +157,12 @@ jobs:
           TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
         run: echo "credentials configured in env"
 
-      - name: Terraform apply (Tencent)
+      - name: Terraform apply broker (Tencent)
         working-directory: infra/tencent
         env:
           TENCENTCLOUD_SECRET_ID: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
           TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
+          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
         run: |
           terraform init
-          terraform apply -auto-approve \
-            -var="image_tag=${{ env.IMAGE_TAG }}"
+          terraform apply -auto-approve

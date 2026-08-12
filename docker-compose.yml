@@ -1,71 +1,92 @@
-# docker-compose.yml
-# Local development stack: app + PostgreSQL + Redis.
-# All services bind to localhost. No public exposure.
-# Use `task dev` (or `docker compose up -d`) to start.
+# docker-compose.yml for SOPS+age-template v2.0 (Secret Broker)
+#
+# 主服务：Secret Broker (mTLS HTTPS, port 8443)
+# 可选服务：演示 app (上一代的 Node 应用)
+#
+# 用法：
+#   1. 准备 SOPS 加密的密钥和配置
+#      - ./secrets/broker.yaml   (SOPS 加密)
+#      - ./secrets/common.env    (SOPS 加密)
+#      - ./age/key.txt           (主 age 私钥, 权限 600)
+#      - ./pki/ca/ca.crt
+#      - ./pki/server/server.crt + server.key
+#      - ./pki/clients/*.crt+key
+#   2. docker compose up -d broker
+#   3. 客户端：secret-broker health
 
-version: '3.8'
+name: sops-age-template
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: my-first-app-postgres
+
+  # ==========================================================
+  # 主服务：Secret Broker
+  # ==========================================================
+  broker:
+    build:
+      context: ./broker
+      dockerfile: Dockerfile
+    image: sops-age-template/broker:2.0.0
+    container_name: secret-broker
     restart: unless-stopped
+    ports:
+      - "8443:8443"     # mTLS HTTPS - 客户端证书保证安全，可直接暴露公网
+    volumes:
+      - ./secrets:/opt/broker/data/secrets:ro
+      - ./pki:/opt/broker/data/pki:ro
+      - ./age:/opt/broker/data/age:ro
+      - ./audit:/opt/broker/data/audit
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-appuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev}
-      POSTGRES_DB: ${POSTGRES_DB:-myapp}
-    ports:
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - NODE_ENV=production
+      - PORT=8443
+      - HOST=0.0.0.0
+      - CONFIG_PATH=/opt/broker/data/secrets/broker.yaml
+      - SECRETS_PATH=/opt/broker/data/secrets/common.env
+      - PKI_DIR=/opt/broker/data/pki
+      - AUDIT_DIR=/opt/broker/data/audit
+      - AGE_KEY_FILE=/opt/broker/data/age/age.key
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-appuser} -d ${POSTGRES_DB:-myapp}"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD", "node", "-e", "require('node:https').get({host:'localhost',port:8443,rejectUnauthorized:false,requestCert:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - broker-net
 
-  redis:
-    image: redis:7-alpine
-    container_name: my-first-app-redis
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "127.0.0.1:6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
+  # ==========================================================
+  # 可选：演示 app（上一代的 Node 应用，演示 SOPS 解密 + env 注入）
+  # ==========================================================
   app:
     build:
       context: .
       dockerfile: Dockerfile
-      target: dev
-    container_name: my-first-app-node
+    container_name: my-first-app
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      NODE_ENV: development
-      LOG_LEVEL: debug
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      JWT_SECRET: ${JWT_SECRET}
-    env_file:
-      - .env
+    profiles: ["example"]   # 默认不启动，需要时 docker compose --profile example up
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     volumes:
-      - ./app:/app/app
       - ./secrets:/app/secrets:ro
-    command: ["node", "--watch", "app/index.js"]
+      - ./age:/app/age:ro
+    environment:
+      - NODE_ENV=production
+    networks:
+      - broker-net
 
-volumes:
-  postgres_data:
-  redis_data:
+networks:
+  broker-net:
+    driver: bridge

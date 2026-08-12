@@ -244,3 +244,36 @@ td code { font-size: 0.8rem; }
 .modal-actions {
   display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px;
 }
+
+/* ---------- Dynamic secret form (Phase 1.1.1) ---------- */
+#sf-fields {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px 14px; margin: 10px 0;
+}
+#sf-fields legend {
+  color: var(--muted); font-size: 0.8rem; padding: 0 6px;
+}
+.sf-field { margin-bottom: 10px; }
+.sf-field:last-child { margin-bottom: 0; }
+.sf-field-label {
+  display: block; font-size: 0.85rem; color: var(--muted);
+}
+.sf-field-label input,
+.sf-field-label select,
+.sf-field-label textarea {
+  display: block; width: 100%; margin-top: 4px;
+  background: var(--bg-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 9px; font-size: 0.9rem; font-family: var(--mono);
+}
+.sf-field-label textarea { resize: vertical; min-height: 60px; }
+.sf-field-label input:focus,
+.sf-field-label select:focus,
+.sf-field-label textarea:focus { outline: none; border-color: var(--accent); }
+.sf-field-label .hint {
+  font-size: 0.75rem; color: var(--muted); margin-top: 2px;
+}
+.sf-field-checkbox {
+  display: flex; align-items: center; gap: 6px; padding: 6px 0;
+}
+.sf-field-checkbox input { width: auto !important; margin: 0; }

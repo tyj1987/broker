@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=20260812c">
+  <link rel="stylesheet" href="style.css?v=20260812d">
 </head>
 <body>
 
@@ -147,6 +147,7 @@
         <div id="secret-modal" class="modal" hidden>
           <div class="modal-card">
             <h3 id="secret-modal-title">新增密钥 / New Secret</h3>
+            <p id="secret-modal-type-desc" class="hint"></p>
             <form id="secret-form" autocomplete="off">
               <label>名称 / Name
                 <input id="sf-name" type="text" required pattern="[A-Za-z0-9_.]+" maxlength="128" placeholder="GITHUB_PAT">
@@ -154,69 +155,16 @@
               </label>
               <label>类型 / Type
                 <select id="sf-type" required>
-                  <option value="custom">custom / 自定义</option>
-                  <optgroup label="代码平台 / Code Platforms">
-                    <option value="github_pat">github_pat</option>
-                    <option value="gitlab_pat">gitlab_pat</option>
-                    <option value="gitee_pat">gitee_pat</option>
-                  </optgroup>
-                  <optgroup label="AI 服务 / AI Providers">
-                    <option value="openai_key">openai_key</option>
-                    <option value="anthropic_key">anthropic_key</option>
-                    <option value="google_ai_key">google_ai_key</option>
-                    <option value="mistral_key">mistral_key</option>
-                    <option value="cohere_key">cohere_key</option>
-                    <option value="deepseek_key">deepseek_key</option>
-                    <option value="zhipu_key">zhipu_key</option>
-                    <option value="moonshot_key">moonshot_key</option>
-                    <option value="qwen_key">qwen_key</option>
-                  </optgroup>
-                  <optgroup label="云厂商 / Cloud">
-                    <option value="aliyun_ak">aliyun_ak</option>
-                    <option value="tencent_sk">tencent_sk</option>
-                    <option value="aws_access_key">aws_access_key</option>
-                    <option value="gcp_service_account">gcp_service_account</option>
-                    <option value="cloudflare_token">cloudflare_token</option>
-                  </optgroup>
-                  <optgroup label="基础设施 / Infra">
-                    <option value="ssh_private_key">ssh_private_key</option>
-                    <option value="ssh_public_key">ssh_public_key</option>
-                    <option value="database_url">database_url</option>
-                    <option value="redis_url">redis_url</option>
-                    <option value="mongodb_url">mongodb_url</option>
-                  </optgroup>
-                  <optgroup label="通讯通知 / Messaging">
-                    <option value="smtp_password">smtp_password</option>
-                    <option value="sendgrid_key">sendgrid_key</option>
-                    <option value="mailgun_key">mailgun_key</option>
-                    <option value="slack_webhook">slack_webhook</option>
-                    <option value="discord_webhook">discord_webhook</option>
-                    <option value="feishu_webhook">feishu_webhook</option>
-                    <option value="dingtalk_webhook">dingtalk_webhook</option>
-                    <option value="telegram_bot_token">telegram_bot_token</option>
-                  </optgroup>
-                  <optgroup label="监控日志 / Observability">
-                    <option value="sentry_dsn">sentry_dsn</option>
-                    <option value="datadog_key">datadog_key</option>
-                  </optgroup>
-                  <optgroup label="支付 / Payment">
-                    <option value="stripe_secret_key">stripe_secret_key</option>
-                    <option value="wechat_pay_key">wechat_pay_key</option>
-                  </optgroup>
-                  <optgroup label="其他 / Other">
-                    <option value="jwt_secret">jwt_secret</option>
-                    <option value="oauth_client_secret">oauth_client_secret</option>
-                    <option value="random_string">random_string</option>
-                  </optgroup>
+                  <!-- dynamically populated from /api/v1/admin/types -->
                 </select>
               </label>
               <label>描述 / Description (可选)
                 <input id="sf-description" type="text" maxlength="200" placeholder="用途说明 / 备注">
               </label>
-              <label>值 / Value <span class="muted">(明文，提交后立即清除)</span>
-                <textarea id="sf-value" rows="4" required placeholder="粘贴 token / 密钥 / 私钥 / 连接串..."></textarea>
-                <span class="hint" id="sf-value-hint">不会保存到浏览器存储。提交后值在内存中立即清空。</span>
-              </label>
+              <fieldset id="sf-fields">
+                <legend>字段 / Fields <span class="muted">(按所选类型动态生成)</span></legend>
+                <div id="sf-fields-container"></div>
+              </fieldset>
               <div id="sf-error" class="status-error" hidden></div>
               <div class="modal-actions">
                 <button type="button" class="btn" id="btn-cancel-secret">取消 / Cancel</button>
@@ -267,7 +215,7 @@ secret-broker get github.pat</code></pre>
     </footer>
   </section>
 
-  <script src="app.js?v=20260812c"></script>
-  <script src="admin/secrets.js?v=20260812c"></script>
+  <script src="app.js?v=20260812d"></script>
+  <script src="admin/secrets.js?v=20260812d"></script>
 </body>
 </html>

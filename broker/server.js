@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { parse as parseYaml } from 'yaml';
+import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,7 +24,9 @@ const PORT           = parseInt(process.env.PORT || '8443', 10);
 const HOST           = process.env.HOST || '0.0.0.0';
 const CONFIG_PATH    = process.env.CONFIG_PATH || resolvePath(__dirname, '../secrets/broker.yaml');
 const SECRETS_PATH   = process.env.SECRETS_PATH || resolvePath(__dirname, '../secrets/common.env');
-const SECRETS_META_PATH = process.env.SECRETS_META_PATH || resolvePath(__dirname, '../secrets/secrets-meta.json');
+// Phase 1.1.1: structured secrets (multi-field support). If this file doesn't
+// exist, broker auto-migrates from common.env on first start and writes here.
+const SECRETS_DETAIL_PATH = process.env.SECRETS_DETAIL_PATH || resolvePath(__dirname, '../secrets/secrets-detail.json');
 const PKI_DIR        = process.env.PKI_DIR || resolvePath(__dirname, '../pki');
 const AGE_KEY_FILE   = process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE;
 const AUDIT_DIR      = process.env.AUDIT_DIR || resolvePath(__dirname, '../audit');
@@ -144,7 +147,11 @@ function sopsEncryptAtomic(targetPath, plaintext) {
 // Config loader
 // ============================================================
 let CONFIG = null;
-let SECRET_CACHE = new Map();  // name -> plaintext
+// Phase 1.1.1: structured secrets. Each entry is:
+//   { type, description, fields: { [fieldName]: value }, created_at, updated_at, updated_by }
+// `type` is a key in type-schemas.js. `fields` is dynamic per type.
+// The legacy `common.env` is read-only on startup; writes go to secrets-detail.json.
+let SECRET_CACHE = new Map();
 
 async function loadConfig() {
   console.log('[config] Decrypting broker.yaml via SOPS...');
@@ -158,85 +165,161 @@ async function loadConfig() {
 }
 
 async function loadSecrets() {
-  console.log('[secrets] Decrypting secrets/common.env via SOPS...');
-  const text = await sopsDecrypt(SECRETS_PATH);
+  // 1. Try new structured store first
+  if (existsSync(SECRETS_DETAIL_PATH)) {
+    try {
+      const text = await sopsDecrypt(SECRETS_DETAIL_PATH);
+      const obj = JSON.parse(text);
+      SECRET_CACHE.clear();
+      for (const [name, entry] of Object.entries(obj.secrets || {})) {
+        SECRET_CACHE.set(name, normalizeSecretEntry(name, entry));
+      }
+      console.log(`[secrets] Loaded ${SECRET_CACHE.size} structured secrets from ${SECRETS_DETAIL_PATH}`);
+      return;
+    } catch (e) {
+      console.error(`[secrets] Failed to load ${SECRETS_DETAIL_PATH}: ${e.message}`);
+      // fall through to migration
+    }
+  }
+  // 2. Migrate from legacy common.env (one-time)
+  if (existsSync(SECRETS_PATH)) {
+    console.log(`[secrets] ${SECRETS_DETAIL_PATH} not found; migrating from ${SECRETS_PATH}...`);
+    const migrated = await migrateFromCommonEnv();
+    SECRET_CACHE.clear();
+    for (const [name, entry] of Object.entries(migrated)) {
+      SECRET_CACHE.set(name, entry);
+    }
+    console.log(`[secrets] Migrated ${SECRET_CACHE.size} secrets; persisting to ${SECRETS_DETAIL_PATH}`);
+    await persistSecretsDetail();
+    return;
+  }
+  // 3. Nothing to load
   SECRET_CACHE.clear();
+  console.log('[secrets] No secrets found (neither structured nor legacy)');
+}
+
+function normalizeSecretEntry(name, entry) {
+  // Defensive: accept both new structured form and legacy {type, description, value}
+  const out = {
+    type: entry.type || 'custom',
+    description: entry.description || '',
+    fields: {},
+    created_at: entry.created_at || new Date().toISOString(),
+    updated_at: entry.updated_at || new Date().toISOString(),
+    updated_by: entry.updated_by || 'system',
+  };
+  if (entry.fields && typeof entry.fields === 'object') {
+    out.fields = { ...entry.fields };
+  } else if (typeof entry.value === 'string') {
+    // Legacy: { value: "..." } → wrap in single field
+    out.fields = { value: entry.value };
+  }
+  return out;
+}
+
+// Heuristic migration: read each KEY=value from common.env, infer type from name,
+// combine Aliyun AK pairs, save as structured JSON.
+async function migrateFromCommonEnv() {
+  const text = await sopsDecrypt(SECRETS_PATH);
+  const entries = {};
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(/^([A-Z0-9_][A-Z0-9_.]*)\s*=\s*(.*)$/);
     if (m) {
       let v = m[2].trim();
-      // strip surrounding quotes
       if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
         v = v.slice(1, -1);
       }
-      SECRET_CACHE.set(m[1], v);
+      entries[m[1]] = v;
     }
   }
-  console.log(`[secrets] Loaded ${SECRET_CACHE.size} secret entries`);
-  if (process.env.SOPS_DEBUG) {
-    console.log(`[secrets] Keys: ${[...SECRET_CACHE.keys()].join(', ')}`);
+  const secrets = {};
+  const consumed = new Set();
+  const now = new Date().toISOString();
+
+  // 1) Aliyun AK pairs: *_ACCESS_KEY + *_ACCESS_SECRET → one aliyun_ak secret
+  for (const name of Object.keys(entries)) {
+    if (consumed.has(name)) continue;
+    if (/_ACCESS_KEY(?:_ID)?$/.test(name) || name === 'ALIYUN_ACCESS_KEY') {
+      const skName = name.replace(/_ACCESS_KEY(?:_ID)?$/, '') + '_ACCESS_SECRET';
+      if (entries[skName] && !consumed.has(skName)) {
+        secrets[name] = {
+          type: 'aliyun_ak',
+          description: '(migrated from common.env; please review)',
+          fields: { access_key_id: entries[name], access_key_secret: entries[skName] },
+          created_at: now, updated_at: now, updated_by: 'migration',
+        };
+        consumed.add(name); consumed.add(skName);
+      } else if (name === 'ALIYUN_ACCESS_KEY_ID' || name.endsWith('_ACCESS_KEY_ID')) {
+        // ID without paired SECRET — treat as plain custom
+        secrets[name] = {
+          type: 'custom', description: '(migrated)',
+          fields: { value: entries[name] },
+          created_at: now, updated_at: now, updated_by: 'migration',
+        };
+        consumed.add(name);
+      }
+    }
   }
+  // 2) Other keys: best-effort type guess
+  for (const name of Object.keys(entries)) {
+    if (consumed.has(name)) continue;
+    let type = 'custom', fieldKey = 'value';
+    if (/GITHUB/.test(name) || /_PAT$/.test(name)) { type = 'github_pat'; fieldKey = 'token'; }
+    else if (/OPENAI/.test(name)) { type = 'openai_key'; fieldKey = 'api_key'; }
+    else if (/JWT_SECRET$/.test(name)) { type = 'jwt_secret'; fieldKey = 'value'; }
+    else if (/_WEBHOOK$/.test(name)) {
+      if (/SLACK/.test(name)) type = 'slack_webhook';
+      else if (/DISCORD/.test(name)) type = 'discord_webhook';
+      else if (/FEISHU|LARK/.test(name)) type = 'feishu_webhook';
+      else if (/DINGTALK/.test(name)) type = 'dingtalk_webhook';
+      fieldKey = 'url';
+    } else if (/SENTRY/.test(name)) { type = 'sentry_dsn'; fieldKey = 'dsn'; }
+    secrets[name] = {
+      type, description: '(migrated; please re-categorize via admin UI)',
+      fields: { [fieldKey]: entries[name] },
+      created_at: now, updated_at: now, updated_by: 'migration',
+    };
+  }
+  return secrets;
 }
 
-function getSecret(name) {
-  return SECRET_CACHE.get(name);
-}
-
-// ============================================================
-// Secret metadata (admin-edited via web UI; persisted to secrets-meta.json SOPS-encrypted)
-// Schema: { "<NAME>": { type, description, created_at, updated_at, updated_by } }
-// File is optional: if missing on disk, SECRET_META stays empty and a fresh one
-// is created on first admin write.
-// ============================================================
-let SECRET_META = new Map();  // name -> { type, description, created_at, updated_at, updated_by }
-
-async function loadSecretMeta() {
-  if (!existsSync(SECRETS_META_PATH)) {
-    console.log(`[meta] ${SECRETS_META_PATH} not found; starting with empty secret metadata (admin UI will create it on first write)`);
-    SECRET_META = new Map();
-    return;
-  }
-  try {
-    const text = await sopsDecrypt(SECRETS_META_PATH);
-    const obj = JSON.parse(text);
-    SECRET_META = new Map(Object.entries(obj || {}));
-    console.log(`[meta] Loaded metadata for ${SECRET_META.size} secrets from ${SECRETS_META_PATH}`);
-  } catch (e) {
-    console.error(`[meta] Failed to load ${SECRETS_META_PATH}: ${e.message}`);
-    console.error('[meta] Starting with empty metadata; admin UI may need to re-enter metadata for existing secrets');
-    SECRET_META = new Map();
-  }
-}
-
-async function persistSecretMeta() {
-  const obj = Object.fromEntries(SECRET_META);
+async function persistSecretsDetail() {
+  const obj = { version: 1, secrets: Object.fromEntries(SECRET_CACHE) };
   const text = JSON.stringify(obj, null, 2) + '\n';
-  await sopsEncryptAtomic(SECRETS_META_PATH, text);
+  await sopsEncryptAtomic(SECRETS_DETAIL_PATH, text);
 }
 
-// Validate a secret name: same rules as common.env KEY= (uppercase, digits, dot, underscore)
+// Get a secret by name. Returns the full entry {type, fields, ...} or null.
+function getSecret(name) {
+  return SECRET_CACHE.get(name) || null;
+}
+
+// Get a specific field from a secret. Returns the value or undefined.
+// Falls back to 'value' field if no field specified AND no other field is populated.
+function getSecretField(name, fieldName) {
+  const s = getSecret(name);
+  if (!s) return undefined;
+  if (fieldName && s.fields[fieldName] !== undefined && s.fields[fieldName] !== '') {
+    return s.fields[fieldName];
+  }
+  if (s.fields.value !== undefined) return s.fields.value;
+  // last resort: return first non-empty field
+  for (const v of Object.values(s.fields)) {
+    if (v !== '' && v !== null && v !== undefined) return v;
+  }
+  return undefined;
+}
+
+// ============================================================
+// Secret name validation
+// ============================================================
 const SECRET_NAME_RE = /^[A-Z0-9_][A-Z0-9_.]{0,127}$/;
 function isValidSecretName(name) {
   return typeof name === 'string' && SECRET_NAME_RE.test(name);
 }
 
-// Whitelisted secret types — keep this tight; the UI shows a dropdown of these.
-// Adding a new type requires updating both this list and dashboard/admin/secrets.js
-const ALLOWED_SECRET_TYPES = new Set([
-  'custom',
-  'github_pat', 'gitlab_pat', 'gitee_pat',
-  'openai_key', 'anthropic_key', 'google_ai_key', 'mistral_key', 'cohere_key',
-  'deepseek_key', 'zhipu_key', 'moonshot_key', 'qwen_key',
-  'aliyun_ak', 'tencent_sk', 'aws_access_key', 'gcp_service_account',
-  'cloudflare_token',
-  'ssh_private_key', 'ssh_public_key',
-  'database_url', 'redis_url', 'mongodb_url',
-  'smtp_password', 'sendgrid_key', 'mailgun_key',
-  'slack_webhook', 'discord_webhook', 'feishu_webhook', 'dingtalk_webhook', 'telegram_bot_token',
-  'sentry_dsn', 'datadog_key',
-  'stripe_secret_key', 'wechat_pay_key',
-  'jwt_secret', 'oauth_client_secret', 'random_string',
-]);
+// Whitelisted secret types — comes from type-schemas.js
+const ALLOWED_SECRET_TYPES = new Set(Object.keys(TYPE_SCHEMAS));
 
 // ============================================================
 // Audit log
@@ -645,8 +728,8 @@ async function callUpstream(serviceCfg, method, path, query, headers, body) {
   if (serviceCfg.type === 'bearer' || serviceCfg.type === 'github_token' || serviceCfg.type === 'header') {
     // Simple bearer/header auth: resolve a single secret and inject as header
     if (!serviceCfg.token_secret) throw new Error(`Service ${serviceCfg.name || '?'} missing token_secret`);
-    const token = getSecret(serviceCfg.token_secret);
-    if (!token) throw new Error(`Secret ${serviceCfg.token_secret} not loaded`);
+    const token = getSecretField(serviceCfg.token_secret, serviceCfg.token_field);
+    if (!token) throw new Error(`Secret ${serviceCfg.token_secret} field=${serviceCfg.token_field || '(default)'} not loaded`);
     if (serviceCfg.type === 'bearer') {
       injectHeaders['Authorization'] = `Bearer ${token}`;
     } else if (serviceCfg.type === 'github_token') {
@@ -668,11 +751,19 @@ async function callUpstream(serviceCfg, method, path, query, headers, body) {
     if (serviceCfg.credential_source === 'imds') {
       creds = await getAliyunCreds('imds');
     } else {
-      // sops-based
-      const ak = getSecret(serviceCfg.access_key_secret);
-      const sk = getSecret(serviceCfg.access_secret_secret);
-      if (!ak || !sk) throw new Error('Aliyun access_key or access_secret not loaded');
-      creds = { accessKeyId: ak, accessKeySecret: sk };
+      // sops-based: prefer one structured secret (aliyun_ak type) with two fields;
+      // fall back to two separate legacy secrets (access_key_secret + access_secret_secret).
+      if (serviceCfg.ak_secret) {
+        const ak = getSecretField(serviceCfg.ak_secret, serviceCfg.ak_id_field || 'access_key_id');
+        const sk = getSecretField(serviceCfg.ak_secret, serviceCfg.ak_secret_field || 'access_key_secret');
+        if (!ak || !sk) throw new Error(`Aliyun secret ${serviceCfg.ak_secret} missing required fields`);
+        creds = { accessKeyId: ak, accessKeySecret: sk };
+      } else {
+        const ak = getSecretField(serviceCfg.access_key_secret, 'value');
+        const sk = getSecretField(serviceCfg.access_secret_secret, 'value');
+        if (!ak || !sk) throw new Error('Aliyun access_key or access_secret not loaded');
+        creds = { accessKeyId: ak, accessKeySecret: sk };
+      }
     }
     const action = getAliyunAction(path, serviceCfg, query);
     if (!action) throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
@@ -906,146 +997,148 @@ async function handle(req, res) {
       audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'denied' });
       return jsonError(res, 403, 'Not allowed to resolve this secret');
     }
-    const v = getSecret(body.name);
-    if (!v) {
+    const entry = getSecret(body.name);
+    if (!entry) {
       audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'not_found' });
       return jsonError(res, 404, `Secret ${body.name} not loaded`);
     }
-    audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
-    return send(res, 200, { name: body.name, value: v });
-  }
-
-  // ============================================================
-  // Admin: Secrets CRUD (Phase 1.1)
-  // All endpoints below require admin role.
-  // Audit emits action: 'secret_admin' with sub-action in {create, update, delete}.
-  // ============================================================
-
-  // Helper: persist common.env atomically.
-  // Format: KEY=VALUE per line. Values are NOT quoted unless they contain newlines
-  // or leading/trailing whitespace (we always quote, for safety).
-  async function persistCommonEnv() {
-    const lines = [];
-    for (const [name, value] of SECRET_CACHE.entries()) {
-      // Always quote; escape backslashes and double-quotes inside value.
-      const safe = String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      lines.push(`${name}="${safe}"`);
+    // Backward compat: return { value } for single-field (value), full { fields } for multi-field
+    const field = body.field;
+    if (field) {
+      const v = entry.fields?.[field];
+      if (v === undefined) {
+        return jsonError(res, 404, `Field ${field} not found in secret ${body.name}`);
+      }
+      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, field, status: 'ok' });
+      return send(res, 200, { name: body.name, field, value: v });
     }
-    const text = lines.join('\n') + '\n';
-    await sopsEncryptAtomic(SECRETS_PATH, text);
+    // No field specified: for backward compat, return value=string if there's a 'value' field,
+    // otherwise return the full fields object.
+    if (entry.fields && 'value' in entry.fields) {
+      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
+      return send(res, 200, { name: body.name, value: entry.fields.value, type: entry.type });
+    }
+    audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
+    return send(res, 200, { name: body.name, type: entry.type, fields: entry.fields });
   }
+
+  // ============================================================
+  // Admin: Secrets CRUD (Phase 1.1.1)
+  // All endpoints below require admin role.
+  // Storage: secrets-detail.json (SOPS-encrypted JSON, structured per-type)
+  // Body shapes:
+  //   POST: { name, type, description?, fields: { ... } }
+  //   PUT:  { type?, description?, fields?: { ... } }
+  //   GET:  returns full entry { name, type, description, fields, created_at, ... }
+  // ============================================================
 
   // ----- GET /api/v1/admin/secrets -----
   if (m === 'GET' && p === '/api/v1/admin/secrets') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const out = [];
-    for (const [name, meta] of SECRET_META.entries()) {
+    for (const [name, entry] of SECRET_CACHE.entries()) {
       out.push({
         name,
-        type: meta.type || 'custom',
-        description: meta.description || '',
-        created_at: meta.created_at || null,
-        updated_at: meta.updated_at || null,
-        updated_by: meta.updated_by || null,
-        has_value: SECRET_CACHE.has(name),
+        type: entry.type || 'custom',
+        description: entry.description || '',
+        fields: entry.fields || {},
+        created_at: entry.created_at || null,
+        updated_at: entry.updated_at || null,
+        updated_by: entry.updated_by || null,
       });
-    }
-    // Include names that exist in SECRET_CACHE but have no metadata (legacy entries)
-    for (const name of SECRET_CACHE.keys()) {
-      if (!SECRET_META.has(name)) {
-        out.push({
-          name,
-          type: 'custom',
-          description: '(无元数据，请补充)',
-          created_at: null,
-          updated_at: null,
-          updated_by: null,
-          has_value: true,
-        });
-      }
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     audit({ action: 'admin_secrets_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
     return send(res, 200, { secrets: out });
   }
 
+  // ----- GET /api/v1/admin/types : return type schemas (so UI can render form dynamically) -----
+  if (m === 'GET' && p === '/api/v1/admin/types') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const out = {};
+    for (const [id, schema] of Object.entries(TYPE_SCHEMAS)) {
+      out[id] = { label: schema.label, description: schema.description, fields: schema.fields };
+    }
+    return send(res, 200, { types: out });
+  }
+
   // ----- POST /api/v1/admin/secrets (create) -----
   if (m === 'POST' && p === '/api/v1/admin/secrets') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const body = await readBody(req) || {};
-    const { name, value, type, description } = body;
+    const { name, type, description, fields } = body;
     if (!isValidSecretName(name)) {
-      return jsonError(res, 400, 'Invalid secret name. Use [A-Z0-9_.], must start with letter/digit/underscore, max 128 chars.');
+      return jsonError(res, 400, 'Invalid secret name. Use [A-Z0-9_.], max 128 chars.');
     }
-    if (typeof value !== 'string' || value.length === 0) {
-      return jsonError(res, 400, 'Missing or empty {value}');
+    if (!type || !ALLOWED_SECRET_TYPES.has(type)) {
+      return jsonError(res, 400, `Unknown type: ${type}`);
     }
-    if (SECRET_CACHE.has(name) || SECRET_META.has(name)) {
+    if (!fields || typeof fields !== 'object') {
+      return jsonError(res, 400, 'Missing {fields: object}');
+    }
+    const errs = validateFields(type, fields);
+    if (errs.length > 0) {
+      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    }
+    if (SECRET_CACHE.has(name)) {
       audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
       return jsonError(res, 409, `Secret ${name} already exists. Use PUT to update.`);
     }
-    const finalType = ALLOWED_SECRET_TYPES.has(type) ? type : 'custom';
     const now = new Date().toISOString();
     const who = ctx.cn || 'admin';
-    SECRET_CACHE.set(name, value);
-    SECRET_META.set(name, { type: finalType, description: description || '', created_at: now, updated_at: now, updated_by: who });
+    SECRET_CACHE.set(name, {
+      type, description: description || '', fields,
+      created_at: now, updated_at: now, updated_by: who,
+    });
     try {
-      await persistCommonEnv();
-      await persistSecretMeta();
+      await persistSecretsDetail();
     } catch (e) {
-      // rollback in-memory state so we don't drift from disk
       SECRET_CACHE.delete(name);
-      SECRET_META.delete(name);
       audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
-    audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, type: finalType, status: 'ok' });
-    return send(res, 200, { ok: true, name, type: finalType });
+    audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, type, status: 'ok' });
+    return send(res, 200, { ok: true, name, type });
   }
 
-  // ----- PUT /api/v1/admin/secrets/:name (update value or metadata) -----
+  // ----- PUT /api/v1/admin/secrets/:name (update) -----
   const updateMatch = p.match(/^\/api\/v1\/admin\/secrets\/([A-Za-z0-9_.]+)$/);
   if (m === 'PUT' && updateMatch && updateMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const name = updateMatch[1];
-    if (!SECRET_CACHE.has(name) && !SECRET_META.has(name)) {
-      return jsonError(res, 404, `Secret ${name} not found`);
-    }
+    const existing = SECRET_CACHE.get(name);
+    if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
     const body = await readBody(req) || {};
-    const meta = SECRET_META.get(name) || { type: 'custom', description: '', created_at: new Date().toISOString() };
-    const newMeta = { ...meta };
-    let valueChanged = false;
-    if (body.value !== undefined) {
-      if (typeof body.value !== 'string') return jsonError(res, 400, '{value} must be a string');
-      SECRET_CACHE.set(name, body.value);
-      valueChanged = true;
-    }
+    const updated = { ...existing };
     if (body.type !== undefined) {
       if (!ALLOWED_SECRET_TYPES.has(body.type)) return jsonError(res, 400, `Unknown type: ${body.type}`);
-      newMeta.type = body.type;
+      updated.type = body.type;
     }
     if (body.description !== undefined) {
-      newMeta.description = String(body.description);
+      updated.description = String(body.description);
     }
-    const now = new Date().toISOString();
-    newMeta.updated_at = now;
-    newMeta.updated_by = ctx.cn || 'admin';
-    if (!newMeta.created_at) newMeta.created_at = meta.created_at || now;
-    SECRET_META.set(name, newMeta);
+    if (body.fields !== undefined) {
+      if (typeof body.fields !== 'object') return jsonError(res, 400, '{fields} must be an object');
+      // Merge: client may send partial fields (e.g. only one field in a multi-field secret)
+      updated.fields = { ...existing.fields, ...body.fields };
+    }
+    // Re-validate after merge
+    const errs = validateFields(updated.type, updated.fields);
+    if (errs.length > 0) {
+      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    }
+    updated.updated_at = new Date().toISOString();
+    updated.updated_by = ctx.cn || 'admin';
+    const prevSnapshot = JSON.parse(JSON.stringify(existing));
+    SECRET_CACHE.set(name, updated);
     try {
-      if (valueChanged) await persistCommonEnv();
-      await persistSecretMeta();
+      await persistSecretsDetail();
     } catch (e) {
-      // best-effort rollback: revert in-memory to pre-update
-      if (valueChanged) {
-        const orig = body._origValue !== undefined ? body._origValue : null;
-        if (orig !== null) SECRET_CACHE.set(name, orig); else SECRET_CACHE.delete(name);
-      }
-      SECRET_META.set(name, meta);
+      SECRET_CACHE.set(name, prevSnapshot);
       audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
-    audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, value_changed: valueChanged, status: 'ok' });
+    audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
   }
 
@@ -1053,26 +1146,16 @@ async function handle(req, res) {
   if (m === 'DELETE' && updateMatch && updateMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const name = updateMatch[1];
-    if (!SECRET_CACHE.has(name) && !SECRET_META.has(name)) {
-      return jsonError(res, 404, `Secret ${name} not found`);
-    }
-    const oldMeta = SECRET_META.get(name);
-    const hadValue = SECRET_CACHE.has(name);
+    const existing = SECRET_CACHE.get(name);
+    if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
     SECRET_CACHE.delete(name);
-    SECRET_META.delete(name);
     try {
-      if (hadValue) await persistCommonEnv();
-      await persistSecretMeta();
+      await persistSecretsDetail();
     } catch (e) {
       // best-effort rollback
-      if (hadValue) {
-        // we don't have the original value in memory after delete; rebuild from existing on disk failed.
-        // For now, log and accept that disk state is the source of truth; restart to recover.
-        console.error(`[admin] delete ${name} persist failed; in-memory cleared, disk may still hold it. Restart broker to reload.`, e.message);
-      }
-      SECRET_META.set(name, oldMeta);
+      SECRET_CACHE.set(name, existing);
       audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}; in-memory may be inconsistent. Restart broker.`);
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
     audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -1132,7 +1215,6 @@ async function handle(req, res) {
     try {
       await loadConfig();
       await loadSecrets();
-      await loadSecretMeta();
       audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
       return send(res, 200, { reloaded: true, services: Object.keys(CONFIG.services), secrets: SECRET_CACHE.size });
     } catch (err) {
@@ -1250,7 +1332,6 @@ function start() {
   try {
     await loadConfig();
     await loadSecrets();
-    await loadSecretMeta();
     start();
   } catch (err) {
     console.error('[bootstrap] failed:', err.message);

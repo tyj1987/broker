@@ -50,6 +50,11 @@ function mTLSRequest({ method = 'GET', path = '/', body = null, headers = {} }) 
   const cfg = loadConfig();
   const url = new URL(path, cfg.endpoint);
   return new Promise((resolve, reject) => {
+    // SNI: by default use the hostname from endpoint, but allow override
+    // so the user can put the SSH-tunnel localhost:18443 in endpoint and
+    // keep the real domain in servername without juggling hosts files.
+    const sni = cfg.sni_hostname || url.hostname;
+
     const opts = {
       method,
       hostname: url.hostname,
@@ -58,6 +63,7 @@ function mTLSRequest({ method = 'GET', path = '/', body = null, headers = {} }) 
       cert: readFileSync(cfg.client_cert),
       key:  readFileSync(cfg.client_key),
       ca:   readFileSync(cfg.ca_cert),
+      servername: sni,
       rejectUnauthorized: true,
       headers: {
         'Content-Type': 'application/json',
@@ -348,7 +354,8 @@ Config: ~/.broker/config.json
     "endpoint": "https://broker.example.com:8443",
     "client_cert": "C:/Users/.../client.laptop.crt",
     "client_key":  "C:/Users/.../client.laptop.key",
-    "ca_cert":     "C:/Users/.../ca.crt"
+    "ca_cert":     "C:/Users/.../ca.crt",
+    "sni_hostname": "broker.example.com"
   }
 
 Examples:

@@ -5,12 +5,27 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    credentials: 'include',
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-  });
+async function api(path, opts = {}, timeoutMs = 15000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(path, {
+      credentials: 'include',
+      signal: ctrl.signal,
+      ...opts,
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    });
+  } catch (ex) {
+    if (ex && ex.name === 'AbortError') {
+      const err = new Error(`请求超时（${timeoutMs / 1000}s），请检查网络后重试`);
+      err.status = 0;
+      throw err;
+    }
+    throw ex;
+  } finally {
+    clearTimeout(timer);
+  }
   const ct = res.headers.get('content-type') || '';
   const body = ct.includes('application/json') ? await res.json() : await res.text();
   if (!res.ok) {
@@ -216,7 +231,8 @@ function parseJsonField(s) {
 async function runProxy(svcName, payload) {
   const t0 = performance.now();
   try {
-    const r = await api(`/api/v1/proxy/${encodeURIComponent(svcName)}`, { method: 'POST', body: JSON.stringify(payload) });
+    // 代理要转发到外部 API，可能较慢，给 90s
+    const r = await api(`/api/v1/proxy/${encodeURIComponent(svcName)}`, { method: 'POST', body: JSON.stringify(payload) }, 90000);
     showResponse(svcName, r, null, false, Math.round(performance.now() - t0), payload);
   } catch (ex) {
     showResponse(svcName, null, ex.message, true, Math.round(performance.now() - t0), payload);
@@ -338,13 +354,24 @@ $('#btn-refresh-secrets').addEventListener('click', loadSecrets);
 
 // ---------- 启动 ----------
 async function boot() {
+  let ident;
   try {
-    await loadIdentity();
-    showApp();
-    await Promise.all([loadServices(), loadAudit(), loadSecrets()]);
+    ident = await api('/api/v1/identity');
   } catch (e) {
+    // 无有效会话 → 留在登录页
     showLogin();
+    return;
   }
+  identity = ident;
+  $('#identity').textContent = `CN=${identity.cn} · role=${identity.role}${identity.via === 'session' ? ' · session' : ''}`;
+  // 身份有效：立即进入主视图。后续数据加载失败只显示错误，不把用户踢回登录页。
+  showApp();
+  loadServices().catch(e => {
+    const wrap = $('#services');
+    if (wrap) wrap.innerHTML = `<div class="card"><p class="status-error">服务列表加载失败：${escapeHtml(e.message)}</p></div>`;
+  });
+  loadAudit().catch(() => {});
+  loadSecrets().catch(() => {});
 }
 
 boot();

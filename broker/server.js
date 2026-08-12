@@ -649,7 +649,11 @@ async function handle(req, res) {
       const ct = p.endsWith('.js') ? 'application/javascript; charset=utf-8'
                : p.endsWith('.css') ? 'text/css; charset=utf-8'
                : 'text/html; charset=utf-8';
-      res.writeHead(200, { 'Content-Type': ct });
+      res.writeHead(200, {
+        'Content-Type': ct,
+        // dashboard 是动态产物，禁止 CDN/浏览器缓存，避免更新后拿到旧版
+        'Cache-Control': 'no-cache, must-revalidate',
+      });
       return res.end(body);
     }
   }

@@ -3,73 +3,131 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Secret Broker / 密钥代理</title>
+  <title>Secret Broker · AI 动作控制台</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>🔐 Secret Broker</h1>
-    <p class="subtitle">mTLS 凭据代理 · v2.0</p>
-    <div id="identity" class="identity"></div>
-  </header>
 
-  <nav class="tabs">
-    <button class="tab-btn active" data-tab="secrets">密钥 / Secrets</button>
-    <button class="tab-btn" data-tab="audit">审计 / Audit</button>
-    <button class="tab-btn" data-tab="rotate">轮转 / Rotate</button>
-    <button class="tab-btn" data-tab="docs">文档 / Docs</button>
-  </nav>
+  <!-- ============ 登录视图 ============ -->
+  <section id="login-view" class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">🔐</div>
+      <h1>Secret Broker</h1>
+      <p class="subtitle">mTLS 凭据代理 · AI 动作控制台</p>
+      <p class="hint">
+        密钥永不离开 broker：你在这里点击/填写请求，broker 自动注入密钥调用外部 API，
+        明文密钥不会出现在这个页面上。
+      </p>
+      <form id="login-form" autocomplete="off">
+        <label>客户端名称 <span class="muted">（仅密码登录时必填）</span>
+          <input id="login-client" type="text" placeholder="client.dashboard-admin" value="client.dashboard-admin">
+        </label>
+        <label>密码
+          <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password">
+        </label>
+        <div id="login-error" class="status-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block">登录 / Login</button>
+      </form>
+      <p class="hint muted">
+        安全提示：密码登录连续失败 5 次将锁定 15 分钟；如果你的浏览器已安装客户端证书，
+        可以直接使用（mTLS 身份自动生效）。
+      </p>
+    </div>
+  </section>
 
-  <main>
-    <!-- Secrets tab -->
-    <section id="tab-secrets" class="tab-content active">
-      <div class="card">
-        <h2>可见密钥 / Visible Secrets</h2>
-        <p class="hint">这些是你当前客户端证书被授权访问的密钥名。点击 <code>resolve</code> 拉明文（受审计）。</p>
-        <button id="btn-refresh-secrets" class="btn">刷新 / Refresh</button>
-        <table id="secrets-table">
-          <thead><tr><th>Name</th><th>操作</th></tr></thead>
-          <tbody></tbody>
-        </table>
+  <!-- ============ 主视图 ============ -->
+  <section id="app-view" hidden>
+    <header>
+      <div class="header-left">
+        <h1>🔐 Secret Broker</h1>
+        <p class="subtitle">AI 动作控制台 · 密钥永不离开 broker</p>
       </div>
-    </section>
+      <div class="header-right">
+        <div id="identity" class="identity"></div>
+        <button id="btn-logout" class="btn btn-ghost">退出</button>
+      </div>
+    </header>
 
-    <!-- Audit tab -->
-    <section id="tab-audit" class="tab-content">
-      <div class="card">
-        <h2>审计日志 / Audit Log</h2>
-        <p class="hint">只读视图，按时间倒序。<strong>需要 admin 角色。</strong></p>
-        <div class="filter-row">
-          <label>Limit: <input id="audit-limit" type="number" value="50" min="1" max="500"></label>
-          <label>Since: <input id="audit-since" type="datetime-local"></label>
-          <button id="btn-refresh-audit" class="btn">刷新 / Refresh</button>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="actions">⚡ 动作 / Actions</button>
+      <button class="tab-btn" data-tab="audit">📋 审计 / Audit</button>
+      <button class="tab-btn" data-tab="secrets">🔑 密钥 / Secrets</button>
+      <button class="tab-btn" data-tab="docs">📖 文档 / Docs</button>
+    </nav>
+
+    <main>
+
+      <!-- ===== Actions tab ===== -->
+      <section id="tab-actions" class="tab-content active">
+        <div class="card intro">
+          <h2>用外部服务，不看密钥</h2>
+          <p>
+            点击预置动作，或填写自定义请求。broker 会在服务端注入密钥（PAT / API Key /
+            阿里云签名）后转发到目标 API，你只看到请求与响应。所有调用都记入审计日志。
+          </p>
         </div>
-        <table id="audit-table">
-          <thead><tr><th>时间</th><th>客户端</th><th>动作</th><th>目标</th><th>状态</th><th>延迟</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
 
-    <!-- Rotate tab -->
-    <section id="tab-rotate" class="tab-content">
-      <div class="card">
-        <h2>触发密钥轮转 / Trigger Rotation</h2>
-        <p class="hint">轮转是手动流程：参考 <code>RUNBOOK.md</code> 在 GitHub/阿里云/etc. 重新签发后，回到 broker 更新 <code>secrets/common.env</code> 并 reload。</p>
-        <div class="form-row">
-          <label>Secret name: <input id="rotate-name" placeholder="e.g. github.pat" type="text"></label>
-          <button id="btn-rotate" class="btn btn-danger">触发 / Trigger</button>
+        <!-- 响应面板 -->
+        <div id="response-panel" class="card response-panel" hidden>
+          <div class="response-head">
+            <strong id="resp-title">响应</strong>
+            <span id="resp-status" class="badge">-</span>
+            <span id="resp-latency" class="muted">-</span>
+            <button id="btn-close-response" class="btn btn-ghost btn-sm">关闭</button>
+          </div>
+          <pre id="resp-body" class="result"></pre>
         </div>
-        <pre id="rotate-result" class="result"></pre>
-      </div>
-    </section>
 
-    <!-- Docs tab -->
-    <section id="tab-docs" class="tab-content">
-      <div class="card">
-        <h2>快速上手 / Quick Start</h2>
-        <h3>从客户端调用 / From a client</h3>
-        <pre><code># 健康检查
+        <div id="services" class="services">
+          <div class="loading">加载服务列表...</div>
+        </div>
+      </section>
+
+      <!-- ===== Audit tab ===== -->
+      <section id="tab-audit" class="tab-content">
+        <div class="card">
+          <h2>审计日志 / Audit Log</h2>
+          <p class="hint">只读视图，按时间倒序。<strong>需要 admin 角色。</strong></p>
+          <div class="filter-row">
+            <label>Limit: <input id="audit-limit" type="number" value="50" min="1" max="500"></label>
+            <button id="btn-refresh-audit" class="btn">刷新 / Refresh</button>
+          </div>
+          <table id="audit-table">
+            <thead><tr><th>时间</th><th>客户端</th><th>动作</th><th>目标</th><th>状态</th><th>延迟</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== Secrets tab ===== -->
+      <section id="tab-secrets" class="tab-content">
+        <div class="card">
+          <h2>可见密钥 / Visible Secrets</h2>
+          <p class="hint">
+            仅在你被授权的密钥名上可用（admin 除外）。拉取明文会写入审计日志，
+            <strong>AI 使用请优先走 Actions 代理模式</strong>。
+          </p>
+          <button id="btn-refresh-secrets" class="btn">刷新 / Refresh</button>
+          <table id="secrets-table">
+            <thead><tr><th>Name</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== Docs tab ===== -->
+      <section id="tab-docs" class="tab-content">
+        <div class="card">
+          <h2>给 AI 的使用说明 / For AI clients</h2>
+          <ol>
+            <li>打开本页，输入客户端名称 + 密码登录（或直接用已安装的客户端证书）。</li>
+            <li>进入 <strong>⚡ 动作</strong> 页：点击预置按钮，或展开「自定义请求」填写
+              method / path / query / body，然后点发送。</li>
+            <li>broker 服务端注入密钥（Bearer / header / 阿里云签名）后转发到上游 API，
+              响应直接返回；<strong>明文密钥永不显示、永不离开发送端内存</strong>。</li>
+          </ol>
+          <h3>CLI 方式 / From the CLI</h3>
+          <pre><code># 健康检查
 secret-broker health
 
 # 代理模式（AI 推荐，密钥不离开 broker）
@@ -78,33 +136,24 @@ secret-broker proxy github GET /repos/tyj1987/sops-age-template
 # 注入环境变量运行子进程
 secret-broker exec --env "GH_TOKEN" -- git push origin main
 
-# 拉明文（仅白名单）
+# 拉明文（仅白名单，慎用）
 secret-broker get github.pat</code></pre>
+          <h3>安全模型 / Security model</h3>
+          <ul>
+            <li>mTLS 双向认证：每台设备一张 client cert，丢失可秒吊销。</li>
+            <li>密码登录需客户端显式开启 <code>allow_password_login</code>，且 5 次失败锁定 15 分钟。</li>
+            <li>会话 token 30 分钟滑动过期；登录/代理/解析全部落审计日志。</li>
+            <li>策略引擎：每个客户端有 <code>allowed_resolve</code> / <code>allowed_proxy</code> 白名单。</li>
+          </ul>
+        </div>
+      </section>
 
-        <h3>管理员操作 / Admin operations</h3>
-        <pre><code># 签发新客户端证书
-secret-broker pki issue-client --cn client.tyj-laptop --role developer --register
+    </main>
 
-# 吊销证书
-secret-broker pki revoke --fingerprint AB:CD:EF:...
-
-# 列出所有客户端
-secret-broker pki list</code></pre>
-
-        <h3>安全模型 / Security model</h3>
-        <ul>
-          <li>AI 客户端永远不直接拿到明文密钥。代理模式下，AI 只看到外部 API 的请求/响应。</li>
-          <li>mTLS 双向认证：每台设备一张 client cert，丢失可秒吊销。</li>
-          <li>所有 resolve / proxy / rotate 调用都落审计日志 <code>audit/audit-YYYY-MM-DD.jsonl</code>。</li>
-          <li>策略引擎：每个客户端有 <code>allowed_resolve</code> / <code>allowed_proxy</code> 白名单。</li>
-        </ul>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <p>Secret Broker v2.0 · <a href="/api/v1/identity" id="api-link">JSON API</a> · <a href="/health">/health</a></p>
-  </footer>
+    <footer>
+      <p>Secret Broker v2.0 · <a href="/api/v1/identity">JSON API</a> · <a href="/health">/health</a></p>
+    </footer>
+  </section>
 
   <script src="app.js"></script>
 </body>

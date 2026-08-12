@@ -229,6 +229,35 @@ function deleteSession(token) {
   if (token) SESSIONS.delete(token);
 }
 
+// Login brute-force protection (per client + auth mode)
+const LOGIN_ATTEMPTS = new Map();  // `${clientName}|${mode}` -> { fails, lockedUntil }
+const MAX_LOGIN_FAILS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+function checkLoginLock(key) {
+  const a = LOGIN_ATTEMPTS.get(key);
+  if (!a) return true;
+  // lockedUntil === 0 means "no lock armed yet"; only block while armed
+  if (a.lockedUntil && Date.now() < a.lockedUntil) return false;
+  return true;
+}
+
+function recordLoginFail(key) {
+  const a = LOGIN_ATTEMPTS.get(key) || { fails: 0, lockedUntil: 0 };
+  // if a previous lockout expired, start the counter over
+  if (a.lockedUntil && Date.now() >= a.lockedUntil) {
+    a.fails = 0;
+    a.lockedUntil = 0;
+  }
+  a.fails += 1;
+  if (a.fails >= MAX_LOGIN_FAILS) a.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+  LOGIN_ATTEMPTS.set(key, a);
+}
+
+function clearLoginLock(key) {
+  LOGIN_ATTEMPTS.delete(key);
+}
+
 
 function getClientContext(socket) {
   // Kept for back-compat with places that still pass req.socket.
@@ -267,6 +296,19 @@ function canProxy(ctx, serviceName, path) {
       if (!rule.paths) return true;
       return checkPathAllowed(rule.paths, path);
     }
+  }
+  return false;
+}
+
+// Does the client have ANY access to a service at all (for the dashboard badge)?
+function isServiceAllowed(ctx, serviceName) {
+  if (!ctx.client) return false;
+  if (ctx.client.role === 'admin') return true;
+  const allow = ctx.client.allowed_proxy || [];
+  for (const rule of allow) {
+    if (rule === '*' || rule === '.*') return true;
+    if (typeof rule === 'string' && rule === serviceName) return true;
+    if (typeof rule === 'object' && rule.service === serviceName) return true;
   }
   return false;
 }
@@ -473,15 +515,17 @@ function buildAliyunSignedUrl(upstream, action, query, region, creds) {
 }
 
 // Extract Aliyun Action from a path like "/?Action=DescribeInstances"
-// or "/DescribeInstances" (for ECS-style). The broker.yaml maps service→Action via
-// `action` field; if not set, the body.path is used.
-function getAliyunAction(path, serviceCfg) {
+// or "/DescribeInstances" (for ECS-style), or from the request query.
+// The broker.yaml maps service→Action via `action` field; if not set,
+// the path query or the proxy request query is used.
+function getAliyunAction(path, serviceCfg, query) {
   if (serviceCfg.action) return serviceCfg.action;
   // try to extract from query string
   try {
     const u = new URL(path, 'http://x/');
     if (u.searchParams.get('Action')) return u.searchParams.get('Action');
   } catch {}
+  if (query && query.Action) return String(query.Action);
   return null;
 }
 
@@ -523,7 +567,7 @@ async function callUpstream(serviceCfg, method, path, query, headers, body) {
       if (!ak || !sk) throw new Error('Aliyun access_key or access_secret not loaded');
       creds = { accessKeyId: ak, accessKeySecret: sk };
     }
-    const action = getAliyunAction(path, serviceCfg);
+    const action = getAliyunAction(path, serviceCfg, query);
     if (!action) throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
     url = buildAliyunSignedUrl(serviceCfg.upstream, action, query, serviceCfg.region, creds);
   } else {
@@ -595,47 +639,71 @@ async function handle(req, res) {
     });
   }
 
-  // ----- Everything below needs mTLS auth -----
-  const ctx = getIdentity(req);
-  if (!ctx || !ctx.certSubject) {
-    audit({ action: 'connect', status: 'denied', reason: 'no_client_cert', remote: req.socket.remoteAddress });
-    return jsonError(res, 401, 'mTLS client certificate required');
-  }
-  if (!ctx.client) {
-    audit({ action: 'connect', status: 'denied', reason: 'cert_not_registered', cn: ctx.cn, fp: ctx.fp, remote: req.socket.remoteAddress });
-    return jsonError(res, 403, `Client certificate not registered. CN=${ctx.cn} fp=${ctx.fp}`);
-  }
-  if (!rateLimit(ctx)) {
-    audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });
-    return jsonError(res, 429, 'Rate limit exceeded');
+  // ----- Public: static dashboard assets (the login page must load without a client cert) -----
+  if (m === 'GET' && (p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css')) {
+    const map = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css' };
+    const f = join(__dirname, 'dashboard', map[p]);
+    if (existsSync(f)) {
+      const body = readFileSync(f);
+      const ct = p.endsWith('.js') ? 'application/javascript; charset=utf-8'
+               : p.endsWith('.css') ? 'text/css; charset=utf-8'
+               : 'text/html; charset=utf-8';
+      res.writeHead(200, { 'Content-Type': ct });
+      return res.end(body);
+    }
   }
 
-  // ----- POST /api/v1/login (mTLS cert + password -> session token) -----
+  // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
+  // Login must work from a browser that may not have a client cert installed.
+  // Security: password-only login requires the client to be explicitly marked
+  // `allow_password_login: true` in broker.yaml AND is protected by a
+  // per-client lockout (5 fails -> 15 min). mTLS remains the strong default.
   if (m === 'POST' && p === '/api/v1/login') {
-    // mTLS only for login (to prevent password-only brute force from anywhere)
-    if (ctx.via !== 'mtls') {
-      return jsonError(res, 401, 'mTLS client certificate required for /login');
-    }
     const body = await readBody(req) || {};
     const password = body.password;
     if (!password) return jsonError(res, 400, 'Missing {password}');
-    // verify password (timing-safe compare against per-client password hash)
-    const expected = ctx.client.password;
-    if (!expected) return jsonError(res, 403, 'No password configured for this client');
-    const ok = await timingSafeEqual(password, expected);
+    const ctx0 = getIdentity(req);
+    let targetClient = null, targetName = null, lockKey = null, via = 'mtls';
+    if (ctx0 && ctx0.via === 'mtls') {
+      if (!ctx0.client.password) return jsonError(res, 403, 'No password configured for this client');
+      targetClient = ctx0.client;
+      targetName = ctx0.clientName;
+      lockKey = `${targetName}|mtls`;
+    } else {
+      // password-only login: client name is required and must opt in
+      const clientName = (body.client || '').trim();
+      const c = clientName ? CONFIG.clients[clientName] : null;
+      if (!c || !c.allow_password_login) {
+        audit({ action: 'login', status: 'denied', reason: 'password_login_not_allowed', client: clientName || '(none)' });
+        return jsonError(res, 401, 'mTLS client certificate required; or pass {client} with allow_password_login: true');
+      }
+      targetClient = c;
+      targetName = clientName;
+      lockKey = `${clientName}|pw`;
+      via = 'password';
+    }
+    if (!checkLoginLock(lockKey)) {
+      audit({ action: 'login', status: 'denied', reason: 'lockout', client: lockKey });
+      return jsonError(res, 429, 'Too many failed login attempts. Locked until later.');
+    }
+    const ok = await timingSafeEqual(password, targetClient.password);
     if (!ok) {
-      audit({ action: 'login', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_password' });
+      recordLoginFail(lockKey);
+      audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
       return jsonError(res, 401, 'Bad password');
     }
-    const token = makeSession({ cn: ctx.cn, fp: ctx.fp, client: ctx.client, clientName: ctx.clientName, cert: { subject: ctx.certSubject } });
-    audit({ action: 'login', cn: ctx.cn, fp: ctx.fp, status: 'ok', via: 'mtls' });
+    clearLoginLock(lockKey);
+    const cn = ctx0 ? ctx0.cn : `${targetName}@web`;
+    const fp = ctx0 ? ctx0.fp : null;
+    const token = makeSession({ cn, fp, role: targetClient.role, clientName: targetName, cert: { subject: { CN: cn } }, client: targetClient });
+    audit({ action: 'login', status: 'ok', cn, client: targetName, via });
     res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     return send(res, 200, {
       token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-      cn: ctx.cn,
-      role: ctx.client.role,
-      via: 'session',
+      cn,
+      role: targetClient.role,
+      via,
     });
   }
 
@@ -651,6 +719,21 @@ async function handle(req, res) {
     return send(res, 200, { logged_out: true });
   }
 
+  // ----- Everything below needs auth (mTLS cert or session token) -----
+  const ctx = getIdentity(req);
+  if (!ctx || !ctx.certSubject) {
+    audit({ action: 'connect', status: 'denied', reason: 'no_client_cert', remote: req.socket.remoteAddress });
+    return jsonError(res, 401, 'mTLS client certificate required');
+  }
+  if (!ctx.client) {
+    audit({ action: 'connect', status: 'denied', reason: 'cert_not_registered', cn: ctx.cn, fp: ctx.fp, remote: req.socket.remoteAddress });
+    return jsonError(res, 403, `Client certificate not registered. CN=${ctx.cn} fp=${ctx.fp}`);
+  }
+  if (!rateLimit(ctx)) {
+    audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });
+    return jsonError(res, 429, 'Rate limit exceeded');
+  }
+
   // ----- GET /api/v1/identity -----
   if (m === 'GET' && p === '/api/v1/identity') {
     return send(res, 200, {
@@ -661,6 +744,25 @@ async function handle(req, res) {
       cert_subject: ctx.certSubject,
       via: ctx.via,
     });
+  }
+
+  // ----- GET /api/v1/services (dashboard "AI Actions" view; never leaks secrets) -----
+  if (m === 'GET' && p === '/api/v1/services') {
+    const services = [];
+    for (const [name, svc] of Object.entries(CONFIG.services)) {
+      services.push({
+        name,
+        type: svc.type || 'unknown',
+        description: svc.description || '',
+        upstream: svc.upstream || '',
+        region: svc.region || '',
+        action: svc.action || '',
+        allowed: isServiceAllowed(ctx, name),
+        actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+      });
+    }
+    audit({ action: 'list_services', cn: ctx.cn, fp: ctx.fp, count: services.length });
+    return send(res, 200, { services });
   }
 
   // ----- GET /api/v1/secrets -----
@@ -766,16 +868,6 @@ async function handle(req, res) {
     });
   }
 
-  // ----- GET / -> static dashboard -----
-  if (m === 'GET' && (p === '/' || p === '/index.html')) {
-    const idx = join(__dirname, 'dashboard', 'index.html');
-    if (existsSync(idx)) {
-      const html = readFileSync(idx, 'utf8');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(html);
-    }
-  }
-
   // 404
   audit({ action: 'unknown', cn: ctx.cn, fp: ctx.fp, method: m, path: p, status: '404' });
   return jsonError(res, 404, `Not found: ${m} ${p}`);
@@ -823,7 +915,10 @@ function getIdentity(req) {
   };
 }
 
-
+// ============================================================
+// TLS server
+// ============================================================
+function start() {
   const tlsOpts = {
     cert: readFileSync(TLS_CERT),
     key: readFileSync(TLS_KEY),

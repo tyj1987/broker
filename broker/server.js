@@ -12,8 +12,9 @@ import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
+import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -289,6 +290,126 @@ async function persistSecretsDetail() {
   await sopsEncryptAtomic(SECRETS_DETAIL_PATH, text);
 }
 
+// Phase 1.2: persist broker.yaml (services + clients section) to disk.
+// The yaml MUST round-trip through SOPS (atomic write) and reloadConfig() so
+// the running process picks up the change without restart.
+async function persistConfig() {
+  if (!CONFIG) throw new Error('CONFIG not loaded yet');
+  // Re-emit the whole config (not just `services`) to preserve any extra fields
+  // the operator may have set by hand. Order: services, clients.
+  const out = {};
+  if (CONFIG.services) out.services = CONFIG.services;
+  if (CONFIG.clients)  out.clients  = CONFIG.clients;
+  // Carry through any other top-level keys (version, etc.)
+  for (const k of Object.keys(CONFIG)) {
+    if (k === 'services' || k === 'clients') continue;
+    out[k] = CONFIG[k];
+  }
+  let text = stringifyYaml(out, { lineWidth: 0, sortMapEntries: false }) + '\n';
+  text = quoteYamlAmbiguousScalars(text);
+  await sopsEncryptAtomic(CONFIG_PATH, text);
+}
+
+// Post-process yaml text: if a scalar value looks like a YAML 1.1 special type
+// (date YYYY-MM-DD, time HH:MM:SS, timestamp) that we'd then want to read back
+// as a plain string, wrap it in double quotes. This is the cheapest way to
+// keep the round-trip stable without forcing every string to be quoted (which
+// would make broker.yaml unreadable to humans).
+function quoteYamlAmbiguousScalars(text) {
+  return text
+    // `key: 2025-08-12` (bare date) → `key: "2025-08-12"`
+    .replace(/^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2})(\s*$)/gm, '$1"$2"$3')
+    // `key: 12:34:56` (bare time) → `key: "12:34:56"`
+    .replace(/^(\s*[\w.-]+\s*:\s+)(\d{1,2}:\d{2}:\d{2})(\s*$)/gm, '$1"$2"$3')
+    // `key: 2025-08-12T10:00:00Z` (timestamp) → `key: "..."`
+    .replace(/^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(\s*$)/gm, '$1"$2"$3');
+}
+
+// Service name rule: lowercase letters / digits / underscore / hyphen. Must
+// start with a letter. Max 64 chars (shorter than secrets because services
+// are referenced in URL paths like /api/v1/proxy/:name).
+const SERVICE_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+function isValidServiceName(name) {
+  return typeof name === 'string' && SERVICE_NAME_RE.test(name);
+}
+
+// Sanitize a service config that came from the API. We never accept `secret`
+// from the API — only `token_secret` (the name reference), so the API can
+// never leak a stored secret value into another service. Also drops unknown
+// fields, coerces inject_headers to {string: string}, etc.
+function normalizeServiceConfig(body) {
+  if (!body || typeof body !== 'object') return null;
+  const out = {};
+  // Required
+  if (body.type) out.type = String(body.type);
+  if (body.upstream !== undefined) out.upstream = String(body.upstream);
+  // Optional metadata
+  if (body.description !== undefined) out.description = String(body.description);
+  if (body.region !== undefined) out.region = String(body.region);
+  if (body.action !== undefined) out.action = String(body.action);
+  // Token reference: just the name of the secret; never the value
+  if (body.token_secret !== undefined) out.token_secret = String(body.token_secret);
+  // inject_headers: must be a flat string->string map
+  if (body.inject_headers && typeof body.inject_headers === 'object') {
+    const h = {};
+    for (const [k, v] of Object.entries(body.inject_headers)) {
+      if (v == null) continue;
+      h[String(k)] = String(v);
+    }
+    if (Object.keys(h).length > 0) out.inject_headers = h;
+  }
+  // For type: header — extra fields
+  if (body.header_name !== undefined) out.header_name = String(body.header_name);
+  if (body.header_value_template !== undefined) out.header_value_template = String(body.header_value_template);
+  // allow_paths: array of regex strings
+  if (Array.isArray(body.allow_paths)) {
+    out.allow_paths = body.allow_paths.map(s => String(s));
+  }
+  // dashboard_actions: array of {label, method, path, query?}
+  if (Array.isArray(body.dashboard_actions)) {
+    out.dashboard_actions = body.dashboard_actions
+      .filter(a => a && typeof a === 'object' && a.label && a.method && a.path)
+      .map(a => ({
+        label: String(a.label),
+        method: String(a.method).toUpperCase(),
+        path: String(a.path),
+        ...(a.query && typeof a.query === 'object' ? { query: a.query } : {}),
+      }));
+  }
+  return out;
+}
+
+// Validate a normalized service config. Returns array of error strings (empty
+// if valid). Used on POST and PUT.
+function validateServiceConfig(name, cfg) {
+  const errs = [];
+  if (!isValidServiceName(name)) {
+    errs.push('Invalid service name. Use [a-z][a-z0-9_-]{0,63}.');
+  }
+  if (!cfg) { errs.push('Missing config body'); return errs; }
+  if (!cfg.type) errs.push('Missing type');
+  else {
+    // Allow any type we have callUpstream support for. (We don't restrict to
+    // a known set because Phase 3 may add more.)
+    const supported = new Set(['github_token', 'bearer', 'header', 'aliyun_v2', 'ssh_proxy']);
+    if (!supported.has(cfg.type)) errs.push(`Unknown service type: ${cfg.type}`);
+  }
+  if (!cfg.upstream && cfg.type !== 'ssh_proxy') errs.push('Missing upstream URL');
+  if (cfg.upstream) {
+    try { new URL(cfg.upstream); } catch (e) { errs.push('upstream is not a valid URL'); }
+  }
+  if (cfg.type === 'header' && !cfg.header_value_template) {
+    errs.push('type=header requires header_value_template (e.g. "Bearer {{secret.X.value}}")');
+  }
+  if (cfg.type === 'aliyun_v2' && !cfg.region) {
+    errs.push('type=aliyun_v2 requires region');
+  }
+  if (cfg.token_secret && !isValidSecretName(cfg.token_secret)) {
+    errs.push(`token_secret "${cfg.token_secret}" is not a valid secret name`);
+  }
+  return errs;
+}
+
 // Get a secret by name. Returns the full entry {type, fields, ...} or null.
 function getSecret(name) {
   return SECRET_CACHE.get(name) || null;
@@ -504,6 +625,22 @@ function isServiceAllowed(ctx, serviceName) {
     if (typeof rule === 'object' && rule.service === serviceName) return true;
   }
   return false;
+}
+
+// Phase 1.2: list client names that have access to a given service. Used by
+// the admin Services UI to show the permission matrix.
+function clientNamesAllowedFor(serviceName) {
+  const out = [];
+  for (const [cname, c] of Object.entries(CONFIG.clients || {})) {
+    if (c.role === 'admin') { out.push(cname); continue; }
+    const allow = c.allowed_proxy || [];
+    for (const rule of allow) {
+      if (rule === '*' || rule === '.*') { out.push(cname); break; }
+      if (typeof rule === 'string' && rule === serviceName) { out.push(cname); break; }
+      if (typeof rule === 'object' && rule.service === serviceName) { out.push(cname); break; }
+    }
+  }
+  return out;
 }
 
 // ============================================================
@@ -723,14 +860,17 @@ function getAliyunAction(path, serviceCfg, query) {
 }
 
 
-async function callUpstream(serviceCfg, method, path, query, headers, body) {
+async function callUpstream(serviceCfg, method, path, query, headers, body, opts = {}) {
   // Resolve all secrets used by this service
   const injectHeaders = { ...(serviceCfg.inject_headers || {}) };
   let url = null;
 
   if (serviceCfg.type === 'bearer' || serviceCfg.type === 'github_token' || serviceCfg.type === 'header') {
-    // Simple bearer/header auth: resolve a single secret and inject as header
-    if (!serviceCfg.token_secret) throw new Error(`Service ${serviceCfg.name || '?'} missing token_secret`);
+    // Simple bearer/header auth: resolve a single secret and inject as header.
+    // `name` is added by the admin service test endpoint; fall back to the
+    // route-level name (passed via opts) for clarity in error messages.
+    const svcNameForErr = serviceCfg.name || opts?.serviceName || '?';
+    if (!serviceCfg.token_secret) throw new Error(`Service ${svcNameForErr} missing token_secret`);
     const token = getSecretField(serviceCfg.token_secret, serviceCfg.token_field);
     if (!token) throw new Error(`Secret ${serviceCfg.token_secret} field=${serviceCfg.token_field || '(default)'} not loaded`);
     if (serviceCfg.type === 'bearer') {
@@ -844,7 +984,7 @@ async function handle(req, res) {
   // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
   if (m === 'GET' && (
     p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' ||
-    p === '/admin/secrets.js'
+    p === '/admin/secrets.js' || p === '/admin/services.js'
   )) {
     const map = {
       '/': 'index.html',
@@ -852,6 +992,7 @@ async function handle(req, res) {
       '/app.js': 'app.js',
       '/style.css': 'style.css',
       '/admin/secrets.js': 'admin/secrets.js',
+      '/admin/services.js': 'admin/services.js',
     };
     const f = join(__dirname, 'dashboard', map[p]);
     if (existsSync(f)) {
@@ -1173,6 +1314,179 @@ async function handle(req, res) {
     return send(res, 200, { ok: true, name });
   }
 
+  // ============================================================
+  // Phase 1.2: Services CRUD (admin only)
+  // ============================================================
+  // GET    /api/v1/admin/services             — list all (admin)
+  // GET    /api/v1/admin/services/:name       — read one (admin)
+  // POST   /api/v1/admin/services             — create
+  // PUT    /api/v1/admin/services/:name       — update (full replace of mutable fields)
+  // DELETE /api/v1/admin/services/:name       — delete
+  // POST   /api/v1/admin/services/:name/test  — trigger one call to verify wiring
+  // GET    /api/v1/admin/service-templates    — list 6 built-in templates
+
+  // ----- GET /api/v1/admin/service-templates -----
+  if (m === 'GET' && p === '/api/v1/admin/service-templates') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    return send(res, 200, { templates: publicTemplateList() });
+  }
+
+  // ----- GET /api/v1/admin/services -----
+  if (m === 'GET' && p === '/api/v1/admin/services') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const out = [];
+    for (const [name, svc] of Object.entries(CONFIG.services || {})) {
+      out.push({
+        name,
+        type: svc.type || 'unknown',
+        description: svc.description || '',
+        upstream: svc.upstream || '',
+        region: svc.region || '',
+        action: svc.action || '',
+        token_secret: svc.token_secret || null,
+        inject_headers: svc.inject_headers || {},
+        header_name: svc.header_name || null,
+        header_value_template: svc.header_value_template || null,
+        allow_paths: svc.allow_paths || null,
+        dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+        allowed_clients: clientNamesAllowedFor(name),
+        action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
+      });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    audit({ action: 'admin_services_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
+    return send(res, 200, { services: out });
+  }
+
+  // ----- /api/v1/admin/services/:name + /test routing -----
+  // Note: /test has a sub-path, so we match it first. We accept the same
+  // SERVICE_NAME_RE for the name segment to stay consistent with POST.
+  const svcTestMatch = p.match(/^\/api\/v1\/admin\/services\/([a-z][a-z0-9_-]{0,63})\/test$/);
+  const svcMatch     = p.match(/^\/api\/v1\/admin\/services\/([a-z][a-z0-9_-]{0,63})$/);
+
+  // ----- GET /api/v1/admin/services/:name -----
+  if (m === 'GET' && svcMatch && svcMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = svcMatch[1];
+    const svc = CONFIG.services[name];
+    if (!svc) return jsonError(res, 404, `Service ${name} not found`);
+    return send(res, 200, {
+      name,
+      type: svc.type || 'unknown',
+      description: svc.description || '',
+      upstream: svc.upstream || '',
+      region: svc.region || '',
+      action: svc.action || '',
+      token_secret: svc.token_secret || null,
+      inject_headers: svc.inject_headers || {},
+      header_name: svc.header_name || null,
+      header_value_template: svc.header_value_template || null,
+      allow_paths: svc.allow_paths || null,
+      dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+      allowed_clients: clientNamesAllowedFor(name),
+    });
+  }
+
+  // ----- POST /api/v1/admin/services (create) -----
+  if (m === 'POST' && p === '/api/v1/admin/services') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const body = await readBody(req) || {};
+    const name = body.name;
+    const cfg = normalizeServiceConfig(body);
+    const errs = validateServiceConfig(name, cfg);
+    if (errs.length > 0) {
+      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
+      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    }
+    if (CONFIG.services[name]) {
+      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
+      return jsonError(res, 409, `Service ${name} already exists. Use PUT to update.`);
+    }
+    CONFIG.services[name] = cfg;
+    try {
+      await persistConfig();
+    } catch (e) {
+      delete CONFIG.services[name];
+      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, type: cfg.type, status: 'ok' });
+    return send(res, 200, { ok: true, name, type: cfg.type });
+  }
+
+  // ----- PUT /api/v1/admin/services/:name (update) -----
+  if (m === 'PUT' && svcMatch && svcMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = svcMatch[1];
+    const existing = CONFIG.services[name];
+    if (!existing) return jsonError(res, 404, `Service ${name} not found`);
+    const body = await readBody(req) || {};
+    const cfg = normalizeServiceConfig(body);
+    // Name is immutable via PUT — keep the URL's name.
+    const errs = validateServiceConfig(name, cfg);
+    if (errs.length > 0) {
+      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
+      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    }
+    const prev = { ...existing };
+    CONFIG.services[name] = cfg;
+    try {
+      await persistConfig();
+    } catch (e) {
+      CONFIG.services[name] = prev;
+      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
+  // ----- DELETE /api/v1/admin/services/:name -----
+  if (m === 'DELETE' && svcMatch && svcMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = svcMatch[1];
+    const existing = CONFIG.services[name];
+    if (!existing) return jsonError(res, 404, `Service ${name} not found`);
+    delete CONFIG.services[name];
+    try {
+      await persistConfig();
+    } catch (e) {
+      CONFIG.services[name] = existing;
+      audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
+  // ----- POST /api/v1/admin/services/:name/test -----
+  // Triggers one read-only call to verify the wiring (upstream reachable,
+  // secret loaded, headers injected). Never mutates state.
+  if (m === 'POST' && svcTestMatch && svcTestMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = svcTestMatch[1];
+    const svc = CONFIG.services[name];
+    if (!svc) return jsonError(res, 404, `Service ${name} not found`);
+    const body = await readBody(req) || {};
+    const method = (body.method || (svc.dashboard_actions && svc.dashboard_actions[0] && svc.dashboard_actions[0].method) || 'GET');
+    const path = (body.path || (svc.dashboard_actions && svc.dashboard_actions[0] && svc.dashboard_actions[0].path) || '/');
+    const start = Date.now();
+    try {
+      // Pass the service name so callUpstream's error messages are useful.
+      const r = await callUpstream({ ...svc, name }, method, path, body.query, body.headers, body.body, { serviceName: name });
+      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, upstream_status: r.status, latency_ms: r.latency, status: r.status >= 200 && r.status < 400 ? 'ok' : 'error' });
+      return send(res, 200, {
+        ok: r.status >= 200 && r.status < 400,
+        upstream_status: r.status,
+        latency_ms: r.latency,
+        body_preview: r.body ? r.body.toString('utf8').slice(0, 500) : '',
+      });
+    } catch (err) {
+      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error: err.message });
+      return send(res, 502, { ok: false, error: err.message, latency_ms: Date.now() - start });
+    }
+  }
+
   // ----- POST /api/v1/proxy/:service -----
   const proxyMatch = p.match(/^\/api\/v1\/proxy\/([a-z0-9_-]+)$/);
   if (m === 'POST' && proxyMatch) {
@@ -1190,7 +1504,8 @@ async function handle(req, res) {
       return jsonError(res, 403, `Not allowed to proxy ${serviceName}${path}`);
     }
     try {
-      const r = await callUpstream(svc, method, path, body.query, body.headers, body.body);
+      // Pass the service name so callUpstream's error messages are useful.
+      const r = await callUpstream({ ...svc, name: serviceName }, method, path, body.query, body.headers, body.body, { serviceName });
       audit({
         action: 'proxy',
         cn: ctx.cn,

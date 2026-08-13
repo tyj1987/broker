@@ -33,7 +33,8 @@ creation_rules:
       #     - alias/your-key-alias
 
   # Secret Broker 服务端配置 / Secret Broker server config
-  - path_regex: .*broker\.yaml$
+  # (also matches the atomic-encrypt tmp file .broker.tmp.<pid>.<ts>.yaml)
+  - path_regex: .*broker.*\.yaml$
     key_groups:
       - age:
           - "age1lm7kxfcgjm66ayh4k6tjzaf0d7ns60w3ssz65dhvzfdfnptf5dhquma7ma"

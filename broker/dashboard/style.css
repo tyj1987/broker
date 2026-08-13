@@ -199,6 +199,26 @@ td code { font-size: 0.8rem; }
 .status-denied { color: var(--yellow); }
 #login-error { margin: 8px 0; font-size: 0.85rem; text-align: left; }
 
+/* ---- Row-level helpers (shared by secrets & services tables) ---- */
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.muted-cell { color: var(--text-muted); font-size: 0.85rem; }
+
+/* ---- Test result panel (services) ---- */
+#service-test-result {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--code-bg, rgba(0,0,0,0.25));
+  border: 1px solid rgba(255,255,255,0.08);
+}
+#service-test-result.status-ok { border-color: rgba(126,231,135,0.4); }
+#service-test-result.status-error { border-color: rgba(245,108,108,0.4); }
+
 @media (max-width: 640px) {
   .tabs { padding: 10px 12px 0; overflow-x: auto; }
   main { padding: 16px 12px 50px; }

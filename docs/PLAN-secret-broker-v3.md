@@ -338,14 +338,14 @@ docs/
 
 ## 8. 时间表 / Timeline
 
-| Phase | 内容 | 工作量 |
-|---|---|---|
-| **Phase 1.1** | Secrets CRUD UI + API + 模板 | 3 天 |
-| **Phase 1.2** | Services CRUD UI + API + 6 个模板 | 4 天 |
-| **Phase 1.3** | Clients CRUD + enrollment token + 证书签发 | 3 天 |
-| **Phase 1.4** | 审计增强（SSE + 过滤 + 导出） | 2 天 |
-| **Phase 2** | UX 打磨（首页/引导/快捷键/响应式） | 3 天 |
-| **Phase 3** | 进阶（按需，估不动） | — |
+| Phase | 内容 | 工作量 | 状态 |
+|---|---|---|---|
+| **Phase 1.1** | Secrets CRUD UI + API + 模板 | 3 天 | ✅ 完成 |
+| **Phase 1.2** | Services CRUD UI + API + 6 个模板 | 4 天 | ✅ 完成 |
+| **Phase 1.3** | Clients CRUD + enrollment token + 证书签发 | 3 天 | 待开始 |
+| **Phase 1.4** | 审计增强（SSE + 过滤 + 导出） | 2 天 | 待开始 |
+| **Phase 2** | UX 打磨（首页/引导/快捷键/响应式） | 3 天 | 待开始 |
+| **Phase 3** | 进阶（按需，估不动） | — | — |
 
 **Phase 1 全部完成**预计 12 个工作日。**Phase 2** 3 天。
 

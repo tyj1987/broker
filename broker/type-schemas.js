@@ -224,10 +224,10 @@ export const TYPE_SCHEMAS = {
       { name: 'password', label: '密码', kind: 'password', sensitive: true,
         show_when: { field: 'auth_method', equals: 'password' },
         help: '当 auth=password 时必填' },
-      { name: 'private_key', label: '私钥内容 (PEM 全文)', kind: 'textarea', sensitive: true,
+      { name: 'private_key', label: '私钥内容 (PEM 全文)', kind: 'textarea', sensitive: true, file_upload: true,
         show_when: { field: 'auth_method', equals: 'private_key' },
         placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----\n...',
-        help: '当 auth=private_key 且无 key_path 时必填' },
+        help: '当 auth=private_key 且无 key_path 时必填。也可以直接上传 .pem 文件。' },
       { name: 'private_key_path', label: '私钥文件路径 (替代粘贴)', kind: 'text',
         show_when: { field: 'auth_method', equals: 'private_key' },
         placeholder: '/root/.ssh/id_ed25519',
@@ -241,8 +241,8 @@ export const TYPE_SCHEMAS = {
     label: 'SSH 私钥 (裸)',
     description: '一个 PEM 私钥字符串，不带连接信息',
     fields: [
-      { name: 'key', label: '私钥内容', kind: 'textarea', required: true, sensitive: true,
-        placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----\n...' },
+      { name: 'key', label: '私钥内容', kind: 'textarea', required: true, sensitive: true, file_upload: true,
+        placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----\n...', help: '可粘贴全文，或上传 .pem 文件' },
       { name: 'passphrase', label: '密码 (可选)', kind: 'password', sensitive: true },
     ],
   },
@@ -250,8 +250,8 @@ export const TYPE_SCHEMAS = {
     label: 'SSH 公钥',
     description: '部署到服务器 ~/.ssh/authorized_keys',
     fields: [
-      { name: 'key', label: '公钥内容', kind: 'textarea', required: true,
-        placeholder: 'ssh-ed25519 AAAA...' },
+      { name: 'key', label: '公钥内容', kind: 'textarea', required: true, file_upload: true,
+        placeholder: 'ssh-ed25519 AAAA...', help: '可粘贴全文，或上传 .pub 文件' },
     ],
   },
 
@@ -445,7 +445,7 @@ export const TYPE_SCHEMAS = {
       { name: 'mch_id', label: '商户号', kind: 'text', required: true },
       { name: 'api_v3_key', label: 'APIv3 密钥', kind: 'password', required: true, sensitive: true },
       { name: 'cert_serial', label: '证书序列号', kind: 'text', required: true },
-      { name: 'private_key', label: '商户私钥 (apiclient_key.pem 内容)', kind: 'textarea', required: true, sensitive: true },
+      { name: 'private_key', label: '商户私钥 (apiclient_key.pem 内容)', kind: 'textarea', required: true, sensitive: true, file_upload: true, help: '可粘贴全文，或上传 .pem 文件' },
     ],
   },
 

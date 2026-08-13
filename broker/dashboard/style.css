@@ -287,3 +287,45 @@ td code { font-size: 0.8rem; }
 pre.sf-display-value {
   resize: vertical; min-height: 38px; max-height: 200px; overflow: auto;
 }
+
+/* ---- Password show/hide ---- */
+.sf-pw-wrap {
+  position: relative; display: flex; align-items: stretch;
+}
+.sf-pw-wrap input[type=password],
+.sf-pw-wrap input[type=text] {
+  flex: 1; padding-right: 38px;
+}
+.sf-pw-wrap .sf-eye {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  background: transparent; border: none; cursor: pointer; padding: 4px 8px;
+  font-size: 1rem; line-height: 1; color: var(--muted);
+  border-radius: 4px;
+}
+.sf-pw-wrap .sf-eye:hover { color: var(--accent); background: rgba(255,255,255,0.05); }
+
+/* ---- File upload for textarea fields ---- */
+.sf-file-upload {
+  margin-top: 6px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+}
+.sf-file-upload .hint { width: 100%; }
+
+/* ---- Bulk action bar ---- */
+.bulk-action-bar {
+  position: sticky; bottom: 0; left: 0; right: 0;
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 8px; padding: 10px 14px;
+  background: var(--bg-card); border: 1px solid var(--accent);
+  border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 50;
+}
+.bulk-action-bar #bulk-action-count {
+  font-weight: 600; color: var(--accent);
+}
+
+/* ---- Danger button ---- */
+.btn-danger {
+  background: #b94545 !important; color: #fff !important;
+  border-color: #a13838 !important;
+}
+.btn-danger:hover { background: #a13838 !important; }

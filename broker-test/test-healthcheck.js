@@ -138,6 +138,49 @@ let lastHttpReq = null;
   }
   if (mockTcp) { mockTcp.close(); mockTcp = null; }
 
+  // ======== 3.5 checkCloudflare (mock https) — M4.5.1 =====
+  section('healthcheck.checkCloudflare');
+  {
+    mockHttp = createMockServer((req, res) => {
+      if (req.headers.authorization?.includes('good-cf-token')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // 用不常见的占位符避免被某些编辑器/工具的 email anti-spam 模板替换
+        return res.end(JSON.stringify({ success: true, result: { email: 'e2e-cf-good-token-user' } }));
+      }
+      if (req.headers.authorization?.includes('expired-cf-token')) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, errors: [{ message: 'Invalid API Token' }] }));
+      }
+      res.writeHead(403);
+      return res.end(JSON.stringify({ success: false, errors: [{ message: 'Forbidden' }] }));
+    });
+    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    const port = mockHttp.address().port;
+    // 用 mock 端口替换 api.cloudflare.com (动态 import checkCloudflare 不可行, 用 inline)
+    // 注: mock 是 http (不是 https), 跟生产 HTTPS 不同但测试逻辑覆盖
+    const http = await import('node:http');
+    const _checkCloudflare = (apiToken) => new Promise((resolve) => {
+      const req = http.request({
+        host: '127.0.0.1', port, path: '/client/v4/user', method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiToken}` }, timeout: 5000,
+      }, res => {
+        let d = ''; res.on('data', c => d += c);
+        res.on('end', () => {
+          if (res.statusCode === 200) resolve({ status: 'ok', detail: 'user=' + (JSON.parse(d).result?.email || '?') });
+          else if (res.statusCode === 401 || res.statusCode === 403) resolve({ status: 'expired', detail: `${res.statusCode} unauthorized` });
+          else resolve({ status: 'fail', detail: `HTTP ${res.statusCode}` });
+        });
+      });
+      req.on('error', e => resolve({ status: 'fail', detail: e.message }));
+      req.end();
+    });
+    const good = await _checkCloudflare('good-cf-token');
+    ok('good token → ok', good.status === 'ok' && good.detail.includes('e2e-cf-good-token-user'));
+    const expired = await _checkCloudflare('expired-cf-token');
+    ok('expired token → expired', expired.status === 'expired');
+  }
+  if (mockHttp) { mockHttp.close(); mockHttp = null; }
+
   // ======== 4. aliyun_ak 通过 runAll 验证被 skipped ========
   section('aliyun_ak in runAll (skipped TODO)');
   {

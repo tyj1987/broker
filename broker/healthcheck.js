@@ -99,6 +99,8 @@ function pickCredential(type, fields) {
       };
     case 'ssh_private_key':
       return { primary: fields.key, meta: { auth: 'private_key' } };
+    case 'cloudflare_token':
+      return { primary: fields.api_token, meta: { account_id: fields.account_id } };
     case 'custom':
     default:
       // 兜底: 找第一个非空 string 字段
@@ -140,6 +142,8 @@ export async function checkSecret(secretName, fields, secretType) {
         return await checkOpenAI(cred.primary, t0);
       case 'ssh_connection':
         return await checkSsh(cred.meta, t0);
+      case 'cloudflare_token':
+        return await checkCloudflare(cred.primary, t0);
       case 'ssh_private_key':
         return { status: 'skipped', detail: 'ssh_private_key (bare) needs ssh_connection host/port — skipped', latency_ms: 0 };
       default:
@@ -228,6 +232,35 @@ function checkSsh(meta, t0) {
       // ECONNREFUSED 也算"fail" — 凭据未过期但服务挂
       resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 });
     });
+  });
+}
+
+function checkCloudflare(apiToken, t0) {
+  // 调 GET /client/v4/user 验证 token 鉴权 (no-side-effect, 只读自己 user info)
+  return new Promise((resolve) => {
+    const req = httpsRequest({
+      host: 'api.cloudflare.com', port: 443, path: '/client/v4/user', method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      timeout: TIMEOUT_MS,
+    }, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        const latency = Date.now() - t0;
+        if (res.statusCode === 200) {
+          let email = null;
+          try { email = JSON.parse(d).result?.email; } catch { /* ignore */ }
+          resolve({ status: 'ok', detail: `user=${email || '?'}`, latency_ms: latency });
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
+          // 403 也可能是 token 失效或 scope 不足
+          resolve({ status: 'expired', detail: `${res.statusCode} ${res.statusCode === 401 ? 'unauthorized' : 'forbidden'} (token may be expired or scope insufficient)`, latency_ms: latency });
+        } else {
+          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.end();
   });
 }
 

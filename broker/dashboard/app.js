@@ -86,6 +86,12 @@ async function loadIdentity() {
 }
 
 // ---------- Tab 切换 ----------
+function switchTab(name) {
+  const btn = document.querySelector(`button[data-tab="${name}"]`);
+  if (btn) btn.click();
+  // emit for modules that listen
+  document.dispatchEvent(new CustomEvent('tabchange', { detail: { tab: name } }));
+}
 $$('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     $$('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -95,8 +101,87 @@ $$('.tab-btn').forEach(btn => {
     // Refresh data for tabs that need it (avoid stale data after admin write)
     if (btn.dataset.tab === 'secrets') loadSecrets();
     if (btn.dataset.tab === 'audit') loadAudit();
+    // Notify modules
+    document.dispatchEvent(new CustomEvent('tabchange', { detail: { tab: btn.dataset.tab } }));
   });
 });
+
+// ---------- Phase 2.2: Keyboard shortcuts ----------
+// Style: Gmail-like two-key sequences. `g h` = go home, `g a` = go actions, etc.
+// `?` shows help. `Esc` closes any open modal/help.
+let _pendingG = false;
+let _gTimeout = null;
+const KEY_MAP = {
+  'h': 'home',
+  'a': 'actions',
+  's': 'secrets',
+  'u': 'audit',
+  'd': 'docs',
+  'k': 'admin-secrets',
+  'p': 'admin-services',
+  'c': 'admin-clients',
+};
+document.addEventListener('keydown', (e) => {
+  // Don't interfere with typing in inputs
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'Escape') {
+    // Close any open modal or help
+    const help = document.querySelector('#kb-help');
+    if (help) { help.remove(); return; }
+    document.querySelectorAll('.modal:not([hidden])').forEach(m => m.hidden = true);
+    return;
+  }
+  if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+    e.preventDefault();
+    showHelp();
+    return;
+  }
+  if (_pendingG) {
+    _pendingG = false;
+    clearTimeout(_gTimeout);
+    const target = KEY_MAP[e.key.toLowerCase()];
+    if (target) {
+      e.preventDefault();
+      switchTab(target);
+    }
+    return;
+  }
+  if (e.key === 'g') {
+    _pendingG = true;
+    _gTimeout = setTimeout(() => { _pendingG = false; }, 1500);
+  }
+});
+
+function showHelp() {
+  if (document.querySelector('#kb-help')) return;
+  const div = document.createElement('div');
+  div.id = 'kb-help';
+  div.className = 'kb-help';
+  div.innerHTML = `
+    <div class="kb-help-card">
+      <h3>键盘快捷键 / Keyboard shortcuts</h3>
+      <table>
+        <tr><td><kbd>g</kbd> <kbd>h</kbd></td><td>跳到首页 / Home</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>a</kbd></td><td>跳到动作 / Actions</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>s</kbd></td><td>跳到密钥 / Secrets</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>u</kbd></td><td>跳到审计 / Audit</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>d</kbd></td><td>跳到文档 / Docs</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>k</kbd></td><td>跳到密钥管理 / Manage</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>p</kbd></td><td>跳到服务管理 / Services</td></tr>
+        <tr><td><kbd>g</kbd> <kbd>c</kbd></td><td>跳到设备管理 / Devices</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>关闭弹窗 / Close modal</td></tr>
+      </table>
+      <p class="muted">在输入框里按这些键不会触发。</p>
+      <button class="btn btn-sm" id="kb-help-close">关闭 / Close</button>
+    </div>
+  `;
+  document.body.appendChild(div);
+  document.querySelector('#kb-help-close')?.addEventListener('click', () => div.remove());
+  // close on backdrop click
+  div.addEventListener('click', (ev) => { if (ev.target === div) div.remove(); });
+}
 
 // ---------- 服务列表（AI Actions 核心） ----------
 async function loadServices() {
@@ -276,7 +361,8 @@ $('#btn-close-response').addEventListener('click', () => {
 
 // ---------- 审计 ----------
 async function loadAudit() {
-  const limit = $('#audit-limit').value || 50;
+  const limitEl = $('#audit-limit') || $('#af-limit');
+  const limit = limitEl ? (limitEl.value || 50) : 50;
   const tbody = $('#audit-table tbody');
   tbody.innerHTML = '<tr><td colspan="6">加载中...</td></tr>';
   try {

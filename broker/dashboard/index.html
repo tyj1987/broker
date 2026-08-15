@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=20260815b">
+  <link rel="stylesheet" href="style.css?v=20260815e">
 </head>
 <body>
 
@@ -52,7 +52,8 @@
     </header>
 
     <nav class="tabs">
-      <button class="tab-btn active" data-tab="actions">⚡ 动作 / Actions</button>
+      <button class="tab-btn active" data-tab="home">🏠 首页 / Home</button>
+      <button class="tab-btn" data-tab="actions">⚡ 动作 / Actions</button>
       <button class="tab-btn" data-tab="audit">📋 审计 / Audit</button>
       <button class="tab-btn" data-tab="secrets">🔑 可见密钥 / Secrets</button>
       <button class="tab-btn admin-only" data-tab="admin-secrets" hidden>🗝️ 密钥管理 / Manage</button>
@@ -63,8 +64,76 @@
 
     <main>
 
+      <!-- ===== Home tab (Phase 2.1) ===== -->
+      <section id="tab-home" class="tab-content active">
+        <div class="card home-hero">
+          <div class="home-greet">
+            <h2 id="home-greet-line">欢迎回来</h2>
+            <p class="muted" id="home-subtitle">仪表盘 · 快捷操作 · 最近活动</p>
+          </div>
+          <div class="home-tip muted" id="home-tip">⏳ 加载中...</div>
+        </div>
+
+        <!-- 4 概览卡片 -->
+        <div class="home-stats">
+          <div class="card stat-card" data-stat="services">
+            <div class="stat-icon">🔌</div>
+            <div class="stat-body">
+              <div class="stat-num" id="stat-services">-</div>
+              <div class="stat-label">已配置服务 / Services</div>
+            </div>
+          </div>
+          <div class="card stat-card" data-stat="secrets">
+            <div class="stat-icon">🔑</div>
+            <div class="stat-body">
+              <div class="stat-num" id="stat-secrets">-</div>
+              <div class="stat-label">已存密钥 / Secrets</div>
+            </div>
+          </div>
+          <div class="card stat-card" data-stat="clients">
+            <div class="stat-icon">💻</div>
+            <div class="stat-body">
+              <div class="stat-num" id="stat-clients">-</div>
+              <div class="stat-label">客户端设备 / Clients</div>
+            </div>
+          </div>
+          <div class="card stat-card" data-stat="audit-today">
+            <div class="stat-icon">📊</div>
+            <div class="stat-body">
+              <div class="stat-num" id="stat-audit-today">-</div>
+              <div class="stat-label">今日审计 / Events today</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 快捷操作 + 最近活动 -->
+        <div class="home-grid">
+          <div class="card">
+            <h3>快捷操作 / Quick actions</h3>
+            <div id="home-quick-actions" class="quick-action-grid">
+              <div class="muted">加载中...</div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>最近活动 / Recent activity</h3>
+            <div id="home-recent">
+              <div class="muted">加载中...</div>
+            </div>
+            <button id="btn-home-open-audit" class="btn btn-sm btn-ghost" style="margin-top:10px">打开审计 / Open audit →</button>
+          </div>
+        </div>
+
+        <!-- 待办 (admin only) -->
+        <div class="card admin-only" id="home-todo-card" hidden>
+          <h3>待办 / TODO <span class="muted" style="font-size:12px">admin only</span></h3>
+          <ul id="home-todo" class="home-todo">
+            <li class="muted">加载中...</li>
+          </ul>
+        </div>
+      </section>
+
       <!-- ===== Actions tab ===== -->
-      <section id="tab-actions" class="tab-content active">
+      <section id="tab-actions" class="tab-content">
         <div class="card intro">
           <h2>用外部服务，不看密钥</h2>
           <p>
@@ -408,10 +477,11 @@ secret-broker get github.pat</code></pre>
     </div>
   </div>
 
-  <script src="app.js?v=20260815c"></script>
-  <script src="admin/secrets.js?v=20260815b"></script>
-  <script src="admin/services.js?v=20260815b"></script>
-  <script src="admin/clients.js?v=20260815b"></script>
-  <script src="admin/audit.js?v=20260815b"></script>
+  <script src="app.js?v=20260815d"></script>
+  <script src="home.js?v=20260815d"></script>
+  <script src="admin/secrets.js?v=20260815c"></script>
+  <script src="admin/services.js?v=20260815c"></script>
+  <script src="admin/clients.js?v=20260815c"></script>
+  <script src="admin/audit.js?v=20260815d"></script>
 </body>
 </html>

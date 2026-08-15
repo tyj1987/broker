@@ -6,13 +6,15 @@
 //   node server.js
 //   PORT=8443 CONFIG_PATH=/opt/broker/secrets/broker.yaml AGE_KEY_FILE=/opt/broker/pki/age.key node server.js
 
-import { createServer as createHttpsServer } from 'node:https';
+import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
+import { request as httpRequest } from 'node:http';
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
 import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
@@ -1026,13 +1028,67 @@ function buildAliyunSignedUrl(upstream, action, query, region, creds) {
   return url;
 }
 
+// DNS-over-HTTPS pre-resolver. ECS outbound UDP/53 to public DNS is
+// blocked; c-ares fails with ENOTFOUND. We use alidns DoH (TCP 443) to
+// resolve and cache the result. Falls back to Cloudflare DoH if alidns
+// itself is unreachable.
+const _dohCache = new Map();  // hostname -> { ip, expiresAt }
+const _dohInFlight = new Map();  // hostname -> Promise (de-dup concurrent)
+const DOH_TTL_MS = 5 * 60 * 1000;
+
+async function resolveHostnameDoH(hostname) {
+  // If already an IP literal, return as-is.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return hostname;
+  const cached = _dohCache.get(hostname);
+  if (cached && cached.expiresAt > Date.now()) return cached.ip;
+  if (_dohInFlight.has(hostname)) return _dohInFlight.get(hostname);
+  const p = (async () => {
+    // Use HTTPS DoH endpoints whose hostnames are already known IPs so we
+    // don't recurse the DoH-via-DoH problem. alidns public IP + Cloudflare.
+    const dohEndpoints = [
+      { url: `https://dns.alidns.com/resolve?name=${encodeURIComponent(hostname)}&type=A`, ip: '223.5.5.5' },
+      { url: `https://1.1.1.1/dns-query?name=${encodeURIComponent(hostname)}&type=A`, ip: '1.1.1.1' },
+    ];
+    for (const { url, ip } of dohEndpoints) {
+      try {
+        const u = new URL(url);
+        // Connect to the literal IP, but use the original hostname for SNI/Host.
+        const r = await new Promise((resolve, reject) => {
+          const req = httpsRequest({
+            hostname: ip,
+            port: 443,
+            path: u.pathname + u.search,
+            method: 'GET',
+            headers: { 'Host': u.host, 'Accept': 'application/dns-json' },
+            timeout: 5000,
+          }, resolve);
+          req.on('error', reject);
+          req.on('timeout', () => req.destroy(new Error('DoH timeout')));
+          req.end();
+        });
+        if (r.statusCode !== 200) { r.resume(); continue; }
+        const chunks = [];
+        for await (const c of r) chunks.push(c);
+        const j = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const answer = j?.Answer?.find(a => a.type === 1)?.data;
+        if (answer) {
+          _dohCache.set(hostname, { ip: answer, expiresAt: Date.now() + DOH_TTL_MS });
+          return answer;
+        }
+      } catch {}
+    }
+    throw new Error(`DoH resolve failed for ${hostname}`);
+  })();
+  _dohInFlight.set(hostname, p);
+  try { return await p; } finally { _dohInFlight.delete(hostname); }
+}
+
 // Extract Aliyun Action from a path like "/?Action=DescribeInstances"
 // or "/DescribeInstances" (for ECS-style), or from the request query.
 // The broker.yaml maps service→Action via `action` field; if not set,
 // the path query or the proxy request query is used.
 function getAliyunAction(path, serviceCfg, query) {
   if (serviceCfg.action) return serviceCfg.action;
-  // try to extract from query string
   try {
     const u = new URL(path, 'http://x/');
     if (u.searchParams.get('Action')) return u.searchParams.get('Action');
@@ -1121,21 +1177,46 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   }
 
   const start = Date.now();
-  const upstreamResp = await fetch(url, fetchOpts);
+  // Workaround for ECS environments where outbound UDP/53 to public DNS
+  // is blocked (c-ares fails with ENOTFOUND). Pre-resolve via DNS-over-HTTPS
+  // (which goes over TCP 443) and connect to the IP directly.
+  const ip = url.protocol === 'https:' ? await resolveHostnameDoH(url.hostname) : url.hostname;
+  const isHttps = url.protocol === 'https:';
+  const requestLib = isHttps ? httpsRequest : httpRequest;
+  const upstreamResp = await new Promise((resolve, reject) => {
+    const req = requestLib({
+      protocol: url.protocol,
+      hostname: ip,
+      port: url.port || (isHttps ? 443 : 80),
+      method: method || 'GET',
+      path: url.pathname + url.search,
+      headers: outHeaders,  // Host: url.host set above
+      timeout: 15000,
+    }, resolve);
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('Upstream timeout')));
+    if (fetchOpts.body) req.write(fetchOpts.body);
+    req.end();
+  });
   const latency = Date.now() - start;
 
-  // Read response
+  // Read response (https.request returns IncomingMessage with plain headers object)
   const respHeaders = {};
-  upstreamResp.headers.forEach((v, k) => { respHeaders[k] = v; });
+  for (const [k, v] of Object.entries(upstreamResp.headers)) {
+    respHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
+  }
   // strip hop-by-hop
   delete respHeaders['transfer-encoding'];
   delete respHeaders['connection'];
   delete respHeaders['keep-alive'];
   delete respHeaders['content-encoding'];  // 避免 content-length mismatch
 
-  const respBuf = Buffer.from(await upstreamResp.arrayBuffer());
+  // IncomingMessage has no .arrayBuffer(); collect from 'data' events.
+  const chunks = [];
+  for await (const chunk of upstreamResp) chunks.push(chunk);
+  const respBuf = Buffer.concat(chunks);
   return {
-    status: upstreamResp.status,
+    status: upstreamResp.statusCode,
     headers: respHeaders,
     body: respBuf,
     latency,
@@ -1165,7 +1246,7 @@ async function handle(req, res) {
   // ----- Public: static dashboard assets (the login page must load without a client cert) -----
   // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
   if (m === 'GET' && (
-    p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' ||
+    p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' || p === '/home.js' ||
     p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js' ||
     p === '/admin/audit.js'
   )) {
@@ -1174,6 +1255,7 @@ async function handle(req, res) {
       '/index.html': 'index.html',
       '/app.js': 'app.js',
       '/style.css': 'style.css',
+      '/home.js': 'home.js',
       '/admin/secrets.js': 'admin/secrets.js',
       '/admin/services.js': 'admin/services.js',
       '/admin/clients.js': 'admin/clients.js',
@@ -1315,6 +1397,25 @@ async function handle(req, res) {
     else if (allow.includes('.*') || allow.includes('*')) visible = all;
     else visible = all.filter(n => checkPathAllowed(allow, n));
     audit({ action: 'list', cn: ctx.cn, fp: ctx.fp, count: visible.length });
+    // For admin, return full secret metadata (type, description, rotation info).
+    // For non-admin, return only names (legacy behavior).
+    if (ctx.client.role === 'admin') {
+      const out = visible.map(name => {
+        const meta = SECRET_CACHE.get(name);
+        if (!meta) return { name };
+        return {
+          name,
+          type: meta.type,
+          description: meta.description,
+          created_at: meta.created_at,
+          updated_at: meta.updated_at,
+          last_rotated_at: meta.last_rotated_at || meta.updated_at,
+          rotation_policy_days: meta.rotation_policy_days,
+          updated_by: meta.updated_by,
+        };
+      });
+      return send(res, 200, { secrets: out });
+    }
     return send(res, 200, { secrets: visible });
   }
 
@@ -1380,6 +1481,8 @@ async function handle(req, res) {
         created_at: entry.created_at || null,
         updated_at: entry.updated_at || null,
         updated_by: entry.updated_by || null,
+        last_rotated_at: entry.last_rotated_at || entry.updated_at || null,
+        rotation_policy_days: entry.rotation_policy_days || null,
       });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
@@ -2260,6 +2363,13 @@ function start() {
 // ============================================================
 (async () => {
   try {
+    // Some systemd environments (Aliyun ECS) block outbound UDP/53 to
+    // public DNS. c-ares inside undici (and node:dns) only does UDP, so
+    // /etc/resolv.conf nameservers fail with ENOTFOUND even though TCP/443
+    // to api.github.com / ecs.aliyuncs.com works fine. We work around by
+    // setting up DoT (DNS-over-TLS via Cloudflare 1.1.1.1:853) — but that
+    // requires tls module work. Simpler: pre-resolve any *upstream hostname
+    // we route to, then re-issue the call. See `resolveHostname()` below.
     await loadConfig();
     await loadSecrets();
     start();

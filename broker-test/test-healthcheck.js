@@ -298,6 +298,167 @@ let lastHttpReq = null;
     delete process.env.ALIYUN_HEALTHCHECK_PORT;
   }
 
+  // ======== 4.4 tencent_sk TC3-HMAC-SHA256 验签 (M5.2) ========
+  section('tencent_sk TC3-HMAC-SHA256 验签 — signTencent 纯函数');
+  {
+    // 1) 基础签名: 注入固定 timestamp
+    const out = hc.signTencent({
+      action: 'DescribeRegions',
+      version: '2017-03-12',
+      secretId: 'AKIDtestid',
+      secretKey: 'test-secret-key',
+      region: 'ap-guangzhou',
+      timestamp: '2026-08-15T00:00:00Z',
+    });
+    ok('signTencent.authorization 以 TC3-HMAC-SHA256 开头',
+       out.authorization.startsWith('TC3-HMAC-SHA256 Credential=AKIDtestid/'));
+    ok('signTencent.authorization 含 SignedHeaders=content-type;host',
+       out.authorization.includes('SignedHeaders=content-type;host'));
+    ok('signTencent.signature 是 64 字符 hex (SHA256)', /^[0-9a-f]{64}$/.test(out.signature));
+    ok('signTencent.stringToSign 以 TC3-HMAC-SHA256\\n 开头',
+       out.stringToSign.startsWith('TC3-HMAC-SHA256\n'));
+    ok('signTencent.stringToSign 含 credential scope (date/service/tc3_request)',
+       out.stringToSign.includes('/cvm/tc3_request'));
+    ok('signTencent.contentType 是 application/x-www-form-urlencoded (GET)',
+       out.contentType === 'application/x-www-form-urlencoded');
+    // 2) 确定性
+    const out2 = hc.signTencent({
+      action: 'DescribeRegions', version: '2017-03-12',
+      secretId: 'AKIDtestid', secretKey: 'test-secret-key',
+      region: 'ap-guangzhou', timestamp: '2026-08-15T00:00:00Z',
+    });
+    ok('signTencent 确定性: 同输入同 signature', out.signature === out2.signature);
+    // 3) 不同 secretKey → 不同 sig
+    const out3 = hc.signTencent({
+      action: 'DescribeRegions', version: '2017-03-12',
+      secretId: 'AKIDtestid', secretKey: 'OTHER-KEY',
+      region: 'ap-guangzhou', timestamp: '2026-08-15T00:00:00Z',
+    });
+    ok('signTencent: 不同 secretKey → 不同 signature', out.signature !== out3.signature);
+  }
+
+  section('tencent_sk TC3-HMAC-SHA256 验签 — checkTencent HTTP mock');
+  {
+    let lastTencentReq = null;
+    mockHttp = createMockServer((req, res) => {
+      lastTencentReq = {
+        url: req.url, method: req.method, host: req.headers.host,
+        auth: req.headers.authorization, action: req.headers['x-tc-action'],
+        ts: req.headers['x-tc-timestamp'],
+      };
+      if (req.headers.authorization?.includes('AKIDgoodid')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ Response: { TotalCount: 27, RegionSet: [] } }));
+      }
+      if (req.headers.authorization?.includes('AKIDbadid')) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ Response: { Error: { Code: 'AuthFailure.SignatureFailure', Message: 'signature failed' } } }));
+      }
+      res.writeHead(500); res.end('mock error');
+    });
+    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    const port = mockHttp.address().port;
+    process.env.TENCENT_HEALTHCHECK_HOST = '127.0.0.1';
+    process.env.TENCENT_HEALTHCHECK_PORT = String(port);
+
+    const good = await hc.checkSecret('PROD', { secret_id: 'AKIDgoodid', secret_key: 'goodsecret' }, 'tencent_sk');
+    ok('tencent_sk good → ok', good.status === 'ok' && good.detail.includes('27 regions accessible'));
+    ok('tencent_sk good mock 收到真 TC3 Authorization header',
+       lastTencentReq?.auth?.includes('TC3-HMAC-SHA256') && lastTencentReq?.auth?.includes('AKIDgoodid'));
+    ok('tencent_sk good mock 收到 X-TC-Action=DescribeRegions',
+       lastTencentReq?.action === 'DescribeRegions' && lastTencentReq?.url?.includes('Action=DescribeRegions'));
+
+    const bad = await hc.checkSecret('PROD', { secret_id: 'AKIDbadid', secret_key: 'badsecret' }, 'tencent_sk');
+    ok('tencent_sk bad signature → expired', bad.status === 'expired' && bad.detail.includes('SignatureFailure'));
+
+    const missing = await hc.checkSecret('PROD', { secret_id: 'AKID_x' /* no key */ }, 'tencent_sk');
+    ok('tencent_sk 缺 secret_key → skipped', missing.status === 'skipped');
+
+    delete process.env.TENCENT_HEALTHCHECK_HOST;
+    delete process.env.TENCENT_HEALTHCHECK_PORT;
+    if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  }
+
+  // ======== 4.5 aws_access_key SigV4 验签 (M5.2) ========
+  section('aws_access_key SigV4 验签 — signAws 纯函数');
+  {
+    const out = hc.signAws({
+      accessKeyId: 'AKIAtestid',
+      secretAccessKey: 'test-secret-access-key',
+      region: 'us-east-1',
+      service: 'sts',
+      amzDate: '20260815T000000Z',
+    });
+    ok('signAws.authorization 以 AWS4-HMAC-SHA256 开头',
+       out.authorization.startsWith('AWS4-HMAC-SHA256 Credential=AKIAtestid/'));
+    ok('signAws.authorization 含 credential scope (date/region/service/aws4_request)',
+       out.authorization.includes('/us-east-1/sts/aws4_request'));
+    ok('signAws.authorization 含 SignedHeaders=host;x-amz-date',
+       out.authorization.includes('SignedHeaders=host;x-amz-date'));
+    ok('signAws.signature 是 64 字符 hex (SHA256)', /^[0-9a-f]{64}$/.test(out.signature));
+    ok('signAws.stringToSign 以 AWS4-HMAC-SHA256\\n 开头',
+       out.stringToSign.startsWith('AWS4-HMAC-SHA256\n'));
+    ok('signAws.host 是 sts.us-east-1.amazonaws.com (默认)', out.host === 'sts.us-east-1.amazonaws.com');
+    // 2) 确定性
+    const out2 = hc.signAws({
+      accessKeyId: 'AKIAtestid', secretAccessKey: 'test-secret-access-key',
+      region: 'us-east-1', service: 'sts', amzDate: '20260815T000000Z',
+    });
+    ok('signAws 确定性: 同输入同 signature', out.signature === out2.signature);
+    // 3) 不同 secretAccessKey → 不同 sig
+    const out3 = hc.signAws({
+      accessKeyId: 'AKIAtestid', secretAccessKey: 'OTHER-KEY',
+      region: 'us-east-1', service: 'sts', amzDate: '20260815T000000Z',
+    });
+    ok('signAws: 不同 secretAccessKey → 不同 signature', out.signature !== out3.signature);
+    // 4) canonical request 含 GET + / + sorted query + headers
+    ok('signAws.canonicalRequest 第 1 行是 GET', out.canonicalRequest.startsWith('GET\n'));
+    ok('signAws.canonicalRequest 第 2 行是 /', out.canonicalRequest.split('\n')[1] === '/');
+    ok('signAws.canonicalRequest 第 3 行是 sorted query (Action 在 Version 前)',
+       out.canonicalRequest.split('\n')[2] === 'Action=GetCallerIdentity&Version=2011-06-15');
+  }
+
+  section('aws_access_key SigV4 验签 — checkAws HTTP mock');
+  {
+    let lastAwsReq = null;
+    mockHttp = createMockServer((req, res) => {
+      lastAwsReq = {
+        url: req.url, method: req.method, host: req.headers.host,
+        auth: req.headers.authorization, amzDate: req.headers['x-amz-date'],
+      };
+      if (req.headers.authorization?.includes('AKIAgoodid')) {
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        return res.end('<GetCallerIdentityResponse><Arn>arn:aws:iam::123:user/test</Arn></GetCallerIdentityResponse>');
+      }
+      if (req.headers.authorization?.includes('AKIAbadid')) {
+        res.writeHead(403, { 'Content-Type': 'text/xml' });
+        return res.end('<ErrorResponse><Error><Code>InvalidClientTokenId</Code></Error></ErrorResponse>');
+      }
+      res.writeHead(500); res.end('mock error');
+    });
+    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    const port = mockHttp.address().port;
+    process.env.AWS_HEALTHCHECK_HOST = '127.0.0.1';
+    process.env.AWS_HEALTHCHECK_PORT = String(port);
+
+    const good = await hc.checkSecret('PROD', { access_key_id: 'AKIAgoodid', secret_access_key: 'goodsecret' }, 'aws_access_key');
+    ok('aws_access_key good → ok', good.status === 'ok' && good.detail.includes('arn=arn:aws:iam::123:user/test'));
+    ok('aws_access_key good mock 收到真 SigV4 Authorization header',
+       lastAwsReq?.auth?.includes('AWS4-HMAC-SHA256') && lastAwsReq?.auth?.includes('AKIAgoodid'));
+    ok('aws_access_key good mock 收到 X-Amz-Date',
+       lastAwsReq?.amzDate?.match(/^\d{8}T\d{6}Z$/));
+
+    const bad = await hc.checkSecret('PROD', { access_key_id: 'AKIAbadid', secret_access_key: 'badsecret' }, 'aws_access_key');
+    ok('aws_access_key bad signature → expired', bad.status === 'expired' && bad.detail.includes('InvalidClientTokenId'));
+
+    const missing = await hc.checkSecret('PROD', { access_key_id: 'AKIA_x' /* no key */ }, 'aws_access_key');
+    ok('aws_access_key 缺 secret_access_key → skipped', missing.status === 'skipped');
+
+    delete process.env.AWS_HEALTHCHECK_HOST;
+    delete process.env.AWS_HEALTHCHECK_PORT;
+    if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  }
+
   // ======== 5. runAll + state 持久化 ========
   section('healthcheck.runAll + state');
   {

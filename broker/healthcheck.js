@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { createHmac } from 'node:crypto';
+import { createHmac, createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -142,9 +142,9 @@ export async function checkSecret(secretName, fields, secretType) {
       case 'aliyun_ak':
         return await checkAliyun(cred.primary, cred.meta, t0);
       case 'tencent_sk':
+        return await checkTencent(cred.primary, cred.meta, t0);
       case 'aws_access_key':
-        // TODO M5.2+: 完整 TC3-HMAC-SHA256 / SigV4 签名实现, 走 mcp-server 出网
-        return { status: 'skipped', detail: `${secretType} check not implemented yet (TODO: M5.2)`, latency_ms: 0 };
+        return await checkAws(cred.primary, cred.meta, t0);
       case 'openai_key':
       case 'anthropic_key':
       case 'google_ai_key':
@@ -360,6 +360,184 @@ async function checkAliyun(accessKeyId, meta, t0) {
           resolve({ status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency });
         } else if (res.statusCode === 401 || res.statusCode === 403) {
           // aliyun 用 403 InvalidAccessKeyId / SignatureDoesNotMatch
+          resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
+        } else {
+          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
+    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.end();
+  });
+}
+
+// ============================================================
+// v3.0 M5.2: tencent_sk TC3-HMAC-SHA256 验签
+// 调 https://cvm.tencentcloudapi.com/?Action=DescribeRegions&Version=2017-03-12 验证 SK
+// 签名规范: https://cloud.tencent.com/document/api/1727/8438
+// ============================================================
+function sha256Hex(s) {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+function hmacSha256(key, data) {
+  return createHmac('sha256', key).update(data, 'utf8').digest();
+}
+
+// 纯函数: tencent TC3-HMAC-SHA256 签名
+// 入参: { action, version, secretId, secretKey, region?, host?, payload?, timestamp? }
+// 返: { authorization, timestamp, canonicalRequest, stringToSign, signature }
+export function signTencent({ action, version, secretId, secretKey, region = 'ap-guangzhou', host = 'cvm.tencentcloudapi.com', payload = '', timestamp }) {
+  // 1. 时间戳 + 日期
+  const ts = timestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');  // YYYY-MM-DDTHH:mm:ssZ
+  const date = ts.split('T')[0];  // YYYY-MM-DD
+  const service = 'cvm';
+  // 2. Canonical request = HTTP method + URI + sorted query + headers + signed headers
+  // 这里只验 GET (DescribeRegions), body=空. payload 留给 POST/PUT
+  const httpRequestMethod = payload ? 'POST' : 'GET';
+  const canonicalUri = '/';
+  const canonicalQueryString = `Action=${encodeURIComponent(action)}&Version=${encodeURIComponent(version)}`;
+  const contentType = payload ? 'application/json; charset=utf-8' : 'application/x-www-form-urlencoded';
+  const canonicalHeaders = `content-type:${contentType}\nhost:${host}\n`;
+  const signedHeaders = 'content-type;host';
+  const hashedRequestPayload = sha256Hex(payload);
+  const canonicalRequest = [httpRequestMethod, canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, hashedRequestPayload].join('\n');
+  // 3. String to sign
+  const credentialScope = `${date}/${service}/tc3_request`;
+  const stringToSign = ['TC3-HMAC-SHA256', ts, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+  // 4. 计算 signature (3 步 HMAC chain)
+  const secretDate = hmacSha256('TC3' + secretKey, date);
+  const secretService = hmacSha256(secretDate, service);
+  const secretSigning = hmacSha256(secretService, 'tc3_request');
+  const signature = createHmac('sha256', secretSigning).update(stringToSign, 'utf8').digest('hex');
+  // 5. Authorization header
+  const authorization = `TC3-HMAC-SHA256 Credential=${secretId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  return { authorization, timestamp: ts, canonicalRequest, stringToSign, signature, contentType };
+}
+
+async function checkTencent(secretId, meta, t0) {
+  // meta: { secret_key, region }
+  if (!secretId || !meta?.secret_key) {
+    return { status: 'skipped', detail: 'tencent_sk missing secret_id or secret_key', latency_ms: 0 };
+  }
+  const { authorization, contentType } = signTencent({
+    action: 'DescribeRegions',
+    version: '2017-03-12',
+    secretId,
+    secretKey: meta.secret_key,
+    region: meta.region || 'ap-guangzhou',
+  });
+  const path = '/?Action=DescribeRegions&Version=2017-03-12';
+  const host = process.env.TENCENT_HEALTHCHECK_HOST || 'cvm.tencentcloudapi.com';
+  const port = Number(process.env.TENCENT_HEALTHCHECK_PORT) || 443;
+  const httpLib = port === 443 ? httpsRequest : (await import('node:http')).request;
+  return new Promise((resolve) => {
+    const req = httpLib({
+      host, port, path, method: 'GET',
+      headers: {
+        'Host': host,
+        'Content-Type': contentType,
+        'Authorization': authorization,
+        'X-TC-Action': 'DescribeRegions',
+        'X-TC-Version': '2017-03-12',
+        'X-TC-Timestamp': new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        'X-TC-Region': meta.region || 'ap-guangzhou',
+        'User-Agent': 'secret-broker-healthcheck',
+      },
+      timeout: TIMEOUT_MS,
+    }, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        const latency = Date.now() - t0;
+        if (res.statusCode === 200) {
+          let regionCount = 0;
+          try { regionCount = JSON.parse(d).Response?.TotalCount || 0; } catch { /* ignore */ }
+          resolve({ status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency });
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
+          // tencent 用 401 SignatureFailure / 403 auth failure
+          resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
+        } else {
+          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
+    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.end();
+  });
+}
+
+// ============================================================
+// v3.0 M5.2: aws_access_key SigV4 验签
+// 调 https://sts.amazonaws.com/?Action=GetCallerIdentity 验证 AK
+// 签名规范: https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
+// ============================================================
+// 纯函数: aws SigV4 签名 (GET, 无 body, 单一 query Action=GetCallerIdentity)
+// 入参: { accessKeyId, secretAccessKey, region, service, host, query?, amzDate? }
+// 返: { authorization, amzDate, canonicalRequest, stringToSign, signature, signedHeaders }
+export function signAws({ accessKeyId, secretAccessKey, region = 'us-east-1', service = 'sts', host, query = 'Action=GetCallerIdentity&Version=2011-06-15', amzDate }) {
+  const _amzDate = amzDate || new Date().toISOString().replace(/[\-:]/g, '').replace(/\.\d{3}Z$/, 'Z');  // YYYYMMDDTHHmmssZ
+  const dateStamp = _amzDate.split('T')[0];  // YYYYMMDD
+  const _host = host || `${service}.${region}.amazonaws.com`;
+  // 1. Canonical request
+  const httpRequestMethod = 'GET';
+  const canonicalUri = '/';
+  // sorted query: Action, Version
+  const canonicalQueryString = query.split('&').sort().join('&');
+  const canonicalHeaders = `host:${_host}\nx-amz-date:${_amzDate}\n`;
+  const signedHeaders = 'host;x-amz-date';
+  const payloadHash = sha256Hex('');  // GET 无 body
+  const canonicalRequest = [httpRequestMethod, canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  // 2. String to sign
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', _amzDate, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+  // 3. 计算 signature (4 步 HMAC chain)
+  const kDate = hmacSha256('AWS4' + secretAccessKey, dateStamp);
+  const kRegion = hmacSha256(kDate, region);
+  const kService = hmacSha256(kRegion, service);
+  const kSigning = hmacSha256(kService, 'aws4_request');
+  const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
+  // 4. Authorization header
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  return { authorization, amzDate: _amzDate, canonicalRequest, stringToSign, signature, signedHeaders, host: _host };
+}
+
+async function checkAws(accessKeyId, meta, t0) {
+  // meta: { secret_access_key, region }
+  if (!accessKeyId || !meta?.secret_access_key) {
+    return { status: 'skipped', detail: 'aws_access_key missing access_key_id or secret_access_key', latency_ms: 0 };
+  }
+  const { authorization, amzDate, host, signedHeaders } = signAws({
+    accessKeyId,
+    secretAccessKey: meta.secret_access_key,
+    region: meta.region || 'us-east-1',
+    service: 'sts',
+  });
+  const path = '/?Action=GetCallerIdentity&Version=2011-06-15';
+  const _host = process.env.AWS_HEALTHCHECK_HOST || host;
+  const port = Number(process.env.AWS_HEALTHCHECK_PORT) || 443;
+  const httpLib = port === 443 ? httpsRequest : (await import('node:http')).request;
+  return new Promise((resolve) => {
+    const req = httpLib({
+      host: _host, port, path, method: 'GET',
+      headers: {
+        'Host': _host,
+        'Authorization': authorization,
+        'X-Amz-Date': amzDate,
+        'User-Agent': 'secret-broker-healthcheck',
+      },
+      timeout: TIMEOUT_MS,
+    }, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        const latency = Date.now() - t0;
+        if (res.statusCode === 200) {
+          // GetCallerIdentity 返 XML, 含 <Arn>
+          let arn = null;
+          try { arn = d.match(/<Arn>(.*?)<\/Arn>/)?.[1]; } catch { /* ignore */ }
+          resolve({ status: 'ok', detail: `GetCallerIdentity ok (arn=${arn || '?'})`, latency_ms: latency });
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
+          // aws 用 403 InvalidClientTokenId / SignatureDoesNotMatch
           resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
         } else {
           resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });

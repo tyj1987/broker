@@ -19,6 +19,7 @@
 
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { readFileSync } from 'node:fs';
 
 // ============================================================
 // CLI args
@@ -43,7 +44,7 @@ const HOST = ARGS.host || process.env.MCP_HOST || '127.0.0.1';
 let MASTER_KEY = ARGS['master-key'] || process.env.MCP_MASTER_KEY || '';
 if (ARGS['master-key-file']) {
   try {
-    MASTER_KEY = require('node:fs').readFileSync(ARGS['master-key-file'], 'utf8').trim();
+    MASTER_KEY = readFileSync(ARGS['master-key-file'], 'utf8').trim();
   } catch (e) {
     console.error(`[mcp] ERROR: cannot read --master-key-file ${ARGS['master-key-file']}: ${e.message}`);
     process.exit(1);

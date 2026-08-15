@@ -567,6 +567,31 @@ kbd {
   background: #2a3441;
   border: 1px solid #3a4a5f;
   border-radius: 3px;
+}
+
+/* ===== v3.0: Me tab (Self-service) ===== */
+.me-section { margin: 16px 0; padding: 16px; background: #0e1217; border: 1px solid #1f2530; border-radius: 6px; }
+.me-section h3 { margin: 0 0 12px 0; color: #d4a849; font-size: 1.05em; }
+.me-section label { display: block; margin: 8px 0; }
+.me-section input { display: block; width: 100%; max-width: 480px; padding: 6px 8px; background: #1a1f27; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 3px; margin-top: 2px; }
+.me-section button { padding: 8px 16px; background: #d4a849; color: #0a0e14; border: none; border-radius: 3px; font-weight: bold; cursor: pointer; margin-top: 4px; }
+.me-section button.secondary { background: #4a5260; color: #e6e6e6; }
+.me-section button.danger { background: #c0392b; color: #fff; }
+.me-section button:hover { filter: brightness(1.1); }
+.me-section .status { margin-left: 12px; font-size: 0.9em; }
+.me-section .status.ok { color: #5cb85c; }
+.me-section .status.err { color: #e74c3c; }
+.me-section .warn { color: #d4a849; }
+.me-section .codes { font-family: monospace; background: #1a1f27; padding: 12px; border-radius: 3px; }
+.me-section .codes li { padding: 2px 0; }
+.me-section .small { font-size: 0.85em; word-break: break-all; }
+.me-section .mono { font-family: monospace; font-size: 0.85em; width: 100%; }
+.kv { border-collapse: collapse; }
+.kv th { text-align: left; padding: 4px 12px 4px 0; color: #9aa0a6; font-weight: normal; }
+.kv td { padding: 4px 0; }
+.data-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.9em; }
+.data-table th, .data-table td { padding: 6px 8px; border-bottom: 1px solid #1f2530; text-align: left; }
+.data-table th { color: #9aa0a6; font-weight: normal; }
   font-size: 12px;
   margin: 0 1px;
 }

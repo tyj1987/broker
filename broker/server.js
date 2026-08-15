@@ -13,6 +13,26 @@ import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+// v3.0: 强认证 (TOTP + MFA 状态机)
+import {
+  createMfaPending,
+  getMfaPending,
+  consumeMfaPending,
+  verifyMfaCode,
+  isMfaRequired,
+  MFA_TOKEN_TTL_MS,
+} from './auth-flow.js';
+// v3.0: 密码 hash + TOTP + 恢复码
+import {
+  verifyPassword as totpVerifyPassword,
+  verify as verifyTotpFn,
+  generateSecret,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  hashPassword,
+  buildOtpauthURL,
+} from './totp.js';
+// v3.0: schema migration (in start())
 import { EventEmitter } from 'node:events';
 import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -762,6 +782,17 @@ async function timingSafeEqual(a, b) {
   return r === 0;
 }
 
+// v3.0: 密码验证智能 wrapper — 检测 stored 是否 hash，自动选 verify 函数
+// 兼容：plaintext / scrypt$... 两种格式
+function verifyClientPassword(plaintext, stored) {
+  if (!stored) return false;
+  if (stored.startsWith('scrypt$')) {
+    return totpVerifyPassword(plaintext, stored);
+  }
+  // legacy: plaintext (v2.x 兼容)
+  return timingSafeEqual(plaintext, stored);
+}
+
 function rateLimit(ctx) {
   if (!ctx.client) return true;  // fail at canResolve/canProxy later
   const limit = ctx.client.rate_limit || '100/hour';
@@ -1247,6 +1278,7 @@ async function handle(req, res) {
   // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
   if (m === 'GET' && (
     p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' || p === '/home.js' ||
+    p === '/me.html' || p === '/me.js' ||
     p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js' ||
     p === '/admin/audit.js'
   )) {
@@ -1256,6 +1288,8 @@ async function handle(req, res) {
       '/app.js': 'app.js',
       '/style.css': 'style.css',
       '/home.js': 'home.js',
+      '/me.html': 'me.html',
+      '/me.js': 'me.js',
       '/admin/secrets.js': 'admin/secrets.js',
       '/admin/services.js': 'admin/services.js',
       '/admin/clients.js': 'admin/clients.js',
@@ -1309,15 +1343,29 @@ async function handle(req, res) {
       audit({ action: 'login', status: 'denied', reason: 'lockout', client: lockKey });
       return jsonError(res, 429, 'Too many failed login attempts. Locked until later.');
     }
-    const ok = await timingSafeEqual(password, targetClient.password);
+    const ok = await verifyClientPassword(password, targetClient.password);
     if (!ok) {
       recordLoginFail(lockKey);
       audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
       return jsonError(res, 401, 'Bad password');
     }
     clearLoginLock(lockKey);
-    const cn = ctx0 ? ctx0.cn : `${targetName}@web`;
+
+    // v3.0: MFA 状态机 — 启 TOTP 的 client 必须二次验证
     const fp = ctx0 ? ctx0.fp : null;
+    if (isMfaRequired(targetClient, via)) {
+      const mfaToken = createMfaPending(targetName, fp);
+      audit({ action: 'login', status: 'mfa_required', client: targetName, via });
+      return send(res, 200, {
+        ok: false,
+        mfa_required: true,
+        mfa_token: mfaToken,
+        expires_in: MFA_TOKEN_TTL_MS / 1000,
+        method: via,
+      });
+    }
+
+    const cn = ctx0 ? ctx0.cn : `${targetName}@web`;
     const token = makeSession({ cn, fp, role: targetClient.role, clientName: targetName, cert: { subject: { CN: cn } }, client: targetClient });
     audit({ action: 'login', status: 'ok', cn, client: targetName, via });
     res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
@@ -1327,6 +1375,42 @@ async function handle(req, res) {
       cn,
       role: targetClient.role,
       via,
+    });
+  }
+
+  // ----- POST /api/v1/login/mfa: 提交 TOTP code 完成登录 -----
+  if (m === 'POST' && p === '/api/v1/login/mfa') {
+    const body = await readBody(req) || {};
+    const { mfa_token: mfaToken, code } = body;
+    if (!mfaToken || !code) return jsonError(res, 400, 'Missing {mfa_token, code}');
+    const pending = getMfaPending(mfaToken);
+    if (!pending) {
+      audit({ action: 'login_mfa', status: 'denied', reason: 'invalid_token' });
+      return jsonError(res, 401, 'Invalid or expired mfa_token');
+    }
+    const targetClient = CONFIG.clients[pending.clientName];
+    if (!targetClient) {
+      consumeMfaPending(mfaToken);
+      audit({ action: 'login_mfa', status: 'denied', reason: 'client_gone', client: pending.clientName });
+      return jsonError(res, 404, 'Client no longer exists');
+    }
+    const mfaResult = verifyMfaCode(targetClient, code);
+    if (!mfaResult.ok) {
+      audit({ action: 'login_mfa', status: 'denied', reason: 'bad_code', client: pending.clientName });
+      return jsonError(res, 401, 'Bad TOTP code or recovery code');
+    }
+    consumeMfaPending(mfaToken);
+    const cn = pending.fp ? `${pending.clientName}@mtls` : `${pending.clientName}@web`;
+    const token = makeSession({ cn, fp: pending.fp, role: targetClient.role, clientName: pending.clientName, cert: { subject: { CN: cn } }, client: targetClient });
+    audit({ action: 'login', status: 'ok', cn, client: pending.clientName, via: 'mfa', mfa_method: mfaResult.method });
+    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    return send(res, 200, {
+      token,
+      expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      cn,
+      role: targetClient.role,
+      via: 'mfa',
+      mfa_method: mfaResult.method,
     });
   }
 
@@ -1355,6 +1439,229 @@ async function handle(req, res) {
   if (!rateLimit(ctx)) {
     audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });
     return jsonError(res, 429, 'Rate limit exceeded');
+  }
+
+  // ============================================================
+  // v3.0: Self-service (我的资料) — 任何已登录 client 都能用
+  // ============================================================
+  // GET    /api/v1/me                      — 我的资料
+  // POST   /api/v1/me/change-password     — 改密码
+  // POST   /api/v1/me/rotate-cert          — 重发我的 cert
+  // GET    /api/v1/me/audit                — 我的活动 (audit log)
+  // POST   /api/v1/me/totp/setup           — 启 TOTP, 返回 otpauth + 10 个恢复码
+  // POST   /api/v1/me/totp/verify          — 验证 TOTP 正确性（setup 完必走）
+  // POST   /api/v1/me/totp/disable         — 关 TOTP
+  // GET    /api/v1/me/recovery-codes/remaining — 看还剩几个恢复码
+
+  // ----- GET /api/v1/me -----
+  if (m === 'GET' && p === '/api/v1/me') {
+    const c = ctx.client;
+    const cp = certPaths.clientPaths(ctx.clientName);
+    const certOnDisk = existsSync(cp.crt) && existsSync(cp.key);
+    return send(res, 200, {
+      name: ctx.clientName,
+      cn: ctx.cn,
+      role: c.role,
+      description: c.description || '',
+      allow_password_login: !!c.allow_password_login,
+      has_password: !!c.password,
+      password_set_at: c.password_set_at || null,
+      password_expires_at: c.password_expires_at || null,
+      totp_enabled: !!c.totp_secret,
+      totp_enabled_at: c.totp_enabled_at || null,
+      totp_recovery_codes_remaining: (c.totp_recovery_codes_hash || []).length,
+      preferred_2fa: c.preferred_2fa || (c.totp_secret ? 'totp' : 'none'),
+      cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
+      cert_present_on_disk: certOnDisk,
+      cert_expires_at: c.cert_expires_at || null,
+      last_password_change: c.last_password_change || null,
+      last_cert_rotation: c.last_cert_rotation || null,
+      rate_limit: c.rate_limit || '100/hour',
+    });
+  }
+
+  // ----- POST /api/v1/me/change-password -----
+  if (m === 'POST' && p === '/api/v1/me/change-password') {
+    const body = await readBody(req) || {};
+    const { old_password: oldPwd, new_password: newPwd } = body;
+    if (!oldPwd || !newPwd) return jsonError(res, 400, 'Missing {old_password, new_password}');
+    if (newPwd.length < 12) return jsonError(res, 400, 'new_password too short (min 12 chars)');
+    const c = ctx.client;
+    if (!c.password) return jsonError(res, 400, 'No password set for this client');
+    const oldOk = verifyClientPassword(oldPwd, c.password);
+    if (!oldOk) {
+      audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_old' });
+      return jsonError(res, 401, 'Old password incorrect');
+    }
+    c.password = hashPassword(newPwd);
+    c.password_set_at = new Date().toISOString();
+    c.last_password_change = c.password_set_at;
+    try {
+      await persistConfig();
+    } catch (e) {
+      audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
+    return send(res, 200, { ok: true, password_set_at: c.password_set_at });
+  }
+
+  // ----- POST /api/v1/me/rotate-cert -----
+  // v3.0: 重发自己的 cert（要当前 TOTP 验证或密码）
+  if (m === 'POST' && p === '/api/v1/me/rotate-cert') {
+    const body = await readBody(req) || {};
+    const verify = body.verify;  // TOTP code 或 密码
+    if (!verify) return jsonError(res, 400, 'Missing {verify}');
+    const c = ctx.client;
+    // 验证：TOTP 优先，fallback 密码
+    let verified = false;
+    if (/^\d{6}$/.test(verify) && c.totp_secret) {
+      const mfaResult = verifyMfaCode(c, verify);
+      if (mfaResult.ok) verified = true;
+    }
+    if (!verified && c.password) {
+      verified = verifyClientPassword(verify, c.password);
+    }
+    if (!verified) {
+      audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_verify' });
+      return jsonError(res, 401, 'Invalid TOTP code or password');
+    }
+    if (!clientsDirWritable()) {
+      return jsonError(res, 503, 'pki/clients/ is not writable; issue cert out-of-band');
+    }
+    let cert;
+    try { cert = await issueAndPersist(ctx.clientName); }
+    catch (e) {
+      audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
+      return jsonError(res, 500, `Issue failed: ${e.message}`);
+    }
+    c.cert_expires_at = new Date(Date.now() + 90 * 86400 * 1000).toISOString();  // 90 天
+    c.last_cert_rotation = c.cert_expires_at;
+    try { await persistConfig(); } catch (e) { /* cert 已在 issueAndPersist 持久化了 */ }
+    audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
+    return send(res, 200, {
+      ok: true,
+      name: ctx.clientName,
+      fingerprint_sha256: cert.fingerprint_sha256,
+      cert_pem: cert.cert_pem,
+      key_pem: cert.key_pem,
+      cert_expires_at: c.cert_expires_at,
+      warning: 'key_pem is a SECRET. Save it now — broker will not return it again.',
+    });
+  }
+
+  // ----- GET /api/v1/me/audit -----
+  if (m === 'GET' && p === '/api/v1/me/audit') {
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 1000);
+    const since = url.searchParams.get('since');
+    const lines = readAuditFiltered({ fp: ctx.fp, since, limit });
+    return send(res, 200, { events: lines, count: lines.length, fp: ctx.fp });
+  }
+
+  // ----- POST /api/v1/me/totp/setup -----
+  // 启 TOTP: 要当前密码 (一次性验证)，返 otpauth URL + 10 个恢复码
+  // 进入"待激活"状态，必须 /totp/verify 一次正确码才正式启用
+  if (m === 'POST' && p === '/api/v1/me/totp/setup') {
+    const body = await readBody(req) || {};
+    const { password } = body;
+    if (!password) return jsonError(res, 400, 'Missing {password}');
+    const c = ctx.client;
+    if (!c.password) return jsonError(res, 400, 'No password set; cannot setup TOTP');
+    if (!verifyClientPassword(password, c.password)) {
+      audit({ action: 'me_totp_setup', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_password' });
+      return jsonError(res, 401, 'Password incorrect');
+    }
+    if (c.totp_secret) {
+      return jsonError(res, 409, 'TOTP already enabled; disable first');
+    }
+    const secret = generateSecret();
+    const recoveryCodes = generateRecoveryCodes();
+    const recoveryHashes = recoveryCodes.map(hashRecoveryCode);
+    // 暂存到"待激活"字段（不写入 totp_secret 主字段，直到 verify 成功）
+    c._pending_totp = {
+      secret,
+      recovery_hashes: recoveryHashes,
+      recovery_codes_plain: recoveryCodes,  // 只这一次返给用户
+      setup_at: new Date().toISOString(),
+    };
+    audit({ action: 'me_totp_setup', cn: ctx.cn, fp: ctx.fp, status: 'pending' });
+    return send(res, 200, {
+      ok: true,
+      otpauth_url: buildOtpauthURL(ctx.clientName, 'SecretBroker', secret),
+      secret,  // 让用户能手动输入 (无 App 也能登)
+      recovery_codes: recoveryCodes,  // 仅此一次
+      recovery_codes_remaining: recoveryCodes.length,
+      next_step: 'POST /api/v1/me/totp/verify with a TOTP code to activate',
+    });
+  }
+
+  // ----- POST /api/v1/me/totp/verify -----
+  // setup 后必须 verify 一次才正式启用
+  if (m === 'POST' && p === '/api/v1/me/totp/verify') {
+    const body = await readBody(req) || {};
+    const { code } = body;
+    if (!code) return jsonError(res, 400, 'Missing {code}');
+    const c = ctx.client;
+    if (!c._pending_totp) return jsonError(res, 400, 'No pending TOTP setup; call /totp/setup first');
+    const ok = verifyTotpFn(c._pending_totp.secret, code);
+    if (!ok) {
+      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_code' });
+      return jsonError(res, 401, 'TOTP code does not match');
+    }
+    // 激活：pending → 正式字段
+    c.totp_secret = c._pending_totp.secret;
+    c.totp_enabled_at = new Date().toISOString();
+    c.totp_recovery_codes_hash = c._pending_totp.recovery_hashes;
+    c.preferred_2fa = 'totp';
+    delete c._pending_totp;
+    try { await persistConfig(); }
+    catch (e) {
+      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
+    return send(res, 200, {
+      ok: true,
+      totp_enabled_at: c.totp_enabled_at,
+      recovery_codes_remaining: c.totp_recovery_codes_hash.length,
+    });
+  }
+
+  // ----- POST /api/v1/me/totp/disable -----
+  // 关 TOTP 要当前 TOTP code 或 恢复码
+  if (m === 'POST' && p === '/api/v1/me/totp/disable') {
+    const body = await readBody(req) || {};
+    const { code } = body;
+    if (!code) return jsonError(res, 400, 'Missing {code}');
+    const c = ctx.client;
+    if (!c.totp_secret) return jsonError(res, 400, 'TOTP not enabled');
+    const mfaResult = verifyMfaCode(c, code);
+    if (!mfaResult.ok) {
+      audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_code' });
+      return jsonError(res, 401, 'TOTP code or recovery code invalid');
+    }
+    delete c.totp_secret;
+    delete c.totp_enabled_at;
+    delete c.totp_recovery_codes_hash;
+    c.preferred_2fa = 'none';
+    try { await persistConfig(); }
+    catch (e) {
+      audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'ok', mfa_method: mfaResult.method });
+    return send(res, 200, { ok: true, totp_disabled: true });
+  }
+
+  // ----- GET /api/v1/me/recovery-codes/remaining -----
+  if (m === 'GET' && p === '/api/v1/me/recovery-codes/remaining') {
+    const c = ctx.client;
+    return send(res, 200, {
+      remaining: (c.totp_recovery_codes_hash || []).length,
+      warning: c.totp_recovery_codes_hash && c.totp_recovery_codes_hash.length < 3
+        ? 'Few recovery codes left. Consider re-setup.'
+        : undefined,
+    });
   }
 
   // ----- GET /api/v1/identity -----
@@ -2372,6 +2679,23 @@ function start() {
     // we route to, then re-issue the call. See `resolveHostname()` below.
     await loadConfig();
     await loadSecrets();
+    // v3.0: 启动时跑一次 schema 迁移（幂等）
+    try {
+      const { migrateV2ToV3 } = await import('./migrate-v2-to-v3.js');
+      const migPath = dirname(fileURLToPath(import.meta.url));
+      const clientsDir = join(migPath, '..', 'pki', 'clients');
+      const { changed, changes } = await migrateV2ToV3(
+        CONFIG, clientsDir, audit, persistConfig
+      );
+      if (changed) {
+        console.log(`[migrate v2->v3] applied ${changes.length} change(s):`);
+        changes.forEach(c => console.log('  -', c));
+      } else {
+        console.log('[migrate v2->v3] already at v3, no changes');
+      }
+    } catch (e) {
+      console.warn('[migrate v2->v3] skipped:', e.message);
+    }
     start();
   } catch (err) {
     console.error('[bootstrap] failed:', err.message);

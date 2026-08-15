@@ -97,10 +97,16 @@ $$('.tab-btn').forEach(btn => {
     $$('.tab-btn').forEach(b => b.classList.remove('active'));
     $$('.tab-content').forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
-    $(`#tab-${btn.dataset.tab}`).classList.add('active');
+    const tabId = `tab-${btn.dataset.tab}`;
+    const tabEl = document.getElementById(tabId);
+    if (tabEl) tabEl.classList.add('active');
     // Refresh data for tabs that need it (avoid stale data after admin write)
     if (btn.dataset.tab === 'secrets') loadSecrets();
     if (btn.dataset.tab === 'audit') loadAudit();
+    if (btn.dataset.tab === 'me') {
+      // v3.0: 通知 me.js 加载 (用专属事件名避免和 tabchange 撞)
+      document.dispatchEvent(new CustomEvent('me-tab-opened'));
+    }
     // Notify modules
     document.dispatchEvent(new CustomEvent('tabchange', { detail: { tab: btn.dataset.tab } }));
   });

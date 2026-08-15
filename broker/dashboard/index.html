@@ -53,6 +53,7 @@
 
     <nav class="tabs">
       <button class="tab-btn active" data-tab="home">🏠 首页 / Home</button>
+      <button class="tab-btn" data-tab="me">👤 我的资料 / Me</button>
       <button class="tab-btn" data-tab="actions">⚡ 动作 / Actions</button>
       <button class="tab-btn" data-tab="audit">📋 审计 / Audit</button>
       <button class="tab-btn" data-tab="secrets">🔑 可见密钥 / Secrets</button>
@@ -130,6 +131,108 @@
             <li class="muted">加载中...</li>
           </ul>
         </div>
+      </section>
+
+      <!-- ===== Me tab (v3.0 自助管理) ===== -->
+      <section id="tab-me" class="tab-content">
+        <h2>我的资料 / My Profile</h2>
+        <p class="muted">v3.0 自助管理 · 任何修改都需要当前密码 / TOTP 二次验证</p>
+
+        <section class="me-section">
+          <h3>基础信息 / Basic Info</h3>
+          <table class="kv">
+            <tr><th>Client 名</th><td><code id="me-name"></code></td></tr>
+            <tr><th>Role</th><td><code id="me-role"></code></td></tr>
+            <tr><th>CN</th><td><code id="me-cn"></code></td></tr>
+            <tr><th>密码登录</th><td><span id="me-allow-pw"></span></td></tr>
+            <tr><th>密码最后改</th><td><code id="me-pw-set-at"></code></td></tr>
+            <tr><th>2FA 状态</th><td><span id="me-2fa"></span></td></tr>
+            <tr><th>Cert 指纹</th><td><code id="me-cert-fp" class="small"></code></td></tr>
+            <tr><th>Cert 到期</th><td><code id="me-cert-exp"></code></td></tr>
+            <tr><th>限速</th><td><code id="me-rate-limit"></code></td></tr>
+          </table>
+        </section>
+
+        <section class="me-section">
+          <h3>改密码 / Change Password</h3>
+          <p class="muted">密码必须 ≥ 12 字符。改完立即生效（其他 session 仍可用当前密码）。</p>
+          <form id="form-change-pw">
+            <label>当前密码 <input type="password" name="old_password" required autocomplete="current-password" /></label>
+            <label>新密码 <input type="password" name="new_password" required minlength="12" autocomplete="new-password" /></label>
+            <label>再输一次 <input type="password" name="new_password2" required minlength="12" autocomplete="new-password" /></label>
+            <button type="submit">改密码</button>
+            <span id="change-pw-status" class="status"></span>
+          </form>
+        </section>
+
+        <section class="me-section">
+          <h3>二次验证 (TOTP) / Two-Factor Authentication</h3>
+          <div id="totp-disabled-view" hidden>
+            <p>未启用 TOTP。强烈建议启用，所有已启 TOTP 的账号可获得「密码 + 6 位动态码」双重保护。</p>
+            <form id="form-totp-setup">
+              <label>当前密码 <input type="password" name="password" required autocomplete="current-password" /></label>
+              <button type="submit">启 TOTP (生成密钥)</button>
+              <span id="totp-setup-status" class="status"></span>
+            </form>
+          </div>
+
+          <div id="totp-pending-view" hidden>
+            <p class="warn">⚠️ <strong>已生成密钥，尚未激活</strong>。请在 Authenticator App 里添加：</p>
+            <ol>
+              <li>打开 Authenticator App (Google / Microsoft / Authy / 1Password)</li>
+              <li>扫描 QR code (或手动输入密钥)</li>
+              <li>输一次当前 6 位 code 验证</li>
+            </ol>
+            <p><strong>otpauth URL：</strong><br><code id="totp-otpauth-url" class="small"></code></p>
+            <p><strong>Secret (手动输入用)：</strong><br><code id="totp-secret" class="small"></code></p>
+            <p><strong>10 个恢复码（请抄下来，只显示一次）：</strong></p>
+            <ol id="totp-recovery-codes" class="codes"></ol>
+            <form id="form-totp-verify">
+              <label>App 当前 6 位 code <input type="text" name="code" required pattern="\d{6}" inputmode="numeric" autocomplete="one-time-code" maxlength="6" /></label>
+              <button type="submit">激活 TOTP</button>
+              <button type="button" id="btn-totp-cancel" class="secondary">取消</button>
+              <span id="totp-verify-status" class="status"></span>
+            </form>
+          </div>
+
+          <div id="totp-enabled-view" hidden>
+            <p>✅ TOTP 已启用 · 激活于 <code id="totp-enabled-at"></code> · 剩 <code id="totp-recovery-remaining"></code> 个恢复码</p>
+            <form id="form-totp-disable">
+              <label>当前 TOTP code 或恢复码 <input type="text" name="code" required autocomplete="one-time-code" /></label>
+              <button type="submit" class="danger">关 TOTP</button>
+              <span id="totp-disable-status" class="status"></span>
+            </form>
+          </div>
+        </section>
+
+        <section class="me-section">
+          <h3>客户端证书 / Client Certificate</h3>
+          <p>当前 cert 到期：<code id="me-cert-exp2"></code></p>
+          <p>需要当前 TOTP code 或 密码 验证。生成新 cert 后旧 cert 立即失效。</p>
+          <form id="form-rotate-cert">
+            <label>当前 TOTP code 或 密码 <input type="text" name="verify" required /></label>
+            <button type="submit">重发 cert (90 天)</button>
+            <span id="rotate-cert-status" class="status"></span>
+          </form>
+          <div id="rotate-cert-result" hidden>
+            <p class="warn">⚠️ <strong>下面是新 cert + key，请立刻保存。key 不会再次显示。</strong></p>
+            <p><strong>cert (公开)：</strong></p>
+            <textarea id="rotate-cert-pem" readonly rows="10" class="mono"></textarea>
+            <p><strong>key (机密！不要发到任何 AI 对话 / GitHub)：</strong></p>
+            <textarea id="rotate-key-pem" readonly rows="10" class="mono"></textarea>
+            <p><strong>新 fingerprint：</strong> <code id="rotate-cert-fp" class="small"></code></p>
+          </div>
+        </section>
+
+        <section class="me-section">
+          <h3>最近活动 / Recent Activity</h3>
+          <p class="muted">最近 100 条 audit log（按 fingerprint 过滤，只显示你的）</p>
+          <button id="btn-load-audit">刷新</button>
+          <table id="me-audit-table" class="data-table">
+            <thead><tr><th>时间</th><th>动作</th><th>方法</th><th>路径</th><th>状态</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
       </section>
 
       <!-- ===== Actions tab ===== -->
@@ -477,11 +580,12 @@ secret-broker get github.pat</code></pre>
     </div>
   </div>
 
-  <script src="app.js?v=20260815d"></script>
-  <script src="home.js?v=20260815d"></script>
-  <script src="admin/secrets.js?v=20260815c"></script>
-  <script src="admin/services.js?v=20260815c"></script>
-  <script src="admin/clients.js?v=20260815c"></script>
-  <script src="admin/audit.js?v=20260815d"></script>
+  <script src="app.js?v=20260816a"></script>
+  <script src="home.js?v=20260816a"></script>
+  <script src="me.js?v=20260816a"></script>
+  <script src="admin/secrets.js?v=20260816a"></script>
+  <script src="admin/services.js?v=20260816a"></script>
+  <script src="admin/clients.js?v=20260816a"></script>
+  <script src="admin/audit.js?v=20260816a"></script>
 </body>
 </html>

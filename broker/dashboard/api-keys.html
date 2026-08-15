@@ -46,6 +46,13 @@
         </select>
       </label>
 
+      <label>二次验证 / Second-factor
+        <input type="text" name="verify" id="ak-verify" required
+               placeholder="TOTP 6 位 code 或登录密码 / TOTP code or login password"
+               autocomplete="one-time-code" />
+        <span class="hint">admin 路径需 TOTP code 或 password；普通 client 需 TOTP。 / admin: TOTP or password; self: TOTP only.</span>
+      </label>
+
       <button type="submit" class="btn btn-primary">+ 创建 API Key / Create</button>
       <span id="create-key-status" class="status"></span>
     </form>

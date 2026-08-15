@@ -69,34 +69,39 @@
   async function submitCreate(ev) {
     ev.preventDefault();
     const form = ev.target;
-    const statusEl = $('#create-key-status');
-    setStatus(statusEl, '创建中…', '');
+    setStatus('#create-key-status', '创建中…', '');
 
     const name = (form.name.value || '').trim();
     const scopes = [];
     if (form.scope_resolve.checked) scopes.push('secrets:resolve');
     if (form.scope_proxy.checked) scopes.push('services:proxy');
     if (scopes.length === 0) {
-      setStatus(statusEl, '❌ 至少勾选一个 scope', 'err');
+      setStatus('#create-key-status', '❌ 至少勾选一个 scope', 'err');
+      return;
+    }
+    const verify = (form.verify.value || '').trim();
+    if (!verify) {
+      setStatus('#create-key-status', '❌ 二次验证必填 (TOTP code 或 password)', 'err');
       return;
     }
     const ttlRaw = form.ttl_seconds.value;
-    const body = { name, scopes };
+    const body = { name, scopes, verify };
     if (ttlRaw !== '0') body.ttl_seconds = parseInt(ttlRaw, 10);
 
     try {
       const r = await api('/api/v1/api-keys', { method: 'POST', body: JSON.stringify(body) });
       // r = { key: { id, name, scopes, expires_at, ... }, secret: 'mb_test_xxx...' }
       showNewKeyModal(r.key, r.secret);
-      setStatus(statusEl, '✅ 已创建！请立即复制完整 key', 'ok');
+      setStatus('#create-key-status', '✅ 已创建！请立即复制完整 key', 'ok');
       form.reset();
       // TTL 回到默认 7d
       $('#ak-ttl').value = '604800';
       $('#ak-scope-resolve').checked = true;
       $('#ak-scope-proxy').checked = true;
+      $('#ak-verify').value = '';  // 安全: 清空 verify 字段
       await loadKeys();
     } catch (ex) {
-      setStatus(statusEl, '❌ ' + (ex.message || ex), 'err');
+      setStatus('#create-key-status', '❌ ' + (ex.message || ex), 'err');
     }
   }
 

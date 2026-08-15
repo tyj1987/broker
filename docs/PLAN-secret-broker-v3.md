@@ -449,6 +449,63 @@ node broker/mcp-server.js --broker https://broker.52trz.com \
 
 **协议版本**: MCP spec ≥ 2025-06-18
 
+#### M3.3 实施记录 (2026-08-15)
+
+**Commit**: (待提交) M3.3: Master Key + MCP Server (HTTP + JSON-RPC + auto-refresh child key)
+
+**新增文件**:
+- `broker/mcp-server.js` (14848 字节) — HTTP + JSON-RPC 2.0 MCP Server
+  - 6 tools: list_secrets / describe_secret / call_service / get_health / list_api_keys / get_audit
+  - Master key 启动 (CLI `--master-key mb_xxx`)
+  - Auto-refresh child key (1h TTL, 5min margin)
+  - 全程 child key 走 Bearer 鉴权，master key 仅用于 issue-child
+  - 工具结果不含密钥明文 (call_service 返回上游响应)
+- `broker-test/test-master-key.js` — Master/Child 关系单元测试 (45 case)
+- `broker-test/test-mcp-server.js` — MCP Server 端到端测试 (31 case, mock broker)
+
+**改动文件**:
+- `broker/api-keys.js` (+128 行) — Master/Child 概念
+  - `generateMasterKey()` — 30d TTL, scope 限定 keys:issue_child
+  - `canCreateChild()` — 鉴权 (revoked/expired/not_master/no_keys_scope)
+  - `createChildKey()` — 创建子 key, scope 严格 ≤ master.child_scopes (防 privilege escalation)
+  - `isChildKey()` — 鉴别子 key
+  - 字段: `is_master` / `can_create_child` / `default_child_ttl_seconds` / `child_scopes` / `parent_master_id`
+- `broker/server.js` (+88 行) — 3 个新端点
+  - `POST /api/v1/api-keys/master` (admin + TOTP) — 创建 master key
+  - `GET  /api/v1/api-keys/master` (admin) — 列出所有 master key
+  - `POST /api/v1/api-keys/issue-child` (master key auth, no TOTP) — 创建子 key
+
+**安全设计**:
+- Master key scope 限定: 只能调 `/api/v1/api-keys/issue-child`, 不能直接 resolve secrets 或 proxy services
+- Child key scope 严格 ≤ master.child_scopes (privilege escalation 攻击测试通过)
+- Master key fingerprint 永不入日志（仅 hash 前 8 字符）
+- MCP server 启动失败快速 exit (5s 内 refresh 失败 → exit 1)
+- 全程 audit log: `master_key_create` / `issue_child` / 所有 child key 的 proxy 调用
+
+**测试结果**:
+- test-master-key.js: 45/45 PASS
+  - generateMasterKey: 8 case (格式/字段/TTL)
+  - canCreateChild: 7 case (鉴权拒绝)
+  - createChildKey: 12 case (scope 限定 + privilege escalation 阻止)
+  - isChildKey / publicView / findApiKey / canResolveSecret: 18 case
+- test-mcp-server.js: 31/31 PASS
+  - JSON-RPC 协议: 12 case (initialize / tools/list / error / bad JSON)
+  - 6 tools 端到端: 16 case (mock broker)
+  - auto-refresh + 错误处理: 3 case
+
+**使用流程**:
+1. Admin 在 dashboard 创建 master key (TOTP 验证)
+2. AI 工具 (MCP Server / OpenClaw skill) 启动时拿 master key
+3. 每次 tool call 内部自动用 child key 调 broker
+4. Child key 过期前 5min 自动 issue 新 child
+5. Master key 30d 后人工 rotate (in dashboard, 需 TOTP)
+
+**未实现 (后续议程)**:
+- M3.4 OpenClaw Skill (独立仓库)
+- SSE 流式响应 (当前 HTTP JSON-RPC 单次请求响应)
+- Token bucket rate limit (per IP, 防滥用)
+- IP whitelist 实际生效 (字段已存, 逻辑未跑)
+
 #### M3.4 OpenClaw Skill (新，独立仓库)
 
 **仓库**: `secret-broker-openclaw-skill/` (独立发布)

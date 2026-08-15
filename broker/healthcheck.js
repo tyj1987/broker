@@ -24,6 +24,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { createHmac } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -88,10 +89,20 @@ function pickCredential(type, fields) {
     case 'deepseek_key':
       return { primary: fields.api_key, meta: {} };
     case 'aliyun_ak':
+      return {
+        primary: fields.access_key_id,
+        meta: { access_key_secret: fields.access_key_secret, region: fields.region || 'cn-hangzhou' }
+      };
     case 'tencent_sk':
+      return {
+        primary: fields.secret_id,
+        meta: { secret_key: fields.secret_key, region: fields.region || 'ap-guangzhou' }
+      };
     case 'aws_access_key':
-      // 两个字段都需要 (id+secret 配对), 但 healthcheck 暂跳过 (走 broker proxy 完整签名)
-      return { primary: fields.access_key_id || fields.secret_id, meta: { pair: true } };
+      return {
+        primary: fields.access_key_id,
+        meta: { secret_access_key: fields.secret_access_key, region: fields.region || 'us-east-1' }
+      };
     case 'ssh_connection':
       return {
         primary: fields.private_key || fields.password || '',
@@ -129,10 +140,11 @@ export async function checkSecret(secretName, fields, secretType) {
       case 'gitee_pat':
         return await checkGithubLike(cred.primary, secretType, t0);
       case 'aliyun_ak':
+        return await checkAliyun(cred.primary, cred.meta, t0);
       case 'tencent_sk':
       case 'aws_access_key':
-        // M4: 跳过云厂商 — 完整 v2/v4 签名要 broker proxy 配合, 走 M4.5
-        return { status: 'skipped', detail: `${secretType} check requires broker proxy (TODO: M4.5)`, latency_ms: 0 };
+        // TODO M5.2+: 完整 TC3-HMAC-SHA256 / SigV4 签名实现, 走 mcp-server 出网
+        return { status: 'skipped', detail: `${secretType} check not implemented yet (TODO: M5.2)`, latency_ms: 0 };
       case 'openai_key':
       case 'anthropic_key':
       case 'google_ai_key':
@@ -259,6 +271,102 @@ function checkCloudflare(apiToken, t0) {
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.end();
+  });
+}
+
+// ============================================================
+// v3.0 M5.1: aliyun_ak v2 验签 (HMAC-SHA1 + base64 + RFC 3986)
+// 调 https://ecs.aliyuncs.com/?Action=DescribeRegions 验证 ak
+// 公共参数: AccessKeyId / SignatureMethod / SignatureVersion / Timestamp / SignatureNonce / Format
+// 签名规范: https://help.aliyun.com/document_detail/315526.html
+// ============================================================
+
+// RFC 3986 编码 (跟 encodeURIComponent 区别: ! ~ * ' ( ) 保留原样, 空格变 %20)
+function rfc3986(s) {
+  return encodeURIComponent(s)
+    .replace(/!/g, '%21')
+    .replace(/\*/g, '%2A')
+    .replace(/'/g, '%27')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29');
+}
+
+// 纯函数: 给一组公共+业务参数, 计算 aliyun v2 signature + 完整 query string
+// 入参: { action, accessKeyId, accessKeySecret, region?, timestamp?, nonce? }
+// 返: { query: 'k1=v1&...&Signature=xxx', signature, stringToSign, canonical }
+export function signAliyun({ action, accessKeyId, accessKeySecret, region = 'cn-hangzhou', timestamp, nonce }) {
+  // 公共参数 + 业务参数
+  const params = {
+    AccessKeyId: accessKeyId,
+    Action: action,
+    Format: 'JSON',
+    RegionId: region,
+    SignatureMethod: 'HMAC-SHA1',
+    SignatureNonce: nonce || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now()),
+    SignatureVersion: '1.0',
+    Timestamp: timestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),  // ISO 8601 UTC, 截 ms
+    Version: '2014-05-26',
+  };
+  // 字典序排序
+  const sortedKeys = Object.keys(params).sort();
+  // 拼 canonicalized query string
+  const canonical = sortedKeys
+    .map(k => `${rfc3986(k)}=${rfc3986(params[k])}`)
+    .join('&');
+  // StringToSign: METHOD&%2F&URL-encoded-canonical
+  const stringToSign = `GET&${rfc3986('/')}&${rfc3986(canonical)}`;
+  // HMAC-SHA1(key = accessKeySecret + "&", data = stringToSign)
+  const signature = createHmac('sha1', accessKeySecret + '&')
+    .update(stringToSign)
+    .digest('base64');
+  // 最终 query
+  const query = `${canonical}&Signature=${rfc3986(signature)}`;
+  return { query, signature, stringToSign, canonical };
+}
+
+async function checkAliyun(accessKeyId, meta, t0) {
+  // meta: { access_key_secret, region }
+  if (!accessKeyId || !meta?.access_key_secret) {
+    return { status: 'skipped', detail: 'aliyun_ak missing access_key_id or access_key_secret', latency_ms: 0 };
+  }
+  // 签名 + 调 DescribeRegions
+  const { query } = signAliyun({
+    action: 'DescribeRegions',
+    accessKeyId,
+    accessKeySecret: meta.access_key_secret,
+    region: meta.region || 'cn-hangzhou',
+  });
+  const path = `/?${query}`;
+  // 允许测试用 env 切 host/port (默认 ecs.aliyuncs.com:443)
+  const host = process.env.ALIYUN_HEALTHCHECK_HOST || 'ecs.aliyuncs.com';
+  const port = Number(process.env.ALIYUN_HEALTHCHECK_PORT) || 443;
+  // port=443 走 https, 其它 (test mock) 走 http
+  const httpLib = port === 443 ? httpsRequest : (await import('node:http')).request;
+  return new Promise((resolve) => {
+    const req = httpLib({
+      host, port, path, method: 'GET',
+      headers: { 'Host': host, 'User-Agent': 'secret-broker-healthcheck' },
+      timeout: TIMEOUT_MS,
+    }, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        const latency = Date.now() - t0;
+        if (res.statusCode === 200) {
+          // DescribeRegions 返 JSON, 列出 region 数量
+          let regionCount = 0;
+          try { regionCount = JSON.parse(d).Regions?.Region?.length || 0; } catch { /* ignore */ }
+          resolve({ status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency });
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
+          // aliyun 用 403 InvalidAccessKeyId / SignatureDoesNotMatch
+          resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
+        } else {
+          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
     req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
     req.end();
   });

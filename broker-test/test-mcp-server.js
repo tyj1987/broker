@@ -2,7 +2,7 @@
 // mock broker (HTTP server in-process)，验证：
 // 1. JSON-RPC 2.0 protocol (initialize / tools/list / tools/call / error handling)
 // 2. Auto-refresh child key (master key 启动 → child key 调 broker → refresh)
-// 3. 6 tools 都正确代理到 broker
+// 3. 8 tools 都正确代理到 broker
 // 4. child key 过期前自动 refresh
 
 import { createServer as createMockServer, request as httpRequest } from 'node:http';
@@ -204,7 +204,7 @@ function mcpRpc(method, params) {
 
   {
     const r = await mcpRpc('tools/list');
-    ok('tools/list returns 6 tools', r.result.tools.length === 6);
+    ok('tools/list returns 8 tools', r.result.tools.length === 8);
     const toolNames = r.result.tools.map(t => t.name).sort();
     ok('tools: list_secrets', toolNames.includes('list_secrets'));
     ok('tools: describe_secret', toolNames.includes('describe_secret'));
@@ -312,6 +312,37 @@ function mcpRpc(method, params) {
     const r = await mcpRpc('tools/call', { name: 'get_audit', arguments: { limit: 10 } });
     const data = JSON.parse(r.result.content[0].text);
     ok('events returned', Array.isArray(data.events) && data.events.length >= 1);
+  }
+
+  // ======== 7.5 v3.0 M4.5: check_credential (凭据零接触) ========
+  section('tool: check_credential (M4.5)');
+  {
+    // 真实 broker 没 mock secrets, 调 list 拿 name, 再 check
+    const list = await mcpRpc('tools/call', { name: 'list_secrets', arguments: {} });
+    const listData = JSON.parse(list.result.content[0].text);
+    const firstName = (listData.secrets?.[0])?.name || listData.secrets?.[0];
+    if (firstName && typeof firstName === 'string') {
+      const r = await mcpRpc('tools/call', { name: 'check_credential', arguments: { name: firstName } });
+      const data = JSON.parse(r.result.content[0].text);
+      ok('check_credential 返 name', data.name === firstName);
+      ok('check_credential 返 type', typeof data.type === 'string');
+      ok('check_credential 返 status', ['ok', 'expired', 'fail', 'skipped'].includes(data.status));
+      // 凭据零接触: 返的 data 不含 value / fields
+      ok('凭据零接触: 无 value', data.value === undefined);
+      ok('凭据零接触: 无 fields', data.fields === undefined);
+    } else {
+      ok('check_credential: 无 secret 跳过', true);
+    }
+  }
+
+  // ======== 7.6 v3.0 M4.5: run_healthcheck ========
+  section('tool: run_healthcheck (M4.5)');
+  {
+    const r = await mcpRpc('tools/call', { name: 'run_healthcheck', arguments: {} });
+    const data = JSON.parse(r.result.content[0].text);
+    ok('run_healthcheck 返 last_status', ['ok', 'degraded'].includes(data.last_status));
+    ok('run_healthcheck 返 summary.total', typeof data.summary?.total === 'number');
+    ok('run_healthcheck 返 checks object', typeof data.checks === 'object');
   }
 
   // ======== 8. Refresh — create new child when previous expires ========

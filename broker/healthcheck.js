@@ -111,9 +111,10 @@ function pickCredential(type, fields) {
 
 // ============================================================
 // 单个 secret 检查
-// signature: checkSecret(name, fields, type)
+// signature: checkSecret(name, fields, type) → {status, detail, latency_ms}
+// 公开 export 供 mcp-server 等外部进程复用 (无需 broker SECRET_CACHE)
 // ============================================================
-async function checkSecret(secretName, fields, secretType) {
+export async function checkSecret(secretName, fields, secretType) {
   const t0 = Date.now();
   const cred = pickCredential(secretType, fields);
   if (!cred || !cred.primary) {

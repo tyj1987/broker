@@ -20,6 +20,15 @@
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { readFileSync } from 'node:fs';
+// v3.0 M4.5: healthcheck 引擎复用 (broker 内核 / mcp-server 外延 同一份)
+// 注: 实际会从 broker/healthcheck.js 动态 import (见下面 lazy load)
+let _healthcheckModule = null;
+async function getHealthcheck() {
+  if (!_healthcheckModule) {
+    _healthcheckModule = await import('./healthcheck.js');
+  }
+  return _healthcheckModule;
+}
 
 // ============================================================
 // CLI args
@@ -221,6 +230,22 @@ const TOOLS = [
       },
     },
   },
+  {
+    // v3.0 M4.5: 走 mcp-server 出网验单个 secret 凭据 (broker 自身不出网, 委托 mcp-server)
+    name: 'check_credential',
+    description: '验单个 secret 凭据是否仍有效 (调上游 no-side-effect API). 凭据零接触: 返 status/detail/latency, 不返 value.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'secret name' } },
+      required: ['name'],
+    },
+  },
+  {
+    // v3.0 M4.5: 跑全部 4 secrets healthcheck, 返 {name: {status, detail, latency_ms, type, ts}}
+    name: 'run_healthcheck',
+    description: '跑全部 secret 凭据自检 (mcp-server 出网, 凭据零接触). 返 summary + 每 secret status.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 async function toolListSecrets() {
@@ -284,6 +309,57 @@ async function toolGetAudit(args) {
   return r.json || { events: [] };
 }
 
+// v3.0 M4.5: 验单个 secret 凭据 (mcp-server 走 client.mavis cert 出网)
+// 凭据零接触: 内部调 broker resolve 拿 value, 调 healthcheck.checkSecret 拿结果,
+// 返回的只有 status/detail/latency/type, 绝不返 secret value.
+async function toolCheckCredential(args) {
+  if (!args?.name) throw new Error('Missing {name}');
+  const r = await callBroker('/api/v1/secrets/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: args.name }),
+  });
+  if (r.status !== 200) throw new Error(`resolve failed: ${r.status} ${r.body.slice(0, 200)}`);
+  const data = r.json;
+  if (!data?.type) throw new Error('resolve returned no type');
+  const { checkSecret } = await getHealthcheck();
+  // fields 是 broker 返回的结构化凭据. healthcheck.checkSecret 内部按 type-schemas 抽字段.
+  const result = await checkSecret(args.name, data.fields || {}, data.type);
+  // 凭据零接触: 不返 data.value / data.fields, 只返 status 元信息
+  return { name: args.name, type: data.type, ...result };
+}
+
+// v3.0 M4.5: 跑全部 secret healthcheck (loop 调 check_credential + 累加 summary)
+async function toolRunHealthcheck(args) {
+  const list = await callBroker('/api/v1/secrets');
+  if (list.status !== 200) throw new Error(`list_secrets failed: ${list.status}`);
+  const items = list.json?.secrets || [];
+  const checks = {};
+  const summary = { ok: 0, expired: 0, fail: 0, skipped: 0, total: 0 };
+  const t0 = Date.now();
+  for (const s of items) {
+    const name = typeof s === 'string' ? s : s.name;
+    if (!name) continue;
+    try {
+      const r = await toolCheckCredential({ name });
+      checks[name] = { ...r, ts: new Date().toISOString() };
+      summary[r.status] = (summary[r.status] || 0) + 1;
+    } catch (e) {
+      checks[name] = { status: 'fail', detail: e.message, ts: new Date().toISOString() };
+      summary.fail++;
+    }
+    summary.total++;
+  }
+  const allPass = summary.expired === 0 && summary.fail === 0;
+  return {
+    last_status: allPass ? 'ok' : 'degraded',
+    last_run_at: new Date().toISOString(),
+    duration_ms: Date.now() - t0,
+    summary,
+    checks,
+  };
+}
+
 const TOOL_HANDLERS = {
   list_secrets: toolListSecrets,
   describe_secret: toolDescribeSecret,
@@ -291,6 +367,8 @@ const TOOL_HANDLERS = {
   get_health: toolGetHealth,
   list_api_keys: toolListApiKeys,
   get_audit: toolGetAudit,
+  check_credential: toolCheckCredential,
+  run_healthcheck: toolRunHealthcheck,
 };
 
 // ============================================================

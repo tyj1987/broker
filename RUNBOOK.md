@@ -174,7 +174,192 @@ Then delete the archive. / 然后删归档。
 
 ---
 
-## 5. Production deployment / 5. 生产部署
+## 5. Secret Broker operations / 5. Secret Broker 运维
+
+The Secret Broker lives on the ECS at `/opt/secret-broker/`.
+Secret Broker 在 ECS 上的位置是 `/opt/secret-broker/`。
+
+### 5.1 Layout / 5.1 目录结构
+
+| Path / 路径 | Purpose / 用途 |
+|---|---|
+| `/opt/secret-broker/broker/server.js` | mTLS HTTP server (Node, ESM) / mTLS HTTP 服务（Node ESM） |
+| `/opt/secret-broker/broker/dashboard/{index.html,app.js,style.css,admin/*.js}` | Vanilla-JS admin UI / 管理 UI（无框架） |
+| `/opt/secret-broker/secrets/broker.yaml` | SOPS-encrypted config: services + clients / SOPS 加密配置 |
+| `/opt/secret-broker/secrets/secrets-detail.json` | SOPS-encrypted structured secret store / SOPS 加密结构化密钥库 |
+| `/opt/secret-broker/pki/{ca,server,clients}/` | mTLS material (CA + server cert + per-client certs) / mTLS 材质 |
+| `/opt/secret-broker/age/key.txt` | age private key (mode 600) / age 私钥（600 权限） |
+| `/opt/secret-broker/audit/<date>.jsonl` | append-only audit log / 追加式审计日志 |
+| `/opt/secret-broker/scripts/` | helper scripts (issue-client-cert.sh, backup-keys.ps1, etc.) / 辅助脚本 |
+| `/etc/systemd/system/secret-broker.service` | systemd unit (ReadOnlyPaths=/opt/secret-broker, ReadWritePaths=audit,secrets) / systemd 单元（加固） |
+
+### 5.2 Day-to-day ops / 5.2 日常运维
+
+```bash
+ssh 52trz
+systemctl status secret-broker                      # status / 状态
+systemctl restart secret-broker                     # restart (after config edit) / 改配置后重启
+journalctl -u secret-broker -f                      # follow logs / 跟踪日志
+journalctl -u secret-broker --since "10 min ago"    # recent events / 最近事件
+# Get current reload token (for hot config reload via API) / 拿 reload token（热加载）
+journalctl -u secret-broker | grep "reload token" | tail -1
+```
+
+`systemctl restart secret-broker` is the only reload mechanism that is
+guaranteed to pick up code changes; for `broker.yaml` / secrets changes
+only, the API also supports hot reload via the reload token (see below).
+`systemctl restart` 是唯一能加载代码改动的；只改 `broker.yaml`/密钥时，
+可走 API 热加载（见下）。
+
+### 5.3 Hot reload broker.yaml / 5.3 热加载 broker.yaml
+
+For adding/changing services or clients without restarting the broker:
+加/改 services 或 clients 时，不重启 broker：
+
+```bash
+ssh 52trz
+TOKEN=$(journalctl -u secret-broker | grep "reload token" | tail -1 | grep -oE '[0-9a-f-]{36}')
+curl -sk -X POST -H "Authorization: Bearer $TOKEN" https://127.0.0.1:8443/api/v1/admin/reload
+# Returns the new audit log + token; broker keeps running.
+# 返回新的 audit log + token；broker 继续跑。
+```
+
+Or use the out-of-band scripts to also re-encrypt broker.yaml via SOPS:
+或用 out-of-band 脚本调 SOPS 重加密 broker.yaml：
+
+```bash
+ssh 52trz
+/opt/secret-broker/scripts/issue-client-cert.sh <client-name>      # issue / 签发
+# Internally: decrypt → mutate → re-encrypt → call broker reload API
+# 内部：解密 → 修改 → 重加密 → 调 broker reload API
+```
+
+### 5.4 Issuing client certificates / 5.4 签发客户端证书
+
+The dashboard UI has a `💻 设备管理 / Devices` tab that lets admin
+issue / rotate / revoke client certs. **However, on production ECS
+the PKI directory is read-only by design** (systemd hardening):
+dashboard UI enrollment returns HTTP 503 + a yellow banner pointing
+to the script. Use the script for production client certs:
+管理 UI 有"💻 设备管理"tab 可以签发/轮换/撤销客户端证书。**但生产 ECS
+的 PKI 目录默认只读**（systemd 加固），dashboard 签发会返 503 + 黄色
+banner 提示走脚本。生产用脚本签发：
+
+```bash
+ssh 52trz
+/opt/secret-broker/scripts/issue-client-cert.sh my-laptop
+# Generates: pki/clients/client.my-laptop.{crt,key}
+# Updates broker.yaml with new fingerprint + adds to clients
+# Re-encrypts broker.yaml via SOPS, calls broker reload API.
+# 生成证书，更新 broker.yaml 客户端指纹，SOPS 重加密，broker 热加载。
+```
+
+For other PKI management tasks (rotate, revoke, list), use the same
+script with `--rotate` / `--revoke` / `--list` (see `--help`).
+轮换/撤销/列表见脚本 `--help`。
+
+To get a client bundle (ca.crt + client.crt + client.key + install.sh)
+as a zip — usually a one-off for the production UI which doesn't
+have write access — the script also supports `--bundle <name>`.
+要拿 zip bundle（ca.crt + client.crt + client.key + install.sh）通常
+生产 UI 写不了时用一次，脚本也支持 `--bundle <name>`。
+
+### 5.5 Local dev / test broker (broker-test) / 5.5 本地测试 broker
+
+A throwaway local broker lives at `C:\Users\User\broker-test\` for
+running end-to-end tests without touching production:
+本地有一个一次性 broker 在 `C:\Users\User\broker-test\`，跑端到端
+测试用，不碰生产：
+
+```powershell
+# Start broker on 127.0.0.1:18443 (PKI from broker-test/pki, not prod)
+/ 用 broker-test/pki，不碰生产 PKI
+Start-Process node -ArgumentList "C:\Users\User\broker-test\mock-upstream.js" `
+  -RedirectStandardOutput C:\Users\User\broker-test\logs\mock-upstream.out `
+  -RedirectStandardError C:\Users\User\broker-test\logs\mock-upstream.err `
+  -WindowStyle Hidden -PassThru
+Start-Process powershell -ArgumentList "-NoProfile","-Command","cd C:\Users\User\broker-test; `$env:PORT='18443'; `$env:HOST='127.0.0.1'; `$env:CONFIG_PATH='C:\Users\User\broker-test\secrets\broker.yaml'; `$env:SECRETS_DETAIL_PATH='C:\Users\User\broker-test\secrets\secrets-detail.json'; `$env:PKI_DIR='C:\Users\User\broker-test\pki'; `$env:COMMON_ENV_PATH='C:\Users\User\broker-test\secrets\common.env'; `$env:AGE_KEY_FILE='C:\Users\User\broker-test\age\key.txt'; `$env:TLS_CA='C:\Users\User\broker-test\pki\ca.crt'; `$env:TLS_CERT='C:\Users\User\broker-test\pki\server\server.crt'; `$env:TLS_KEY='C:\Users\User\broker-test\pki\server\server.key'; `$env:OPENSSL_BIN='C:\Program Files\Git\usr\bin\openssl.exe'; node C:\home\my-first-app\broker\server.js" `
+  -RedirectStandardOutput C:\Users\User\broker-test\logs\broker.out `
+  -RedirectStandardError C:\Users\User\broker-test\logs\broker.err `
+  -WindowStyle Hidden -PassThru
+
+# Run the test suites / 跑测试套件
+cd C:\Users\User\broker-test
+node test-thorough.js       # 40 tests (secrets CRUD + bulk + file upload + eye toggle)
+node test-services-crud.js  # 17 tests (services CRUD + templates + test connection)
+node test-clients-crud.js   # 16 tests (clients CRUD + cert enroll/rotate/bundle)
+node test-audit.js          # 11 tests (filters + SSE stream + JSON/CSV export)
+
+# Login: client `client.dashboard-admin`, password `a203df55219b804edb4b8a0f`
+# 登录：client 名称 `client.dashboard-admin`，密码 `a203df55219b804edb4b8a0f`
+```
+
+**Hard rule / 硬规则**:
+- All tests in broker-test point at `https://127.0.0.1:18443` — NEVER
+  at `https://broker.52trz.com` (production). A pre-cleanup hook deletes
+  any secret whose name starts with the test prefix; it does **not**
+  delete hard-coded production keys like `GITHUB_PAT`. Adding a new
+  test? `grep -l 'broker.52trz.com' broker-test/test-*.js` first to
+  verify no URLs leak to prod.
+  所有 broker-test 测试只打 `https://127.0.0.1:18443` —— **绝对不**
+  打 `https://broker.52trz.com`（生产）。pre-cleanup 钩子只删自己命名前
+  缀的测试残留，**不删** `GITHUB_PAT` 这类硬编码生产密钥。写新测试
+  前先 `grep -l 'broker.52trz.com' broker-test/test-*.js` 防止 URL 泄到生产。
+- If a test starts failing intermittently, check `logs/broker.err` first
+  (lots of `ssl3_read_bytes: certificate unknown` is normal — those are
+  password-lock or no-cert probes). Lock out after 5 fails for 15 min.
+  如果测试开始间歇性失败，先看 `logs/broker.err`（大量
+  `ssl3_read_bytes: certificate unknown` 是正常的——密码锁定或无证书
+  探测）。5 次失败锁 15 分钟。
+
+### 5.6 Audit log / 5.6 审计日志
+
+The audit log is append-only JSONL at `/opt/secret-broker/audit/<date>.jsonl`.
+It records: `ts, action, status, cn, fp, service, method, path, error, name,
+field, reason, latency_ms, upstream_status`. Secrets are NEVER recorded
+(masked at the source).
+审计日志在 `/opt/secret-broker/audit/<date>.jsonl`，追加式 JSONL。记录：
+`ts, action, status, cn, fp, service, method, path, error, name, field, reason,
+latency_ms, upstream_status`。**密钥永不记录**（源头 mask）。
+
+Inspect via API (admin only) / 通过 API 看（仅 admin）：
+
+```bash
+# Last 20 events / 最近 20 条
+curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit?limit=20'
+# Filter by client / service / action / status / time range / 按客户端/服务/动作/状态/时间过滤
+curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit?client=ci-runner&action=proxy&since=2026-08-15T00:00:00Z'
+# Real-time SSE stream (30 min auto-disconnect, 25s heartbeat) / 实时 SSE 流
+curl -sk -b /tmp/cookies.txt -H 'Accept: text/event-stream' \
+  https://broker.52trz.com/api/v1/admin/audit/stream
+# Export / 导出
+curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit/export.csv?limit=1000' -o audit.csv
+curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit/export.json?limit=1000' -o audit.json
+```
+
+Or use the dashboard `📋 审计 / Audit` tab (filters + live stream +
+export buttons + anomaly highlighting).
+或用 dashboard `📋 审计 / Audit` tab（过滤 + 实时流 + 导出按钮 +
+异常高亮）。
+
+### 5.7 Phase 1 feature matrix / 5.7 Phase 1 功能矩阵
+
+| Tab / 标签 | Path / 路径 | What it does / 用途 |
+|---|---|---|
+| `⚡ 动作 / Actions` | `app.js` | Browse services → call upstream via broker / 浏览服务 → 走 broker 调上游 |
+| `🔑 可见密钥 / Secrets` | `admin/secrets.js` | Read-only view of secrets the current client can see / 当前客户端可见密钥只读视图 |
+| `🗝️ 密钥管理 / Manage` | `admin/secrets.js` | CRUD structured secrets (multi-field), bulk delete, file upload, eye toggle / 结构化密钥 CRUD + 批量删除 + 文件上传 + 眼睛 |
+| `🔌 服务管理 / Services` | `admin/services.js` | CRUD services from 6 templates, test connection, permissions matrix / 6 模板服务 CRUD + 连通测试 + 权限矩阵 |
+| `💻 设备管理 / Devices` | `admin/clients.js` | CRUD clients, enroll/rotate/revoke (UI; 503 on prod due to PKI read-only) / 客户端 CRUD + 签发/轮换/撤销（生产 UI 返 503） |
+| `📋 审计 / Audit` | `admin/audit.js` | Filter, SSE live stream, JSON/CSV export, anomaly highlight / 过滤 + 实时流 + 导出 + 异常高亮 |
+
+Test count (local broker-test, 3-round stable) / 测试数（本地 broker-test，3 轮稳定）:
+test-thorough.js 40 + test-services-crud.js 17 + test-clients-crud.js 16 +
+test-audit.js 11 = **84/84 × 3 = 252/252 stable**.
+
+---
+
+## 6. Production deployment / 6. 生产部署
 
 ### Prerequisites (one-time, per cloud) / 前置条件（一次性，每家云）
 
@@ -288,7 +473,7 @@ Security notes / 安全提示：
 
 ---
 
-## 6. Incident response / 6. 应急响应
+## 7. Incident response / 7. 应急响应
 
 ### Secret accidentally committed in plaintext / 明文密钥误提交
 
@@ -341,7 +526,7 @@ history, but they are now permanent ciphertext.
 
 ---
 
-## 7. Monitoring / 7. 监控
+## 8. Monitoring / 8. 监控
 
 ### Start Uptime Kuma / 启动 Uptime Kuma
 
@@ -369,7 +554,7 @@ docker compose -f monitoring/uptime-kuma.yml --profile metrics up -d
 
 ---
 
-## 8. Disaster recovery checklist / 8. 灾难恢复清单
+## 9. Disaster recovery checklist / 9. 灾难恢复清单
 
 Run this checklist every quarter to make sure the system still
 recovers from a fresh machine.
@@ -392,7 +577,7 @@ recovers from a fresh machine.
 
 ---
 
-## 9. Reference / 9. 参考
+## 10. Reference / 10. 参考
 
 - SOPS docs / 文档: https://github.com/getsops/sops
 - age docs / 文档: https://age-encryption.org

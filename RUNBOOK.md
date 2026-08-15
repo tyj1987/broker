@@ -342,20 +342,84 @@ export buttons + anomaly highlighting).
 或用 dashboard `📋 审计 / Audit` tab（过滤 + 实时流 + 导出按钮 +
 异常高亮）。
 
-### 5.7 Phase 1 feature matrix / 5.7 Phase 1 功能矩阵
+### 5.7 Phase 1+2 feature matrix / 5.7 Phase 1+2 功能矩阵
 
 | Tab / 标签 | Path / 路径 | What it does / 用途 |
 |---|---|---|
+| `🏠 首页 / Home` | `home.js` | 4 stat cards + quick actions + recent activity + admin TODO / 概览 + 快捷操作 + 最近活动 + 待办（轮换提醒） |
 | `⚡ 动作 / Actions` | `app.js` | Browse services → call upstream via broker / 浏览服务 → 走 broker 调上游 |
+| `📋 审计 / Audit` | `admin/audit.js` | Filter, SSE live stream, JSON/CSV export, anomaly highlight / 过滤 + 实时流 + 导出 + 异常高亮 |
 | `🔑 可见密钥 / Secrets` | `admin/secrets.js` | Read-only view of secrets the current client can see / 当前客户端可见密钥只读视图 |
 | `🗝️ 密钥管理 / Manage` | `admin/secrets.js` | CRUD structured secrets (multi-field), bulk delete, file upload, eye toggle / 结构化密钥 CRUD + 批量删除 + 文件上传 + 眼睛 |
 | `🔌 服务管理 / Services` | `admin/services.js` | CRUD services from 6 templates, test connection, permissions matrix / 6 模板服务 CRUD + 连通测试 + 权限矩阵 |
 | `💻 设备管理 / Devices` | `admin/clients.js` | CRUD clients, enroll/rotate/revoke (UI; 503 on prod due to PKI read-only) / 客户端 CRUD + 签发/轮换/撤销（生产 UI 返 503） |
-| `📋 审计 / Audit` | `admin/audit.js` | Filter, SSE live stream, JSON/CSV export, anomaly highlight / 过滤 + 实时流 + 导出 + 异常高亮 |
+| `📖 文档 / Docs` | `app.js` | API reference, examples / API 参考 + 示例 |
 
-Test count (local broker-test, 3-round stable) / 测试数（本地 broker-test，3 轮稳定）:
+### 5.8 Keyboard shortcuts / 5.8 键盘快捷键
+
+Press `?` (Shift+/) anywhere outside an input to see the help modal. Style:
+Gmail-like two-key sequences. / 在 input/textarea 之外的任意位置按 `?`
+（Shift+/）可看帮助。Gmail 风格两键序列。
+
+| Sequence | Action / 行为 |
+|---|---|
+| `g h` | 跳到首页 / Go to Home |
+| `g a` | 跳到动作 / Go to Actions |
+| `g s` | 跳到密钥 / Go to Secrets (visible) |
+| `g u` | 跳到审计 / Go to aUdit |
+| `g d` | 跳到文档 / Go to Docs |
+| `g k` | 跳到密钥管理 / Go to Keys management (admin) |
+| `g p` | 跳到服务管理 / Go to services (admin) |
+| `g c` | 跳到设备管理 / Go to Clients (admin) |
+| `?` | 显示帮助 / Show help |
+| `Esc` | 关闭弹窗 / Close modal |
+
+### 5.9 Secret rotation policy / 5.9 密钥轮换策略
+
+`secrets-detail.json` supports per-secret rotation metadata. UI (home tab
+admin TODO list) warns when secrets need rotation.
+`secrets-detail.json` 支持每个密钥的轮换元数据。Home tab 的 admin TODO
+列表会在密钥需要轮换时显示提醒。
+
+Set rotation policy in admin UI: open 密钥管理 / Manage → edit secret → set
+`rotation_policy_days` (e.g. 90). On next load, `last_rotated_at` defaults
+to the secret's `updated_at`. The home TODO list shows:
+管理 UI 设置：打开密钥管理 → 编辑密钥 → 设 `rotation_policy_days`（如 90）。
+下次加载时 `last_rotated_at` 默认用 `updated_at`。Home TODO 列表显示：
+
+- 🟡 还剩 N 天到轮换期 (>= 80% of policy)
+- 🔴 已 N 天未轮换 (>= 100% of policy)
+- 🟡 无轮换时间戳 (no `last_rotated_at`)
+
+When you rotate a secret (sops edit, then `updated_at` is freshened by the
+admin UI), the warning clears automatically.
+轮换密钥（sops 编辑后 admin UI 自动更新 `updated_at`）后，提醒会自动消失。
+
+### 5.10 ECS daily snapshot policy / 5.10 ECS 每日快照策略
+
+```bash
+ssh 52trz
+/opt/secret-broker/scripts/ecs-snapshot-policy.sh install   # enable
+/opt/secret-broker/scripts/ecs-snapshot-policy.sh status    # check
+/opt/secret-broker/scripts/ecs-snapshot-policy.sh uninstall
+```
+
+Creates `/etc/systemd/system/ecs-snapshot.{service,timer}`. Timer fires
+daily at 03:00 (with ±10min randomize). The script calls ECS OpenAPI
+through the broker (no direct ALIYUN_ACCESS_KEY in the script — all
+calls audited at /opt/secret-broker/audit/).
+创建 systemd unit。每日 03:00 触发，调用走 broker 转发（脚本里没 AK，
+全部 audit 记录）。
+
+Snapshots older than `RETENTION_DAYS=7` (default) are auto-deleted; only
+snapshots whose name starts with `auto-` are considered for cleanup, so
+manual snapshots you create are safe.
+超过 7 天的快照自动清理；只清理 `auto-` 前缀的，手动快照不受影响。
+
+Test count (local broker-test, 2-round stable) / 测试数（本地 broker-test，2 轮稳定）:
 test-thorough.js 40 + test-services-crud.js 17 + test-clients-crud.js 16 +
-test-audit.js 11 = **84/84 × 3 = 252/252 stable**.
+test-audit.js 11 + test-home.js 8 + test-shortcuts.js 6 =
+**98/98 × 2 = 196/196 stable**.
 
 ---
 

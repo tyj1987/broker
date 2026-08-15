@@ -294,6 +294,64 @@ export async function runAll(getSecrets) {
 }
 
 // ============================================================
+// v3.0 M5: 调 mcp-server 跑 healthcheck (broker 不出网时由 mcp-server 走 client.mavis cert 出网)
+// 返: { last_status, last_run_at, duration_ms, summary, checks, _source: 'mcp_server' }
+// ============================================================
+export async function runAllViaMcp(mcpServerUrl) {
+  loadState();
+  const t0 = Date.now();
+  // 调 mcp-server /mcp tools/call run_healthcheck (JSON-RPC 2.0)
+  const req = await import('node:http');
+  // mcp-server 在 localhost, 用 http (不走 mTLS, 不暴露外网)
+  const url = new URL('/mcp', mcpServerUrl);
+  const body = JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'run_healthcheck', arguments: {} },
+  });
+  const result = await new Promise((resolve, reject) => {
+    const r = req.request({
+      host: url.hostname,
+      port: url.port || 3001,
+      path: url.pathname,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 60_000,  // healthcheck 跑 5 secrets ~12s, 给 60s
+    }, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`mcp-server HTTP ${res.statusCode}: ${d.slice(0, 200)}`));
+        }
+        try {
+          const json = JSON.parse(d);
+          if (json.error) return reject(new Error(`mcp-server RPC error: ${json.error.message}`));
+          const text = json.result?.content?.[0]?.text;
+          if (!text) return reject(new Error('mcp-server 返空 result'));
+          resolve(JSON.parse(text));
+        } catch (e) { reject(new Error(`mcp-server 返非 JSON: ${e.message}`)); }
+      });
+    });
+    r.on('timeout', () => r.destroy(new Error('mcp-server timeout 60s')));
+    r.on('error', reject);
+    r.write(body);
+    r.end();
+  });
+  // 写 broker state (跟 broker runAll 同一格式)
+  const newState = {
+    last_run_at: new Date().toISOString(),
+    last_status: result.last_status || 'unknown',
+    duration_ms: result.duration_ms || (Date.now() - t0),
+    summary: result.summary || { ok: 0, expired: 0, fail: 0, skipped: 0, total: 0 },
+    checks: result.checks || {},
+    _source: 'mcp_server',  // 标记这次跑来自 mcp-server
+  };
+  state = newState;
+  saveState();
+  HEALTHCHECK_BUS.emit('run_complete', newState);
+  return newState;
+}
+
+// ============================================================
 // 状态查询 (供 /api/v1/healthcheck/status 用)
 // ============================================================
 export function getStatus() {

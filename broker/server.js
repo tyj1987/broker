@@ -35,6 +35,7 @@ import {
 // v3.0 M2: API Key 管理 + Bearer 鉴权
 import {
   runAll as healthcheckRunAll,
+  runAllViaMcp as healthcheckRunAllViaMcp,
   getStatus as healthcheckGetStatus,
   getSecretStatus as healthcheckGetSecretStatus,
   HEALTHCHECK_BUS,
@@ -1996,16 +1997,26 @@ async function handle(req, res) {
   // ----- POST /api/v1/healthcheck/run (admin) -----
   if (m === 'POST' && p === '/api/v1/healthcheck/run') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    // 返 entry 完整 (type + fields + description), 让 healthcheck 按 type-schemas 抽字段
-    const getSecrets = () => {
-      const out = {};
-      for (const [name, entry] of SECRET_CACHE) {
-        out[name] = { type: entry.type, fields: entry.fields || {}, description: entry.description || '' };
-      }
-      return out;
-    };
+    // v3.0 M5: upstream 模式决定走 broker 本地 (默认) 或 mcp-server (出网绕过)
+    // 配置: broker.yaml healthcheck: { upstream: 'mcp_server'|'local', mcp_server_url: 'http://127.0.0.1:3001' }
+    const hcCfg = CONFIG.healthcheck || {};
+    const upstream = hcCfg.upstream || 'local';
+    const mcpUrl = hcCfg.mcp_server_url || 'http://127.0.0.1:3001';
     try {
-      const r = await healthcheckRunAll(getSecrets);
+      let r;
+      if (upstream === 'mcp_server') {
+        r = await healthcheckRunAllViaMcp(mcpUrl);
+      } else {
+        // local: 返 entry 完整 (type + fields + description), 让 healthcheck 按 type-schemas 抽字段
+        const getSecrets = () => {
+          const out = {};
+          for (const [name, entry] of SECRET_CACHE) {
+            out[name] = { type: entry.type, fields: entry.fields || {}, description: entry.description || '' };
+          }
+          return out;
+        };
+        r = await healthcheckRunAll(getSecrets);
+      }
       // 同步写 audit
       for (const [name, c] of Object.entries(r.checks)) {
         audit({
@@ -2969,9 +2980,12 @@ function start() {
     console.log(`[broker] reload token: ${RELOAD_TOKEN}`);
 
     // v3.0 M4: 启动 cron 循环 (04:00 daily healthcheck)
+    // v3.0 M5: 跟 /api/v1/healthcheck/run 一样支持 upstream: 'local' | 'mcp_server'
     const hcCfg = CONFIG.healthcheck || { enabled: true, schedule: '04:00' };
     if (hcCfg.enabled !== false) {
       const schedule = hcCfg.schedule || '04:00';
+      const cronUpstream = hcCfg.upstream || 'local';
+      const cronMcpUrl = hcCfg.mcp_server_url || 'http://127.0.0.1:3001';
       // 从 broker 内存 SECRET_CACHE 拿 secrets (有 type + fields)
       const getSecrets = () => {
         const out = {};
@@ -2981,9 +2995,11 @@ function start() {
         return out;
       };
       registerCron(schedule, async () => {
-        console.log(`[cron] running healthcheck (${schedule})`);
+        console.log(`[cron] running healthcheck (${schedule}, upstream=${cronUpstream})`);
         try {
-          const r = await healthcheckRunAll(getSecrets);
+          const r = cronUpstream === 'mcp_server'
+            ? await healthcheckRunAllViaMcp(cronMcpUrl)
+            : await healthcheckRunAll(getSecrets);
           const summary = r.summary;
           console.log(`[cron] healthcheck done: ${summary.ok} ok / ${summary.expired} expired / ${summary.fail} fail / ${summary.skipped} skipped`);
           // 写 audit (每个 check 一条)
@@ -3006,7 +3022,7 @@ function start() {
         }
       });
       startCronLoop();
-      console.log(`[cron] registered healthcheck (schedule=${schedule})`);
+      console.log(`[cron] registered healthcheck (schedule=${schedule}, upstream=${cronUpstream})`);
     }
   });
 

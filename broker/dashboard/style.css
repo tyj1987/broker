@@ -508,6 +508,51 @@ pre.sf-display-value {
 .stat-num { font-size: 28px; font-weight: 600; line-height: 1.1; }
 .stat-label { color: #8a96a8; font-size: 12px; margin-top: 2px; }
 
+/* v3.0 M4: 凭据健康度 stat card 颜色 */
+.stat-card-health .stat-num.hc-ok       { color: #3fb950; }
+.stat-card-health .stat-num.hc-degraded { color: #f85149; }
+.stat-card-health .stat-num.hc-unknown  { color: #8a96a8; }
+
+/* v3.0 M4: healthcheck 详情列表 */
+.hc-list { display: flex; flex-direction: column; gap: 6px; }
+.hc-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #2a3441;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.hc-row .hc-name { font-weight: 500; }
+.hc-row .hc-type { color: #6e7781; font-size: 11px; font-family: ui-monospace, monospace; }
+.hc-row .hc-detail { color: #8a96a8; font-size: 12px; grid-column: 1 / -1; padding-left: 4px; }
+.hc-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.hc-badge.ok      { background: #133929; color: #3fb950; }
+.hc-badge.expired { background: #4d1f1f; color: #f85149; }
+.hc-badge.fail    { background: #4d1f1f; color: #f85149; }
+.hc-badge.skipped { background: #2a3441; color: #8a96a8; }
+.hc-badge.unknown { background: #2a3441; color: #8a96a8; }
+.hc-status-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 8px;
+}
+.hc-status-badge.hc-ok      { background: #133929; color: #3fb950; }
+.hc-status-badge.hc-degraded { background: #4d1f1f; color: #f85149; }
+.hc-status-badge.hc-unknown { background: #2a3441; color: #8a96a8; }
+
 .home-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

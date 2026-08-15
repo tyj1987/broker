@@ -108,6 +108,13 @@
               <div class="stat-label">客户端设备 / Clients</div>
             </div>
           </div>
+          <div class="card stat-card stat-card-health" data-stat="healthcheck">
+            <div class="stat-icon">🩺</div>
+            <div class="stat-body">
+              <div class="stat-num" id="stat-healthcheck">-</div>
+              <div class="stat-label">凭据健康度 / Credential health</div>
+            </div>
+          </div>
           <div class="card stat-card" data-stat="audit-today">
             <div class="stat-icon">📊</div>
             <div class="stat-body">
@@ -131,6 +138,19 @@
               <div class="muted">加载中...</div>
             </div>
             <button id="btn-home-open-audit" class="btn btn-sm btn-ghost" style="margin-top:10px">打开审计 / Open audit →</button>
+          </div>
+        </div>
+
+        <!-- v3.0 M4: 凭据健康度详情 (admin 可手动 Run Now) -->
+        <div class="card" id="home-healthcheck-card">
+          <h3>
+            🩺 凭据自检 / Credential health
+            <span class="hc-status-badge muted" id="hc-last-status">未运行</span>
+            <span class="muted" style="font-size:12px; margin-left:8px" id="hc-last-run">—</span>
+            <button class="btn btn-sm btn-primary admin-only" id="btn-hc-run" hidden style="margin-left:auto">立即跑 / Run Now</button>
+          </h3>
+          <div id="home-healthcheck-list" class="hc-list">
+            <div class="muted">加载中...</div>
           </div>
         </div>
 

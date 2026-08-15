@@ -77,15 +77,17 @@
   async function loadAll() {
     setGreet();
     setTip('加载统计中...');
-    const [services, secrets, clients, audit] = await Promise.allSettled([
+    const [services, secrets, clients, audit, healthcheck] = await Promise.allSettled([
       fetchSafe('/api/v1/services'),
       fetchSafe('/api/v1/secrets'),
       fetchSafe('/api/v1/admin/clients'),
       fetchSafe(isAdmin ? '/api/v1/admin/audit?limit=200' : '/api/v1/audit?limit=200'),
+      fetchSafe('/api/v1/healthcheck/status'),
     ]);
-    renderStats(services, secrets, clients, audit);
+    renderStats(services, secrets, clients, audit, healthcheck);
     renderQuickActions(services);
     renderRecent(audit);
+    renderHealthcheck(healthcheck);
     if (isAdmin) renderTodo(services, secrets, clients, audit);
     setTip('');
   }
@@ -107,7 +109,7 @@
   }
 
   // ---- Render: stats ----
-  function renderStats(services, secrets, clients, audit) {
+  function renderStats(services, secrets, clients, audit, healthcheck) {
     const sCount = services.status === 'fulfilled' ? (services.value.services?.length || 0) : 0;
     let secCount = 0;
     if (secrets.status === 'fulfilled') {
@@ -124,6 +126,21 @@
     animateNumber($('#stat-secrets'), secCount);
     animateNumber($('#stat-clients'), cCount);
     animateNumber($('#stat-audit-today'), aCount);
+    // Healthcheck stat: 显示 "ok/total" 文本 (e.g. "1/4")
+    const hcEl = $('#stat-healthcheck');
+    if (hcEl) {
+      if (healthcheck.status === 'fulfilled' && healthcheck.value.summary?.total) {
+        const sum = healthcheck.value.summary;
+        hcEl.textContent = `${sum.ok || 0}/${sum.total}`;
+        hcEl.className = 'stat-num ' + (
+          healthcheck.value.last_status === 'ok' ? 'hc-ok' :
+          healthcheck.value.last_status === 'degraded' ? 'hc-degraded' : 'hc-unknown'
+        );
+      } else {
+        hcEl.textContent = '—';
+        hcEl.className = 'stat-num hc-unknown';
+      }
+    }
   }
 
   function animateNumber(el, target) {
@@ -197,6 +214,76 @@
       </tr>`;
     }).join('') + '</tbody></table>';
   }
+
+  // ---- Render: v3.0 M4 healthcheck ----
+  function renderHealthcheck(hc) {
+    const listEl = $('#home-healthcheck-list');
+    const statusEl = $('#hc-last-status');
+    const runEl = $('#hc-last-run');
+    const runBtn = $('#btn-hc-run');
+    if (!listEl) return;
+    if (hc.status !== 'fulfilled' || !hc.value) {
+      listEl.innerHTML = '<div class="muted">加载失败 — ' + esc(hc.value?.error || 'unknown') + '</div>';
+      if (statusEl) { statusEl.textContent = '未知'; statusEl.className = 'hc-status-badge hc-unknown'; }
+      return;
+    }
+    const v = hc.value;
+    const last = v.last_status || 'unknown';
+    if (statusEl) {
+      statusEl.textContent = last === 'ok' ? '全部正常' : last === 'degraded' ? '有失败' : '未运行';
+      statusEl.className = 'hc-status-badge hc-' + last;
+    }
+    if (runEl) {
+      const ts = v.last_run_at ? v.last_run_at.replace('T', ' ').slice(0, 19) + ' UTC' : '—';
+      runEl.textContent = `最近: ${ts}`;
+    }
+    if (runBtn) {
+      runBtn.hidden = !isAdmin;
+      runBtn.onclick = async () => {
+        runBtn.disabled = true;
+        const origText = runBtn.textContent;
+        runBtn.textContent = '跑中… / Running…';
+        try {
+          const r = await fetch('/api/v1/healthcheck/run', { method: 'POST', credentials: 'include' });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+          // 重新拉全部 (含 healthcheck)
+          await loadAll();
+        } catch (e) {
+          listEl.innerHTML = `<div class="muted">❌ Run Now 失败: ${esc(e.message)}</div>`;
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = origText;
+        }
+      };
+    }
+    // 渲染 detail list
+    const checks = v.checks || {};
+    const names = Object.keys(checks).sort();
+    if (names.length === 0) {
+      listEl.innerHTML = '<div class="muted">还没有 healthcheck 结果。点 "立即跑" 触发首次检查。</div>';
+      return;
+    }
+    listEl.innerHTML = names.map(name => {
+      const c = checks[name];
+      const status = c.status || 'unknown';
+      const detail = c.detail || '';
+      const ts = c.ts ? c.ts.replace('T', ' ').slice(11, 19) : '';
+      return `<div class="hc-row">
+        <div>
+          <div class="hc-name">${esc(name)}</div>
+          <div class="hc-type">${esc(c.type || '')}</div>
+        </div>
+        <div style="text-align:right">
+          <div><span class="hc-badge ${status}">${esc(status)}</span></div>
+          <div class="muted" style="font-size:11px">${c.latency_ms != null ? c.latency_ms + 'ms' : ''} ${ts ? '· ' + ts : ''}</div>
+        </div>
+        <div class="hc-detail" title="${esc(detail)}">${esc(detail)}</div>
+      </div>`;
+    }).join('');
+  }
+  // 保存最后一次 renderStats 参数, 给 healthcheck Run Now 刷新用 (currently unused,
+  // Run Now 直接调 loadAll 重拉全部)
 
   // ---- Render: TODO (admin) ----
   function renderTodo(services, secrets, clients, audit) {

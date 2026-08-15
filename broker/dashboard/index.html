@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=20260813a">
+  <link rel="stylesheet" href="style.css?v=20260814a">
 </head>
 <body>
 
@@ -57,6 +57,7 @@
       <button class="tab-btn" data-tab="secrets">🔑 可见密钥 / Secrets</button>
       <button class="tab-btn admin-only" data-tab="admin-secrets" hidden>🗝️ 密钥管理 / Manage</button>
       <button class="tab-btn admin-only" data-tab="admin-services" hidden>🔌 服务管理 / Services</button>
+      <button class="tab-btn admin-only" data-tab="admin-clients" hidden>💻 设备管理 / Devices</button>
       <button class="tab-btn" data-tab="docs">📖 文档 / Docs</button>
     </nav>
 
@@ -177,6 +178,35 @@
             <tbody></tbody>
           </table>
           <pre id="service-test-result" class="status-ok" hidden></pre>
+        </div>
+      </section>
+
+      <!-- ===== Admin: Clients Management tab (Phase 1.3) ===== -->
+      <section id="tab-admin-clients" class="tab-content">
+        <div class="card intro admin-only" hidden>
+          <h2>设备管理 / Devices (Clients)</h2>
+          <p>每台设备一个 mTLS client cert。客户端名规范：<code>[a-z][a-z0-9_.-]{0,63}</code>。</p>
+          <p class="hint">证书签发后必须<b>离线</b>把 zip 包送达设备——里面包含私钥，泄露后必须立即撤销。</p>
+          <p id="pki-readonly-banner" class="badge-warn" hidden>⚠ 当前 <code>pki/clients/</code> 不可写（生产环境典型情况）。"签发/补发"和"轮换"按钮已禁用。请在 ECS 上跑 <code>scripts/issue-client-cert.sh &lt;name&gt;</code>。</p>
+        </div>
+        <div class="card admin-only" hidden>
+          <div class="admin-toolbar">
+            <button id="btn-new-client" class="btn btn-primary">+ 新增 / New</button>
+            <button id="btn-refresh-clients-admin" class="btn">刷新 / Refresh</button>
+            <span class="muted admin-count" id="admin-clients-count"></span>
+          </div>
+          <table id="admin-clients-table">
+            <thead><tr>
+              <th>名称 / Name</th>
+              <th>角色 / Role</th>
+              <th>证书 / Cert</th>
+              <th>指纹 / Fingerprint</th>
+              <th>最近在线 / Last seen</th>
+              <th>密码登录 / PW login</th>
+              <th>操作 / Actions</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </section>
 
@@ -302,8 +332,63 @@ secret-broker get github.pat</code></pre>
     </div>
   </div>
 
-  <script src="app.js?v=20260813a"></script>
-  <script src="admin/secrets.js?v=20260813a"></script>
-  <script src="admin/services.js?v=20260813a"></script>
+  <!-- ===== Client Modal (Phase 1.3) ===== -->
+  <div id="client-modal" class="modal" hidden>
+    <div class="modal-card">
+      <h3 id="client-modal-title">新增客户端 / New Client</h3>
+      <p class="hint">仅先建配置，证书签发走"签发/补发"按钮，私钥一次性显示。</p>
+      <form id="client-form" autocomplete="off">
+        <label>名称 / Name
+          <input id="cl-name" type="text" required pattern="[a-z][a-z0-9_.\-]*" maxlength="64" placeholder="client.tyj-laptop">
+          <span class="hint">规范：<code>[a-z][a-z0-9_.-]{0,63}</code>，最多 64 字符。保存后不可修改。</span>
+        </label>
+        <label>角色 / Role
+          <select id="cl-role" required>
+            <option value="developer">developer · 普通用户，可 resolve / proxy（白名单内）</option>
+            <option value="admin">admin · 全部权限</option>
+            <option value="readonly">readonly · 只读（审计、未来用）</option>
+          </select>
+        </label>
+        <label><input id="cl-allow-pw" type="checkbox"> 允许密码登录 (浏览器场景；默认否)</label>
+        <label>密码 (留空 = 不修改 / 仅密码登录)
+          <input id="cl-password" type="password" placeholder="新密码">
+          <span class="hint">编辑时留空表示不改；想清除密码可勾掉"允许密码登录"后保存。</span>
+        </label>
+        <label>速率限制 / Rate Limit
+          <input id="cl-rate" type="text" placeholder="100/hour">
+        </label>
+        <label>描述 / Description（可选）
+          <input id="cl-description" type="text" maxlength="200" placeholder="设备用途">
+        </label>
+        <label>允许 resolve 的 secret（每行一个 glob）
+          <textarea id="cl-allowed-resolve" rows="2" placeholder="GITHUB_PAT&#10;ALIYUN_*"></textarea>
+        </label>
+        <label>允许 proxy 的 service（每行一个，可加 paths=）
+          <textarea id="cl-allowed-proxy" rows="2" placeholder="github&#10;aliyun_ecs  paths=[&quot;^/.*&quot;]"></textarea>
+        </label>
+        <div id="cl-error" class="status-error" hidden></div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="btn-cancel-client">取消 / Cancel</button>
+          <button type="button" class="btn btn-primary" id="btn-save-client">保存 / Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== Enroll Result Modal (Phase 1.3) — one-time view of cert + key ===== -->
+  <div id="enroll-result-modal" class="modal" hidden>
+    <div class="modal-card">
+      <h3>证书签发结果 / Enrollment Result</h3>
+      <div id="enroll-result-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btn-close-enroll-result">关闭 / Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=20260814a"></script>
+  <script src="admin/secrets.js?v=20260814a"></script>
+  <script src="admin/services.js?v=20260814a"></script>
+  <script src="admin/clients.js?v=20260814a"></script>
 </body>
 </html>

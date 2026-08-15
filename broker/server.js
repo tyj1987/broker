@@ -15,6 +15,13 @@ import { randomUUID } from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
 import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
+import {
+  issueClientCert, certFingerprint, readClientCertPem, readClientKeyPem,
+  deleteClientCertFiles, readCaCertPem, paths as certPaths,
+} from './cert-issuer.js';
+
+// Re-export the clients dir for the writable-probe helper.
+const CLIENTS_DIR = certPaths.CLIENTS_DIR;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -323,6 +330,69 @@ function quoteYamlAmbiguousScalars(text) {
     .replace(/^(\s*[\w.-]+\s*:\s+)(\d{1,2}:\d{2}:\d{2})(\s*$)/gm, '$1"$2"$3')
     // `key: 2025-08-12T10:00:00Z` (timestamp) → `key: "..."`
     .replace(/^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(\s*$)/gm, '$1"$2"$3');
+}
+
+// ============================================================
+// Phase 1.3: Client lifecycle
+// ============================================================
+// We support 2 enrollment modes:
+//   (a) Admin signs cert directly via /:name/enrollment → returns cert + key
+//       in the response (one-time secret). The admin can then hand-deliver
+//       the zip bundle (or re-issue via /:name/bundle).
+//   (b) Admin calls POST /:name to create the client (no cert), then the
+//       client-side CLI does `secret-broker enroll --token=xxx` to submit a
+//       CSR. We sign it and return the cert. This is the "real" workflow
+//       but is more complex; for now we ship (a) only and keep the door open
+//       for (b) via a future /:name/sign-csr endpoint.
+
+const ENROLLMENT_TTL_MS = 5 * 60 * 1000;  // 5 min
+const ENROLLMENTS = new Map();  // token -> { clientName, expiresAt, signed? }
+
+// Client name rule: same shape as services (URL path component) but allow
+// dots for legacy `client.foo` style names.
+const CLIENT_NAME_RE = /^[a-z][a-z0-9_.-]{0,63}$/;
+function isValidClientName(name) {
+  return typeof name === 'string' && CLIENT_NAME_RE.test(name);
+}
+
+// Whitelist of client config fields the admin can set via the API. Cert
+// fingerprint is set by the enrollment flow, never by the API.
+function normalizeClientConfig(body) {
+  if (!body || typeof body !== 'object') return null;
+  const out = {};
+  if (body.password !== undefined) out.password = String(body.password);
+  if (body.password === null || body.password === '') delete out.password;  // explicit clear
+  if (body.allow_password_login !== undefined) out.allow_password_login = !!body.allow_password_login;
+  if (body.role !== undefined) {
+    if (!['admin', 'developer', 'readonly'].includes(String(body.role))) {
+      throw new Error(`Invalid role: ${body.role}`);
+    }
+    out.role = String(body.role);
+  }
+  if (body.allowed_resolve !== undefined) {
+    out.allowed_resolve = Array.isArray(body.allowed_resolve) ? body.allowed_resolve.map(String) : [];
+  }
+  if (body.allowed_proxy !== undefined) {
+    out.allowed_proxy = Array.isArray(body.allowed_proxy) ? body.allowed_proxy : [];
+  }
+  if (body.rate_limit !== undefined) out.rate_limit = String(body.rate_limit);
+  if (body.description !== undefined) out.description = String(body.description);
+  return out;
+}
+
+// Server-side last-seen timestamps. Not part of broker.yaml because it
+// changes on every connect (would force a write per request). Map name → ms.
+const LAST_SEEN = new Map();
+
+// Hook called by getIdentity on successful mTLS handshake. Bumps a counter
+// in memory; the admin UI can show "last seen 3m ago" without a write storm.
+export function recordClientSeen(name) {
+  if (name) LAST_SEEN.set(name, Date.now());
+}
+function lastSeenAgo(name) {
+  const t = LAST_SEEN.get(name);
+  if (!t) return null;
+  return Date.now() - t;
 }
 
 // Service name rule: lowercase letters / digits / underscore / hyphen. Must
@@ -726,6 +796,90 @@ function jsonError(res, status, msg) {
   return send(res, status, { error: msg, status });
 }
 
+// Phase 1.3: minimal store-only zip writer (no compression). Used for the
+// client cert bundle. Avoids pulling in archiver / jszip as a new dep.
+// Format reference: https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
+//   local file header: 30 bytes + name + extra
+//   central dir entry: 46 bytes + name + extra + comment
+//   EOCD record:       22 bytes + comment
+function buildZip(files) {
+  const enc = (s) => Buffer.from(s, 'binary');
+  const now = new Date();
+  const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | (Math.floor(now.getSeconds() / 2) & 0x1f);
+  const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0xf) << 5) | (now.getDate() & 0x1f);
+  let offset = 0;
+  const localParts = [];
+  const centralParts = [];
+  for (const f of files) {
+    const nameBuf = enc(f.name);
+    const dataBuf = Buffer.from(f.data, 'utf8');
+    const crc = computeCrc32(dataBuf);
+    // Local file header (30 bytes)
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);   // signature
+    lh.writeUInt16LE(20, 4);           // version needed
+    lh.writeUInt16LE(0, 6);            // flags
+    lh.writeUInt16LE(0, 8);            // method (0 = stored)
+    lh.writeUInt16LE(dosTime, 10);
+    lh.writeUInt16LE(dosDate, 12);
+    lh.writeUInt32LE(crc, 14);
+    lh.writeUInt32LE(dataBuf.length, 18);  // compressed size
+    lh.writeUInt32LE(dataBuf.length, 22);  // uncompressed size
+    lh.writeUInt16LE(nameBuf.length, 26);
+    lh.writeUInt16LE(0, 28);           // extra
+    localParts.push(lh, nameBuf, dataBuf);
+    // Central dir entry (46 bytes)
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0);   // signature
+    cd.writeUInt16LE(20, 4);           // version made by
+    cd.writeUInt16LE(20, 6);           // version needed
+    cd.writeUInt16LE(0, 8);            // flags
+    cd.writeUInt16LE(0, 10);           // method
+    cd.writeUInt16LE(dosTime, 12);
+    cd.writeUInt16LE(dosDate, 14);
+    cd.writeUInt32LE(crc, 16);
+    cd.writeUInt32LE(dataBuf.length, 20);
+    cd.writeUInt32LE(dataBuf.length, 24);
+    cd.writeUInt16LE(nameBuf.length, 28);
+    cd.writeUInt16LE(0, 30);           // extra
+    cd.writeUInt16LE(0, 32);           // comment
+    cd.writeUInt16LE(0, 34);           // disk
+    cd.writeUInt16LE(0, 36);           // internal attrs
+    cd.writeUInt32LE(0o100644, 38);   // external attrs (regular file, 0644)
+    cd.writeUInt32LE(offset, 42);      // local header offset
+    centralParts.push(cd, nameBuf);
+    offset += lh.length + nameBuf.length + dataBuf.length;
+  }
+  const local = Buffer.concat(localParts);
+  const central = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  eocd.writeUInt16LE(0, 20);
+  return Buffer.concat([local, central, eocd]);
+}
+
+// Manual CRC32 (small tables; zlib.crc32 is in 22+). Only used as fallback.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function computeCrc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
 // ============================================================
 // Aliyun / Tencent IMDS + STS token (no long-lived AK needed)
 // ============================================================
@@ -984,7 +1138,7 @@ async function handle(req, res) {
   // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
   if (m === 'GET' && (
     p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' ||
-    p === '/admin/secrets.js' || p === '/admin/services.js'
+    p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js'
   )) {
     const map = {
       '/': 'index.html',
@@ -993,6 +1147,7 @@ async function handle(req, res) {
       '/style.css': 'style.css',
       '/admin/secrets.js': 'admin/secrets.js',
       '/admin/services.js': 'admin/services.js',
+      '/admin/clients.js': 'admin/clients.js',
     };
     const f = join(__dirname, 'dashboard', map[p]);
     if (existsSync(f)) {
@@ -1414,22 +1569,36 @@ async function handle(req, res) {
     return send(res, 200, { ok: true, name, type: cfg.type });
   }
 
-  // ----- PUT /api/v1/admin/services/:name (update) -----
+  // ----- PUT /api/v1/admin/services/:name (update, PARTIAL) -----
+  // PUT semantics here: client sends only the fields they want to change.
+  // Fields NOT in the body are preserved from `existing`. This matches the
+  // PATCH-like behavior the UI relies on (e.g. "edit description" sends only
+  // {description, type, upstream} and expects token_secret / inject_headers
+  // to be kept as-is).
   if (m === 'PUT' && svcMatch && svcMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const name = svcMatch[1];
     const existing = CONFIG.services[name];
     if (!existing) return jsonError(res, 404, `Service ${name} not found`);
     const body = await readBody(req) || {};
-    const cfg = normalizeServiceConfig(body);
+    const patch = normalizeServiceConfig(body);
+    // Build the next config: existing first, then patch overrides. For
+    // array fields, if the client sent an array (even empty), use it as-is;
+    // if they sent nothing, preserve the existing array.
+    const next = { ...existing, ...patch };
+    // Special case: allow_resolve / allowed_proxy as arrays
+    if (body.allowed_resolve !== undefined) next.allowed_resolve = patch.allowed_resolve || [];
+    if (body.allowed_proxy !== undefined) next.allowed_proxy = patch.allowed_proxy || [];
+    if (body.dashboard_actions !== undefined) next.dashboard_actions = patch.dashboard_actions || [];
+    if (body.inject_headers !== undefined) next.inject_headers = patch.inject_headers || {};
     // Name is immutable via PUT — keep the URL's name.
-    const errs = validateServiceConfig(name, cfg);
+    const errs = validateServiceConfig(name, next);
     if (errs.length > 0) {
       audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
       return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
     }
     const prev = { ...existing };
-    CONFIG.services[name] = cfg;
+    CONFIG.services[name] = next;
     try {
       await persistConfig();
     } catch (e) {
@@ -1485,6 +1654,310 @@ async function handle(req, res) {
       audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error: err.message });
       return send(res, 502, { ok: false, error: err.message, latency_ms: Date.now() - start });
     }
+  }
+
+  // ============================================================
+  // Phase 1.3: Clients CRUD + certificate lifecycle
+  // ============================================================
+  // GET    /api/v1/admin/clients             — list all
+  // GET    /api/v1/admin/clients/:name       — read one
+  // POST   /api/v1/admin/clients             — create (no cert yet)
+  // PUT    /api/v1/admin/clients/:name       — update config
+  // DELETE /api/v1/admin/clients/:name       — delete client (also cert files)
+  // POST   /api/v1/admin/clients/:name/enrollment — issue cert, return cert+key
+  // POST   /api/v1/admin/clients/:name/rotate     — re-issue cert, return new cert+key
+  // POST   /api/v1/admin/clients/:name/revoke    — remove fingerprint from config
+  // GET    /api/v1/admin/clients/:name/bundle     — download zip (cert+key+ca+install)
+
+  const clientMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})$/);
+  const clientEnrollMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/enrollment$/);
+  const clientRotateMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/rotate$/);
+  const clientRevokeMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/revoke$/);
+  const clientBundleMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/bundle$/);
+
+  // ----- GET /api/v1/admin/clients -----
+  if (m === 'GET' && p === '/api/v1/admin/clients') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const writable = clientsDirWritable();  // probe once per list
+    const out = [];
+    for (const [name, c] of Object.entries(CONFIG.clients || {})) {
+      out.push({
+        name,
+        role: c.role || 'developer',
+        description: c.description || '',
+        allow_password_login: !!c.allow_password_login,
+        has_password: !!c.password,
+        cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
+        cert_present_on_disk: existsSync(certPaths.clientPaths(name).crt),
+        cert_key_present_on_disk: existsSync(certPaths.clientPaths(name).key),
+        rate_limit: c.rate_limit || '100/hour',
+        allowed_resolve: c.allowed_resolve || [],
+        allowed_proxy: c.allowed_proxy || [],
+        last_seen_ms_ago: lastSeenAgo(name),
+      });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    audit({ action: 'admin_clients_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
+    return send(res, 200, { clients: out, pki_writable: writable });
+  }
+
+  // ----- GET /api/v1/admin/clients/:name -----
+  if (m === 'GET' && clientMatch && clientMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientMatch[1];
+    const c = CONFIG.clients[name];
+    if (!c) return jsonError(res, 404, `Client ${name} not found`);
+    return send(res, 200, {
+      name,
+      role: c.role || 'developer',
+      description: c.description || '',
+      allow_password_login: !!c.allow_password_login,
+      has_password: !!c.password,
+      cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
+      cert_present_on_disk: existsSync(certPaths.clientPaths(name).crt),
+      cert_key_present_on_disk: existsSync(certPaths.clientPaths(name).key),
+      rate_limit: c.rate_limit || '100/hour',
+      allowed_resolve: c.allowed_resolve || [],
+      allowed_proxy: c.allowed_proxy || [],
+      last_seen_ms_ago: lastSeenAgo(name),
+    });
+  }
+
+  // ----- POST /api/v1/admin/clients (create) -----
+  if (m === 'POST' && p === '/api/v1/admin/clients') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const body = await readBody(req) || {};
+    const name = body.name;
+    if (!isValidClientName(name)) {
+      return jsonError(res, 400, 'Invalid client name. Use [a-z][a-z0-9_.-]{0,63}.');
+    }
+    if (CONFIG.clients[name]) {
+      return jsonError(res, 409, `Client ${name} already exists.`);
+    }
+    let cfg;
+    try { cfg = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
+    const prev = CONFIG.clients[name];
+    CONFIG.clients[name] = cfg;
+    try {
+      await persistConfig();
+    } catch (e) {
+      delete CONFIG.clients[name];
+      audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, role: cfg.role, status: 'ok' });
+    return send(res, 200, { ok: true, name, role: cfg.role });
+  }
+
+  // ----- PUT /api/v1/admin/clients/:name (update) -----
+  if (m === 'PUT' && clientMatch && clientMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientMatch[1];
+    const existing = CONFIG.clients[name];
+    if (!existing) return jsonError(res, 404, `Client ${name} not found`);
+    const body = await readBody(req) || {};
+    let patch;
+    try { patch = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
+    // Apply patch over existing (don't touch cert_fingerprint_sha256; that's
+    // owned by the enrollment flow).
+    const prev = { ...existing };
+    const next = { ...existing, ...patch };
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'password') && !patch.password) {
+      delete next.password;
+    }
+    CONFIG.clients[name] = next;
+    try {
+      await persistConfig();
+    } catch (e) {
+      CONFIG.clients[name] = prev;
+      audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
+  // ----- DELETE /api/v1/admin/clients/:name -----
+  if (m === 'DELETE' && clientMatch && clientMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientMatch[1];
+    const existing = CONFIG.clients[name];
+    if (!existing) return jsonError(res, 404, `Client ${name} not found`);
+    delete CONFIG.clients[name];
+    // Best-effort: also remove cert files (revoke the cert material).
+    try { deleteClientCertFiles(name); } catch {}
+    try {
+      await persistConfig();
+    } catch (e) {
+      CONFIG.clients[name] = existing;
+      audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
+  // Helper: issue a cert, persist fingerprint, return cert+key.
+  async function issueAndPersist(name) {
+    const cert = await issueClientCert(name, { days: 365 });
+    const c = CONFIG.clients[name];
+    if (!c) throw new Error(`Client ${name} disappeared mid-enrollment`);
+    const prev = { ...c };
+    c.cert_fingerprint_sha256 = cert.fingerprint_sha256;
+    try {
+      await persistConfig();
+    } catch (e) {
+      // Roll back the in-memory change; cert files stay (operator can re-try).
+      CONFIG.clients[name] = prev;
+      throw e;
+    }
+    return cert;
+  }
+
+  // Helper: is the clients dir writable? On most prod setups pki/ is mounted
+  // read-only (cert files are pre-issued and distributed out-of-band via
+  // scripts/issue-client-cert.sh). We probe once per request — cheap.
+  function clientsDirWritable() {
+    try {
+      const probe = join(CLIENTS_DIR, `.write-probe-${randomUUID()}`);
+      writeFileSync(probe, 'ok');
+      unlinkSync(probe);
+      return true;
+    } catch (e) { return false; }
+  }
+  // ----- POST /api/v1/admin/clients/:name/enrollment -----
+  // Issue a fresh cert for the client. Returns the cert PEM and key PEM
+  // directly in the response (one-time). For a real production system
+  // you'd want an out-of-band delivery channel (e.g. the user polls
+  // /enrollment?token=xxx). For Phase 1.3 we keep it simple.
+  if (m === 'POST' && clientEnrollMatch && clientEnrollMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientEnrollMatch[1];
+    if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
+    if (!clientsDirWritable()) {
+      return jsonError(res, 503, 'pki/clients/ is not writable on this server. ' +
+        'On production setups the PKI dir is mounted read-only; issue certs out-of-band via scripts/issue-client-cert.sh.');
+    }
+    let cert;
+    try { cert = await issueAndPersist(name); } catch (e) {
+      audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Issue failed: ${e.message}`);
+    }
+    audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, {
+      ok: true,
+      name,
+      fingerprint_sha256: cert.fingerprint_sha256,
+      cert_pem: cert.cert_pem,
+      key_pem: cert.key_pem,
+      warning: 'key_pem is a SECRET. Deliver it to the client device out-of-band; do not paste it into chat or commit it to git.',
+    });
+  }
+
+  // ----- POST /api/v1/admin/clients/:name/rotate -----
+  if (m === 'POST' && clientRotateMatch && clientRotateMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientRotateMatch[1];
+    if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
+    if (!clientsDirWritable()) {
+      return jsonError(res, 503, 'pki/clients/ is not writable on this server. ' +
+        'On production setups the PKI dir is mounted read-only; issue certs out-of-band via scripts/issue-client-cert.sh.');
+    }
+    let cert;
+    try { cert = await issueAndPersist(name); } catch (e) {
+      audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Rotate failed: ${e.message}`);
+    }
+    audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, {
+      ok: true,
+      name,
+      fingerprint_sha256: cert.fingerprint_sha256,
+      cert_pem: cert.cert_pem,
+      key_pem: cert.key_pem,
+      warning: 'key_pem is a SECRET. The OLD cert is still on disk but its fingerprint has been replaced; broker will accept only the new one.',
+    });
+  }
+
+  // ----- POST /api/v1/admin/clients/:name/revoke -----
+  // Removes the fingerprint from broker.yaml so the cert is no longer
+  // accepted (broker rejects on next connect). Cert files are kept on disk
+  // for forensics; /delete wipes them.
+  if (m === 'POST' && clientRevokeMatch && clientRevokeMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientRevokeMatch[1];
+    const c = CONFIG.clients[name];
+    if (!c) return jsonError(res, 404, `Client ${name} not found`);
+    if (!c.cert_fingerprint_sha256) {
+      return send(res, 200, { ok: true, name, already_revoked: true });
+    }
+    const prev = { ...c };
+    delete c.cert_fingerprint_sha256;
+    try {
+      await persistConfig();
+    } catch (e) {
+      CONFIG.clients[name] = prev;
+      audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Revoke failed: ${e.message}`);
+    }
+    audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+    return send(res, 200, { ok: true, name });
+  }
+
+  // ----- GET /api/v1/admin/clients/:name/bundle -----
+  // Returns a zip with ca.crt, client.crt, client.key, and a tiny
+  // connect-client.sh helper. Note: contains the SECRET key, so the
+  // zip itself must be delivered out-of-band.
+  if (m === 'GET' && clientBundleMatch && clientBundleMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const name = clientBundleMatch[1];
+    const c = CONFIG.clients[name];
+    if (!c) return jsonError(res, 404, `Client ${name} not found`);
+    let certPem, keyPem, caPem;
+    try {
+      certPem = readClientCertPem(name);
+      keyPem  = readClientKeyPem(name);
+      caPem   = readCaCertPem();
+    } catch (e) {
+      return jsonError(res, 409, `Cert files missing for ${name}: ${e.message}. Run /enrollment first.`);
+    }
+    const installSh = [
+      '#!/bin/sh',
+      `# install.sh for ${name} — Secret Broker client bundle`,
+      '# Usage:  sh install.sh /opt/secret-broker/pki/clients',
+      '#         (creates ${name}.crt ${name}.key ca.crt with 0600 perms)',
+      '',
+      'set -e',
+      'DEST="${1:-/opt/secret-broker/pki/clients}"',
+      'mkdir -p "$DEST"',
+      `cat > "$DEST/${name}.crt" <<'CERT_EOF'`,
+      certPem,
+      'CERT_EOF',
+      `cat > "$DEST/${name}.key" <<'KEY_EOF'`,
+      keyPem,
+      'KEY_EOF',
+      'cat > "$DEST/ca.crt" <<\'CA_EOF\'',
+      caPem,
+      'CA_EOF',
+      `chmod 600 "$DEST/${name}.key"`,
+      'echo "Installed to $DEST"',
+      '',
+    ].join('\n');
+    // Build a minimal in-memory zip (no extra deps). Each entry: local
+    // file header (0x04034b50) + data + central dir + EOCD.
+    const files = [
+      { name: `${name}.crt`, data: certPem },
+      { name: `${name}.key`, data: keyPem },
+      { name: 'ca.crt',      data: caPem },
+      { name: 'install.sh',  data: installSh },
+    ];
+    const zip = buildZip(files);
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${name}-bundle.zip"`,
+      'X-Broker-Version': '2.0.0',
+    });
+    return res.end(zip);
   }
 
   // ----- POST /api/v1/proxy/:service -----
@@ -1602,6 +2075,7 @@ function getIdentity(req) {
     }
   }
   if (!matched) return null;
+  recordClientSeen(matchedBy);
   return {
     cn, fp, client: matched, clientName: matchedBy,
     certSubject: cert.subject,

@@ -219,6 +219,43 @@ td code { font-size: 0.8rem; }
 #service-test-result.status-ok { border-color: rgba(126,231,135,0.4); }
 #service-test-result.status-error { border-color: rgba(245,108,108,0.4); }
 
+/* ---- Badges (clients) ---- */
+.badge-ok {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #7ee787;
+  background: rgba(126,231,135,0.12);
+  border: 1px solid rgba(126,231,135,0.3);
+}
+.badge-warn {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #f5cc60;
+  background: rgba(245,204,96,0.12);
+  border: 1px solid rgba(245,204,96,0.3);
+}
+
+/* ---- PEM textareas in enroll result modal ---- */
+#enroll-result-body textarea {
+  width: 100%;
+  font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.78rem;
+  padding: 8px 10px;
+  background: rgba(0,0,0,0.3);
+  color: #e6edf3;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  resize: vertical;
+  word-break: break-all;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
 @media (max-width: 640px) {
   .tabs { padding: 10px 12px 0; overflow-x: auto; }
   main { padding: 16px 12px 50px; }

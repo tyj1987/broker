@@ -34,6 +34,15 @@ import {
 } from './totp.js';
 // v3.0 M2: API Key 管理 + Bearer 鉴权
 import {
+  runAll as healthcheckRunAll,
+  getStatus as healthcheckGetStatus,
+  getSecretStatus as healthcheckGetSecretStatus,
+  HEALTHCHECK_BUS,
+} from './healthcheck.js';
+import {
+  registerCron, startCronLoop, stopCronLoop, listCron, fireNow as cronFireNow,
+} from './cron-tasks.js';
+import {
   createApiKey as createApiKeyFn,
   revokeApiKey as revokeApiKeyFn,
   listApiKeys as listApiKeysFn,
@@ -2025,6 +2034,50 @@ async function handle(req, res) {
   //   GET:  returns full entry { name, type, description, fields, created_at, ... }
   // ============================================================
 
+  // ============================================================
+  // v3.0 M4: 凭据自检与告警
+  // ============================================================
+  // GET  /api/v1/healthcheck/status    — 看最新一次自检结果
+  // POST /api/v1/healthcheck/run       — 手动触发 (admin)
+  // ============================================================
+
+  // ----- GET /api/v1/healthcheck/status -----
+  if (m === 'GET' && p === '/api/v1/healthcheck/status') {
+    const s = healthcheckGetStatus();
+    return send(res, 200, s);
+  }
+
+  // ----- POST /api/v1/healthcheck/run (admin) -----
+  if (m === 'POST' && p === '/api/v1/healthcheck/run') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const getSecrets = () => {
+      const out = {};
+      for (const [name, entry] of SECRET_CACHE) {
+        const v = entry.value || entry.fields?.value;
+        if (v) out[name] = { value: v, type: entry.type };
+      }
+      return out;
+    };
+    try {
+      const r = await healthcheckRunAll(getSecrets);
+      // 同步写 audit
+      for (const [name, c] of Object.entries(r.checks)) {
+        audit({
+          action: 'healthcheck',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          secret: name,
+          status: c.status,
+          detail: c.detail,
+          latency_ms: c.latency_ms,
+        });
+      }
+      return send(res, 200, r);
+    } catch (e) {
+      return jsonError(res, 500, `healthcheck failed: ${e.message}`);
+    }
+  }
+
   // ----- GET /api/v1/admin/secrets -----
   if (m === 'GET' && p === '/api/v1/admin/secrets') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
@@ -2968,10 +3021,53 @@ function start() {
   server.listen(PORT, HOST, () => {
     console.log(`[broker] mTLS HTTPS listening on https://${HOST}:${PORT}`);
     console.log(`[broker] reload token: ${RELOAD_TOKEN}`);
+
+    // v3.0 M4: 启动 cron 循环 (04:00 daily healthcheck)
+    const hcCfg = CONFIG.healthcheck || { enabled: true, schedule: '04:00' };
+    if (hcCfg.enabled !== false) {
+      const schedule = hcCfg.schedule || '04:00';
+      // 从 broker 内存 SECRET_CACHE 拿 secrets (有 type + value)
+      const getSecrets = () => {
+        const out = {};
+        for (const [name, entry] of SECRET_CACHE) {
+          // entry.value or entry.fields.value
+          const v = entry.value || entry.fields?.value;
+          if (v) out[name] = { value: v, type: entry.type };
+        }
+        return out;
+      };
+      registerCron(schedule, async () => {
+        console.log(`[cron] running healthcheck (${schedule})`);
+        try {
+          const r = await healthcheckRunAll(getSecrets);
+          const summary = r.summary;
+          console.log(`[cron] healthcheck done: ${summary.ok} ok / ${summary.expired} expired / ${summary.fail} fail / ${summary.skipped} skipped`);
+          // 写 audit (每个 check 一条)
+          for (const [name, c] of Object.entries(r.checks)) {
+            audit({
+              action: 'healthcheck',
+              cn: 'system',
+              fp: 'system',
+              secret: name,
+              status: c.status,
+              detail: c.detail,
+              latency_ms: c.latency_ms,
+              ts: c.ts,
+            });
+          }
+          // SSE 推 (供 dashboard alerts 页用)
+          HEALTHCHECK_BUS.emit('result', r);
+        } catch (e) {
+          console.error('[cron] healthcheck failed:', e.message);
+        }
+      });
+      startCronLoop();
+      console.log(`[cron] registered healthcheck (schedule=${schedule})`);
+    }
   });
 
-  process.on('SIGINT',  () => { console.log('\n[broker] shutting down'); server.close(); process.exit(0); });
-  process.on('SIGTERM', () => { server.close(); process.exit(0); });
+  process.on('SIGINT',  () => { console.log('\n[broker] shutting down'); server.close(); stopCronLoop(); process.exit(0); });
+  process.on('SIGTERM', () => { server.close(); stopCronLoop(); process.exit(0); });
 }
 
 // ============================================================

@@ -397,7 +397,7 @@ async function boot() {
   console.error(`[mcp] starting ${SERVER_INFO.name} v${SERVER_INFO.version}`);
   console.error(`[mcp] broker: ${BROKER_URL}`);
   console.error(`[mcp] listen: http://${HOST}:${PORT}/`);
-  console.error(`[mcp] master key: ${MASTER_KEY.slice(0, 12)}...${MASTER_KEY.slice(-4)} (length=${MASTER_KEY.length})`);
+  console.error(`[mcp] master key: <loaded from ${ARGS['master-key-file'] || 'env/CLI'}, length=${MASTER_KEY.length}> (凭据零接触: secret 永不入日志)`);
   try {
     await refreshChildKey();
   } catch (e) {

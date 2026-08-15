@@ -32,6 +32,22 @@ import {
   hashPassword,
   buildOtpauthURL,
 } from './totp.js';
+// v3.0 M2: API Key 管理 + Bearer 鉴权
+import {
+  createApiKey as createApiKeyFn,
+  revokeApiKey as revokeApiKeyFn,
+  listApiKeys as listApiKeysFn,
+  publicView as publicViewFn,
+  findApiKey,
+  parseBearer,
+  canResolveSecret,
+  canProxyService,
+  recordUse,
+  DEFAULT_TTL_MS as API_KEY_DEFAULT_TTL_MS,
+  generateMasterKey,
+  createChildKey,
+  canCreateChild,
+} from './api-keys.js';
 // v3.0: schema migration (in start())
 import { EventEmitter } from 'node:events';
 import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
@@ -1279,6 +1295,7 @@ async function handle(req, res) {
   if (m === 'GET' && (
     p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' || p === '/home.js' ||
     p === '/me.html' || p === '/me.js' ||
+    p === '/api-keys.html' || p === '/api-keys.js' ||
     p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js' ||
     p === '/admin/audit.js'
   )) {
@@ -1290,6 +1307,8 @@ async function handle(req, res) {
       '/home.js': 'home.js',
       '/me.html': 'me.html',
       '/me.js': 'me.js',
+      '/api-keys.html': 'api-keys.html',
+      '/api-keys.js': 'api-keys.js',
       '/admin/secrets.js': 'admin/secrets.js',
       '/admin/services.js': 'admin/services.js',
       '/admin/clients.js': 'admin/clients.js',
@@ -1661,6 +1680,237 @@ async function handle(req, res) {
       warning: c.totp_recovery_codes_hash && c.totp_recovery_codes_hash.length < 3
         ? 'Few recovery codes left. Consider re-setup.'
         : undefined,
+    });
+  }
+
+  // ============================================================
+  // v3.0 M2: API Key 管理 (admin + self)
+  // ============================================================
+  // GET    /api/v1/api-keys                 — 列表 (admin: 全部; self: 自己的)
+  // POST   /api/v1/api-keys                 — 创建 (需 TOTP, admin 或 self)
+  // GET    /api/v1/api-keys/:id             — 详情
+  // DELETE /api/v1/api-keys/:id            — 撤销 (需 TOTP)
+  // GET    /api/v1/api-keys/:id/usage       — 最近 100 次使用 (admin only)
+  //
+  // 静态路由必须先于动态路由
+
+  // ----- GET /api/v1/api-keys -----
+  if (m === 'GET' && p === '/api/v1/api-keys') {
+    const opts = ctx.client.role === 'admin' ? {} : { clientOnly: ctx.clientName };
+    return send(res, 200, { keys: listApiKeysFn(CONFIG.api_keys, opts) });
+  }
+
+  // ----- POST /api/v1/api-keys -----
+  if (m === 'POST' && p === '/api/v1/api-keys') {
+    const body = await readBody(req) || {};
+    const name = (body.name || '').trim();
+    if (!name) return jsonError(res, 400, 'Missing {name}');
+    // 创建者 = 自己 (admin 可指定 client)
+    const targetClient = body.client && ctx.client.role === 'admin'
+      ? body.client : ctx.clientName;
+    if (!CONFIG.clients[targetClient]) {
+      return jsonError(res, 400, `Unknown client: ${targetClient}`);
+    }
+    // 二次验证: 当前 TOTP code (强制)
+    const verifyCode = body.verify;
+    if (!verifyCode) return jsonError(res, 400, 'Missing {verify} (TOTP code)');
+    // self 验证: 自己的 totp
+    let verified = false;
+    if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
+      const mfaR = verifyMfaCode(ctx.client, verifyCode);
+      if (mfaR.ok) verified = true;
+    }
+    // admin 没 TOTP 时允许用密码
+    if (!verified && ctx.client.role === 'admin' && ctx.client.password) {
+      verified = verifyClientPassword(verifyCode, ctx.client.password);
+    }
+    if (!verified) {
+      audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_verify' });
+      return jsonError(res, 401, 'Invalid TOTP code or password');
+    }
+    const opts = {
+      scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
+      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      rate_limit: body.rate_limit,
+      ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
+      ttl_ms: body.ttl_seconds ? body.ttl_seconds * 1000 : undefined,
+      created_by: ctx.clientName,
+    };
+    const r = createApiKeyFn(CONFIG.api_keys, name, targetClient, opts);
+    try { await persistConfig(); } catch (e) {
+      // 回滚
+      const idx = CONFIG.api_keys.findIndex(k => k.id === r.key_obj.id);
+      if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
+      audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, name, client: targetClient, status: 'ok' });
+    return send(res, 200, {
+      ok: true,
+      key: r.key_obj,    // public view
+      secret: r.secret,  // 仅此一次返回
+      warning: 'secret will not be shown again. Save it now.',
+    });
+  }
+
+  // ----- GET /api/v1/api-keys/:id (静态优先, 必须在 :id/usage 之前) -----
+  const apiKeyMatch = p.match(/^\/api\/v1\/api-keys\/([a-z0-9]{16})$/);
+  const apiKeyUsageMatch = p.match(/^\/api\/v1\/api-keys\/([a-z0-9]{16})\/usage$/);
+  if (m === 'GET' && apiKeyMatch && apiKeyMatch[1]) {
+    const id = apiKeyMatch[1];
+    const k = CONFIG.api_keys.find(x => x.id === id);
+    if (!k) return jsonError(res, 404, `API key ${id} not found`);
+    if (ctx.client.role !== 'admin' && k.client !== ctx.clientName) {
+      return jsonError(res, 403, 'Not your API key');
+    }
+    return send(res, 200, { key: publicViewFn(k) });
+  }
+
+  // ----- DELETE /api/v1/api-keys/:id -----
+  if (m === 'DELETE' && apiKeyMatch && apiKeyMatch[1]) {
+    const id = apiKeyMatch[1];
+    const k = CONFIG.api_keys.find(x => x.id === id);
+    if (!k) return jsonError(res, 404, `API key ${id} not found`);
+    if (ctx.client.role !== 'admin' && k.client !== ctx.clientName) {
+      return jsonError(res, 403, 'Not your API key');
+    }
+    const body = await readBody(req) || {};
+    const verifyCode = body.verify;
+    if (!verifyCode) return jsonError(res, 400, 'Missing {verify}');
+    let verified = false;
+    if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
+      const mfaR = verifyMfaCode(ctx.client, verifyCode);
+      if (mfaR.ok) verified = true;
+    }
+    if (!verified && ctx.client.role === 'admin' && ctx.client.password) {
+      verified = verifyClientPassword(verifyCode, ctx.client.password);
+    }
+    if (!verified) {
+      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'denied', reason: 'bad_verify' });
+      return jsonError(res, 401, 'Invalid TOTP code or password');
+    }
+    const r = revokeApiKeyFn(CONFIG.api_keys, id, ctx.clientName);
+    if (!r.ok) {
+      return jsonError(res, 400, r.reason);
+    }
+    try { await persistConfig(); } catch (e) {
+      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'ok' });
+    return send(res, 200, { ok: true, id, revoked_at: k.revoked_at });
+  }
+
+  // ----- GET /api/v1/api-keys/:id/usage -----
+  if (m === 'GET' && apiKeyUsageMatch && apiKeyUsageMatch[1]) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    const id = apiKeyUsageMatch[1];
+    const k = CONFIG.api_keys.find(x => x.id === id);
+    if (!k) return jsonError(res, 404, `API key ${id} not found`);
+    // 查 audit log 按 cn=clientName + action=proxy 过滤
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 1000);
+    const lines = readAuditFiltered({ fp: k.id ? `apikey:${k.id}` : null, since: null, limit });
+    return send(res, 200, { id, name: k.name, use_count: k.use_count, last_used_at: k.last_used_at, events: lines });
+  }
+
+  // ============================================================
+  // v3.0 M3.3: Master Key (给 MCP Server / OpenClaw auto-refresh 用)
+  // ============================================================
+  // POST /api/v1/api-keys/master          — 创建 master key (admin + TOTP)
+  // GET  /api/v1/api-keys/master          — 列出所有 master key (admin)
+  // POST /api/v1/api-keys/issue-child     — 用 master key 创建子 key (api_key with can_create_child)
+
+  // ----- POST /api/v1/api-keys/master -----
+  if (m === 'POST' && p === '/api/v1/api-keys/master') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    const body = await readBody(req) || {};
+    const name = (body.name || '').trim();
+    if (!name) return jsonError(res, 400, 'Missing {name}');
+    // TOTP 强制
+    const verifyCode = body.verify;
+    if (!verifyCode) return jsonError(res, 400, 'Missing {verify} (TOTP code)');
+    let verified = false;
+    if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
+      if (verifyMfaCode(ctx.client, verifyCode).ok) verified = true;
+    }
+    if (!verified && ctx.client.password) {
+      verified = verifyClientPassword(verifyCode, ctx.client.password);
+    }
+    if (!verified) {
+      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'bad_verify' });
+      return jsonError(res, 401, 'Invalid TOTP code or password');
+    }
+    const { id, secret, key_obj } = generateMasterKey(name, ctx.clientName, {
+      default_child_ttl_seconds: body.default_child_ttl_seconds,
+      child_scopes: Array.isArray(body.child_scopes) ? body.child_scopes : undefined,
+      rate_limit: body.rate_limit,
+      ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
+      ttl_ms: body.ttl_ms,
+      created_by: ctx.clientName,
+    });
+    CONFIG.api_keys.push(key_obj);
+    try { await persistConfig(); } catch (e) {
+      const idx = CONFIG.api_keys.findIndex(x => x.id === id);
+      if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
+      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'ok', id });
+    return send(res, 200, {
+      ok: true,
+      key: publicViewFn(key_obj),
+      secret,
+      warning: 'Master key will not be shown again. Save it now. Use POST /api/v1/api-keys/issue-child to mint short-lived child keys.',
+    });
+  }
+
+  // ----- GET /api/v1/api-keys/master -----
+  if (m === 'GET' && p === '/api/v1/api-keys/master') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    const masters = (CONFIG.api_keys || []).filter(k => k.is_master);
+    return send(res, 200, { keys: masters.map(publicViewFn) });
+  }
+
+  // ----- POST /api/v1/api-keys/issue-child -----
+  if (m === 'POST' && p === '/api/v1/api-keys/issue-child') {
+    // 必须用 API Key (Bearer) + is_master + can_create_child
+    if (ctx.via !== 'api_key') {
+      return jsonError(res, 401, 'This endpoint requires Master API Key (Authorization: Bearer ...)');
+    }
+    const master = ctx.apiKey;
+    const check = canCreateChild(master);
+    if (!check.ok) {
+      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: check.reason });
+      return jsonError(res, 403, `Master key cannot create child: ${check.reason}`);
+    }
+    const body = await readBody(req) || {};
+    const name = (body.name || '').trim() || `child-${Date.now()}`;
+    const r = createChildKey(CONFIG.api_keys, master, name, {
+      scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
+      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      rate_limit: body.rate_limit,
+      ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : undefined,
+      ttl_seconds: body.ttl_seconds ? parseInt(body.ttl_seconds, 10) : undefined,
+    });
+    if (!r.ok) {
+      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, status: 'error', reason: r.reason });
+      return jsonError(res, 400, `Cannot create child: ${r.reason}`);
+    }
+    try { await persistConfig(); } catch (e) {
+      const idx = CONFIG.api_keys.findIndex(x => x.id === r.key_obj.id);
+      if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
+      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, child_id: r.key_obj.id, status: 'ok' });
+    return send(res, 200, {
+      ok: true,
+      key: r.key_obj,
+      secret: r.secret,
+      warning: 'Child key will not be shown again. It will expire in ttl_seconds.',
+      parent_master_id: master.id,
     });
   }
 
@@ -2583,6 +2833,23 @@ async function handle(req, res) {
 // Identity: try session token first (for dashboard / browser), then mTLS
 // ============================================================
 function getIdentity(req) {
+  // 0. v3.0 M2: API Key Bearer 鉴权 (无 mTLS, 给 Web 端 AI 用)
+  const apiKeyCtx = getApiKeyIdentity(req);
+  if (apiKeyCtx) {
+    if (apiKeyCtx.rate_limited) {
+      audit({ action: 'connect', status: 'denied', reason: 'api_key_rate_limit', cn: apiKeyCtx.clientName });
+      return null;  // 让外层返 429
+    }
+    return {
+      cn: `apikey:${apiKeyCtx.apiKey.id}`,
+      fp: apiKeyCtx.apiKey.id,
+      client: apiKeyCtx.client,
+      clientName: apiKeyCtx.clientName,
+      certSubject: { CN: `apikey:${apiKeyCtx.apiKey.id}`, O: 'api_key' },  // 占位让 ctx.certSubject truthy
+      via: 'api_key',
+      apiKey: apiKeyCtx.apiKey,
+    };
+  }
   // 1. session token (from dashboard / browser)
   const session = getSession(req);
   if (session) {
@@ -2620,6 +2887,48 @@ function getIdentity(req) {
     certSubject: cert.subject,
     via: 'mtls',
   };
+}
+
+// v3.0 M2: API Key Bearer 鉴权 (无 mTLS, 给 Web 端 AI 用)
+// 独立函数, 走 ctx.apiKey 字段
+function getApiKeyIdentity(req) {
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  const secret = parseBearer(authHeader);
+  if (!secret) return null;
+  const k = findApiKey(CONFIG.api_keys, secret);
+  if (!k) return null;
+  // 找到归属 client
+  const owner = CONFIG.clients[k.client];
+  if (!owner) return null;
+  // 限速 (per api key)
+  if (!rateLimitApiKey(k)) {
+    return { apiKey: k, client: owner, clientName: k.client, via: 'api_key', rate_limited: true };
+  }
+  recordUse(k);
+  return { apiKey: k, client: owner, clientName: k.client, via: 'api_key' };
+}
+
+// v3.0 M2: API Key 限速 (用 k.id 作 bucket key)
+const API_KEY_BUCKETS = new Map();
+function rateLimitApiKey(k) {
+  if (!k) return true;
+  const limit = k.rate_limit || '100/hour';
+  if (limit === 'unlimited') return true;
+  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
+  if (!m) return true;
+  const max = parseInt(m[1], 10);
+  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
+  const key = 'apikey:' + k.id;
+  const now = Date.now();
+  const bucket = API_KEY_BUCKETS.get(key) || [];
+  const fresh = bucket.filter(t => now - t < windowMs);
+  if (fresh.length >= max) {
+    API_KEY_BUCKETS.set(key, fresh);
+    return false;
+  }
+  fresh.push(now);
+  API_KEY_BUCKETS.set(key, fresh);
+  return true;
 }
 
 // ============================================================

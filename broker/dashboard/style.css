@@ -92,9 +92,60 @@ header {
   background: none; border: none; color: var(--muted);
   font-size: 0.9rem; padding: 8px 14px; cursor: pointer;
   border-bottom: 2px solid transparent;
+  position: relative; /* 让 .badge-new 绝对定位的参照 (anchor for badge-new) */
 }
 .tab-btn:hover { color: var(--text); }
 .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* v3.0 上线提示横幅 (v3.0 release banner，引导到 me tab) */
+.v3-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 16px;
+  padding: 12px 16px;
+  background: var(--accent); /* 金背景（用 accent 蓝做高亮，颜色已与品牌对齐） */
+  color: #fff;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  box-shadow: 0 2px 8px rgba(68, 147, 248, 0.25);
+}
+.v3-banner-text { flex: 1; line-height: 1.5; }
+.v3-banner-text a {
+  color: #fff;
+  font-weight: 600;
+  text-decoration: underline;
+}
+.v3-banner-text a:hover { color: #ffeaa7; }
+.v3-banner-close {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.v3-banner-close:hover { color: #fff; }
+
+/* 「新」角标 —— 红色小徽章，标在 tab 按钮右上 (new-feature red badge) */
+.badge-new {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--red, #e74c3c);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 8px;
+  pointer-events: none; /* 不阻挡 tab 按钮点击 */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
 
 main { max-width: 980px; margin: 0 auto; padding: 20px 28px 60px; }
 .tab-content { display: none; }

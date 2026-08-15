@@ -112,6 +112,47 @@ $$('.tab-btn').forEach(btn => {
   });
 });
 
+// ---------- v3.0 上线提示横幅 (v3.0 release banner，引导到 me tab) ----------
+// 点击带 [data-switch-tab] 的链接 → 切到对应 tab (banner / 文案中可点的入口通用)
+// Click delegation: any [data-switch-tab] link switches tab (used by v3 banner & future inline tips)
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('[data-switch-tab]');
+  if (!link) return;
+  e.preventDefault();
+  const name = link.getAttribute('data-switch-tab');
+  if (!name) return;
+  switchTab(name);
+  // 滚到顶部，让用户看到新 tab 的内容 (scroll to top so user sees the new tab content)
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
+// 关闭按钮 + localStorage 持久化 (close button + localStorage persistence)
+const V3_BANNER_KEY = 'v3-banner-dismissed';
+function dismissV3Banner() {
+  const banner = document.getElementById('v3-banner');
+  if (banner) banner.hidden = true;
+  try { localStorage.setItem(V3_BANNER_KEY, 'true'); } catch {}
+}
+
+// 启动时检查：用户已关过 → 不再显示 (on boot, hide if user already dismissed)
+function initV3Banner() {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(V3_BANNER_KEY) === 'true'; } catch {}
+  if (dismissed) {
+    const banner = document.getElementById('v3-banner');
+    if (banner) banner.hidden = true;
+  }
+  const closeBtn = document.getElementById('v3-banner-close');
+  if (closeBtn) closeBtn.addEventListener('click', dismissV3Banner);
+}
+
+// app.js 是 <body> 末加载，DOM 通常已就绪；用 readyState 双保险
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initV3Banner);
+} else {
+  initV3Banner();
+}
+
 // ---------- Phase 2.2: Keyboard shortcuts ----------
 // Style: Gmail-like two-key sequences. `g h` = go home, `g a` = go actions, etc.
 // `?` shows help. `Esc` closes any open modal/help.

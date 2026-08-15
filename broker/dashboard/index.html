@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=20260815e">
+  <link rel="stylesheet" href="style.css?v=20260815f">
 </head>
 <body>
 
@@ -53,7 +53,8 @@
 
     <nav class="tabs">
       <button class="tab-btn active" data-tab="home">🏠 首页 / Home</button>
-      <button class="tab-btn" data-tab="me">👤 我的资料 / Me</button>
+      <button class="tab-btn" data-tab="me">👤 我的资料 / Me <span class="badge-new">新</span></button>
+      <button class="tab-btn" data-tab="api-keys">🔑 API Keys</button>
       <button class="tab-btn" data-tab="actions">⚡ 动作 / Actions</button>
       <button class="tab-btn" data-tab="audit">📋 审计 / Audit</button>
       <button class="tab-btn" data-tab="secrets">🔑 可见密钥 / Secrets</button>
@@ -73,6 +74,15 @@
             <p class="muted" id="home-subtitle">仪表盘 · 快捷操作 · 最近活动</p>
           </div>
           <div class="home-tip muted" id="home-tip">⏳ 加载中...</div>
+        </div>
+
+        <!-- v3.0 上线提示：引导用户到「我的资料」tab（v3.0 self-service release tip） -->
+        <div class="v3-banner" id="v3-banner" role="status" aria-live="polite">
+          <div class="v3-banner-text">
+            🎉 v3.0 上线！进入「<a href="#" data-switch-tab="me">👤 我的资料</a>」查看
+            <strong>改密 / 启 TOTP / rotate cert / 我的活动</strong>
+          </div>
+          <button type="button" class="v3-banner-close" id="v3-banner-close" aria-label="关闭提示">×</button>
         </div>
 
         <!-- 4 概览卡片 -->
@@ -234,6 +244,126 @@
           </table>
         </section>
       </section>
+
+      <!-- ===== API Keys tab (v3.0 M2-C) ===== -->
+      <section id="tab-api-keys" class="tab-content">
+        <h2>🔑 API Key 管理 / API Key Management</h2>
+        <p class="muted">v3.0 M2 · 短命 Bearer Token · 适用于 Web 端 AI 客户端（无需 mTLS）</p>
+
+        <!-- 顶部安全提示 banner -->
+        <div class="me-section" style="border-left: 3px solid #d4a849;">
+          <p class="warn"><strong>⚠️ API Key 是一次性凭证</strong> · 创建后只显示一次完整 key，请立即复制保存。<br>
+             <span class="muted">The full key is shown <strong>only once</strong> on creation. Copy it immediately — you will not see it again.</span>
+          </p>
+        </div>
+
+        <!-- 创建表单 -->
+        <section class="me-section">
+          <h3>创建新 API Key / Create New Key</h3>
+          <p class="muted">请填 label（标签）+ scope（权限）+ expires-in（有效期）。提交后会弹窗显示完整 key。</p>
+          <form id="form-create-key" autocomplete="off">
+            <label>Label / 标签
+              <input type="text" name="name" id="ak-name" required maxlength="64"
+                     placeholder="e.g. my-ai-notebook" pattern="[A-Za-z0-9._\-]+" />
+              <span class="hint">规范：<code>[A-Za-z0-9._-]{1,64}</code>，仅用于识别。</span>
+            </label>
+
+            <fieldset style="border:1px solid #1f2530;border-radius:4px;padding:8px 14px;margin:8px 0;">
+              <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Scope / 权限（至少一项）</legend>
+              <label style="display:block;margin:4px 0;">
+                <input type="checkbox" name="scope_resolve" id="ak-scope-resolve" value="secrets:resolve" checked />
+                <code>secrets:resolve</code> — 允许拉取密钥（白名单内）
+              </label>
+              <label style="display:block;margin:4px 0;">
+                <input type="checkbox" name="scope_proxy" id="ak-scope-proxy" value="services:proxy" checked />
+                <code>services:proxy</code> — 允许代理外部服务调用
+              </label>
+            </fieldset>
+
+            <label>有效期 / Expires-in
+              <select name="ttl_seconds" id="ak-ttl" required>
+                <option value="86400">24 小时 / 24 hours</option>
+                <option value="604800" selected>7 天 / 7 days (推荐 / recommended)</option>
+                <option value="2592000">30 天 / 30 days</option>
+                <option value="0">永久（不推荐） / Never (not recommended)</option>
+              </select>
+            </label>
+
+            <button type="submit" class="btn btn-primary">+ 创建 API Key / Create</button>
+            <span id="create-key-status" class="status"></span>
+          </form>
+        </section>
+
+        <!-- 列表 -->
+        <section class="me-section">
+          <h3>已存在的 API Keys / Existing Keys</h3>
+          <p class="muted">仅显示 fingerprint 前 8 位（完整 hash 永不出库）。红色 = 已撤销；黄色 = 已过期。</p>
+          <button type="button" id="btn-refresh-keys" class="btn">🔄 刷新 / Refresh</button>
+          <table id="api-keys-table" class="data-table" style="margin-top:10px;">
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>FP 前 8 位 / FP prefix</th>
+                <th>Scope</th>
+                <th>Last Used</th>
+                <th>Expires</th>
+                <th>Status</th>
+                <th>操作 / Actions</th>
+              </tr>
+            </thead>
+            <tbody id="api-keys-tbody">
+              <tr><td colspan="7" class="muted">加载中… / loading…</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </section>
+
+      <!-- ===== API Keys: 新 key 一次性展示 modal ===== -->
+      <div id="ak-newkey-modal" class="modal" hidden>
+        <div class="modal-card">
+          <h3>🆕 你的新 API Key / Your New API Key</h3>
+          <p class="warn"><strong>⚠️ 这是唯一一次显示完整 key！</strong> 请立即复制到安全位置（如密码管理器）。关闭后无法再看到。</p>
+          <p class="muted"><strong>The full key is shown only this once.</strong> Save it now — closing this dialog will not show it again.</p>
+          <p style="margin-top:14px;"><strong>Label / 标签：</strong><code id="ak-newkey-label"></code></p>
+          <p><strong>Scope / 权限：</strong><code id="ak-newkey-scopes"></code></p>
+          <p><strong>Expires / 过期：</strong><code id="ak-newkey-expires"></code></p>
+          <p><strong>完整 Key（点 ⧉ Copy 复制）：</strong></p>
+          <div style="display:flex;gap:8px;align-items:flex-start;">
+            <textarea id="ak-newkey-secret" readonly rows="3" class="mono" style="flex:1;"></textarea>
+            <button type="button" class="btn btn-sm" id="btn-copy-newkey">⧉ Copy</button>
+          </div>
+          <p class="hint" style="margin-top:12px;">用法：HTTP header <code>Authorization: Bearer &lt;key&gt;</code></p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-primary" id="btn-close-newkey">我已保存，关闭 / I saved it, close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== API Keys: Usage 弹窗 ===== -->
+      <div id="ak-usage-modal" class="modal" hidden>
+        <div class="modal-card" style="max-width:780px;">
+          <h3>📊 API Key 使用记录 / Usage Log</h3>
+          <p class="muted">最近 50 条使用记录 / Most recent 50 uses。</p>
+          <p><strong>Label / 标签：</strong><code id="ak-usage-label"></code> &nbsp; <strong>FP / 指纹：</strong><code id="ak-usage-fp"></code></p>
+          <table class="data-table" id="ak-usage-table" style="margin-top:8px;">
+            <thead>
+              <tr>
+                <th>时间 / Time</th>
+                <th>动作 / Action</th>
+                <th>方法 / Method</th>
+                <th>路径 / Path</th>
+                <th>状态 / Status</th>
+              </tr>
+            </thead>
+            <tbody id="ak-usage-tbody">
+              <tr><td colspan="5" class="muted">加载中… / loading…</td></tr>
+            </tbody>
+          </table>
+          <div class="modal-actions">
+            <button type="button" class="btn" id="btn-close-usage">关闭 / Close</button>
+          </div>
+        </div>
+      </div>
 
       <!-- ===== Actions tab ===== -->
       <section id="tab-actions" class="tab-content">
@@ -583,6 +713,7 @@ secret-broker get github.pat</code></pre>
   <script src="app.js?v=20260816a"></script>
   <script src="home.js?v=20260816a"></script>
   <script src="me.js?v=20260816a"></script>
+  <script src="api-keys.js?v=20260816a"></script>
   <script src="admin/secrets.js?v=20260816a"></script>
   <script src="admin/services.js?v=20260816a"></script>
   <script src="admin/clients.js?v=20260816a"></script>

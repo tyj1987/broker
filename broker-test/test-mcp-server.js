@@ -70,11 +70,31 @@ async function startMockBroker() {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ secrets: [{ name: 'GITHUB_PAT' }, { name: 'ALIYUN_AK' }] }));
         }
-        if (url.startsWith('/api/v1/secrets/')) {
+        // POST /api/v1/secrets/resolve { name } -> { name, type, description, value }
+        if (url === '/api/v1/secrets/resolve' && req.method === 'POST') {
+          let rb = '';
+          chunks.push = ((orig => c => { orig.call(chunks, c); rb += c.toString(); }))(chunks.push);
+          // re-collect via chunks (already concatenated above)
+          const reqBodyText = Buffer.concat(chunks).toString('utf-8');
+          let parsed = {};
+          try { parsed = JSON.parse(reqBodyText || '{}'); } catch {}
+          const name = parsed.name || 'UNKNOWN';
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ name, type: 'api_key', description: `Mock ${name}`, value: 'mock-value' }));
+        }
+        // 兼容旧 GET /api/v1/secrets/:name (M3.3 旧 mock)
+        if (req.method === 'GET' && url.startsWith('/api/v1/secrets/')) {
           const name = decodeURIComponent(url.split('/').pop());
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ secret: { name, type: 'api_key', description: `Mock ${name}`, has_value: true } }));
         }
+        // M3.3 修复后: proxy 路径是 /api/v1/proxy/:name (不是 /api/v1/services/:name/proxy)
+        if (url.startsWith('/api/v1/proxy/')) {
+          toolCalls.push({ url, body });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ upstream_status: 200, data: { result: 'mocked' } }));
+        }
+        // 兼容旧 mock
         if (url.startsWith('/api/v1/services/')) {
           toolCalls.push({ url, body });
           res.writeHead(200, { 'Content-Type': 'application/json' });

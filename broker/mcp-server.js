@@ -233,16 +233,30 @@ async function toolListSecrets() {
 
 async function toolDescribeSecret(args) {
   if (!args?.name) throw new Error('Missing {name}');
-  const r = await callBroker(`/api/v1/secrets/${encodeURIComponent(args.name)}`);
-  if (r.status === 404) return { found: false, name: args.name };
+  // broker 端没有 GET /api/v1/secrets/:name 元信息端点, 走 POST /api/v1/secrets/resolve
+  // 拿完整 secret 然后剥掉 value 字段 (凭据零接触: value 永不入 MCP 响应)
+  const r = await callBroker('/api/v1/secrets/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ name: args.name }),
+  });
+  if (r.status === 404 || r.status === 403) return { found: false, name: args.name };
   if (r.status !== 200) throw new Error(`describe_secret failed: ${r.status} ${r.body.slice(0, 200)}`);
-  const item = r.json?.secret || r.json || {};
-  return { name: item.name, type: item.type, description: item.description, has_value: !!item.value };
+  const item = r.json || {};
+  // ⚠️ 凭据零接触: 显式 redact 所有可能的 value 字段
+  return {
+    found: true,
+    name: item.name,
+    type: item.type,
+    description: item.description,
+    has_value: !!(item.value || (item.fields && Object.keys(item.fields).length > 0)),
+    // 不返 value / fields / token 等任何密钥字段
+  };
 }
 
 async function toolCallService(args) {
   if (!args?.service || !args?.method || !args?.path) throw new Error('Missing {service, method, path}');
-  const r = await callBroker(`/api/v1/services/${encodeURIComponent(args.service)}/proxy`, {
+  // broker 端 proxy 路径是 /api/v1/proxy/:name (不是 /api/v1/services/:name/proxy)
+  const r = await callBroker(`/api/v1/proxy/${encodeURIComponent(args.service)}`, {
     method: 'POST',
     body: JSON.stringify({ method: args.method, path: args.path, query: args.query || {}, body: args.body || null }),
   });

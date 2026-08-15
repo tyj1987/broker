@@ -110,6 +110,30 @@ export const SERVICE_TEMPLATES = {
     disabled: true,
     disabled_reason: 'SSH 代理模式在 Phase 3 实现，Phase 1.2 暂不开放',
   },
+
+  // M3.5 (2026-08-15): Cloudflare API Token 注入
+  // https://dash.cloudflare.com/profile/api-tokens
+  // Scope 推荐: Zone:DNS:Edit + Account:Cloudflare Tunnel:Edit (改 ingress)
+  // token_field=api_token 配合 cloudflare_token type secret
+  cloudflare: {
+    label: 'Cloudflare API',
+    icon: '☁️',
+    description: 'API Token 自动注入到 Authorization: Bearer (调 /zones, /accounts, /tunnels)',
+    type: 'bearer',
+    upstream: 'https://api.cloudflare.com/client/v4',
+    token_field: 'api_token',
+    inject_headers: {
+      'Content-Type': 'application/json',
+    },
+    secret_placeholder: '{{secret.<CLOUDFLARE_SECRET>.api_token}}',
+    default_secret_field: 'api_token',
+    secret_help: '使用 cloudflare_token 类型的密钥 (含 api_token + account_id 字段)',
+    dashboard_actions: [
+      { label: '验证 Token', method: 'GET', path: '/user' },
+      { label: '列出 Zones', method: 'GET', path: '/zones', query: { per_page: '50' } },
+      { label: '列出 Tunnels', method: 'GET', path: '/accounts/{{account_id}}/tunnels?status=active' },
+    ],
+  },
 };
 
 // Helper for /api/v1/admin/service-templates: return a sanitized view for UI.

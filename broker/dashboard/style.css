@@ -256,6 +256,39 @@ td code { font-size: 0.8rem; }
   overflow-x: auto;
 }
 
+/* ---- Audit anomaly row highlight ---- */
+#audit-table tbody tr.row-anomaly {
+  background: rgba(245,108,108,0.08);
+  border-left: 3px solid rgba(245,204,96,0.7);
+}
+#audit-table tbody tr.row-anomaly:hover {
+  background: rgba(245,108,108,0.16);
+}
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.filter-row label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  gap: 2px;
+}
+.filter-row input {
+  padding: 4px 8px;
+  background: rgba(0,0,0,0.25);
+  color: #e6edf3;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  min-width: 140px;
+}
+.filter-row input[type=number] { min-width: 80px; }
+
 @media (max-width: 640px) {
   .tabs { padding: 10px 12px 0; overflow-x: auto; }
   main { padding: 16px 12px 50px; }

@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=20260814a">
+  <link rel="stylesheet" href="style.css?v=20260815b">
 </head>
 <body>
 
@@ -89,17 +89,39 @@
         </div>
       </section>
 
-      <!-- ===== Audit tab ===== -->
+      <!-- ===== Audit tab (Phase 1.4: enhanced with filters + SSE + export) ===== -->
       <section id="tab-audit" class="tab-content">
         <div class="card">
           <h2>审计日志 / Audit Log</h2>
-          <p class="hint">只读视图，按时间倒序。<strong>需要 admin 角色。</strong></p>
+          <p class="hint">实时流 + 过滤 + 导出（仅 admin 完整功能；其他角色只读基础视图）。</p>
+          <div class="filter-row admin-only" id="audit-admin-only" hidden>
+            <label>客户端 / Client <input id="af-client" type="text" placeholder="client.dashboard-admin"></label>
+            <label>服务 / Service <input id="af-service" type="text" placeholder="github"></label>
+            <label>动作 / Action <input id="af-action" type="text" placeholder="proxy"></label>
+            <label>状态 / Status <input id="af-status" type="text" placeholder="error"></label>
+            <label>起始 <input id="af-since" type="datetime-local"></label>
+            <label>结束 <input id="af-until" type="datetime-local"></label>
+            <label>Limit <input id="af-limit" type="number" value="200" min="1" max="5000"></label>
+            <button id="btn-audit-apply" class="btn btn-primary">应用 / Apply</button>
+            <button id="btn-audit-reset" class="btn">重置 / Reset</button>
+            <span class="muted" id="audit-stream-status" style="margin-left:auto">⚪ 未连接</span>
+          </div>
           <div class="filter-row">
-            <label>Limit: <input id="audit-limit" type="number" value="50" min="1" max="500"></label>
-            <button id="btn-refresh-audit" class="btn">刷新 / Refresh</button>
+            <button id="btn-audit-refresh" class="btn">刷新 / Refresh</button>
+            <button id="btn-audit-export-json" class="btn admin-only" hidden>⬇ 导出 JSON</button>
+            <button id="btn-audit-export-csv" class="btn admin-only" hidden>⬇ 导出 CSV</button>
+            <span class="muted" id="audit-count" style="margin-left:auto"></span>
           </div>
           <table id="audit-table">
-            <thead><tr><th>时间</th><th>客户端</th><th>动作</th><th>目标</th><th>状态</th><th>延迟</th></tr></thead>
+            <thead><tr>
+              <th>时间 / Time</th>
+              <th>客户端 / Client</th>
+              <th>动作 / Action</th>
+              <th>目标 / Target</th>
+              <th>状态 / Status</th>
+              <th>延迟 / Latency</th>
+              <th>异常 / Anomaly</th>
+            </tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -386,9 +408,10 @@ secret-broker get github.pat</code></pre>
     </div>
   </div>
 
-  <script src="app.js?v=20260814a"></script>
-  <script src="admin/secrets.js?v=20260814a"></script>
-  <script src="admin/services.js?v=20260814a"></script>
-  <script src="admin/clients.js?v=20260814a"></script>
+  <script src="app.js?v=20260815c"></script>
+  <script src="admin/secrets.js?v=20260815b"></script>
+  <script src="admin/services.js?v=20260815b"></script>
+  <script src="admin/clients.js?v=20260815b"></script>
+  <script src="admin/audit.js?v=20260815b"></script>
 </body>
 </html>

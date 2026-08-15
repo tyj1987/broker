@@ -308,7 +308,7 @@ async function loadAudit() {
   }
 }
 
-$('#btn-refresh-audit').addEventListener('click', loadAudit);
+$('#btn-audit-refresh').addEventListener('click', loadAudit);
 
 // ---------- 密钥列表 ----------
 async function loadSecrets() {

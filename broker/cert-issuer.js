@@ -38,9 +38,25 @@ if (!CA_CRT) throw new Error('CA cert not found: set CA_CERT_PATH or TLS_CA env'
 if (!CA_KEY) throw new Error('CA key not found: set CA_KEY_PATH or place ca.key next to ca.crt');
 if (!CLIENTS_DIR) throw new Error('CLIENTS_DIR not set and PKI_DIR not provided');
 
+// Resolve openssl binary. On Windows, `spawn` won't auto-append .exe, so we
+// honor OPENSSL_BIN env first, then probe the executable extension.
+import { execFileSync } from 'node:child_process';
+const OPENSSL_BIN_ENV = process.env.OPENSSL_BIN;
+const OPENSSL_BIN = (() => {
+  if (OPENSSL_BIN_ENV) return OPENSSL_BIN_ENV;
+  const isWin = process.platform === 'win32';
+  const candidates = isWin ? ['openssl.exe', 'openssl'] : ['openssl'];
+  for (const c of candidates) {
+    try { execFileSync(c, ['version'], { stdio: 'ignore' }); return c; } catch {}
+  }
+  return candidates[0]; // best-effort; spawn will throw a clear ENOENT
+})();
+
 function run(cmd, args, opts = {}) {
+  // Always route openssl invocations through the resolved binary.
+  const realCmd = cmd === 'openssl' ? OPENSSL_BIN : cmd;
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { ...opts, windowsHide: true });
+    const child = spawn(realCmd, args, { ...opts, windowsHide: true });
     let err = '', out = '';
     child.stdout.on('data', d => out += d.toString());
     child.stderr.on('data', d => err += d.toString());

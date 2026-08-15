@@ -12,6 +12,7 @@ import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
 import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
@@ -520,6 +521,12 @@ const ALLOWED_SECRET_TYPES = new Set(Object.keys(TYPE_SCHEMAS));
 // ============================================================
 if (!existsSync(AUDIT_DIR)) mkdirSync(AUDIT_DIR, { recursive: true });
 
+// Phase 1.4: an in-process pub/sub for live audit events. The SSE endpoint
+// subscribes; every `audit(...)` call also emits here. Restart the broker
+// drops all subscribers (clients will reconnect on next page load).
+const AUDIT_BUS = new EventEmitter();
+AUDIT_BUS.setMaxListeners(0);  // unbounded; one listener per SSE connection
+
 function auditFilePath() {
   const d = new Date().toISOString().slice(0, 10);
   return join(AUDIT_DIR, `audit-${d}.jsonl`);
@@ -547,29 +554,50 @@ function audit(event) {
   } catch (err) {
     console.error('[audit] write failed:', err.message);
   }
+  // Broadcast to any live SSE subscribers. setImmediate keeps the audit
+  // call non-blocking even if a subscriber is slow.
+  setImmediate(() => AUDIT_BUS.emit('event', e));
   return e;
 }
 
-function readAudit({ since, limit = 100 } = {}) {
+// Phase 1.4: filtered audit read.
+// Filters: client (cn substring), service, action, status, since, until.
+// Returns up to `limit` events (default 100, max 5000).
+function readAuditFiltered({ client, service, action, status, since, until, limit = 100 } = {}) {
   const files = readdirSync(AUDIT_DIR)
     .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
     .sort()
     .reverse();
   const out = [];
+  const maxLimit = Math.min(Math.max(1, limit), 5000);
+  // Pre-lowercase substring matches
+  const cnL     = client  ? String(client).toLowerCase()  : null;
+  const svcL    = service ? String(service).toLowerCase() : null;
+  const actL    = action  ? String(action).toLowerCase()  : null;
+  const stL     = status  ? String(status).toLowerCase()  : null;
   for (const f of files) {
-    if (out.length >= limit) break;
+    if (out.length >= maxLimit) break;
     const content = readFileSync(join(AUDIT_DIR, f), 'utf8');
     for (const line of content.split('\n').reverse()) {
       if (!line) continue;
-      try {
-        const e = JSON.parse(line);
-        if (since && e.ts < since) continue;
-        out.push(e);
-        if (out.length >= limit) break;
-      } catch {}
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (since && e.ts < since) continue;
+      if (until && e.ts > until) continue;
+      if (cnL  && !(e.cn  || '').toLowerCase().includes(cnL))  continue;
+      if (svcL && !(e.service || '').toLowerCase().includes(svcL)) continue;
+      if (actL && !(e.action  || '').toLowerCase().includes(actL)) continue;
+      if (stL  && !(e.status  || '').toLowerCase().includes(stL))  continue;
+      out.push(e);
+      if (out.length >= maxLimit) break;
     }
   }
   return out;
+}
+
+// Kept for backwards compat: simple {since, limit} read (used by /api/v1/audit).
+function readAudit({ since, limit = 100 } = {}) {
+  return readAuditFiltered({ since, limit });
 }
 
 // ============================================================
@@ -1138,7 +1166,8 @@ async function handle(req, res) {
   // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
   if (m === 'GET' && (
     p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' ||
-    p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js'
+    p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js' ||
+    p === '/admin/audit.js'
   )) {
     const map = {
       '/': 'index.html',
@@ -1148,6 +1177,7 @@ async function handle(req, res) {
       '/admin/secrets.js': 'admin/secrets.js',
       '/admin/services.js': 'admin/services.js',
       '/admin/clients.js': 'admin/clients.js',
+      '/admin/audit.js': 'admin/audit.js',
     };
     const f = join(__dirname, 'dashboard', map[p]);
     if (existsSync(f)) {
@@ -2005,6 +2035,105 @@ async function handle(req, res) {
     const since = url.searchParams.get('since');
     const limit = parseInt(url.searchParams.get('limit') || '100', 10);
     return send(res, 200, { events: readAudit({ since, limit }) });
+  }
+
+  // ============================================================
+  // Phase 1.4: Audit enhancements
+  //   - filtered list (client/service/action/status/since/until)
+  //   - SSE real-time stream
+  //   - JSON / CSV export
+  // ============================================================
+  const auditFilterMatch = p.match(/^\/api\/v1\/admin\/audit\/export\.(json|csv)$/);
+  if (m === 'GET' && auditFilterMatch) {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const fmt = auditFilterMatch[1];
+    const params = {
+      client:  url.searchParams.get('client'),
+      service: url.searchParams.get('service'),
+      action:  url.searchParams.get('action'),
+      status:  url.searchParams.get('status'),
+      since:   url.searchParams.get('since'),
+      until:   url.searchParams.get('until'),
+      limit:   parseInt(url.searchParams.get('limit') || '5000', 10),
+    };
+    const events = readAuditFiltered(params);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    if (fmt === 'json') {
+      const body = JSON.stringify({ exported_at: new Date().toISOString(), count: events.length, events }, null, 2);
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="audit-${stamp}.json"`,
+        'X-Broker-Version': '2.0.0',
+      });
+      return res.end(body);
+    } else { // csv
+      // Columns: ts, action, status, cn, fp, service, method, path, error, name, field, reason
+      const cols = ['ts','action','status','cn','fp','service','method','path','error','name','field','reason','latency_ms','upstream_status'];
+      const escape = (v) => {
+        if (v == null) return '';
+        const s = String(v);
+        return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const lines = [cols.join(',')];
+      for (const e of events) lines.push(cols.map(c => escape(e[c])).join(','));
+      const body = lines.join('\n') + '\n';
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="audit-${stamp}.csv"`,
+        'X-Broker-Version': '2.0.0',
+      });
+      return res.end(body);
+    }
+  }
+
+  // ----- GET /api/v1/admin/audit (filtered list) -----
+  if (m === 'GET' && p === '/api/v1/admin/audit') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const params = {
+      client:  url.searchParams.get('client'),
+      service: url.searchParams.get('service'),
+      action:  url.searchParams.get('action'),
+      status:  url.searchParams.get('status'),
+      since:   url.searchParams.get('since'),
+      until:   url.searchParams.get('until'),
+      limit:   parseInt(url.searchParams.get('limit') || '200', 10),
+    };
+    const events = readAuditFiltered(params);
+    return send(res, 200, { events });
+  }
+
+  // ----- GET /api/v1/admin/audit/stream (SSE) -----
+  // Server-Sent Events: streams new audit events to the admin UI live.
+  // Browser opens via `new EventSource('/api/v1/admin/audit/stream')`.
+  // Sends a hello ping, then `event: <name>\ndata: <json>\n\n` for each event.
+  // Closes after 30 minutes (clients can reconnect).
+  if (m === 'GET' && p === '/api/v1/admin/audit/stream') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',  // disable buffering under nginx
+      'X-Broker-Version': '2.0.0',
+    });
+    res.write(': hello\n\n');
+    res.write('event: ready\ndata: {"ok":true}\n\n');
+    const onEvent = (e) => {
+      try {
+        res.write(`event: audit\ndata: ${JSON.stringify(e)}\n\n`);
+      } catch (e) { /* socket closed */ }
+    };
+    AUDIT_BUS.on('event', onEvent);
+    // Keep-alive comment every 25s (so proxies don't kill idle conns)
+    const ka = setInterval(() => { try { res.write(': ka\n\n'); } catch {} }, 25_000);
+    // Auto-close after 30 min
+    const closeTimer = setTimeout(() => { try { res.end(); } catch {} }, 30 * 60 * 1000);
+    req.on('close', () => {
+      clearInterval(ka);
+      clearTimeout(closeTimer);
+      AUDIT_BUS.off('event', onEvent);
+    });
+    return;  // keep connection open
   }
 
   // ----- POST /api/v1/reload (admin only) -----

@@ -408,9 +408,14 @@ async function loadSecrets() {
       return;
     }
     tbody.innerHTML = '';
-    for (const name of list) {
+    for (const entry of list) {
+      // /api/v1/secrets may return either:
+      // - string array (non-admin or before Phase 2)
+      // - object array (admin: {name, type, description, ...})
+      const name = typeof entry === 'string' ? entry : entry.name;
+      const desc = typeof entry === 'object' ? (entry.description || '') : '';
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td><code>${escapeHtml(name)}</code></td>
+      tr.innerHTML = `<td><code>${escapeHtml(name)}</code>${desc ? `<br><span class="muted" style="font-size:11px">${escapeHtml(desc)}</span>` : ''}</td>
         <td><button class="btn btn-sm" data-act="show" data-name="${escapeHtml(name)}">显示 / Show</button>
             <button class="btn btn-sm" data-act="copy" data-name="${escapeHtml(name)}">复制 / Copy</button></td>`;
       tbody.appendChild(tr);

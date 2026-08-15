@@ -285,7 +285,16 @@ function mcpRpc(method, params) {
     const r = await mcpRpc('tools/call', { name: 'get_health', arguments: {} });
     const data = JSON.parse(r.result.content[0].text);
     ok('health 200', data.status === 200);
-    ok('broker_response.mock', data.broker_response && data.broker_response.broker === 'mock');
+    // 兼容 mock (broker='mock') 和 真 broker (status='ok'). 真 broker 还返
+    // sops_loaded + services + uptime_seconds (公网验证).
+    const br = data.broker_response || {};
+    const isMock = br.broker === 'mock';
+    const isReal = br.status === 'ok' && Array.isArray(br.services);
+    ok('broker_response 字段识别 (mock 或 real)', isMock || isReal);
+    if (isReal) {
+      ok('real broker 含 services', br.services.length > 0);
+      ok('real broker 含 uptime_seconds', typeof br.uptime_seconds === 'number');
+    }
   }
 
   // ======== 6. list_api_keys ========

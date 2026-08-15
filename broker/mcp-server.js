@@ -39,7 +39,16 @@ const ARGS = parseArgs(process.argv);
 const BROKER_URL = (ARGS['broker'] || process.env.BROKER_URL || 'https://127.0.0.1:18443').replace(/\/$/, '');
 const PORT = parseInt(ARGS.port || process.env.MCP_PORT || '3001', 10);
 const HOST = ARGS.host || process.env.MCP_HOST || '127.0.0.1';
-const MASTER_KEY = ARGS['master-key'] || process.env.MCP_MASTER_KEY || '';
+// Master key resolution: --master-key-file (preferred, 永不入 ps) > --master-key / MCP_MASTER_KEY (兼容)
+let MASTER_KEY = ARGS['master-key'] || process.env.MCP_MASTER_KEY || '';
+if (ARGS['master-key-file']) {
+  try {
+    MASTER_KEY = require('node:fs').readFileSync(ARGS['master-key-file'], 'utf8').trim();
+  } catch (e) {
+    console.error(`[mcp] ERROR: cannot read --master-key-file ${ARGS['master-key-file']}: ${e.message}`);
+    process.exit(1);
+  }
+}
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const CHILD_NAME = ARGS['child-name'] || process.env.MCP_CHILD_NAME || 'mcp-server-child';
 

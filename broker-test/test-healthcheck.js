@@ -138,30 +138,76 @@ let lastHttpReq = null;
   }
   if (mockTcp) { mockTcp.close(); mockTcp = null; }
 
-  // ======== 4. checkAliyun (skipped) ========
-  section('healthcheck.checkAliyun (skipped TODO)');
+  // ======== 4. aliyun_ak 通过 runAll 验证被 skipped ========
+  section('aliyun_ak in runAll (skipped TODO)');
   {
-    // 直接调源码里的 checkAliyun (走 fallback)
-    const r = await hc.checkAliyun('fake-ak', Date.now());
-    ok('aliyun skipped', r.status === 'skipped');
+    // aliyun_ak 在 runAll 内部直接 skip, 通过 runAll 行为验证
+    // 先开一个 https mock (healthcheck 真去调 GitHub/OpenAI)
+    mockHttp = createMockServer((req, res) => {
+      // GitHub style: /user
+      if (req.url === '/user' && req.headers.authorization?.includes('good-token')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ login: 'octocat' }));
+      }
+      if (req.url === '/user' && req.headers.authorization?.includes('expired-token')) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ message: 'Bad credentials' }));
+      }
+      // OpenAI: /v1/models
+      if (req.url === '/v1/models' && req.headers.authorization?.includes('Bearer sk-good')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ data: [] }));
+      }
+      if (req.url === '/v1/models') {
+        res.writeHead(401);
+        return res.end(JSON.stringify({ error: { message: 'invalid_api_key' } }));
+      }
+      res.writeHead(500);
+      res.end('mock-error');
+    });
+    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    const port = mockHttp.address().port;
+
+    // 用 env 把 healthcheck 的目标 host 改到 mock
+    // checkGithub/checkOpenAI 在源码里 hardcode host, 这块单元测试只测 "skipped" 逻辑
+    // 实际: aliyun_ak 走 checkSecret 的 case 'aliyun_ak' → 立即 return { status: 'skipped' }
+    // 不发任何网络请求, 所以无需 mock http. 这里用 getSecrets 触发真 runAll 看 aliyun_ak 的 skip
+    if (mockHttp) { mockHttp.close(); mockHttp = null; }
+
+    const getSecrets = () => ({
+      'ALIYUN_PROD': { type: 'aliyun_ak', fields: { access_key_id: 'LTAIfake', access_key_secret: 'fake' } },
+    });
+    const r = await hc.runAll(getSecrets);
+    ok('aliyun_ak skipped (M4.5 TODO)', r.checks.ALIYUN_PROD?.status === 'skipped');
+    ok('summary.total=1', r.summary.total === 1);
+    ok('summary.skipped=1', r.summary.skipped === 1);
   }
 
   // ======== 5. runAll + state 持久化 ========
   section('healthcheck.runAll + state');
   {
-    // 用 mock secrets
+    // 新签名: getSecrets 返 {name: {type, fields}}
     const getSecrets = () => ({
-      'GOOD_PAT': { value: 'good-token', type: 'github_pat' },
-      'BAD_PAT': { value: 'expired-token', type: 'github_pat' },
-      'OPENAI_OK': { value: 'sk-good', type: 'openai_key' },
-      'UNKNOWN_TYPE': { value: 'whatever', type: 'mystery_type' },
+      'GOOD_PAT':   { type: 'github_pat', fields: { token: 'good-token' } },
+      'BAD_PAT':    { type: 'github_pat', fields: { token: 'expired-token' } },
+      'OPENAI_OK':  { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      'UNKNOWN':    { type: 'mystery_type', fields: { value: 'whatever' } },
+      'EMPTY':      { type: 'github_pat', fields: {} },  // 无 token → skipped (pickCredential 返 null)
     });
-    // 改 healthcheck 的 host — 这里测逻辑而不是真实 HTTP, 简化直接 mock checkSecret
-    // 直接验 state 持久化
+    // 把 state 写到 temp dir
     const tempDir = mkdtempSync(join(tmpdir(), 'hc-test-'));
-    const fakeState = join(tempDir, 'state.json');
-    writeFileSync(fakeState, JSON.stringify({ test: true }));
-    ok('state file writeable', existsSync(fakeState));
+    process.env.HEALTHCHECK_STATE_PATH = join(tempDir, 'state.json');
+    // 重置 healthcheck 内存 state, 让它从 env 路径重新 load
+    const r = await hc.runAll(getSecrets);
+    ok('runAll 跑 5 secrets', r.summary.total === 5);
+    ok('至少 1 skipped (mystery_type 或 empty)', (r.summary.skipped || 0) >= 1);
+    ok('state 持久化到 HEALTHCHECK_STATE_PATH', existsSync(join(tempDir, 'state.json')));
+    if (existsSync(join(tempDir, 'state.json'))) {
+      const persisted = JSON.parse(readFileSync(join(tempDir, 'state.json'), 'utf-8'));
+      ok('persisted.last_status 存在', typeof persisted.last_status === 'string');
+      ok('persisted.checks 5 个', Object.keys(persisted.checks).length === 5);
+    }
+    delete process.env.HEALTHCHECK_STATE_PATH;
     rmSync(tempDir, { recursive: true, force: true });
   }
 

@@ -2050,11 +2050,11 @@ async function handle(req, res) {
   // ----- POST /api/v1/healthcheck/run (admin) -----
   if (m === 'POST' && p === '/api/v1/healthcheck/run') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    // 返 entry 完整 (type + fields + description), 让 healthcheck 按 type-schemas 抽字段
     const getSecrets = () => {
       const out = {};
       for (const [name, entry] of SECRET_CACHE) {
-        const v = entry.value || entry.fields?.value;
-        if (v) out[name] = { value: v, type: entry.type };
+        out[name] = { type: entry.type, fields: entry.fields || {}, description: entry.description || '' };
       }
       return out;
     };
@@ -3026,13 +3026,11 @@ function start() {
     const hcCfg = CONFIG.healthcheck || { enabled: true, schedule: '04:00' };
     if (hcCfg.enabled !== false) {
       const schedule = hcCfg.schedule || '04:00';
-      // 从 broker 内存 SECRET_CACHE 拿 secrets (有 type + value)
+      // 从 broker 内存 SECRET_CACHE 拿 secrets (有 type + fields)
       const getSecrets = () => {
         const out = {};
         for (const [name, entry] of SECRET_CACHE) {
-          // entry.value or entry.fields.value
-          const v = entry.value || entry.fields?.value;
-          if (v) out[name] = { value: v, type: entry.type };
+          out[name] = { type: entry.type, fields: entry.fields || {}, description: entry.description || '' };
         }
         return out;
       };

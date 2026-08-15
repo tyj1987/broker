@@ -64,6 +64,9 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
 import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
 import {
+  checkPathAllowed, canProxy, isServiceAllowed, clientNamesAllowedFor,
+} from './can-proxy.js';
+import {
   issueClientCert, certFingerprint, readClientCertPem, readClientKeyPem,
   deleteClientCertFiles, readCaCertPem, paths as certPaths,
 } from './cert-issuer.js';
@@ -724,68 +727,11 @@ function getClientContext(socket) {
   return getIdentity({ socket });
 }
 
-function checkPathAllowed(pattern, path) {
-  if (!pattern) return true;
-  if (Array.isArray(pattern)) {
-    return pattern.some(p => checkPathAllowed(p, path));
-  }
-  try {
-    return new RegExp(pattern).test(path);
-  } catch {
-    return false;
-  }
-}
-
 function canResolve(ctx, secretName) {
   if (!ctx.client) return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_resolve || [];
   return checkPathAllowed(allow, secretName);
-}
-
-function canProxy(ctx, serviceName, path) {
-  if (!ctx.client) return false;
-  if (ctx.client.role === 'admin') return true;
-  const allow = ctx.client.allowed_proxy || [];
-  // allow can be a list of objects: { service, paths }
-  for (const rule of allow) {
-    if (rule === '*' || rule === '.*') return true;
-    if (typeof rule === 'string' && rule === serviceName) return true;
-    if (typeof rule === 'object' && rule.service === serviceName) {
-      if (!rule.paths) return true;
-      return checkPathAllowed(rule.paths, path);
-    }
-  }
-  return false;
-}
-
-// Does the client have ANY access to a service at all (for the dashboard badge)?
-function isServiceAllowed(ctx, serviceName) {
-  if (!ctx.client) return false;
-  if (ctx.client.role === 'admin') return true;
-  const allow = ctx.client.allowed_proxy || [];
-  for (const rule of allow) {
-    if (rule === '*' || rule === '.*') return true;
-    if (typeof rule === 'string' && rule === serviceName) return true;
-    if (typeof rule === 'object' && rule.service === serviceName) return true;
-  }
-  return false;
-}
-
-// Phase 1.2: list client names that have access to a given service. Used by
-// the admin Services UI to show the permission matrix.
-function clientNamesAllowedFor(serviceName) {
-  const out = [];
-  for (const [cname, c] of Object.entries(CONFIG.clients || {})) {
-    if (c.role === 'admin') { out.push(cname); continue; }
-    const allow = c.allowed_proxy || [];
-    for (const rule of allow) {
-      if (rule === '*' || rule === '.*') { out.push(cname); break; }
-      if (typeof rule === 'string' && rule === serviceName) { out.push(cname); break; }
-      if (typeof rule === 'object' && rule.service === serviceName) { out.push(cname); break; }
-    }
-  }
-  return out;
 }
 
 // ============================================================

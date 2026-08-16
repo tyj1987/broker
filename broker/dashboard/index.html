@@ -141,7 +141,7 @@
           </div>
         </div>
 
-        <!-- v3.0 M4: 凭据健康度详情 (admin 可手动 Run Now) -->
+        <!-- v3.0 M4 + v3.1 M5.3: 凭据健康度详情 (admin 可手动 Run Now) -->
         <div class="card" id="home-healthcheck-card">
           <h3>
             🩺 凭据自检 / Credential health
@@ -149,6 +149,8 @@
             <span class="muted" style="font-size:12px; margin-left:8px" id="hc-last-run">—</span>
             <button class="btn btn-sm btn-primary admin-only" id="btn-hc-run" hidden style="margin-left:auto">立即跑 / Run Now</button>
           </h3>
+          <!-- v3.1 M5.3: 5 维 summary pills (ok / expired / unreachable / misconfigured / fail / skipped) -->
+          <div id="hc-summary-pills" class="hc-summary-row" style="margin-bottom:8px"></div>
           <div id="home-healthcheck-list" class="hc-list">
             <div class="muted">加载中...</div>
           </div>

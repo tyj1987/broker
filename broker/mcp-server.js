@@ -329,13 +329,14 @@ async function toolCheckCredential(args) {
   return { name: args.name, type: data.type, ...result };
 }
 
-// v3.0 M4.5: 跑全部 secret healthcheck (loop 调 check_credential + 累加 summary)
+// v3.0 M4.5 + v3.1 M5.3: 跑全部 secret healthcheck (loop 调 check_credential + 累加 5 维 summary)
 async function toolRunHealthcheck(args) {
   const list = await callBroker('/api/v1/secrets');
   if (list.status !== 200) throw new Error(`list_secrets failed: ${list.status}`);
   const items = list.json?.secrets || [];
   const checks = {};
-  const summary = { ok: 0, expired: 0, fail: 0, skipped: 0, total: 0 };
+  // v3.1 M5.3: 5 维 status 兜底 (M4 4 维 + unreachable / misconfigured)
+  const summary = { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 };
   const t0 = Date.now();
   for (const s of items) {
     const name = typeof s === 'string' ? s : s.name;
@@ -345,12 +346,15 @@ async function toolRunHealthcheck(args) {
       checks[name] = { ...r, ts: new Date().toISOString() };
       summary[r.status] = (summary[r.status] || 0) + 1;
     } catch (e) {
+      // toolCheckCredential 内部已用 classifyError, 这里 catch 兜底网络/解析错误 → fail
       checks[name] = { status: 'fail', detail: e.message, ts: new Date().toISOString() };
       summary.fail++;
     }
     summary.total++;
   }
-  const allPass = summary.expired === 0 && summary.fail === 0;
+  // v3.1 M5.3: last_status 计算看 4 个非 ok 维度 (M4 只看 expired/fail)
+  const allPass = summary.expired === 0 && summary.unreachable === 0
+    && summary.misconfigured === 0 && summary.fail === 0;
   return {
     last_status: allPass ? 'ok' : 'degraded',
     last_run_at: new Date().toISOString(),

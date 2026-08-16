@@ -257,9 +257,9 @@ let lastHttpReq = null;
     ok('aliyun_ak bad signature → expired', bad.status === 'expired' && bad.detail.includes('403'));
     ok('aliyun_ak bad detail 含 InvalidAccessKeyId', bad.detail.includes('InvalidAccessKeyId'));
 
-    // 缺 secret 字段
+    // 缺 secret 字段 (M5.3: 缺字段是配置错, 不是 skipped)
     const missing = await hc.checkSecret('PROD', { access_key_id: 'LTAI_x' /* no secret */ }, 'aliyun_ak');
-    ok('aliyun_ak 缺 secret → skipped', missing.status === 'skipped');
+    ok('aliyun_ak 缺 secret → misconfigured (M5.3)', missing.status === 'misconfigured' && missing.detail.includes('access_key_secret'));
 
     // 清理 env
     delete process.env.ALIYUN_HEALTHCHECK_HOST;
@@ -293,7 +293,9 @@ let lastHttpReq = null;
     const r = await hc.runAll(getSecrets);
     ok('aliyun_ak 在 runAll 中不再 skipped (M5.1 落地)',
        r.checks.ALIYUN_PROD?.status !== 'skipped');
-    ok('aliyun_ak runAll → fail (连不通 mock port 1 是预期)', r.checks.ALIYUN_PROD?.status === 'fail');
+    // M5.3: 连不通 mock port 1 → ECONNREFUSED → misconfigured (不是笼统 fail)
+    ok('aliyun_ak runAll → misconfigured (M5.3 ECONNREFUSED 分类)',
+       r.checks.ALIYUN_PROD?.status === 'misconfigured');
     delete process.env.ALIYUN_HEALTHCHECK_HOST;
     delete process.env.ALIYUN_HEALTHCHECK_PORT;
   }
@@ -372,7 +374,8 @@ let lastHttpReq = null;
     ok('tencent_sk bad signature → expired', bad.status === 'expired' && bad.detail.includes('SignatureFailure'));
 
     const missing = await hc.checkSecret('PROD', { secret_id: 'AKID_x' /* no key */ }, 'tencent_sk');
-    ok('tencent_sk 缺 secret_key → skipped', missing.status === 'skipped');
+    ok('tencent_sk 缺 secret_key → misconfigured (M5.3)',
+       missing.status === 'misconfigured' && missing.detail.includes('secret_key'));
 
     delete process.env.TENCENT_HEALTHCHECK_HOST;
     delete process.env.TENCENT_HEALTHCHECK_PORT;
@@ -452,11 +455,111 @@ let lastHttpReq = null;
     ok('aws_access_key bad signature → expired', bad.status === 'expired' && bad.detail.includes('InvalidClientTokenId'));
 
     const missing = await hc.checkSecret('PROD', { access_key_id: 'AKIA_x' /* no key */ }, 'aws_access_key');
-    ok('aws_access_key 缺 secret_access_key → skipped', missing.status === 'skipped');
+    ok('aws_access_key 缺 secret_access_key → misconfigured (M5.3)',
+       missing.status === 'misconfigured' && missing.detail.includes('secret_access_key'));
 
     delete process.env.AWS_HEALTHCHECK_HOST;
     delete process.env.AWS_HEALTHCHECK_PORT;
     if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  }
+
+  // ======== 4.6 v3.1 M5.3: classifyError 5 维分类 + 缺字段 misconfigured ========
+  section('v3.1 M5.3: classifyError 5 维分类');
+  {
+    // 1) ENOTFOUND → unreachable
+    const r1 = hc.classifyError({ code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND api.openai.com' });
+    ok('ENOTFOUND → unreachable', r1.status === 'unreachable' && r1.detail.includes('DNS fail'));
+    // 2) EAI_AGAIN / EAI_FAIL → unreachable
+    ok('EAI_AGAIN → unreachable', hc.classifyError({ code: 'EAI_AGAIN' }).status === 'unreachable');
+    ok('EAI_FAIL → unreachable', hc.classifyError({ code: 'EAI_FAIL' }).status === 'unreachable');
+    // 3) ECONNRESET → unreachable
+    const r3 = hc.classifyError({ code: 'ECONNRESET', message: 'read ECONNRESET' });
+    ok('ECONNRESET → unreachable', r3.status === 'unreachable' && r3.detail.includes('reset by peer'));
+    // 4) EHOSTUNREACH / ENETUNREACH → unreachable
+    ok('EHOSTUNREACH → unreachable', hc.classifyError({ code: 'EHOSTUNREACH' }).status === 'unreachable');
+    ok('ENETUNREACH → unreachable', hc.classifyError({ code: 'ENETUNREACH' }).status === 'unreachable');
+    // 5) SSL_connect reset / read ECONNRESET in msg → unreachable
+    ok('SSL reset in msg → unreachable',
+       hc.classifyError({ message: 'OpenSSL SSL_connect: Connection reset by peer in connection to api.openai.com:443' }).status === 'unreachable');
+    // 6) ECONNREFUSED → misconfigured
+    ok('ECONNREFUSED → misconfigured',
+       hc.classifyError({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 192.168.2.100:22' }).status === 'misconfigured'
+       && hc.classifyError({ code: 'ECONNREFUSED' }).detail.includes('refused'));
+    // 7) ETIMEDOUT → misconfigured
+    ok('ETIMEDOUT → misconfigured',
+       hc.classifyError({ code: 'ETIMEDOUT' }).status === 'misconfigured'
+       && hc.classifyError({ code: 'ETIMEDOUT' }).detail.includes('firewall'));
+    // 8) "timeout after Xms" msg → misconfigured
+    ok('"timeout after 10000ms" → misconfigured',
+       hc.classifyError({ message: 'timeout after 10000ms' }).status === 'misconfigured');
+    // 9) 未知错误 → fail 兜底
+    ok('未知错误 → fail',
+       hc.classifyError({ code: 'WEIRD', message: 'something weird' }).status === 'fail');
+    ok('classifyError 缺 e → fail 兜底 (不崩)',
+       hc.classifyError(undefined).status === 'fail' || hc.classifyError(null).status === 'fail');
+    // 10) 缺 message 也不崩
+    ok('classifyError 缺 message → fail (含 code)',
+       hc.classifyError({ code: 'NOPE' }).status === 'fail' && hc.classifyError({ code: 'NOPE' }).detail.includes('NOPE'));
+  }
+
+  section('v3.1 M5.3: 缺字段 misconfigured (ssh / cloud 凭据)');
+  {
+    // ssh_connection 缺 host → misconfigured (不是 skipped)
+    const sshNoHost = await hc.checkSecret('IBMC', { username: 'admin', private_key: 'fake' }, 'ssh_connection');
+    ok('ssh_connection 缺 host → misconfigured',
+       sshNoHost.status === 'misconfigured' && sshNoHost.detail.includes('host'));
+    // ssh_connection 完全空 fields (无 primary 凭据) → skipped (没东西可验, 不是配置错)
+    const sshEmpty = await hc.checkSecret('IBMC_EMPTY', {}, 'ssh_connection');
+    ok('ssh_connection 完全空 (无 primary) → skipped', sshEmpty.status === 'skipped');
+    // ssh_connection 有 username 但无 private_key/password → 仍是 skipped
+    const sshNoKey = await hc.checkSecret('IBMC_NOKEY', { username: 'admin' }, 'ssh_connection');
+    ok('ssh_connection 有 user 但无 private_key/password → skipped', sshNoKey.status === 'skipped');
+    // ssh_connection 有 private_key 但无 host → misconfigured (配置错)
+    const sshKeyNoHost = await hc.checkSecret('IBMC_KEY', { private_key: 'fake' }, 'ssh_connection');
+    ok('ssh_connection 有 key 但无 host → misconfigured',
+       sshKeyNoHost.status === 'misconfigured' && sshKeyNoHost.detail.includes('host'));
+    // aliyun_ak 缺 access_key_secret → misconfigured (不是 skipped)
+    const aliyunMissing = await hc.checkSecret('ALIYUN_M', { access_key_id: 'LTAI_x' /* no secret */ }, 'aliyun_ak');
+    ok('aliyun_ak 缺 access_key_secret → misconfigured',
+       aliyunMissing.status === 'misconfigured' && aliyunMissing.detail.includes('access_key_secret'));
+    // aliyun_ak 缺 access_key_id (主凭据) → skipped (没东西可验, 不是配置错)
+    const aliyunNoId = await hc.checkSecret('ALIYUN_N', { access_key_secret: 'sec' }, 'aliyun_ak');
+    ok('aliyun_ak 缺 access_key_id (主凭据) → skipped', aliyunNoId.status === 'skipped');
+    // tencent_sk 缺 secret_key → misconfigured
+    const tcMissing = await hc.checkSecret('TC_M', { secret_id: 'AKID' /* no key */ }, 'tencent_sk');
+    ok('tencent_sk 缺 secret_key → misconfigured',
+       tcMissing.status === 'misconfigured' && tcMissing.detail.includes('secret_key'));
+    // aws_access_key 缺 secret_access_key → misconfigured
+    const awsMissing = await hc.checkSecret('AWS_M', { access_key_id: 'AKIA' /* no key */ }, 'aws_access_key');
+    ok('aws_access_key 缺 secret_access_key → misconfigured',
+       awsMissing.status === 'misconfigured' && awsMissing.detail.includes('secret_access_key'));
+    // ssh_private_key (bare) → misconfigured (需要 wrap)
+    const bareKey = await hc.checkSecret('BARE_KEY', { key: 'fake' }, 'ssh_private_key');
+    ok('ssh_private_key bare → misconfigured (需要 ssh_connection wrapper)',
+       bareKey.status === 'misconfigured' && bareKey.detail.includes('ssh_connection'));
+    // github_pat 缺 token (pickCredential 返 null) → 仍是 skipped (无凭据可验, 不是配置错)
+    const ghNoToken = await hc.checkSecret('GH', {}, 'github_pat');
+    ok('github_pat 缺 token → skipped (pickCredential 返 null, 不是 misconfigured)', ghNoToken.status === 'skipped');
+    // 未知 type → 仍是 skipped (没 check 函数, 不是 misconfigured)
+    const unknownType = await hc.checkSecret('X', { value: 'whatever' }, 'mystery_type_xyz');
+    ok('未知 type → skipped', unknownType.status === 'skipped');
+  }
+
+  section('v3.1 M5.3: checkSsh ECONNREFUSED → misconfigured');
+  {
+    // 启 TCP server 立刻关, 拿到的 port 应该被 OS 拒绝新连接
+    const _net = await import('node:net');
+    const tmpServer = _net.createServer();
+    await new Promise(r => tmpServer.listen(0, '127.0.0.1', r));
+    const port = tmpServer.address().port;
+    await new Promise(r => tmpServer.close(r));
+    // 等 OS 释放 port
+    await new Promise(r => setTimeout(r, 200));
+    // 现在连这个 port → ECONNREFUSED (OS 拒绝, 没人 listen)
+    const result = await hc.checkSecret('SSH_REJECT', { host: '127.0.0.1', port, username: 'u' }, 'ssh_connection');
+    ok('ssh_connection ECONNREFUSED → misconfigured',
+       result.status === 'misconfigured' && result.detail.includes('refused'),
+       `actual status=${result.status} detail=${result.detail}`);
   }
 
   // ======== 5. runAll + state 持久化 ========
@@ -477,12 +580,46 @@ let lastHttpReq = null;
     const r = await hc.runAll(getSecrets);
     ok('runAll 跑 5 secrets', r.summary.total === 5);
     ok('至少 1 skipped (mystery_type 或 empty)', (r.summary.skipped || 0) >= 1);
+    // v3.1 M5.3: summary 5 维字段都存在
+    ok('summary 含 ok 字段', typeof r.summary.ok === 'number');
+    ok('summary 含 expired 字段', typeof r.summary.expired === 'number');
+    ok('summary 含 unreachable 字段', typeof r.summary.unreachable === 'number');
+    ok('summary 含 misconfigured 字段', typeof r.summary.misconfigured === 'number');
+    ok('summary 含 fail 字段', typeof r.summary.fail === 'number');
+    ok('summary 含 skipped 字段', typeof r.summary.skipped === 'number');
+    // 6 维 sum 应等于 total
+    const dimSum = (r.summary.ok || 0) + (r.summary.expired || 0) + (r.summary.unreachable || 0)
+      + (r.summary.misconfigured || 0) + (r.summary.fail || 0) + (r.summary.skipped || 0);
+    ok('6 维 sum === total', dimSum === r.summary.total);
+    // last_status: 有 expired → degraded
+    ok('last_status: 至少 1 expired → degraded', r.last_status === 'degraded');
     ok('state 持久化到 HEALTHCHECK_STATE_PATH', existsSync(join(tempDir, 'state.json')));
     if (existsSync(join(tempDir, 'state.json'))) {
       const persisted = JSON.parse(readFileSync(join(tempDir, 'state.json'), 'utf-8'));
       ok('persisted.last_status 存在', typeof persisted.last_status === 'string');
+      ok('persisted.summary 6 维', persisted.summary.unreachable !== undefined && persisted.summary.misconfigured !== undefined);
       ok('persisted.checks 5 个', Object.keys(persisted.checks).length === 5);
     }
+    delete process.env.HEALTHCHECK_STATE_PATH;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+
+  // ======== 5.1 runAll last_status: 全 ok vs 各种 fail/degraded =====
+  section('healthcheck.runAll last_status 4 维计算');
+  {
+    // 用一个简单的 getSecrets (走真网络可能 fail, 但我们只验 last_status 字段计算逻辑)
+    const okGetSecrets = () => ({
+      'GH': { type: 'github_pat', fields: { token: 'good-token' } },
+      'OAI': { type: 'openai_key', fields: { api_key: 'sk-good' } },
+    });
+    // 注: 上面 github/openai 测试用 127.0.0.1 mock, 但 runAll 不走 mock — 它会调真 api
+    // 所以 runAll 实际可能 fail/expired, 但我们只验 last_status 字段计算逻辑
+    const tempDir = mkdtempSync(join(tmpdir(), 'hc-test-'));
+    process.env.HEALTHCHECK_STATE_PATH = join(tempDir, 'state.json');
+    const r1 = await hc.runAll(okGetSecrets);
+    // 网络可能 fail/expired, last_status 不应是 'ok' (除非本地网络全通)
+    ok('last_status 是 degraded 或 ok (取决于网络)', r1.last_status === 'degraded' || r1.last_status === 'ok');
+    ok('last_status 字段类型 string', typeof r1.last_status === 'string');
     delete process.env.HEALTHCHECK_STATE_PATH;
     rmSync(tempDir, { recursive: true, force: true });
   }

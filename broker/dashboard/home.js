@@ -126,7 +126,7 @@
     animateNumber($('#stat-secrets'), secCount);
     animateNumber($('#stat-clients'), cCount);
     animateNumber($('#stat-audit-today'), aCount);
-    // Healthcheck stat: 显示 "ok/total" 文本 (e.g. "1/4")
+    // Healthcheck stat: 显示 "ok/total" 文本 (e.g. "1/5")
     const hcEl = $('#stat-healthcheck');
     if (hcEl) {
       if (healthcheck.status === 'fulfilled' && healthcheck.value.summary?.total) {
@@ -140,6 +140,18 @@
         hcEl.textContent = '—';
         hcEl.className = 'stat-num hc-unknown';
       }
+    }
+    // v3.1 M5.3: 5 维 summary pill 列表 (ok/expired/unreachable/misconfigured/fail/skipped)
+    const sumPillsEl = $('#hc-summary-pills');
+    if (sumPillsEl && healthcheck.status === 'fulfilled' && healthcheck.value.summary) {
+      const sum = healthcheck.value.summary;
+      const dims = ['ok', 'expired', 'unreachable', 'misconfigured', 'fail', 'skipped'];
+      const parts = dims
+        .filter(d => (sum[d] || 0) > 0)
+        .map(d => `<span class="hc-pill ${d}">${d} ${sum[d]}</span>`);
+      sumPillsEl.innerHTML = parts.length ? parts.join('') : '<span class="muted">无</span>';
+    } else if (sumPillsEl) {
+      sumPillsEl.innerHTML = '';
     }
   }
 

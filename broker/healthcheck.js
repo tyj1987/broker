@@ -1,19 +1,27 @@
-// broker/healthcheck.js — v3.0 M4 凭据自检引擎
+// broker/healthcheck.js — v3.0 M4 + v3.1 M5.3 凭据自检引擎
 // 每日 04:00 cron 触发 (broker/cron-tasks.js)
 // 对每个 secret: dry_run = true, 调上游 no-side-effect API, 验凭据
 // 失败: 写 audit + 推 SSE + dashboard 红色 stat
 //
 // 设计:
 // - secret.type → 抽 fields (按 type-schemas 字段名)
-// - 结果写 broker/audit/audit-<date>.jsonl (action: 'healthcheck', status: 'ok'|'fail'|'expired')
+// - 结果写 broker/audit/audit-<date>.jsonl (action: 'healthcheck', status: 'ok'|'expired'|'unreachable'|'misconfigured'|'fail'|'skipped')
 // - 同时推 HEALTHCHECK_BUS (EventEmitter)
 // - 持久化最新状态到 secrets/healthcheck-state.json (writable; secrets/ 在 ReadWritePaths 里)
+//
+// v3.1 M5.3 状态 5 维 (M4 4 维 + 新 2):
+//   ok             业务验证通过 (凭据对, 上游服务正常)
+//   expired        401/403 真凭据问题 (用户需要轮换)
+//   unreachable    基础设施不可达 (DNS fail / ECONNRESET / IP 段被风控 — 用户改不了 ECS IP)
+//   misconfigured  配置错 (缺字段 / ssh target 不可达 / 端口错 — 用户要改 broker.yaml)
+//   fail           兜底 (其它未知错误)
+//   skipped        type 不支持 / 无凭据 (don't fail healthcheck just because we don't have a check)
 //
 // 不在 v3.0 范围: SMS / Email / Webhook 外发 (留 v3.1), 凭据零接触
 //
 // 烟雾测试 (no-side-effect):
 // - github_pat:   GET https://api.github.com/user
-// - aliyun_ak:    https://ecs.aliyuncs.com/?Action=DescribeRegions (skipped M4 — 需 broker proxy v2 签名, 留 M4.5)
+// - aliyun_ak:    https://ecs.aliyuncs.com/?Action=DescribeRegions
 // - openai_key:   GET https://api.openai.com/v1/models
 // - ssh_connection: TCP connect <host>:<port> (用 net.Socket, 不开 shell)
 // - 其他 type: 返回 status='skipped' (don't fail healthcheck just because we don't have a check)
@@ -104,8 +112,11 @@ function pickCredential(type, fields) {
         meta: { secret_access_key: fields.secret_access_key, region: fields.region || 'us-east-1' }
       };
     case 'ssh_connection':
+      // healthcheck 只测 TCP 可达性, 不需要凭据值. 但 meta.host 是关键.
+      // 完全空 (无 host 无 private_key 无 password) → 没东西可验 → null
+      if (!fields.host && !fields.private_key && !fields.password) return null;
       return {
-        primary: fields.private_key || fields.password || '',
+        primary: fields.private_key || fields.password || 'tcp-only',
         meta: { host: fields.host, port: fields.port || 22, user: fields.username, auth: fields.auth_method }
       };
     case 'ssh_private_key':
@@ -123,6 +134,57 @@ function pickCredential(type, fields) {
 }
 
 // ============================================================
+// v3.1 M5.3: classifyError — 把网络/系统错误分类成 5 维 status 之一
+// 返 { status, detail } (不含 latency_ms, 调用方自己加)
+//
+// unreachable (基础设施层, 用户改不了 ECS):
+//   - ENOTFOUND / EAI_AGAIN / EAI_FAIL  → DNS 解析失败
+//   - ECONNRESET                         → TCP 远端主动 RST (OpenAI 拒阿里云 IP 段典型表现)
+//   - EHOSTUNREACH / ENETUNREACH         → 路由层不可达
+//   - SSL_connect Connection reset       → TLS 层 RST
+//
+// misconfigured (配置错, 用户要改 broker.yaml 或 secrets/*.yaml):
+//   - ECONNREFUSED                       → 端口没开 / ssh target 错
+//   - ETIMEDOUT                          → TCP connect 远端不响应 (ssh target 错 / 防火墙 drop)
+//   - "timeout after Xms"                → net.Socket 自身 timeout
+//
+// fail (兜底, 其它未知错误):
+//   - 其它 code / message
+// ============================================================
+export function classifyError(e) {
+  const code = e?.code || '';
+  const msg = String(e?.message || '');
+
+  // unreachable: 基础设施层
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_FAIL') {
+    return { status: 'unreachable', detail: `DNS fail (${code}): ${msg.slice(0, 80)}` };
+  }
+  if (code === 'ECONNRESET') {
+    return { status: 'unreachable', detail: `connection reset by peer (${code}) — service may block this IP range` };
+  }
+  if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
+    return { status: 'unreachable', detail: `network unreachable (${code})` };
+  }
+  if (/SSL_connect.*Connection reset/i.test(msg) || /read ECONNRESET/i.test(msg)) {
+    return { status: 'unreachable', detail: msg.slice(0, 100) };
+  }
+
+  // misconfigured: 配置错
+  if (code === 'ECONNREFUSED') {
+    return { status: 'misconfigured', detail: `connection refused (port may be closed or target wrong): ${msg.slice(0, 80)}` };
+  }
+  if (code === 'ETIMEDOUT') {
+    return { status: 'misconfigured', detail: `connect timeout — target may be unreachable or behind firewall: ${msg.slice(0, 80)}` };
+  }
+  if (/timeout after \d+ms/i.test(msg)) {
+    return { status: 'misconfigured', detail: msg.slice(0, 100) };
+  }
+
+  // 兜底
+  return { status: 'fail', detail: msg.slice(0, 200) || `unknown error (code=${code || 'none'})` };
+}
+
+// ============================================================
 // 单个 secret 检查
 // signature: checkSecret(name, fields, type) → {status, detail, latency_ms}
 // 公开 export 供 mcp-server 等外部进程复用 (无需 broker SECRET_CACHE)
@@ -131,6 +193,8 @@ export async function checkSecret(secretName, fields, secretType) {
   const t0 = Date.now();
   const cred = pickCredential(secretType, fields);
   if (!cred || !cred.primary) {
+    // pickCredential 返 null: type 不支持 或 fields 全空 (无任何凭据值)
+    // 这是 "没有可检查的东西", 不是配置错. 保持 skipped
     return { status: 'skipped', detail: `no extractable credential for type=${secretType}`, latency_ms: 0 };
   }
   try {
@@ -157,12 +221,15 @@ export async function checkSecret(secretName, fields, secretType) {
       case 'cloudflare_token':
         return await checkCloudflare(cred.primary, t0);
       case 'ssh_private_key':
-        return { status: 'skipped', detail: 'ssh_private_key (bare) needs ssh_connection host/port — skipped', latency_ms: 0 };
+        // ssh_private_key 是 bare 凭据 (无 host), 需要 wrap 成 ssh_connection 才能验.
+        // 如果用户只配 ssh_private_key 没配 ssh_connection, 是配置错不是 skipped.
+        return { status: 'misconfigured', detail: 'ssh_private_key (bare) needs ssh_connection host/port wrapper', latency_ms: 0 };
       default:
+        // type 不在支持列表, 不要假装能查. skipped.
         return { status: 'skipped', detail: 'no check for type=' + secretType, latency_ms: 0 };
     }
   } catch (e) {
-    return { status: 'fail', detail: e.message.slice(0, 200), latency_ms: Date.now() - t0 };
+    return { ...classifyError(e), latency_ms: Date.now() - t0 };
   }
 }
 
@@ -197,7 +264,7 @@ function checkGithubLike(token, type, t0) {
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
 }
@@ -217,22 +284,24 @@ function checkOpenAI(apiKey, t0) {
         else resolve({ status: 'fail', detail: `HTTP ${res.statusCode}`, latency_ms: latency });
       });
     });
-    req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
+    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
 }
 
 function checkSsh(meta, t0) {
   // meta: { host, port, user, auth }
+  // 缺 host 字段: 是配置错 (用户配了 ssh_connection 但没填 host), 不是 skipped
+  if (!meta || !meta.host) {
+    return Promise.resolve({ status: 'misconfigured', detail: 'ssh_connection missing host field', latency_ms: 0 });
+  }
   return new Promise((resolve) => {
-    if (!meta || !meta.host) {
-      return resolve({ status: 'skipped', detail: 'ssh_connection missing host field', latency_ms: 0 });
-    }
     const sock = netConnect(meta.port || 22, meta.host);
     const timer = setTimeout(() => {
       sock.destroy();
-      resolve({ status: 'fail', detail: `connect timeout ${meta.host}:${meta.port || 22}`, latency_ms: Date.now() - t0 });
+      // 10s timeout: 远端不响应, 通常是 ssh target 错 (防火墙 drop / 内网不可达)
+      resolve({ status: 'misconfigured', detail: `connect timeout ${meta.host}:${meta.port || 22} — target may be unreachable or behind firewall`, latency_ms: Date.now() - t0 });
     }, TIMEOUT_MS);
     sock.on('connect', () => {
       clearTimeout(timer);
@@ -241,8 +310,10 @@ function checkSsh(meta, t0) {
     });
     sock.on('error', e => {
       clearTimeout(timer);
-      // ECONNREFUSED 也算"fail" — 凭据未过期但服务挂
-      resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 });
+      // ECONNREFUSED → misconfigured (端口不开或目标错)
+      // ECONNRESET / ENOTFOUND → unreachable (网络层)
+      // 其它 → 走 classifyError 分类
+      resolve({ ...classifyError(e), latency_ms: Date.now() - t0 });
     });
   });
 }
@@ -271,7 +342,7 @@ function checkCloudflare(apiToken, t0) {
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
 }
@@ -328,8 +399,10 @@ export function signAliyun({ action, accessKeyId, accessKeySecret, region = 'cn-
 
 async function checkAliyun(accessKeyId, meta, t0) {
   // meta: { access_key_secret, region }
+  // 缺 secret: 凭据字段不齐 = 配置错 (用户要补字段), 不是 skipped
   if (!accessKeyId || !meta?.access_key_secret) {
-    return { status: 'skipped', detail: 'aliyun_ak missing access_key_id or access_key_secret', latency_ms: 0 };
+    const missing = !accessKeyId ? 'access_key_id' : 'access_key_secret';
+    return { status: 'misconfigured', detail: `aliyun_ak missing ${missing}`, latency_ms: 0 };
   }
   // 签名 + 调 DescribeRegions
   const { query } = signAliyun({
@@ -367,7 +440,7 @@ async function checkAliyun(accessKeyId, meta, t0) {
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
 }
@@ -417,8 +490,10 @@ export function signTencent({ action, version, secretId, secretKey, region = 'ap
 
 async function checkTencent(secretId, meta, t0) {
   // meta: { secret_key, region }
+  // 缺 secret: 配置错
   if (!secretId || !meta?.secret_key) {
-    return { status: 'skipped', detail: 'tencent_sk missing secret_id or secret_key', latency_ms: 0 };
+    const missing = !secretId ? 'secret_id' : 'secret_key';
+    return { status: 'misconfigured', detail: `tencent_sk missing ${missing}`, latency_ms: 0 };
   }
   const { authorization, contentType } = signTencent({
     action: 'DescribeRegions',
@@ -462,7 +537,7 @@ async function checkTencent(secretId, meta, t0) {
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
 }
@@ -504,8 +579,10 @@ export function signAws({ accessKeyId, secretAccessKey, region = 'us-east-1', se
 
 async function checkAws(accessKeyId, meta, t0) {
   // meta: { secret_access_key, region }
+  // 缺 secret: 配置错
   if (!accessKeyId || !meta?.secret_access_key) {
-    return { status: 'skipped', detail: 'aws_access_key missing access_key_id or secret_access_key', latency_ms: 0 };
+    const missing = !accessKeyId ? 'access_key_id' : 'secret_access_key';
+    return { status: 'misconfigured', detail: `aws_access_key missing ${missing}`, latency_ms: 0 };
   }
   const { authorization, amzDate, host, signedHeaders } = signAws({
     accessKeyId,
@@ -545,7 +622,7 @@ async function checkAws(accessKeyId, meta, t0) {
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ status: 'fail', detail: e.message, latency_ms: Date.now() - t0 }));
+    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
 }
@@ -557,7 +634,8 @@ async function checkAws(accessKeyId, meta, t0) {
 export async function runAll(getSecrets) {
   loadState();
   const t0 = Date.now();
-  const summary = { ok: 0, expired: 0, fail: 0, skipped: 0, total: 0 };
+  // v3.1 M5.3: 5 维 status (M4 4 维 + unreachable / misconfigured)
+  const summary = { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 };
   const checks = {};
   for (const [name, entry] of Object.entries(getSecrets())) {
     summary.total++;
@@ -565,7 +643,9 @@ export async function runAll(getSecrets) {
     checks[name] = { ...r, type: entry.type, ts: new Date().toISOString() };
     summary[r.status] = (summary[r.status] || 0) + 1;
   }
-  const allPass = summary.expired === 0 && summary.fail === 0;
+  // last_status: ok 当且仅当 5 个非 ok 维度全为 0
+  const allPass = summary.expired === 0 && summary.unreachable === 0
+    && summary.misconfigured === 0 && summary.fail === 0;
   const newState = {
     last_run_at: new Date().toISOString(),
     last_status: allPass ? 'ok' : 'degraded',
@@ -627,7 +707,8 @@ export async function runAllViaMcp(mcpServerUrl) {
     last_run_at: new Date().toISOString(),
     last_status: result.last_status || 'unknown',
     duration_ms: result.duration_ms || (Date.now() - t0),
-    summary: result.summary || { ok: 0, expired: 0, fail: 0, skipped: 0, total: 0 },
+    // v3.1 M5.3: summary 5 维兜底 (M4 4 维 + unreachable / misconfigured)
+    summary: result.summary || { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 },
     checks: result.checks || {},
     _source: 'mcp_server',  // 标记这次跑来自 mcp-server
   };

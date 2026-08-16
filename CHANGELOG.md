@@ -348,6 +348,108 @@ M5.3 不修这些, 仍是 user action 或 backlog:
 
 ---
 
+## [3.1.1] - 2026-08-16
+
+### 概述
+
+v3.0 `/api/v1/proxy/:service` 不管 secret 健康度, 凭据 expired 也照常调上游, 浪费配额 + 触发风控.
+v3.1.1 M5.5 加 service ↔ secret 联动: 当 `svc.token_secret` 引用 secret 是 expired / unreachable / misconfigured / fail 时,
+broker 提前 503 阻断, **不真去调 upstream**.
+
+**1 个 commit**: `9c1ec0d broker: service-secret-guard 联动 — call_service 前置 503 阻断 (M5.5)`
+**测试 5 套件 256/256 PASS** (41 + 45 + 103 + 35 + **32** 新, 224 → 256, +32)
+
+### Added (新增功能)
+
+#### M5.5 (Service ↔ Secret 联动 / call_service 前置检查) — commit `9c1ec0d`
+
+- **新模块** `broker/service-secret-guard.js` (4151 字节):
+  - `checkSecretForService(tokenSecret, getSecretStatusFn) → { allowed, status, detail, ... }`
+  - 5 min 内存缓存 (避免每个 call_service 都查 healthcheck state 读盘)
+  - 注入失败兜底 (getSecretStatusFn 缺/null) → allowed=true (不阻断业务)
+  - 未来 status 兜底 → 保守阻断
+  - 公开 `guardHint(status)` 翻译成用户行动提示
+
+- **broker/server.js** 改 `/api/v1/proxy/:service` handler:
+  - 在 `canProxy` 之后、`callUpstream` 之前调 `checkSecretForService(svc.token_secret, healthcheckGetSecretStatus)`
+  - `!allowed` → 503 + 详细 hint (`rotate the secret first` / `fix the upstream network/firewall` / `fix the secret config` / `check the secret status`)
+  - audit log: `action='proxy_blocked'`, `secret=YYY`, `secret_status=ZZZ`, `status='denied'`
+  - 即使放过也把 `secret_status` 写进 audit log (代理调用上下文)
+
+- **broker/server.js** 改 `/api/v1/services` GET: 每个 service 返回 `token_secret` + `secret_health` 字段
+
+- **broker/dashboard/app.js** 改 `renderServiceCard`: 加 secret 健康度 badge
+  - 5 维 status 颜色 (复用 `.hc-badge` 已有 CSS)
+  - hover 看 detail
+  - 没 healthcheck 数据 → "unknown" 灰
+
+- **新测试套件** `broker-test/test-proxy-guard.js` (9115 字节, 32 断言):
+  - 5 维 status 分类 9 cases (ok/expired/unreachable/misconfigured/fail/skipped/null token/empty token/unknown)
+  - 5 min 缓存复用 3 cases (第二次/第三次都不重查)
+  - 缓存过期 (TTL 边界) 3 cases (4:59 仍缓存 / 5:01 重查, mock Date.now)
+  - `clearSecretGuardCache` 4 cases (清单个 / 全部)
+  - `guardHint` 4 cases (4 种 status 提示)
+  - 注入失败兜底 3 cases
+  - `SECRET_GUARD_TTL_MS = 5min` 常量
+  - 未知 status 兜底 2 cases
+
+### Changed (行为变更)
+
+- `/api/v1/proxy/:service` 当 token_secret 状态非 ok/skipped/unknown/no_secret 时 → **503 阻断**, 不调 upstream
+- `/api/v1/services` JSON shape 加 2 字段 (`token_secret` + `secret_health`)
+- `/api/v1/proxy` audit log 加 `secret_status` 字段 (代理调用上下文)
+
+### 兼容 (Compatibility)
+
+- 0 新 npm 依赖
+- 0 数据库 schema 变更
+- 公开 API 行为兼容: 老 service 配置不变, 默认放过
+- JSON 加 2 字段, 老客户端忽略即可
+- guard 注入失败兜底 → 阻断业务, 安全降级
+- 5 min 缓存对用户透明 (broker 重启清空, healthcheck state 变化后下次 cache miss 重新查)
+
+### 公网验证 (生产 ECS broker, 2026-08-16)
+
+#### `/api/v1/services` (admin mTLS) 5 services 全部带 secret_health
+
+| service | token_secret | secret_health.status | detail |
+|---|---|---|---|
+| `github` | GITHUB_PAT | **expired** | 401 Bad credentials |
+| `openai` | OPENAI_API_KEY | **unreachable** | ECONNRESET — service may block this IP range |
+| `aliyun_ecs` | (无) | None | (不需 secret) |
+| `alidns` | ALIYUN_ACCESS_KEY | **ok** | DescribeRegions 32 regions accessible |
+| `cloudflare` | cloudflare | **expired** | 403 forbidden |
+
+#### call_service 前置阻断 (3 case)
+
+| 调 | secret 状态 | 预期 | 实际 |
+|---|---|---|---|
+| `POST /api/v1/proxy/openai` | unreachable | 503 blocked | ✅ 503 + hint "fix network" |
+| `POST /api/v1/proxy/github` | expired | 503 blocked | ✅ 503 + hint "rotate" |
+| `POST /api/v1/proxy/alidns` | ok | 放行 | ✅ 放行 (upstream 自身 502 是 broker 注入问题, 不阻断) |
+
+#### audit log 落盘
+
+3 条新事件 (proxy_blocked × 2 + proxy × 1), 都带 `secret_status` 字段.
+
+### 已知问题 (Known Issues)
+
+- **broker state.json 缓存**: 用户的 dashboard "Run Now" 触发 `/api/v1/healthcheck/run` (走 mcp_server upstream) 才能刷新 broker state.json. mcp-server 端 `run_healthcheck` 工具不写 broker state (只返给 caller). 这是 M5.3 设计预期, M5.5 复用同一份 state.
+- **OPENAI API_KEY 持续 unreachable**: ECS 出网 47.94.225.76 (AS37963 Hangzhou Alibaba Advertising) 被 OpenAI 拒, 走 m5.5 guard 后 `openai` service 自动 503 阻断, 不再触发上游风控. 解决: ECS 接 Cloudflare WARP 出网 / 海外 VPS 跳板 / 接受 healthcheck 永远 unreachable.
+- **GITHUB_PAT / cloudflare token 真过期**: 仍需用户轮换 (M5.5 让 secret 过期时 service 自动阻断, 业务不能继续调).
+- **IBMC ssh target 192.168.2.100 不可达**: 跟 service 解耦 (IBMC 不在 services tab 里), 仍需用户改 broker.yaml.
+
+### 下一步 (Next Steps / Backlog)
+
+- [ ] M5.6: 告警增强 (SSE 实时推送 healthcheck 状态变化 + secret 过期时 dashboard 红点)
+- [ ] M5.7: mcp-server 端 healthcheck 写 broker audit 桥 (新增 mcp→broker audit 桥 API)
+- [ ] M5.8: 自动轮换工作流 (secret expired 时自动 trigger 邮件/钉钉/webhook)
+- [ ] ECS 接 Cloudflare WARP 出网 (OPENAI 已知网络问题, 不在本系统范围)
+- [ ] 用户轮换 GITHUB_PAT / cloudflare token
+- [ ] 用户改 IBMC ssh target host
+
+---
+
 ## [2.x] - 历史
 
 v2.x 系列 (commit `976a4fc` 之前) 是 Secret Broker 的 mTLS + SOPS 基础版本.

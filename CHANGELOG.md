@@ -252,6 +252,102 @@ M5.2 验证时真实验证 `401 Bad credentials` (latency 1010ms, 拿到真响�
 
 ---
 
+## [3.1.0] - 2026-08-16
+
+### 概述
+
+v3.0 M4 healthcheck 把所有"没成功"全塞进 `fail`, dashboard 上看到 `4 fail` 不知道
+该轮换凭据 / 改 ECS 出网 / 改 broker.yaml. v3.1 M5.3 把 `fail` 拆成 3 个独立维度,
+让"用户能做什么" 一目了然.
+
+**1 个 commit**: `19e42fe healthcheck: 5-维 status (ok/expired/unreachable/misconfigured/fail) — M5.3`
+**测试 4 套件 224/224 PASS** (41 + 45 + 103 + 35, 188 → 224, +36)
+
+### Added (新增功能)
+
+#### M5.3 (5-维 healthcheck status) — commit `19e42fe`
+
+healthcheck 状态从 4 维升级到 5 维:
+
+| status | 含义 | 用户动作 |
+|---|---|---|
+| `ok` | 业务验证通过 | 不用动 |
+| `expired` | 401/403 真凭据问题 | **轮换凭据** (`rotate-secret-ecs.sh`) |
+| `unreachable` | 基础设施不可达 (DNS / ECONNRESET / IP 段被风控) | **改 ECS 出网** (Warp / 海外跳板 / 安全组) — **改不了 ECS IP** |
+| `misconfigured` | 配置错 (缺字段 / ssh target 错 / 端口错) | **改 broker.yaml / secrets/*.yaml** |
+| `fail` | 兜底未知错误 | 看 detail 排查 |
+| `skipped` | type 不支持 / 无凭据 | 不用动 |
+
+**关键函数**: `classifyError(e)` (export) 纯函数, 把网络/系统错误归类到 5 维之一.
+6 个 check 函数 (`checkGithubLike` / `checkOpenAI` / `checkSsh` / `checkAliyun` /
+`checkTencent` / `checkAws` / `checkCloudflare`) 全部 `req.on('error')` 走 classifyError.
+
+**检测规则**:
+- `unreachable` (基础设施): ENOTFOUND / EAI_AGAIN / EAI_FAIL / ECONNRESET /
+  EHOSTUNREACH / ENETUNREACH / SSL reset in msg / read ECONNRESET in msg
+- `misconfigured` (配置错): ECONNREFUSED / ETIMEDOUT / `timeout after Xms` /
+  ssh_connection 缺 host / cloud 凭据缺子凭据 / ssh_private_key bare
+- `fail` (兜底): 其它未知错误 + HTTP 4xx/5xx non-401/403
+
+**Dashboard 增强** (home tab 凭据自检 card):
+- 标题下加 5 维 summary pills (按 count 显示, 0 跳过)
+- 每个 secret 行的 badge 颜色按 5 维区分 (绿/红/黄/琥珀/红/灰)
+- stat card 仍显示 `ok/total` (e.g. "1/5"), 不变
+
+### Changed (行为变更)
+
+- `ssh_connection` 缺 `host` 字段: `skipped` → `misconfigured` (配置错, 不是"没东西可验")
+- `ssh_connection` TCP connect 10s timeout: `fail` → `misconfigured` (远端不响应, 通常 ssh target 错)
+- `aliyun_ak` / `tencent_sk` / `aws_access_key` 缺子凭据 (access_key_secret / secret_key / secret_access_key): `skipped` → `misconfigured`
+- `ssh_private_key` (bare): `skipped` → `misconfigured` (需要 wrap 成 ssh_connection)
+- `runAll` summary 加 2 字段: `unreachable`, `misconfigured`
+- `runAll` last_status 计算看 4 个非 ok 维度 (M4 只看 expired/fail)
+- `pickCredential` `ssh_connection` 接受"有 host 即有凭据" (healthcheck 只测 TCP 可达性, 不需要凭据值)
+
+### 兼容 (Compatibility)
+
+- 0 新 npm 依赖
+- 0 数据库 schema 变更
+- 0 公开 API 重命名 (`checkSecret` / `runAll` / `runAllViaMcp` / `getStatus` / `getSecretStatus` 同名, 加 `classifyError` 新 export)
+- 系统接口 (`/api/v1/healthcheck/status`, `/api/v1/healthcheck/run`) JSON shape 兼容 (仅多 2 个 summary 字段)
+- `skipped` 仍存在 (未知 type / 无凭据), `fail` 仍存在 (兜底), `expired` 沿用
+
+### 公网验证 (生产 ECS broker, 5 secrets, 2026-08-16)
+
+```
+summary: { ok: 1, expired: 2, unreachable: 1, misconfigured: 1, fail: 0, skipped: 0, total: 5 }
+```
+
+| Secret | M4 (笼统) | M5.3 (精确) | Detail |
+|---|---|---|---|
+| ALIYUN_ACCESS_KEY | ok | **ok** | DescribeRegions 32 regions 1149ms |
+| OPENAI_API_KEY | fail | **unreachable** | ECONNRESET — OpenAI 拒阿里云 IP 段 47.94.225.76 (AS37963) |
+| IBMC | fail | **misconfigured** | connect timeout 192.168.2.100:22 — ssh target 不可达 |
+| GITHUB_PAT | expired | **expired** | 401 Bad credentials (M5.2 真实验证, 待用户轮换) |
+| cloudflare | expired | **expired** | 403 forbidden (M5.2 真实验证, 待用户轮换) |
+
+### 已知问题 (Known Issues)
+
+M5.3 不修这些, 仍是 user action 或 backlog:
+
+- **OPENAI API_KEY 持续 unreachable**: ECS 出网 47.94.225.76 (AS37963 Hangzhou Alibaba Advertising) 被 OpenAI 拒
+  (TCP 通但 SSL reset). xray 代理出网 (127.0.0.1:1080) 也 timeout 15s (出口同源 = 阿里云).
+  解决: ECS 接 Cloudflare WARP 出网 / 海外 VPS 跳板 / 接受 healthcheck 永远 unreachable.
+- **GITHUB_PAT 真过期** (401): 用户需 github.com/settings/tokens 创新 PAT + `rotate-secret-ecs.sh`.
+- **cloudflare token 真过期** (403): 用户需 Cloudflare dashboard 创新 token + `rotate-secret-ecs.sh`.
+- **IBMC ssh target 192.168.2.100 不可达**: ECS 路由表有 `192.168.2.100 via 172.17.255.253 dev eth0`
+  但走网关 timeout. 用户需改 `broker.yaml IBMC.ssh_connection.host` 为 ECS 可达 IP.
+
+### 下一步 (Next Steps / Backlog)
+
+- [ ] M5.4: mcp-server 端 healthcheck 写 broker audit (需新增 mcp→broker audit 桥 API)
+- [ ] M5.5+: 告警增强 (email / webhook / SSE 实时推送)
+- [ ] ECS 接 Cloudflare WARP 出网 (解决 OPENAI unreachable)
+- [ ] 用户轮换 GITHUB_PAT / cloudflare token
+- [ ] 用户改 IBMC ssh target host
+
+---
+
 ## [2.x] - 历史
 
 v2.x 系列 (commit `976a4fc` 之前) 是 Secret Broker 的 mTLS + SOPS 基础版本.

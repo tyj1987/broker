@@ -7,9 +7,9 @@
 version: '3'
 
 vars:
-  APP_NAME: my-first-app
-  REGISTRY_ALIYUN: registry.cn-hangzhou.aliyuncs.com/your-ns
-  REGISTRY_TENCENT: ccr.ccs.tencentyun.com/your-ns
+  REGISTRY_ALIYUN: registry.cn-hangzhou.aliyuncs.com/tyj1987
+  REGISTRY_TENCENT: ccr.ccs.tencentyun.com/tyj1987
+  IMAGE_NAME: sops-age-template-broker
 
 tasks:
   default:
@@ -21,12 +21,12 @@ tasks:
   # 工具检查 / Tool check
   # ============================
   check:
-    desc: Check required tools / 检查必需工具
+    desc: Check required tools / 检查必需工具 (sops, age, openssl, node)
     cmds:
       - pwsh -File scripts/check-tools.ps1
 
   # ============================
-  # 密钥管理 / Secrets
+  # 密钥管理 / Secrets (SOPS + age)
   # ============================
   secrets:init:
     desc: Initialize secret system (generate age keys + encrypt first file) / 初始化密钥体系（生成 age 钥匙 + 加密第一个文件）
@@ -34,20 +34,14 @@ tasks:
       - pwsh -File bootstrap.ps1
 
   secrets:edit:
-    desc: Edit common.env (auto decrypt -> edit -> encrypt) / 编辑 common.env（自动解密 → 编辑 → 加密）
+    desc: Edit broker.yaml (auto decrypt -> edit -> encrypt) / 编辑 broker.yaml（自动解密 → 编辑 → 加密）
     cmds:
-      - sops secrets/common.env
+      - sops secrets/broker.yaml
 
   secrets:view:
-    desc: View decrypted secrets / 查看解密后内容
+    desc: View decrypted broker.yaml / 查看解密后内容
     cmds:
-      - sops --decrypt secrets/common.env
-
-  secrets:export:
-    desc: Decrypt to .env file (for tools that do not understand SOPS) / 解密到 .env 文件（给不认 SOPS 的工具用）
-    cmds:
-      - sops --decrypt --output-type dotenv secrets/common.env > .env
-      - echo "OK .env generated (gitignored) / .env 已生成（已 gitignore）"
+      - sops --decrypt secrets/broker.yaml
 
   secrets:rotate:
     desc: Rotate all age keys / 轮转所有 age 钥匙
@@ -63,79 +57,58 @@ tasks:
       - pwsh -File scripts/backup-keys.ps1
 
   # ============================
-  # 本地开发 / Development
-  # ============================
-  dev:
-    desc: Start dev environment (auto-decrypt secrets + run app) / 启动开发环境（自动解密密钥 + 跑应用）
-    deps: [dev:secrets, dev:run]
-
-  dev:secrets:
-    desc: Decrypt secrets to .env for the app / 解密密钥到 .env
-    cmds:
-      - sops --decrypt --output-type dotenv secrets/common.env > .env
-
-  dev:run:
-    desc: Run the Node.js app / 跑 Node 应用
-    cmds:
-      - cd app && node --env-file=../.env index.js
-
-  # ============================
-  # 代码质量 / Code quality
-  # ============================
-  lint:
-    desc: Lint code / 代码风格
-    cmds:
-      - cd app && npm run lint
-
-  format:
-    desc: Format code / 格式化代码
-    cmds:
-      - cd app && npm run format
-
-  # ============================
-  # 测试 / Tests
+  # Broker 测试 / Broker tests
   # ============================
   test:
-    desc: Run tests / 跑测试
+    desc: Run all broker test suites / 跑全部 broker 测试
     cmds:
-      - cd app && npm test
+      - cd broker-test && node test-can-proxy.js
+      - cd broker-test && node test-master-key.js
+      - cd broker-test && node test-healthcheck.js
+      - cd broker-test && node test-mcp-server.js
+      - cd broker-test && node test-proxy-guard.js
+      - cd broker-test && node test-alert-history.js
 
-  test:coverage:
-    desc: Run tests with coverage / 跑测试 + 覆盖率
+  test:one:
+    desc: Run a single test suite / 跑单个测试 (e.g. task test:one -- test-healthcheck.js)
     cmds:
-      - cd app && npm run test:coverage
+      - cd broker-test && node {{.CLI_ARGS}}
 
   # ============================
-  # 构建 / Build
+  # 构建 / Build (broker docker image)
   # ============================
   build:
-    desc: Build Docker image (multi-arch) / 构建 Docker 镜像（多架构）
+    desc: Build broker Docker image (linux/amd64) / 构建 broker 镜像
     cmds:
-      - docker buildx build --platform linux/amd64,linux/arm64 -t {{.APP_NAME}}:{{.TAG | default "latest"}} --load .
+      - docker buildx build --platform linux/amd64 -t {{.IMAGE_NAME}}:{{.TAG | default "latest"}} --load ./broker
 
   push:
-    desc: Push to Aliyun ACR + Tencent TCR / 推送到阿里云 ACR + 腾讯云 TCR
+    desc: Push broker image to dual registry (Aliyun + Tencent) / 推送到双云 registry
     cmds:
-      - docker tag {{.APP_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_ALIYUN}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
-      - docker tag {{.APP_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_TENCENT}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
-      - docker push {{.REGISTRY_ALIYUN}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
-      - docker push {{.REGISTRY_TENCENT}}/{{.APP_NAME}}:{{.TAG | default "latest"}}
+      - docker tag {{.IMAGE_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_ALIYUN}}/{{.IMAGE_NAME}}:{{.TAG | default "latest"}}
+      - docker tag {{.IMAGE_NAME}}:{{.TAG | default "latest"}} {{.REGISTRY_TENCENT}}/{{.IMAGE_NAME}}:{{.TAG | default "latest"}}
+      - docker push {{.REGISTRY_ALIYUN}}/{{.IMAGE_NAME}}:{{.TAG | default "latest"}}
+      - docker push {{.REGISTRY_TENCENT}}/{{.IMAGE_NAME}}:{{.TAG | default "latest"}}
 
   # ============================
   # 部署 / Deploy
   # ============================
-  deploy:
-    desc: Full deploy (build + push + terraform apply) / 完整部署
+  deploy:aliyun:
+    desc: Deploy broker to Aliyun ECS / 部署到阿里云 ECS
     cmds:
-      - task:build
-      - task:push
-      - cd infra/aliyun && terraform init && terraform apply -auto-approve
+      - cd infra/aliyun/broker && terraform init
+      - cd infra/aliyun/broker && terraform apply -auto-approve -var-file=b.tfvars
+
+  deploy:tencent:
+    desc: Deploy broker to Tencent CVM / 部署到腾讯云 CVM
+    cmds:
+      - cd infra/tencent && terraform init
+      - cd infra/tencent && terraform apply -auto-approve -var-file=broker.tfvars
 
   # ============================
   # 清理 / Cleanup
   # ============================
   clean:
-    desc: Clean temp files / 清理临时文件
+    desc: Clean local temp files / 清理本地临时文件
     cmds:
-      - rm -f .env *.dec.yaml
-      - docker system prune -f
+      - 'Remove-Item -ErrorAction SilentlyContinue *.dec.yaml,*.dec.yml,*.dec.env'

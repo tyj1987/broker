@@ -1,18 +1,18 @@
 # RUNBOOK / 运维手册
 
-> Operational procedures for my-first-app.
-> my-first-app 的运维操作手册。
+> Operational procedures for **Secret Broker** (mTLS HTTPS credential proxy).
+> Secret Broker 的运维操作手册。
 > Read this when something is on fire, before you rotate keys,
 > or when you set up the project on a new machine.
 > 出事时、轮转钥匙前、在新机器上搭项目时读这个。
 
 ---
 
-## 1. First-time setup on a new machine / 1. 新机器首次搭建
+## 0. Quick start on a new machine / 新机器快速搭建
 
 ```powershell
 # 1. Install all required tools / 装所有必需工具
-scoop install age sops git go-task direnv gitleaks nodejs
+scoop install age sops git go-task gitleaks nodejs direnv
 # winget fallback: winget install FiloSottile.age Mozilla.SOPS OpenJS.NodeJS.LTS
 
 # 2. Add direnv to your PowerShell profile / 给 PowerShell profile 加 direnv hook
@@ -20,161 +20,15 @@ pwsh -File scripts/install-direnv-hook.ps1
 # Restart PowerShell. / 重启 PowerShell。
 
 # 3. Clone the repo and bootstrap / 克隆仓库并引导
-git clone https://github.com/<you>/my-first-app.git
-cd my-first-app
+git clone https://github.com/tyj1987/sops-age-template.git
+cd sops-age-template
 pwsh -File bootstrap.ps1
-# (It will skip age key generation if a USB drive with key-b-backup.txt
-#  is plugged in and copied to ~/.config/sops/age/key-b-backup.txt.)
-# （如果 U 盘里插着 key-b-backup.txt 并拷到 ~/.config/sops/age/ 下，
-#  bootstrap 会跳过重新生成 age 钥匙。）
-```
-
-The bootstrap script is idempotent. Run it on every new dev box.
-bootstrap 脚本是幂等的。每台新机器都跑一次。
-
----
-
-## 2. Day-to-day ops / 2. 日常运维
-
-### View the current decrypted secrets / 查看当前解密的密钥
-
-```powershell
-task secrets:view
-```
-
-### Edit a secret / 编辑密钥
-
-```powershell
-task secrets:edit
-# Opens secrets\common.env in $EDITOR. SOPS handles decrypt/edit/encrypt.
-# 用 $EDITOR 打开 secrets\common.env。SOPS 自动解密 → 编辑 → 加密。
-# Add a new key=value, save, commit, push.
-# 加新 key=value，保存，提交，推送。
-git add secrets\common.env
-git commit -m "rotate OpenAI key / 轮转 OpenAI key"
-git push
-```
-
-### Decrypt to .env (for tools that don't understand SOPS)
-### 解密到 .env（给不认 SOPS 的工具用）
-
-```powershell
-task secrets:export
-# Writes .env (gitignored). Safe to delete with task clean.
-# 写出 .env（已 gitignore）。task clean 可清理。
-```
-
-### Run the local stack / 跑本地栈
-
-```powershell
-task dev
-# Decrypts .env, starts postgres + redis + app.
-# 解密 .env，启动 postgres + redis + app。
-# Visit http://localhost:3000/health
-# 打开 http://localhost:3000/health
-```
-
-### Stop the local stack / 停掉本地栈
-
-```powershell
-# From the directory task dev is running in: Ctrl-C
-# 在跑 task dev 的目录按 Ctrl-C
-# Or from another terminal / 或在另一个终端：
-docker compose down
+# bootstrap: install sops/age + generate age key + encrypt secrets/broker.yaml.example -> secrets/broker.yaml
 ```
 
 ---
 
-## 3. Backup & restore / 3. 备份与恢复
-
-### Back up age private keys / 备份 age 私钥
-
-```powershell
-task backup:keys
-# Or with a custom destination / 或指定目标：
-pwsh -File scripts/backup-keys.ps1 -Destination E:\keys-backup
-```
-
-This copies both `key-a.txt` and `key-b-backup.txt` to the destination
-and writes a `README.txt` index with the public keys.
-这会把 `key-a.txt` 和 `key-b-backup.txt` 都拷到目标目录，并生成一个
-`README.txt` 索引（带公钥）。
-
-### Copy to a USB drive (recommended) / 拷到 U 盘（推荐）
-
-1. Plug in the USB drive (e.g. `E:`). / 插上 U 盘（如 `E:`）。
-2. `task backup:keys -Destination E:\keys-backup`
-3. Verify the files are on the USB drive. / 检查文件在 U 盘上。
-4. Eject the USB drive. / 弹出 U 盘。
-5. Store the USB drive somewhere physically safe (safe, deposit box,
-   with a trusted family member). / 把 U 盘放在物理安全的地方
-   （保险柜、银行保险箱、信任的家人处）。
-
-### Restore from USB on a new machine / 在新机器上从 U 盘恢复
-
-1. Plug in the USB drive. / 插上 U 盘。
-2. Copy `key-a.txt` and `key-b-backup.txt` to `~/.config/sops/age/`.
-   / 把 `key-a.txt` 和 `key-b-backup.txt` 拷到 `~/.config/sops/age/`。
-3. Clone the repo. / 克隆仓库。
-4. `sops --decrypt secrets\common.env` should work immediately.
-   / 应该能立即解密。
-
-### Disconnected USB = no recovery / 没 U 盘 = 不可恢复
-
-If you lose BOTH your development machine AND the USB drive with the
-backup key, **all encrypted secrets are unrecoverable**. There is no
-backdoor. The system is designed this way on purpose — the trade-off
-is security for recoverability. Keep the USB in a separate physical
-location.
-如果开发机和 U 盘上的备份钥匙**都**丢了，**所有加密密钥都不可恢复**。
-没有后门——这是有意的设计：安全换可恢复性。U 盘必须放在不同的物理位置。
-
----
-
-## 4. Rotate age keys / 4. 轮转 age 钥匙
-
-Every 6-12 months, or immediately if you suspect a key was leaked.
-每 6-12 个月一次，或怀疑泄露时立即。
-
-```powershell
-task secrets:rotate
-```
-
-What it does / 做的事：
-1. Generates a new `key-a.txt` (replaces old). / 生成新 key-a.txt（替换旧）。
-2. Archives the old key to `~/.config/sops/age/archive-<timestamp>/`.
-   / 把旧钥匙归档到 `~/.config/sops/age/archive-<timestamp>/`。
-3. Replaces the old public key in `.sops.yaml` with the new one.
-   / 用新公钥替换 `.sops.yaml` 里的旧公钥。
-4. Re-encrypts every `secrets/*.env` file with the new key.
-   / 用新钥匙重加密所有 `secrets/*.env`。
-5. Commits the change (you do this). / 提交变更（你来）。
-
-**Manual steps after rotation / 轮转后手动步骤：**
-
-```powershell
-git add -A
-git commit -m "rotate age key / 轮转 age 钥匙"
-git push
-# Re-copy the new key-a.txt to your USB drive.
-# 把新的 key-a.txt 重新拷到 U 盘。
-```
-
-**Important / 重要**: the OLD key file is still in `archive-<timestamp>/`.
-Keep it until you have verified that:
-旧钥匙还在 `archive-<timestamp>/`。在确认下面这些之前别删：
-
-- The new encrypted files decrypt with the new key on a second machine.
-  / 在第二台机器上用新钥匙能解开新加密文件。
-- All services that consume those secrets (CI, local dev, production)
-  have picked up the new key.
-  / 所有消费这些密钥的服务（CI、本地、生产）都用了新钥匙。
-
-Then delete the archive. / 然后删归档。
-
----
-
-## 5. Secret Broker operations / 5. Secret Broker 运维
+## 1. Secret Broker operations / 1. Secret Broker 运维
 
 The Secret Broker lives on the ECS at `/opt/secret-broker/`.
 Secret Broker 在 ECS 上的位置是 `/opt/secret-broker/`。
@@ -423,7 +277,7 @@ test-audit.js 11 + test-home.js 8 + test-shortcuts.js 6 =
 
 ---
 
-## 6. Production deployment / 6. 生产部署
+## 2. Production deployment / 2. 生产部署
 
 ### Prerequisites (one-time, per cloud) / 前置条件（一次性，每家云）
 
@@ -537,7 +391,7 @@ Security notes / 安全提示：
 
 ---
 
-## 7. Incident response / 7. 应急响应
+## 3. Incident response / 3. 应急响应
 
 ### Secret accidentally committed in plaintext / 明文密钥误提交
 
@@ -590,35 +444,42 @@ history, but they are now permanent ciphertext.
 
 ---
 
-## 8. Monitoring / 8. 监控
+## 4. Monitoring / 4. 监控
 
-### Start Uptime Kuma / 启动 Uptime Kuma
+> broker 自带 healthcheck 引擎 (M4) + 5 维 status 告警 (M5.3) + SSE 实时推送 (M5.6).
+> dashboard home tab 看凭据自检状态; 异常 secret 立即有 audit + alert history + 浏览器通知.
+> / broker 自带 healthcheck, 不需要外部监控启动.
+
+### 4.1 Uptime Kuma (可选) / Optional Uptime Kuma
 
 ```powershell
-docker compose -f monitoring/uptime-kuma.yml up -d
+# 用任意 docker host 起 Uptime Kuma (跟 broker 不一定要同机)
+docker run -d --restart=always -p 127.0.0.1:3001:3001 \
+  -v uptime-kuma-data:/app/data \
+  louislam/uptime-kuma:1
 # Open http://localhost:3001 / 打开 http://localhost:3001
 ```
 
 Add monitors for: / 添加监控：
-- `https://<your-domain>/health` (HTTP probe / HTTP 拨测)
-- `<db-host>:5432` (TCP probe / TCP 拨测)
-- `<cache-host>:6379` (TCP probe / TCP 拨测)
-- `<your-domain>` (TLS cert expiry / TLS 证书过期)
+- `https://<broker-domain>/api/v1/health` (HTTP probe, returns 401 = broker alive / HTTP 拨测, 401 表示 broker 活着)
+- `<broker-domain>` (TLS cert expiry / TLS 证书过期)
+- SSH TCP probe to broker ECS (22)
 
 Configure a notification channel: WeChat, DingTalk, Telegram, Slack,
 or email. / 配告警渠道：微信/钉钉/Telegram/Slack/邮件。
 
-### Start Prometheus + Grafana (optional) / 可选启动
+### 4.2 broker healthcheck 自身 (built-in) / broker 自带健康度检查
 
-```powershell
-docker compose -f monitoring/uptime-kuma.yml --profile metrics up -d
-# Prometheus: http://localhost:9090
-# Grafana:    http://localhost:3000 (admin / change-me-on-first-login)
-```
+- **Dashboard home tab** → 凭据自检 card: 5 维 status pill (ok/expired/unreachable/misconfigured/fail) + Run Now 按钮
+- **每 4:00 cron** (broker 端): 自动跑 healthcheck, 5 secrets 5 维状态
+- **SSE 实时推送** (admin only): `/api/v1/admin/healthcheck/stream` → dashboard 状态变化时红点 + 浏览器通知
+- **alert_history** 持久化: `/api/v1/admin/alerts/history` → 状态变化 timeline
+
+详见 `docs/PLAN-secret-broker-v3.md` (M4/M5.3/M5.6 节).
 
 ---
 
-## 9. Disaster recovery checklist / 9. 灾难恢复清单
+## 5. Disaster recovery checklist / 5. 灾难恢复清单
 
 Run this checklist every quarter to make sure the system still
 recovers from a fresh machine.
@@ -641,7 +502,7 @@ recovers from a fresh machine.
 
 ---
 
-## 10. Reference / 10. 参考
+## 6. Reference / 6. 参考
 
 - SOPS docs / 文档: https://github.com/getsops/sops
 - age docs / 文档: https://age-encryption.org

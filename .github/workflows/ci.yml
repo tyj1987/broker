@@ -116,25 +116,7 @@ jobs:
           node cli/secret-broker.js help > /dev/null
 
   # ============================================================
-  # 4. 上一代 app 测试（保留兼容性）
-  # ============================================================
-  app-test:
-    name: App test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-          cache: 'npm'
-          cache-dependency-path: app/package-lock.json
-      - working-directory: app
-        run: npm ci
-      - working-directory: app
-        run: node --check index.js
-
-  # ============================================================
-  # 5. Terraform validate
+  # 4. Terraform validate
   # ============================================================
   terraform-validate:
     name: Terraform validate

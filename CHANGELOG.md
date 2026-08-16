@@ -450,6 +450,114 @@ broker 提前 503 阻断, **不真去调 upstream**.
 
 ---
 
+## [3.1.2] - 2026-08-16
+
+### 概述
+
+两个 broker 内部数据增强一起做, 都是"系统自我完善" — 不依赖网络/凭据:
+- **M5.6**: 状态变化持久化 (alert-history.jsonl) + SSE 实时推 + dashboard 红点 + 浏览器通知
+- **M5.9**: 轮换时间线 (last_rotated_at + rotation_history) + `/api/v1/rotate/:name` 实际写 + dashboard timeline UI
+
+**1 个 commit**: `ce286a6 broker: alert_history SSE 实时告警 (M5.6) + rotation_history timeline (M5.9)`
+**测试 6 套件 276/276 PASS** (41+45+103+35+32+**20** 新, 256 → 276, +20)
+
+### Added (新增功能)
+
+#### M5.6 (alert_history SSE 实时告警) — commit `ce286a6`
+
+- **broker/healthcheck.js**: 状态变化持久化 (`secrets/alert-history.jsonl`, append-only, last 1000 entries)
+  - `detectChanges()` 比较上次 vs 这次 status, 返 `{ changes: { name: { from, to, ts } } }`
+  - 检测方向: ok → expired / expired → ok / new secret (from=unknown) / removed (to=removed)
+  - `runAll` + `runAllViaMcp` 跑完有变化时落 alert entry + emit `status_change` 事件
+  - 公开 API: `getAlertHistory(limit?)` + `clearLastChecks()` (测试用)
+- **broker/server.js**: SSE 端点 `/api/v1/admin/healthcheck/stream` (admin only)
+  - 3 个 event: `ready` / `run_complete` / `status_change`
+  - 30 min 自动关 (跟 audit stream 一致)
+  - 启动时立即推 1 次当前 state
+- **broker/server.js**: REST 端点 `/api/v1/admin/alerts/history?limit=50`
+- **broker/dashboard/home.js**: SSE 客户端
+  - `startAlertStream` / `stopAlertStream` / `flashStatusChange`
+  - 状态变化时: home-healthcheck-card 红点 + 浏览器通知 + 自动 `loadAll()`
+  - `alertSeenIds` Set 去重 (避免重连后重放)
+- **broker/dashboard/style.css**: `alert-flash` 动画 (1s ease-in-out 3 次红边框 + 🔴 icon)
+
+#### M5.9 (rotation_history timeline) — commit `ce286a6`
+
+- **broker/server.js**: secrets schema 加 `last_rotated_at` + `rotation_history[]` 字段
+  - `normalizeSecretEntry` 默认 `last_rotated_at = updated_at`, `history = []`
+  - **凭据零接触**: `/api/v1/rotate/:name` **不**接受 value, 只记录"我刚轮换了 X"
+  - body: `{ note?, source? }`
+  - 持久化到 `secrets-detail.json` (SOPS 加密)
+  - audit log: `action='rotate'`, `status='ok'`, `source`, `note`
+  - 返 `{ rotated, last_rotated_at, rotation_count, note }`
+- **broker/server.js**: GET `/api/v1/secrets` (user) + GET `/api/v1/admin/secrets` 加字段
+- **broker/dashboard/admin/secrets.js**: 轮换按钮 + rotation_history timeline UI
+  - "🔄 轮换" 按钮 → `prompt` 输入 note → POST rotate
+  - "📜 N 次轮换历史" `<details>` 展开, 前 10 条 timeline
+  - `rotation_policy_days` 时显示已过/剩多少天提示
+
+#### 测试 (新套件 broker-test/test-alert-history.js, 10741 字节, 20 断言)
+
+- 启动无历史 / clearLastChecks / runAll 同样 / runAll 改 secret / 持久化到 ALERT_HISTORY_PATH
+- HEALTHCHECK_BUS emit status_change / 同样状态不 emit / 新 secret from=unknown / 消失 to=removed
+- 持久化 jsonl 文件存在 + 多行 + 合法 JSON + ts+changes
+
+### Changed (行为变更)
+
+- `/api/v1/rotate/:name` 从"see RUNBOOK" 改为实际写 `last_rotated_at` + `rotation_history` (凭据值修改仍走 `PUT /api/v1/admin/secrets/:name`)
+- `/api/v1/secrets` JSON shape 加 `last_rotated_at` 字段
+- `/api/v1/admin/secrets` JSON shape 加 `rotation_history` 字段
+- `secrets-detail.json` schema 加 2 字段 (后向兼容: 老 secret 自动 fallback)
+- `secrets/alert-history.jsonl` 是新文件 (运行时产物, 已加 .gitignore)
+
+### 兼容 (Compatibility)
+
+- 0 新 npm 依赖
+- 0 数据库 schema 变更 (secrets-detail.json 改是 jsonl, 老文件自动兼容)
+- 公开 API 兼容: SSE / alerts history 是新加 (老客户端忽略即可)
+- 凭据零接触保持: rotate endpoint 不接受 value, 只记录 metadata
+- 后向兼容: `last_rotated_at` fallback `updated_at`, `rotation_history` fallback `[]`
+- .gitignore 加 `secrets/healthcheck-state.json`, `secrets/alert-history.jsonl`, `secrets/secrets-detail.json` (运行时产物)
+
+### 公网验证 (生产 ECS broker, 2026-08-16)
+
+#### M5.6 — alert_history + SSE
+
+- 跑 healthcheck: 1 ok / 2 expired / 1 misconfigured / 0 fail / 0 skipped (4 total)
+- `/api/v1/admin/alerts/history` count: 1 (4 secret 第一次跑全算变化)
+- `alert-history.jsonl` 503 bytes 1 行
+- `/api/v1/admin/healthcheck/stream` 5s SSE 看到: `: hello` + `event: ready` + `event: run_complete` (full state with all checks)
+
+#### M5.9 — rotation
+
+- `POST /api/v1/rotate/GITHUB_PAT` body `{note, source}`:
+  ```json
+  {"rotated":"GITHUB_PAT","last_rotated_at":"2026-08-16T08:04:21.536Z","rotation_count":2,
+   "note":"Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or rotate-secret-ecs.sh)."}
+  ```
+- `GET /api/v1/admin/secrets` GITHUB_PAT:
+  - `last_rotated_at`: 2026-08-16T08:04:21.536Z
+  - `rotation_history`: 2 条 (按 ts 倒序), 每条含 ts/by/source/note
+- audit log: 4 healthcheck + 1 rotate 都带 cert fp + 凭据零接触
+
+### 已知问题 (Known Issues)
+
+- **OPENAI API_KEY 在 broker secrets 里未找到**: 跟 M5.6/M5.9 无关, 是 secrets-detail.json 当前不含 OPENAI. healthcheck summary 显示 4 total 而非 5. 不影响本次改动.
+- **GITHUB_PAT / cloudflare token 真过期**: 仍需用户轮换 (M5.5 让 secret 过期时 service 自动阻断, M5.9 让用户能 track 轮换历史).
+- **IBMC ssh target 192.168.2.100 不可达**: 仍需用户改 broker.yaml.
+
+### 下一步 (Next Steps / Backlog)
+
+- [ ] M5.7: mcp-server 端 healthcheck 写 broker audit 桥 (M5.6 已自动 emit status_change, 差异不大)
+- [ ] M5.8: 自动轮换工作流 (M5.6 alert 触发 → 邮件/钉钉/webhook) — M5.6 SSE 推 + alert 持久化已完成基础
+- [ ] 通知中心聚合 (M5.6 + audit 合并到一 SSE stream)
+- [ ] rotation_policy_days 完整 UI (日历视图)
+- [ ] ECS 接 Cloudflare WARP 出网 (OPENAI 已知网络问题)
+- [ ] 用户轮换 GITHUB_PAT / cloudflare token
+- [ ] 用户改 IBMC ssh target host
+
+---
+
 ## [2.x] - 历史
 
 v2.x 系列 (commit `976a4fc` 之前) 是 Secret Broker 的 mTLS + SOPS 基础版本.

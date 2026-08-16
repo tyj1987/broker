@@ -249,12 +249,28 @@ function renderServiceCard(svc) {
   card.className = 'card service-card';
   card.dataset.service = svc.name;
 
+  // v3.1 M5.5: service 依赖的 secret 健康度 badge
+  // 复用 healthcheck 5 维 status 颜色 (.hc-badge)
+  let secretBadge = '';
+  if (svc.token_secret) {
+    if (svc.secret_health) {
+      const sh = svc.secret_health;
+      // secret_health.status 是 healthcheck 5 维之一
+      const latency = sh.latency_ms != null ? ` ${sh.latency_ms}ms` : '';
+      secretBadge = `<span class="hc-badge ${escapeHtml(sh.status)}" title="${escapeHtml(sh.detail || '')}">🔑 ${escapeHtml(svc.token_secret)}: ${escapeHtml(sh.status)}${latency}</span>`;
+    } else {
+      // 配置了 token_secret 但没 healthcheck 数据
+      secretBadge = `<span class="hc-badge skipped" title="no healthcheck data yet">🔑 ${escapeHtml(svc.token_secret)}: unknown</span>`;
+    }
+  }
+
   const badges = `
     <span class="badge badge-type">${escapeHtml(svc.type)}</span>
     ${svc.allowed
       ? '<span class="badge badge-ok">可调用</span>'
       : '<span class="badge badge-denied">未授权</span>'}
-    ${svc.region ? `<span class="badge badge-type">${escapeHtml(svc.region)}</span>` : ''}`;
+    ${svc.region ? `<span class="badge badge-type">${escapeHtml(svc.region)}</span>` : ''}
+    ${secretBadge}`;
 
   const actionsHtml = (svc.actions || []).map((a, i) =>
     `<button class="btn btn-sm btn-action" data-svc="${escapeHtml(svc.name)}" data-idx="${i}">${escapeHtml(a.label || a.path || '动作')}</button>`

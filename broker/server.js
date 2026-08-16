@@ -554,6 +554,16 @@ function getSecretField(name, fieldName) {
 }
 
 // ============================================================
+// v3.1 M5.5: Service ↔ Secret 联动 — call_service 前置检查
+// 单独模块 broker/service-secret-guard.js, 方便测试 + 复用
+// ============================================================
+import {
+  checkSecretForService,
+  clearSecretGuardCache,
+  guardHint,
+} from './service-secret-guard.js';
+
+// ============================================================
 // Secret name validation
 // Allow: A-Z a-z 0-9 _ . -
 // First char must be letter, digit, or underscore (no leading dot/dash)
@@ -1886,6 +1896,13 @@ async function handle(req, res) {
   if (m === 'GET' && p === '/api/v1/services') {
     const services = [];
     for (const [name, svc] of Object.entries(CONFIG.services)) {
+      // v3.1 M5.5: 每个 service 返回 secret_health 字段, dashboard 一眼看到 service 依赖的 secret 健康度
+      const secretHealth = svc.token_secret
+        ? (() => {
+            const s = healthcheckGetSecretStatus(svc.token_secret);
+            return s ? { name: svc.token_secret, status: s.status, detail: s.detail, latency_ms: s.latency_ms, ts: s.ts } : null;
+          })()
+        : null;
       services.push({
         name,
         type: svc.type || 'unknown',
@@ -1893,6 +1910,8 @@ async function handle(req, res) {
         upstream: svc.upstream || '',
         region: svc.region || '',
         action: svc.action || '',
+        token_secret: svc.token_secret || null,
+        secret_health: secretHealth,
         allowed: isServiceAllowed(ctx, name),
         actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
       });
@@ -2676,6 +2695,27 @@ async function handle(req, res) {
       audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'denied' });
       return jsonError(res, 403, `Not allowed to proxy ${serviceName}${path}`);
     }
+    // v3.1 M5.5: Service ↔ Secret 联动 — 前置检查 token_secret 健康度
+    // 当 secret 处于 expired / unreachable / misconfigured / fail 时, 提前 503 阻断
+    const guard = checkSecretForService(svc.token_secret, healthcheckGetSecretStatus);
+    if (!guard.allowed) {
+      audit({
+        action: 'proxy_blocked',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        service: serviceName,
+        method,
+        path,
+        secret: svc.token_secret || null,
+        secret_status: guard.status,
+        status: 'denied',
+      });
+      // 不同 status 给不同提示, 让用户知道改什么
+      const hint = guardHint(guard.status);
+      return jsonError(res, 503,
+        `Service ${serviceName} blocked: secret "${svc.token_secret}" is ${guard.status} (${guard.detail}). ` +
+        `Action: ${hint}. Run "Run Now" healthcheck to refresh.`);
+    }
     try {
       // Pass the service name so callUpstream's error messages are useful.
       const r = await callUpstream({ ...svc, name: serviceName }, method, path, body.query, body.headers, body.body, { serviceName });
@@ -2688,6 +2728,7 @@ async function handle(req, res) {
         path,
         upstream_status: r.status,
         latency_ms: r.latency,
+        secret_status: guard.status,  // v3.1 M5.5: 记录当时 secret 健康度
         status: r.status >= 200 && r.status < 400 ? 'ok' : 'error',
       });
       // forward response

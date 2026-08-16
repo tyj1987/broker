@@ -370,4 +370,93 @@
   document.addEventListener('tabchange', (e) => {
     if (e.detail?.tab === 'home') loadAll();
   });
+
+  // ============================================================
+  // v3.1.1 M5.6: SSE 实时告警 (admin only)
+  // 订阅 /api/v1/admin/healthcheck/stream
+  //   event: run_complete  → 每次 healthcheck 跑完 (full state, 跟 fetch 一样)
+  //   event: status_change → 状态变化 (alert history entry)
+  //   状态变化时 dashboard 红点 + 浏览器通知 + 刷新 healthcheck card
+  // ============================================================
+  let alertSSE = null;
+  let alertSeenIds = new Set();  // 已展示的 status_change, 避免重连后重复通知
+
+  function startAlertStream() {
+    if (alertSSE) return;
+    if (!isAdmin) return;  // 非 admin 不连 (浪费连接)
+    try {
+      alertSSE = new EventSource('/api/v1/admin/healthcheck/stream', { withCredentials: true });
+      alertSSE.addEventListener('ready', () => {
+        // 初次连接成功, 静默
+      });
+      alertSSE.addEventListener('run_complete', () => {
+        // 每次 healthcheck 跑完, 重新拉 healthcheck card 显示最新 summary
+        if (window.location.hash.includes('home') || document.querySelector('.tab-home.active')) {
+          loadAll();
+        }
+      });
+      alertSSE.addEventListener('status_change', (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          // 用 ts+changes hash 当 ID, 避免重连后重放
+          const changeId = `${data.ts}:${Object.keys(data.changes || {}).sort().join(',')}`;
+          if (alertSeenIds.has(changeId)) return;
+          alertSeenIds.add(changeId);
+          // 清理 seen 集合 (避免无限增长)
+          if (alertSeenIds.size > 100) {
+            const arr = Array.from(alertSeenIds);
+            alertSeenIds = new Set(arr.slice(-50));
+          }
+          flashStatusChange(data);
+        } catch (e) {
+          console.warn('status_change parse failed', e);
+        }
+      });
+      alertSSE.onerror = () => {
+        // 自动重连 (EventSource 自带)
+        // 但如果连续失败, 5s 后尝试关掉, 等用户切 tab 时再启
+        console.warn('alert SSE error, will retry');
+      };
+    } catch (e) {
+      console.warn('alert SSE start failed', e);
+    }
+  }
+
+  function stopAlertStream() {
+    if (alertSSE) {
+      try { alertSSE.close(); } catch {}
+      alertSSE = null;
+    }
+  }
+
+  function flashStatusChange(data) {
+    // 1) 在 home-healthcheck-card 标题加红点 (3s 后消失)
+    const card = $('#home-healthcheck-card');
+    if (card) {
+      card.classList.add('alert-flash');
+      setTimeout(() => card.classList.remove('alert-flash'), 3000);
+    }
+    // 2) 浏览器通知 (用户授权过的话)
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const names = Object.keys(data.changes || {});
+      const title = `凭据状态变化 / Credential status change`;
+      const body = names.length
+        ? names.map(n => `${n}: ${data.changes[n].from} → ${data.changes[n].to}`).slice(0, 5).join('\n')
+        : (data.summary?.ok || 0) + ' ok / ' + (data.summary?.expired || 0) + ' expired / ' + (data.summary?.unreachable || 0) + ' unreachable';
+      try {
+        new Notification(title, { body, tag: 'broker-alert' });
+      } catch (e) { /* 通知被拒 */ }
+    }
+    // 3) 刷新 healthcheck card 显示最新
+    loadAll();
+  }
+
+  // 启动 SSE (admin 才连)
+  setTimeout(() => {
+    if (isAdmin) startAlertStream();
+  }, 2000);
+  // 申请通知权限 (best-effort)
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    try { Notification.requestPermission(); } catch {}
+  }
 })();

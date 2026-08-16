@@ -110,6 +110,31 @@
       const fieldSummary = fieldCount > 0
         ? `${fieldCount} 字段: ${Object.keys(s.fields).slice(0, 4).join(', ')}${fieldCount > 4 ? '…' : ''}`
         : '<span class="muted">(无字段)</span>';
+      // v3.1.1 M5.9: last_rotated_at + rotation_history
+      const lastRotated = s.last_rotated_at || s.updated_at;
+      const hist = Array.isArray(s.rotation_history) ? s.rotation_history : [];
+      const histCount = hist.length;
+      const histHtml = histCount > 0
+        ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:0.75rem;color:#6e7781">📜 ${histCount} 次轮换历史</summary>
+           <ul class="rotation-timeline">
+             ${hist.slice(0, 10).map(h => `
+               <li>
+                 <span class="ts">${formatTs(h.ts)}</span>
+                 <span class="by">${escapeHtml(h.by || '?')}</span>
+                 <span class="source">${escapeHtml(h.source || 'manual')}</span>
+                 <span class="note">${escapeHtml(h.note || '')}</span>
+               </li>`).join('')}
+           </ul></details>`
+        : '<div class="rotation-history-empty">无轮换历史</div>';
+      const policyDays = s.rotation_policy_days;
+      const policyHint = policyDays
+        ? (() => {
+            const days = Math.floor((Date.now() - new Date(lastRotated).getTime()) / 86400000);
+            if (days >= policyDays) return `<span class="status-error" style="font-size:0.75rem">已过 ${days}/${policyDays} 天</span>`;
+            if (days >= policyDays * 0.8) return `<span style="color:#f0c674;font-size:0.75rem">剩 ${policyDays - days}/${policyDays} 天</span>`;
+            return `<span class="muted" style="font-size:0.75rem">${days}/${policyDays} 天</span>`;
+          })()
+        : '';
       const checked = selectedNames.has(s.name) ? 'checked' : '';
       tr.innerHTML = `
         <td><input type="checkbox" class="row-check" data-name="${escapeHtml(s.name)}" ${checked}></td>
@@ -119,9 +144,15 @@
           <div>${escapeHtml(s.description || '')}</div>
           <div class="muted" style="font-size:0.75rem;margin-top:2px">${fieldSummary}</div>
         </td>
-        <td class="muted">${formatTs(s.updated_at)}<br><span style="font-size:0.75rem">${escapeHtml(s.updated_by || '')}</span></td>
+        <td class="muted">
+          <div>📅 ${formatTs(s.updated_at)}</div>
+          <div style="font-size:0.75rem">${escapeHtml(s.updated_by || '')}</div>
+          <div style="font-size:0.75rem;margin-top:4px;border-top:1px dashed #2a3441;padding-top:4px">🔄 ${formatTs(lastRotated)} ${policyHint}</div>
+          ${histHtml}
+        </td>
         <td>
           <button class="btn btn-sm" data-act="edit" data-name="${escapeHtml(s.name)}">编辑</button>
+          <button class="btn btn-sm" data-act="rotate" data-name="${escapeHtml(s.name)}">🔄 轮换</button>
           <button class="btn btn-sm" data-act="delete" data-name="${escapeHtml(s.name)}">删除</button>
         </td>
       `;
@@ -142,9 +173,25 @@
         const name = btn.dataset.name;
         if (act === 'edit') openModal(name);
         else if (act === 'delete') confirmDelete(name);
+        else if (act === 'rotate') confirmRotate(name);
       });
     });
     updateBulkBar();
+  }
+
+  // v3.1.1 M5.9: 轮换记录
+  async function confirmRotate(name) {
+    const note = prompt(`轮换 ${name}？\nRotate ${name}?\n\n可选：填备注（来源/原因）。\nOptional: note (source/reason).`, '');
+    if (note === null) return;  // 取消
+    try {
+      await api(`/api/v1/rotate/${encodeURIComponent(name)}`, {
+        method: 'POST',
+        body: JSON.stringify({ note: note || '', source: 'admin-ui' }),
+      });
+      await loadSecrets();
+    } catch (ex) {
+      alert(`轮换记录失败: ${ex.message}`);
+    }
   }
 
   function showTableError(msg) {

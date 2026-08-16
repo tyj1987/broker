@@ -1,4 +1,4 @@
-// broker/healthcheck.js — v3.0 M4 + v3.1 M5.3 凭据自检引擎
+// broker/healthcheck.js — v3.0 M4 + v3.1 M5.3 + v3.1.1 M5.6 凭据自检引擎
 // 每日 04:00 cron 触发 (broker/cron-tasks.js)
 // 对每个 secret: dry_run = true, 调上游 no-side-effect API, 验凭据
 // 失败: 写 audit + 推 SSE + dashboard 红色 stat
@@ -6,8 +6,9 @@
 // 设计:
 // - secret.type → 抽 fields (按 type-schemas 字段名)
 // - 结果写 broker/audit/audit-<date>.jsonl (action: 'healthcheck', status: 'ok'|'expired'|'unreachable'|'misconfigured'|'fail'|'skipped')
-// - 同时推 HEALTHCHECK_BUS (EventEmitter)
+// - 同时推 HEALTHCHECK_BUS (EventEmitter): 'run_complete' + 'status_change' (M5.6)
 // - 持久化最新状态到 secrets/healthcheck-state.json (writable; secrets/ 在 ReadWritePaths 里)
+// - M5.6: 状态变化持久化到 secrets/alert-history.jsonl (jsonl append-only, last 1000 entries)
 //
 // v3.1 M5.3 状态 5 维 (M4 4 维 + 新 2):
 //   ok             业务验证通过 (凭据对, 上游服务正常)
@@ -28,7 +29,7 @@
 
 import { request as httpsRequest } from 'node:https';
 import { connect as netConnect } from 'node:net';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
@@ -74,6 +75,90 @@ function saveState() {
     writeFileSync(resolveStatePath(), JSON.stringify(state, null, 2));
   } catch (e) {
     console.error('[healthcheck] state save failed:', e.message);
+  }
+}
+
+// ============================================================
+// v3.1.1 M5.6: alert_history 持久化 (jsonl append-only, last 1000 entries)
+// 每次 healthcheck 跑完, 比较老 vs 新 status, 有变化则写一条
+// 也用于 SSE 推 status_change 事件 (M5.6 dashboard 实时告警)
+// ============================================================
+function resolveAlertHistoryPath() {
+  return process.env.ALERT_HISTORY_PATH
+    || join(__dirname, '..', 'secrets', 'alert-history.jsonl');
+}
+
+const ALERT_HISTORY_MAX = 1000;
+let alertHistory = [];       // 内存 [{ ts, summary, changes: { name: { from, to, ts } } }]
+let lastChecks = {};         // name -> status (上次 run 后的状态, 启动时从 alert_history load)
+
+function loadAlertHistory() {
+  const p = resolveAlertHistoryPath();
+  if (existsSync(p)) {
+    try {
+      const lines = readFileSync(p, 'utf-8').split('\n').filter(Boolean);
+      alertHistory = lines.map(l => JSON.parse(l));
+      // 同步 lastChecks 为最新一条的状态 (last entry wins)
+      for (const entry of alertHistory) {
+        for (const [name, change] of Object.entries(entry.changes || {})) {
+          lastChecks[name] = change.to;
+        }
+      }
+    } catch (e) {
+      console.error('[healthcheck] alert_history load failed:', e.message);
+    }
+  }
+  return alertHistory;
+}
+
+function saveAlertHistory() {
+  // trim to last ALERT_HISTORY_MAX entries
+  if (alertHistory.length > ALERT_HISTORY_MAX) {
+    alertHistory = alertHistory.slice(-ALERT_HISTORY_MAX);
+  }
+  try {
+    const lines = alertHistory.map(e => JSON.stringify(e)).join('\n') + '\n';
+    writeFileSync(resolveAlertHistoryPath(), lines);
+  } catch (e) {
+    console.error('[healthcheck] alert_history save failed:', e.message);
+  }
+}
+
+// 检测状态变化, 返 { changes: { name: { from, to, ts } } }, 并同步 lastChecks
+function detectChanges(currentChecks) {
+  const changes = {};
+  for (const [name, c] of Object.entries(currentChecks)) {
+    const prevStatus = lastChecks[name];
+    const newStatus = c.status;
+    if (prevStatus !== newStatus) {
+      changes[name] = { from: prevStatus || 'unknown', to: newStatus, ts: c.ts || new Date().toISOString() };
+      lastChecks[name] = newStatus;
+    }
+  }
+  // 也检测消失的 secret (在 lastChecks 但没在 currentChecks)
+  for (const name of Object.keys(lastChecks)) {
+    if (!currentChecks[name]) {
+      changes[name] = { from: lastChecks[name], to: 'removed', ts: new Date().toISOString() };
+      delete lastChecks[name];
+    }
+  }
+  return changes;
+}
+
+// 暴露给测试 / 外部清状态
+// 清: 内存 lastChecks + alertHistory + 文件 (alert-history.jsonl)
+export function clearLastChecks() {
+  lastChecks = {};
+  alertHistory = [];
+  try {
+    const p = resolveAlertHistoryPath();
+    if (existsSync(p)) {
+      try { unlinkSync(p); } catch (e) {
+        console.error('[healthcheck] clearLastChecks unlink failed:', e.message, 'path=', p);
+      }
+    }
+  } catch (e) {
+    console.error('[healthcheck] clearLastChecks resolvePath failed:', e.message);
   }
 }
 
@@ -633,6 +718,7 @@ async function checkAws(accessKeyId, meta, t0) {
 // ============================================================
 export async function runAll(getSecrets) {
   loadState();
+  loadAlertHistory();
   const t0 = Date.now();
   // v3.1 M5.3: 5 维 status (M4 4 维 + unreachable / misconfigured)
   const summary = { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 };
@@ -646,6 +732,8 @@ export async function runAll(getSecrets) {
   // last_status: ok 当且仅当 5 个非 ok 维度全为 0
   const allPass = summary.expired === 0 && summary.unreachable === 0
     && summary.misconfigured === 0 && summary.fail === 0;
+  // v3.1.1 M5.6: 检测状态变化 (跟上次 status 比)
+  const changes = detectChanges(checks);
   const newState = {
     last_run_at: new Date().toISOString(),
     last_status: allPass ? 'ok' : 'degraded',
@@ -655,16 +743,30 @@ export async function runAll(getSecrets) {
   };
   state = newState;
   saveState();
+  // M5.6: 状态变化时落 alert_history + emit status_change
+  if (Object.keys(changes).length > 0) {
+    const alertEntry = {
+      ts: new Date().toISOString(),
+      duration_ms: Date.now() - t0,
+      summary,
+      changes,
+    };
+    alertHistory.push(alertEntry);
+    saveAlertHistory();
+    HEALTHCHECK_BUS.emit('status_change', alertEntry);
+  }
   HEALTHCHECK_BUS.emit('run_complete', newState);
   return newState;
 }
 
 // ============================================================
 // v3.0 M5: 调 mcp-server 跑 healthcheck (broker 不出网时由 mcp-server 走 client.mavis cert 出网)
+// v3.1.1 M5.6: 跟 broker runAll 一样检测状态变化 + 落 alert_history + emit status_change
 // 返: { last_status, last_run_at, duration_ms, summary, checks, _source: 'mcp_server' }
 // ============================================================
 export async function runAllViaMcp(mcpServerUrl) {
   loadState();
+  loadAlertHistory();
   const t0 = Date.now();
   // 调 mcp-server /mcp tools/call run_healthcheck (JSON-RPC 2.0)
   const req = await import('node:http');
@@ -712,8 +814,22 @@ export async function runAllViaMcp(mcpServerUrl) {
     checks: result.checks || {},
     _source: 'mcp_server',  // 标记这次跑来自 mcp-server
   };
+  // M5.6: 状态变化检测
+  const changes = detectChanges(newState.checks);
   state = newState;
   saveState();
+  if (Object.keys(changes).length > 0) {
+    const alertEntry = {
+      ts: new Date().toISOString(),
+      duration_ms: newState.duration_ms,
+      summary: newState.summary,
+      changes,
+      _source: 'mcp_server',
+    };
+    alertHistory.push(alertEntry);
+    saveAlertHistory();
+    HEALTHCHECK_BUS.emit('status_change', alertEntry);
+  }
   HEALTHCHECK_BUS.emit('run_complete', newState);
   return newState;
 }
@@ -729,4 +845,16 @@ export function getStatus() {
 export function getSecretStatus(name) {
   loadState();
   return state.checks?.[name] || null;
+}
+
+// ============================================================
+// v3.1.1 M5.6: alert_history 查询 (供 /api/v1/admin/alerts/history 用)
+// 返最近 N 条状态变化. 不传 N 返全部 (已 trim 到 ALERT_HISTORY_MAX)
+// ============================================================
+export function getAlertHistory(limit) {
+  loadAlertHistory();
+  if (typeof limit === 'number' && limit > 0) {
+    return alertHistory.slice(-limit);
+  }
+  return alertHistory.slice();
 }

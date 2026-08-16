@@ -84,6 +84,11 @@ audit/*.log
 # 客户端配置（含 cert 路径）
 .broker/
 
+# v3.1.1 M5.6/M5.9: 运行时 healthcheck/alert 持久化 (含 cert fp, 不入 git)
+secrets/healthcheck-state.json
+secrets/alert-history.jsonl
+secrets/secrets-detail.json  # 凭据 detail, SOPS 加密后的不入 (运行时明文)
+
 # Terraform 变量文件（避免 commit 真密码 / 真 IP）
 infra/**/*.tfvars
 infra/**/*.tfvars.json

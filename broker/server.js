@@ -38,6 +38,7 @@ import {
   runAllViaMcp as healthcheckRunAllViaMcp,
   getStatus as healthcheckGetStatus,
   getSecretStatus as healthcheckGetSecretStatus,
+  getAlertHistory as healthcheckGetAlertHistory,
   HEALTHCHECK_BUS,
 } from './healthcheck.js';
 import {
@@ -267,6 +268,11 @@ function normalizeSecretEntry(name, entry) {
     created_at: entry.created_at || new Date().toISOString(),
     updated_at: entry.updated_at || new Date().toISOString(),
     updated_by: entry.updated_by || 'system',
+    // v3.1.1 M5.9: last_rotated_at + rotation_history
+    // - last_rotated_at 默认 fallback 到 updated_at (老 secret 没这字段时)
+    // - rotation_history 默认 [] (M5.9 才加的字段)
+    last_rotated_at: entry.last_rotated_at || entry.updated_at || new Date().toISOString(),
+    rotation_history: Array.isArray(entry.rotation_history) ? entry.rotation_history : [],
   };
   if (entry.fields && typeof entry.fields === 'object') {
     out.fields = { ...entry.fields };
@@ -1948,6 +1954,19 @@ async function handle(req, res) {
       });
       return send(res, 200, { secrets: out });
     }
+    // Non-admin 也能看到 last_rotated_at (M5.9)
+    const out = visible.map(name => {
+      const meta = SECRET_CACHE.get(name);
+      if (!meta) return { name };
+      return {
+        name,
+        type: meta.type,
+        description: meta.description,
+        last_rotated_at: meta.last_rotated_at || meta.updated_at,
+        rotation_policy_days: meta.rotation_policy_days,
+      };
+    });
+    return send(res, 200, { secrets: out });
     return send(res, 200, { secrets: visible });
   }
 
@@ -2069,6 +2088,8 @@ async function handle(req, res) {
         updated_by: entry.updated_by || null,
         last_rotated_at: entry.last_rotated_at || entry.updated_at || null,
         rotation_policy_days: entry.rotation_policy_days || null,
+        // v3.1.1 M5.9: 轮换历史 (前 10 条, 倒序 — 最新在前)
+        rotation_history: Array.isArray(entry.rotation_history) ? entry.rotation_history.slice(0, 10) : [],
       });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
@@ -2847,6 +2868,56 @@ async function handle(req, res) {
     return;  // keep connection open
   }
 
+  // ----- GET /api/v1/admin/healthcheck/stream (SSE) -----
+  // v3.1.1 M5.6: 实时推送 healthcheck 状态
+  //   event: run_complete    — 每次 healthcheck 跑完 (full state)
+  //   event: status_change   — 状态变化 (alert history entry)
+  //   event: ready           — 初次连接
+  // Closes after 30 minutes (clients can reconnect).
+  if (m === 'GET' && p === '/api/v1/admin/healthcheck/stream') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-Broker-Version': '2.0.0',
+    });
+    res.write(': hello\n\n');
+    res.write('event: ready\ndata: {"ok":true}\n\n');
+    const onComplete = (state) => {
+      try { res.write(`event: run_complete\ndata: ${JSON.stringify(state)}\n\n`); } catch (e) { /* socket closed */ }
+    };
+    const onChange = (change) => {
+      try { res.write(`event: status_change\ndata: ${JSON.stringify(change)}\n\n`); } catch (e) { /* socket closed */ }
+    };
+    HEALTHCHECK_BUS.on('run_complete', onComplete);
+    HEALTHCHECK_BUS.on('status_change', onChange);
+    // 启动时立即推一次当前 state
+    try {
+      const currentState = healthcheckGetStatus();
+      res.write(`event: run_complete\ndata: ${JSON.stringify(currentState)}\n\n`);
+    } catch (e) { /* state not loaded yet */ }
+    const ka = setInterval(() => { try { res.write(': ka\n\n'); } catch {} }, 25_000);
+    const closeTimer = setTimeout(() => { try { res.end(); } catch {} }, 30 * 60 * 1000);
+    req.on('close', () => {
+      clearInterval(ka);
+      clearTimeout(closeTimer);
+      HEALTHCHECK_BUS.off('run_complete', onComplete);
+      HEALTHCHECK_BUS.off('status_change', onChange);
+    });
+    return;
+  }
+
+  // ----- GET /api/v1/admin/alerts/history -----
+  // v3.1.1 M5.6: 返 alert_history (状态变化时间线)
+  if (m === 'GET' && p === '/api/v1/admin/alerts/history') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+    const events = healthcheckGetAlertHistory(limit);
+    return send(res, 200, { events, count: events.length });
+  }
+
   // ----- POST /api/v1/reload (admin only) -----
   if (m === 'POST' && p === '/api/v1/reload') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
@@ -2864,14 +2935,41 @@ async function handle(req, res) {
   }
 
   // ----- POST /api/v1/rotate/:name -----
+  // v3.1.1 M5.9: 实际记录轮换时间戳 + rotation_history (凭据零接触: 不接受 value, 只标 "我刚轮换了 X")
+  // 凭据值的实际修改走 /api/v1/admin/secrets/:name (PUT), 那里有完整的值更新逻辑
+  // 此端点用于"我刚在外部 (GitHub/CF/...) 轮换了, 告诉 broker 一下" — 写 last_rotated_at + history
   const rotMatch = p.match(/^\/api\/v1\/rotate\/([a-zA-Z0-9_.-]+)$/);
   if (m === 'POST' && rotMatch) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    // 简化版：仅记审计 + 返回"see RUNBOOK"
-    audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: rotMatch[1], status: 'triggered' });
-    return send(res, 202, {
-      rotated: rotMatch[1],
-      note: 'See RUNBOOK.md to complete rotation. Broker does not auto-call provider APIs.',
+    const name = rotMatch[1];
+    const existing = SECRET_CACHE.get(name);
+    if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
+    const body = await readBody(req) || {};
+    const now = new Date().toISOString();
+    const who = ctx.cn || 'admin';
+    const note = (body.note && typeof body.note === 'string') ? body.note.slice(0, 200) : '';
+    const source = (body.source && typeof body.source === 'string') ? body.source.slice(0, 50) : 'manual';
+    // rotation_history: unshift 最新, cap 50 entries
+    const history = Array.isArray(existing.rotation_history) ? existing.rotation_history.slice() : [];
+    history.unshift({ ts: now, by: who, note, source });
+    if (history.length > 50) history.length = 50;
+    const updated = { ...existing, last_rotated_at: now, rotation_history: history };
+    const prevSnapshot = JSON.parse(JSON.stringify(existing));
+    SECRET_CACHE.set(name, updated);
+    try {
+      await persistSecretsDetail();
+    } catch (e) {
+      SECRET_CACHE.set(name, prevSnapshot);
+      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'error', error: e.message });
+      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'ok', source, note });
+    return send(res, 200, {
+      rotated: name,
+      last_rotated_at: now,
+      rotation_count: history.length,
+      // 凭据零接触: 不返 value, 只返 metadata
+      note: 'Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or rotate-secret-ecs.sh).',
     });
   }
 

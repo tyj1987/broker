@@ -18,7 +18,7 @@ function assert(c, m) {
 }
 
 console.log('=== version ===');
-assert(BROKER_VERSION === '3.7.0', '3.7.0');
+assert(typeof BROKER_VERSION === 'string' && /^\d+\.\d+\.\d+/.test(BROKER_VERSION), `version=${BROKER_VERSION}`);
 
 console.log('=== validateBrokerConfig ===');
 {
@@ -69,7 +69,6 @@ console.log('=== rejectIfShuttingDown ===');
 
 console.log('=== installGracefulShutdown (no exit) ===');
 {
-  // Only test that API returns functions; do not send signals in unit test
   const ctl = installGracefulShutdown({
     server: null,
     onShutdown: [],

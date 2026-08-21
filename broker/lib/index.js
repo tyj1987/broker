@@ -44,3 +44,12 @@ export {
   pruneAuditFiles,
   auditPolicyFromEnv,
 } from './audit-policy.js';
+export {
+  installGracefulShutdown,
+  rejectIfShuttingDown,
+} from './shutdown.js';
+export {
+  validateBrokerConfig,
+  preflightPaths,
+  formatValidationReport,
+} from './config-validate.js';

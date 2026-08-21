@@ -7,46 +7,51 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
-## [3.6.0] - 2026-08-21
+## [3.7.0] - 2026-08-21
 
 ### 概述
 
-**Phase D — 追踪与审计策略（零新依赖）**：W3C `traceparent` 续传、请求上下文（ALS）、审计采样与按天保留清理。
+**Phase E — 运维加固（零新依赖）**：优雅退出（SIGTERM/SIGINT drain）、配置与路径预检。
 
 ### Added
 
-- `broker/lib/trace.js` — parse / continue / outbound headers
-- `broker/lib/request-context.js` — `AsyncLocalStorage` request scope
-- `broker/lib/audit-policy.js` — `shouldSampleAudit` / `withAuditSampling` / `pruneAuditFiles`
-- Env: `AUDIT_SAMPLE_RATE`, `AUDIT_RETAIN_DAYS`
-- `docs/PHASE-D-TRACING-AUDIT.md`
-- `broker-test/test-phase-d-trace-audit.js`；`npm run test:trace`
+- `broker/lib/shutdown.js` — `installGracefulShutdown` / `rejectIfShuttingDown`
+- `broker/lib/config-validate.js` — `validateBrokerConfig` / `preflightPaths` / `formatValidationReport`
+- Env: `SHUTDOWN_TIMEOUT_MS`（默认 15000）
+- `docs/PHASE-E-OPS.md`
+- `broker-test/test-phase-e-ops.js`；`npm run test:ops`
 
 ### Changed
 
-- `BROKER_VERSION` / `package.json` → **3.6.0**
+- `BROKER_VERSION` / `package.json` → **3.7.0**
 
 ### Wire
 
-See Phase D doc — wrap `handle` with `runWithRequestContext`; inject trace headers on proxy; optional audit sampling + prune in cron.
+见 `docs/PHASE-E-OPS.md`：listen 后安装 shutdown；load config 后 `validateBrokerConfig`；handle 入口 503 when draining。
+
+---
+
+## [3.6.0] - 2026-08-21
+
+Phase D — traceparent、request context、审计采样/保留。见 `docs/PHASE-D-TRACING-AUDIT.md`。
 
 ---
 
 ## [3.5.0] - 2026-08-21
 
-Phase C — metrics, `/ready` `/live`, JSON logs. See `docs/PHASE-C-OBSERVABILITY.md`.
+Phase C — metrics、ready/live、JSON logs。
 
 ---
 
 ## [3.4.0] - 2026-08-21
 
-Phase B.5 — modular surface, `USE_MODULAR_ROUTES` opt-in.
+Phase B.5 — 模块化表面 + `USE_MODULAR_ROUTES`。
 
 ---
 
 ## [3.3.0] / [3.2.0] - 2026-08-21
 
-Phase B lib extract; Phase A hardening.
+Phase B lib；Phase A 加固。
 
 ---
 

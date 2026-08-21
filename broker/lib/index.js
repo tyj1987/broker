@@ -13,3 +13,4 @@ export {
   MAX_LOGIN_FAILS,
   LOGIN_LOCKOUT_MS,
 } from './session.js';
+export { buildRouteDeps, useModularRoutes } from './build-route-deps.js';

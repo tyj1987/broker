@@ -10,6 +10,8 @@
 //
 // Errors throw an Error with the openssl stderr so callers can surface
 // a useful message to the admin UI without exposing the secret key paths.
+//
+// v3.2: default cert validity is 90 days (was 365) to enforce rotation culture.
 
 import { spawn } from 'node:child_process';
 import { existsSync, unlinkSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
@@ -52,6 +54,9 @@ const OPENSSL_BIN = (() => {
   return candidates[0]; // best-effort; spawn will throw a clear ENOENT
 })();
 
+/** Default client cert lifetime (days). v3.2: 90 (was 365). */
+export const DEFAULT_CERT_DAYS = 90;
+
 function run(cmd, args, opts = {}) {
   // Always route openssl invocations through the resolved binary.
   const realCmd = cmd === 'openssl' ? OPENSSL_BIN : cmd;
@@ -81,7 +86,7 @@ function clientPaths(cn) {
 // Returns { fingerprint_sha256, cert_pem, key_pem } — key_pem is the secret
 // to bundle into the install zip; cert_pem is also bundled; fingerprint
 // goes into broker.yaml for the server to recognize the new cert.
-export async function issueClientCert(cn, { days = 365 } = {}) {
+export async function issueClientCert(cn, { days = DEFAULT_CERT_DAYS } = {}) {
   if (!existsSync(CA_KEY)) throw new Error(`CA key not found: ${CA_KEY}`);
   if (!existsSync(CA_CRT)) throw new Error(`CA cert not found: ${CA_CRT}`);
   if (!existsSync(CLIENTS_DIR)) mkdirSync(CLIENTS_DIR, { recursive: true });
@@ -115,6 +120,7 @@ export async function issueClientCert(cn, { days = 365 } = {}) {
     fingerprint_sha256: fingerprint,
     cert_pem: readFileSync(p.crt, 'utf8'),
     key_pem: readFileSync(p.key, 'utf8'),
+    days,
   };
 }
 

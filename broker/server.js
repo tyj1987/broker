@@ -58,7 +58,40 @@ import {
   generateMasterKey,
   createChildKey,
   canCreateChild,
+  isClientIpAllowed,
 } from './api-keys.js';
+import { BROKER_VERSION } from './version.js';
+import {
+  handleHealth,
+  handleStatic,
+  handleMetrics,
+  handleOps,
+  dispatch,
+  API_HANDLERS,
+} from './routes/index.js';
+import {
+  buildRouteDeps,
+  useModularRoutes,
+  installGracefulShutdown,
+  rejectIfShuttingDown,
+  validateBrokerConfig,
+  formatValidationReport,
+  preflightPaths,
+  withAuditSampling,
+  pruneAuditFiles,
+  auditPolicyFromEnv,
+  runWithRequestContext,
+  setResponseTraceHeaders,
+  getRequestId,
+  getTraceparent,
+  outboundTraceHeaders,
+  inc,
+  observeMs,
+  log,
+  runProbes,
+  probesFromConfig,
+  buildBackupManifest,
+} from './lib/index.js';
 // v3.0: schema migration (in start())
 import { EventEmitter } from 'node:events';
 import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
@@ -98,7 +131,7 @@ const TLS_CRL        = process.env.TLS_CRL  || join(PKI_DIR, 'ca/crl.pem');
 const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
 
 console.log('============================================');
-console.log('  Secret Broker v2.0');
+console.log(`  Secret Broker v${BROKER_VERSION}`);
 console.log('  mTLS Secret Broker for AI clients');
 console.log('============================================');
 console.log(`  Port:           ${PORT}`);
@@ -811,7 +844,7 @@ function send(res, status, body, extraHeaders = {}) {
   res.writeHead(status, {
     'Content-Type': isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload, 'utf8'),
-    'X-Broker-Version': '2.0.0',
+    'X-Broker-Version': BROKER_VERSION,
     ...extraHeaders,
   });
   res.end(payload);
@@ -1174,7 +1207,11 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
 
   // Build outgoing request
   const outHeaders = {
-    'User-Agent': 'secret-broker/2.0',
+    'User-Agent': `secret-broker/${BROKER_VERSION}`,
+    ...outboundTraceHeaders({
+      traceparent: typeof getTraceparent === 'function' ? getTraceparent() : undefined,
+      requestId: typeof getRequestId === 'function' ? getRequestId() : undefined,
+    }),
     ...injectHeaders,
     ...(headers || {}),
   };
@@ -1246,16 +1283,50 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
 // Route handler
 // ============================================================
 async function handle(req, res) {
+  return runWithRequestContext(req.headers || {}, async () => {
+  setResponseTraceHeaders(res);
+  if (rejectIfShuttingDown(globalThis.__brokerShuttingDown || (() => false), res, jsonError)) return;
+
   const url = new URL(req.url, `https://${req.headers.host}`);
   const m = req.method;
   const p = url.pathname;
   const t0 = Date.now();
+  const route = { method: m, pathname: p };
+
+  // Phase AF: modular request pipeline (public routes)
+  {
+    const publicDeps = {
+      send,
+      jsonError,
+      readBody,
+      version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : '3.8.0',
+      secretCache: SECRET_CACHE,
+      config: CONFIG,
+      dashboardDir: join(__dirname, 'dashboard'),
+      requireSops: true,
+      runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
+    };
+    if (await handleHealth(req, res, route, publicDeps)) {
+      observeMs('broker_http_request_duration_ms', Date.now() - t0);
+      inc('broker_http_requests_total', 1, { route: p });
+      return;
+    }
+    if (handleStatic(req, res, route, publicDeps)) {
+      observeMs('broker_http_request_duration_ms', Date.now() - t0);
+      inc('broker_http_requests_total', 1, { route: p });
+      return;
+    }
+    if (handleMetrics(req, res, route, publicDeps)) {
+      observeMs('broker_http_request_duration_ms', Date.now() - t0);
+      return;
+    }
+  }
 
   // ----- Public: /health -----
   if (m === 'GET' && p === '/health') {
     return send(res, 200, {
       status: 'ok',
-      version: '2.0.0',
+      version: BROKER_VERSION,
       sops_loaded: SECRET_CACHE.size > 0,
       services: Object.keys(CONFIG.services),
       uptime_seconds: Math.floor(process.uptime()),
@@ -1967,7 +2038,6 @@ async function handle(req, res) {
       };
     });
     return send(res, 200, { secrets: out });
-    return send(res, 200, { secrets: visible });
   }
 
   // ----- POST /api/v1/secrets/resolve -----
@@ -2539,7 +2609,7 @@ async function handle(req, res) {
 
   // Helper: issue a cert, persist fingerprint, return cert+key.
   async function issueAndPersist(name) {
-    const cert = await issueClientCert(name, { days: 365 });
+    const cert = await issueClientCert(name); // DEFAULT_CERT_DAYS = 90
     const c = CONFIG.clients[name];
     if (!c) throw new Error(`Client ${name} disappeared mid-enrollment`);
     const prev = { ...c };
@@ -2695,7 +2765,7 @@ async function handle(req, res) {
     res.writeHead(200, {
       'Content-Type': 'application/zip',
       'Content-Disposition': `attachment; filename="${name}-bundle.zip"`,
-      'X-Broker-Version': '2.0.0',
+      'X-Broker-Version': BROKER_VERSION,
     });
     return res.end(zip);
   }
@@ -2753,7 +2823,7 @@ async function handle(req, res) {
         status: r.status >= 200 && r.status < 400 ? 'ok' : 'error',
       });
       // forward response
-      res.writeHead(r.status, { ...r.headers, 'X-Broker-Latency-Ms': String(r.latency), 'X-Broker-Version': '2.0.0' });
+      res.writeHead(r.status, { ...r.headers, 'X-Broker-Latency-Ms': String(r.latency), 'X-Broker-Version': BROKER_VERSION });
       return res.end(r.body);
     } catch (err) {
       audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'error', error: err.message });
@@ -2795,7 +2865,7 @@ async function handle(req, res) {
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Disposition': `attachment; filename="audit-${stamp}.json"`,
-        'X-Broker-Version': '2.0.0',
+        'X-Broker-Version': BROKER_VERSION,
       });
       return res.end(body);
     } else { // csv
@@ -2812,7 +2882,7 @@ async function handle(req, res) {
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="audit-${stamp}.csv"`,
-        'X-Broker-Version': '2.0.0',
+        'X-Broker-Version': BROKER_VERSION,
       });
       return res.end(body);
     }
@@ -2846,7 +2916,7 @@ async function handle(req, res) {
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',  // disable buffering under nginx
-      'X-Broker-Version': '2.0.0',
+      'X-Broker-Version': BROKER_VERSION,
     });
     res.write(': hello\n\n');
     res.write('event: ready\ndata: {"ok":true}\n\n');
@@ -2881,7 +2951,7 @@ async function handle(req, res) {
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
-      'X-Broker-Version': '2.0.0',
+      'X-Broker-Version': BROKER_VERSION,
     });
     res.write(': hello\n\n');
     res.write('event: ready\ndata: {"ok":true}\n\n');
@@ -2975,7 +3045,10 @@ async function handle(req, res) {
 
   // 404
   audit({ action: 'unknown', cn: ctx.cn, fp: ctx.fp, method: m, path: p, status: '404' });
+  observeMs('broker_http_request_duration_ms', Date.now() - t0);
+  inc('broker_http_requests_total', 1, { route: p });
   return jsonError(res, 404, `Not found: ${m} ${p}`);
+  }); // Phase AF: end request pipeline (runWithRequestContext)
 }
 
 // ============================================================
@@ -3046,6 +3119,20 @@ function getApiKeyIdentity(req) {
   if (!secret) return null;
   const k = findApiKey(CONFIG.api_keys, secret);
   if (!k) return null;
+  // v3.2: enforce ip_whitelist when set
+  const remoteIp = req.socket?.remoteAddress
+    || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()
+    || '';
+  if (!isClientIpAllowed(k, remoteIp)) {
+    audit({
+      action: 'connect',
+      status: 'denied',
+      reason: 'api_key_ip_denied',
+      cn: k.client,
+      remote: remoteIp,
+    });
+    return null;
+  }
   // 找到归属 client
   const owner = CONFIG.clients[k.client];
   if (!owner) return null;
@@ -3165,8 +3252,23 @@ function start() {
     }
   });
 
-  process.on('SIGINT',  () => { console.log('\n[broker] shutting down'); server.close(); stopCronLoop(); process.exit(0); });
-  process.on('SIGTERM', () => { server.close(); stopCronLoop(); process.exit(0); });
+  // Phase E: graceful shutdown (SIGTERM/SIGINT drain)
+  const _shutdownCtl = installGracefulShutdown({
+    server,
+    onShutdown: [() => stopCronLoop()],
+  });
+  globalThis.__brokerShuttingDown = _shutdownCtl.shuttingDown;
+
+  // Phase D/F: audit prune
+  try {
+    const policy = auditPolicyFromEnv();
+    registerCron('03:30', () => {
+      const r = pruneAuditFiles(AUDIT_DIR, policy.retainDays);
+      console.log('[cron] audit prune deleted=', r.deleted?.length || 0);
+    });
+  } catch (e) {
+    console.warn('[cron] audit prune register failed:', e.message);
+  }
 }
 
 // ============================================================
@@ -3183,6 +3285,32 @@ function start() {
     // we route to, then re-issue the call. See `resolveHostname()` below.
     await loadConfig();
     await loadSecrets();
+    // Phase E: config validation
+    try {
+      const vr = validateBrokerConfig(CONFIG);
+      if (!vr.ok) {
+        console.error('[config] validation failed:\n' + formatValidationReport(vr));
+        process.exit(1);
+      }
+      for (const w of vr.warnings || []) console.warn('[config]', w.path, w.message);
+    } catch (e) {
+      console.warn('[config] validate skipped:', e.message);
+    }
+    try {
+      const pf = preflightPaths({
+        configPath: CONFIG_PATH,
+        ageKey: AGE_KEY_FILE,
+        caCert: TLS_CA,
+        serverCert: TLS_CERT,
+        serverKey: TLS_KEY,
+      }, { existsSync });
+      if (!pf.ok) {
+        console.error('[preflight] failed:\n' + formatValidationReport(pf));
+        process.exit(1);
+      }
+    } catch (e) {
+      console.warn('[preflight] skipped:', e.message);
+    }
     // v3.0: 启动时跑一次 schema 迁移（幂等）
     try {
       const { migrateV2ToV3 } = await import('./migrate-v2-to-v3.js');

@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "wire": "node ../scripts/broker/apply-phase-af-full-wire.mjs",
     "test:lib": "node ../broker-test/test-lib-phase-b.js",
     "test:ip": "node ../broker-test/test-ip-allowlist.js",
     "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js",

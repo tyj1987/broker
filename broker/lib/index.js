@@ -23,3 +23,24 @@ export {
   getCounter,
 } from './metrics.js';
 export { log } from './log.js';
+export {
+  parseTraceparent,
+  continueOrCreateTrace,
+  outboundTraceHeaders,
+  resolveRequestId,
+  newTraceId,
+  newSpanId,
+} from './trace.js';
+export {
+  getRequestContext,
+  getRequestId,
+  getTraceparent,
+  runWithRequestContext,
+  setResponseTraceHeaders,
+} from './request-context.js';
+export {
+  shouldSampleAudit,
+  withAuditSampling,
+  pruneAuditFiles,
+  auditPolicyFromEnv,
+} from './audit-policy.js';

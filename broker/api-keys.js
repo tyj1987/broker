@@ -9,6 +9,7 @@
 //     id, name, client (归属), scopes, allowed_secrets, allowed_services,
 //     rate_limit, expires_at, created_at, created_by,
 //     fingerprint (SHA-256 of secret), revoked_at (可选)
+//     ip_whitelist (可选 string[]): 精确 IP 或 CIDR；空 = 不限制
 //
 // API:
 //   POST   /api/v1/api-keys              (admin or self + TOTP)
@@ -20,6 +21,7 @@
 // Auth: session/mTLS (走 ctx.client) 或 Bearer (自己处理)
 
 import { randomBytes, createHash } from 'node:crypto';
+import { isIpAllowed, normalizeIp } from './lib/ip-allowlist.js';
 
 const ENV = process.env.NODE_ENV === 'production' ? 'live' : 'test';
 const KEY_PREFIX = 'mb';
@@ -83,25 +85,18 @@ export function generateApiKey(name, client, opts = {}) {
 
 /**
  * v3.0 M3.3: 生成 Master Key（30d TTL, scope 限定 keys:issue_child）
- * Master key 不能直接 resolve secrets 或 proxy services
- * 只能用来 create short-lived child API keys
- *
- * 用法：MCP Server / OpenClaw 启动时拿 master key
- *      然后每 1h 调 /api/v1/api-keys/issue-child 创建短期子 key
- *      子 key 自动带 master key 限定的 scopes
  */
 export function generateMasterKey(name, client, opts = {}) {
   return generateApiKey(name, client, {
     ...opts,
     is_master: true,
     ttl_ms: opts.ttl_ms || DEFAULT_MASTER_TTL_MS,
-    scopes: opts.scopes || MASTER_KEY_SCOPES,  // force: only keys:issue_child
+    scopes: opts.scopes || MASTER_KEY_SCOPES,
   });
 }
 
 /**
  * v3.0 M3.3: 鉴权 — 检查 API Key 是否有创建子 key 权限
- * 只有 is_master=true + can_create_child=true + 未过期 + 未撤销 才能创建子 key
  */
 export function canCreateChild(k) {
   if (!k) return { ok: false, reason: 'not_found' };
@@ -123,15 +118,22 @@ export function isChildKey(k) {
 }
 
 /**
+ * v3.2: API Key IP 白名单
+ * whitelist 为空/null → 允许任意 IP
+ * 否则 remoteIp 必须命中 exact 或 CIDR 规则
+ */
+export function isClientIpAllowed(k, remoteIp) {
+  if (!k) return false;
+  return isIpAllowed(k.ip_whitelist, remoteIp);
+}
+
+/**
  * v3.0 M3.3: 创建子 key（仅 master key 可调）
- * 子 key 的 scope 受 master.child_scopes 限定
- * 不能突破 master 限定的 scopes（防 privilege escalation）
  */
 export function createChildKey(cfgKeys, master, name, opts = {}) {
   const check = canCreateChild(master);
   if (!check.ok) return { ok: false, reason: check.reason };
 
-  // 子 key 的 scope 必须在 master.child_scopes 内（防越权）
   let childScopes = opts.scopes || master.child_scopes || DEFAULT_CHILD_SCOPES;
   if (Array.isArray(childScopes) && Array.isArray(master.child_scopes)) {
     childScopes = childScopes.filter(s => master.child_scopes.includes(s));
@@ -140,7 +142,6 @@ export function createChildKey(cfgKeys, master, name, opts = {}) {
     return { ok: false, reason: 'no_valid_scopes' };
   }
 
-  // 子 key 的 allowed_secrets/allowed_services 必须 ⊆ master 的
   let allowedSecrets = opts.allowed_secrets || master.allowed_secrets || [];
   if (Array.isArray(allowedSecrets) && Array.isArray(master.allowed_secrets) && master.allowed_secrets.length > 0) {
     allowedSecrets = allowedSecrets.filter(s => master.allowed_secrets.includes(s));
@@ -150,7 +151,6 @@ export function createChildKey(cfgKeys, master, name, opts = {}) {
     allowedServices = allowedServices.filter(a => master.allowed_services.includes(a));
   }
 
-  // 子 key 默认 TTL = master.default_child_ttl_seconds（通常 1h）
   const childTtlSec = opts.ttl_seconds || master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS;
 
   const { id, secret, key_obj } = generateApiKey(name, master.client, {
@@ -197,7 +197,6 @@ export function findApiKey(cfgKeys, secret) {
  */
 export function canResolveSecret(k, secretName) {
   if (!k || !k.scopes || !k.scopes.includes('secrets:resolve')) return false;
-  // 限定白名单: allowed_secrets 为空 = 全部允许; 否则只允许白名单里的
   if (Array.isArray(k.allowed_secrets) && k.allowed_secrets.length > 0) {
     if (!k.allowed_secrets.includes(secretName)) return false;
   }
@@ -230,7 +229,6 @@ export function listApiKeys(cfgKeys, opts = {}) {
   if (!cfgKeys || !Array.isArray(cfgKeys)) return [];
   let keys = cfgKeys;
   if (opts.clientOnly) keys = keys.filter(k => k.client === opts.clientOnly);
-  // 永远隐藏 secret (没存 secret, 只存 hash, 但确保 fingerprint 不漏)
   return keys.map(k => publicView(k));
 }
 
@@ -257,7 +255,6 @@ export function publicView(k) {
     use_count: k.use_count || 0,
     revoked: !!k.revoked_at,
     revoked_at: k.revoked_at,
-    // v3.0 M3.3: master / child 关系（保留便于审计）
     is_master: !!k.is_master,
     can_create_child: !!k.can_create_child,
     default_child_ttl_seconds: k.default_child_ttl_seconds || null,
@@ -297,10 +294,6 @@ export function recordUse(k) {
   k.last_used_at = new Date().toISOString();
 }
 
-// ============================================================
-// 导出
-// ============================================================
-
 export {
   ENV,
   KEY_PREFIX,
@@ -310,4 +303,6 @@ export {
   DEFAULT_CHILD_TTL_SECONDS,
   MASTER_KEY_SCOPES,
   DEFAULT_CHILD_SCOPES,
+  normalizeIp,
+  isIpAllowed,
 };

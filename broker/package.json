@@ -1,6 +1,6 @@
 {
   "name": "secret-broker",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "mTLS Secret Broker with SOPS-backed credentials, proxy-mode for AI clients",
   "main": "server.js",
   "type": "module",
@@ -14,7 +14,8 @@
     "test:ip": "node ../broker-test/test-ip-allowlist.js",
     "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js",
     "test:obs": "node ../broker-test/test-phase-c-obs.js",
-    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs"
+    "test:trace": "node ../broker-test/test-phase-d-trace-audit.js",
+    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace"
   },
   "dependencies": {
     "yaml": "^2.9.0"

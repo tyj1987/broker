@@ -27,7 +27,14 @@ console.log('=== validateBrokerConfig ===');
 
   const emptyClients = validateBrokerConfig({ clients: {} });
   assert(emptyClients.ok === true, 'empty clients ok');
-  assert(emptyClients.warnings.some((w) => w.message.includes('no client')), 'no admin warn');
+  // empty map: no "no admin" warn (only when there are clients but none is admin)
+  assert(!emptyClients.warnings.some((w) => /no client with role admin/i.test(w.message)), 'empty has no admin warn');
+
+  const noAdmin = validateBrokerConfig({
+    clients: { ci: { role: 'ci' } },
+  });
+  assert(noAdmin.ok === true, 'no-admin config ok');
+  assert(noAdmin.warnings.some((w) => /no client with role admin/i.test(w.message)), 'no admin warn');
 
   const good = validateBrokerConfig({
     clients: {

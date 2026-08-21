@@ -8,9 +8,9 @@
  * 3) issueAndPersist default 90d
  * 4) API key IP allowlist in getApiKeyIdentity
  * 5) Remove dead return in GET /api/v1/secrets
- * 6) Prefer routes/health + routes/static when present (optional soft-wire)
+ * 6) Early-dispatch routes/health + routes/static
  *
- * Does NOT delete large inlined function bodies (safe). Full body removal is manual/follow-up.
+ * Does NOT delete large inlined function bodies (safe).
  *
  * Usage (repo root):
  *   node scripts/broker/apply-phase-b2-server-wire.mjs
@@ -35,42 +35,28 @@ let n = 0;
 
 function once(label, find, replace) {
   if (!src.includes(find)) {
-    if (typeof replace === 'string' && src.includes(replace.slice(0, Math.min(50, replace.length)))) {
-      console.log(`[skip] ${label}`);
+    if (typeof replace === 'string' && src.includes(replace.slice(0, Math.min(48, replace.length)))) {
+      console.log('[skip] ' + label);
       return;
     }
-    console.warn(`[miss] ${label}`);
+    console.warn('[miss] ' + label);
     return;
   }
   src = src.replace(find, replace);
   n++;
-  console.log(`[ok]   ${label}`);
+  console.log('[ok]   ' + label);
 }
 
-// --- Phase A / version ---
 once(
   'import isClientIpAllowed',
-  `  generateMasterKey,
-  createChildKey,
-  canCreateChild,
-} from './api-keys.js';`,
-  `  generateMasterKey,
-  createChildKey,
-  canCreateChild,
-  isClientIpAllowed,
-} from './api-keys.js';`
+  "  generateMasterKey,\n  createChildKey,\n  canCreateChild,\n} from './api-keys.js';",
+  "  generateMasterKey,\n  createChildKey,\n  canCreateChild,\n  isClientIpAllowed,\n} from './api-keys.js';"
 );
 
 once(
-  'import BROKER_VERSION',
-  `} from './api-keys.js';
-// v3.0: schema migration (in start())`,
-  `} from './api-keys.js';
-import { BROKER_VERSION } from './version.js';
-import { send as libSend, readBody as libReadBody, jsonError as libJsonError } from './lib/http.js';
-import { buildZip as libBuildZip } from './lib/zip.js';
-import { handleHealth, handleStatic, dispatch as dispatchRoutes } from './routes/index.js';
-// v3.0: schema migration (in start())`
+  'import BROKER_VERSION + routes',
+  "} from './api-keys.js';\n// v3.0: schema migration (in start())",
+  "} from './api-keys.js';\nimport { BROKER_VERSION } from './version.js';\nimport { handleHealth, handleStatic } from './routes/index.js';\n// v3.0: schema migration (in start())"
 );
 
 once(
@@ -101,75 +87,48 @@ once(
 
 once(
   'API key IP whitelist',
-  `  const k = findApiKey(CONFIG.api_keys, secret);
-  if (!k) return null;
-  // 找到归属 client
-  const owner = CONFIG.clients[k.client];
-  if (!owner) return null;
-  // 限速 (per api key)`,
-  `  const k = findApiKey(CONFIG.api_keys, secret);
-  if (!k) return null;
-  // v3.2: enforce ip_whitelist when set
-  const remoteIp = req.socket?.remoteAddress
-    || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()
-    || '';
-  if (!isClientIpAllowed(k, remoteIp)) {
-    audit({
-      action: 'connect',
-      status: 'denied',
-      reason: 'api_key_ip_denied',
-      cn: k.client,
-      remote: remoteIp,
-    });
-    return null;
-  }
-  // 找到归属 client
-  const owner = CONFIG.clients[k.client];
-  if (!owner) return null;
-  // 限速 (per api key)`
+  "  const k = findApiKey(CONFIG.api_keys, secret);\n  if (!k) return null;\n  // 找到归属 client\n  const owner = CONFIG.clients[k.client];\n  if (!owner) return null;\n  // 限速 (per api key)",
+  "  const k = findApiKey(CONFIG.api_keys, secret);\n  if (!k) return null;\n  // v3.2: enforce ip_whitelist when set\n  const remoteIp = req.socket?.remoteAddress\n    || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()\n    || '';\n  if (!isClientIpAllowed(k, remoteIp)) {\n    audit({\n      action: 'connect',\n      status: 'denied',\n      reason: 'api_key_ip_denied',\n      cn: k.client,\n      remote: remoteIp,\n    });\n    return null;\n  }\n  // 找到归属 client\n  const owner = CONFIG.clients[k.client];\n  if (!owner) return null;\n  // 限速 (per api key)"
 );
 
 once(
   'dead return secrets list',
-  `    return send(res, 200, { secrets: out });
-    return send(res, 200, { secrets: visible });
-  }`,
-  `    return send(res, 200, { secrets: out });
-  }`
+  "    return send(res, 200, { secrets: out });\n    return send(res, 200, { secrets: visible });\n  }",
+  "    return send(res, 200, { secrets: out });\n  }"
 );
 
-// Soft-wire: early dispatch for health + static (idempotent marker)
-once(
-  'routes early dispatch marker',
-  `async function handle(req, res) {
-  const url = new URL(req.url, \`https://\${req.headers.host}\`);
-  const m = req.method;
-  const p = url.pathname;
-  const t0 = Date.now();
-
-  // ----- Public: /health -----`,
-  `async function handle(req, res) {
-  const url = new URL(req.url, \`https://\${req.headers.host}\`);
-  const m = req.method;
-  const p = url.pathname;
-  const t0 = Date.now();
-
-  // Phase B.2: modular public routes (health + static dashboard)
-  {
-    const route = { method: m, pathname: p };
-    const deps = {
-      send,
-      version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : '3.3.0',
-      secretCache: SECRET_CACHE,
-      config: CONFIG,
-      dashboardDir: join(__dirname, 'dashboard'),
-    };
-    if (handleHealth(req, res, route, deps)) return;
-    if (handleStatic(req, res, route, deps)) return;
+// Early dispatch: insert after "const t0 = Date.now();" that precedes health block
+{
+  const marker = '  // Phase B.2: modular public routes';
+  if (src.includes(marker)) {
+    console.log('[skip] routes early dispatch');
+  } else {
+    const needle = "  const t0 = Date.now();\n\n  // ----- Public: /health -----";
+    const insert =
+      "  const t0 = Date.now();\n\n" +
+      "  // Phase B.2: modular public routes (health + static dashboard)\n" +
+      "  {\n" +
+      "    const route = { method: m, pathname: p };\n" +
+      "    const deps = {\n" +
+      "      send,\n" +
+      "      version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : '3.3.0',\n" +
+      "      secretCache: SECRET_CACHE,\n" +
+      "      config: CONFIG,\n" +
+      "      dashboardDir: join(__dirname, 'dashboard'),\n" +
+      "    };\n" +
+      "    if (handleHealth(req, res, route, deps)) return;\n" +
+      "    if (handleStatic(req, res, route, deps)) return;\n" +
+      "  }\n\n" +
+      "  // ----- Public: /health -----";
+    if (src.includes(needle)) {
+      src = src.replace(needle, insert);
+      n++;
+      console.log('[ok]   routes early dispatch');
+    } else {
+      console.warn('[miss] routes early dispatch');
+    }
   }
-
-  // ----- Public: /health -----`
-);
+}
 
 if (src === original) {
   console.log('\nNo changes (already wired or patterns drifted).');
@@ -177,5 +136,5 @@ if (src === original) {
 }
 
 writeFileSync(SERVER, src);
-console.log(`\nWrote ${SERVER} (${n} patch groups).`);
-console.log('Run: node broker-test/test-lib-phase-b.js && node broker-test/test-ip-allowlist.js');
+console.log('\nWrote ' + SERVER + ' (' + n + ' patch groups).');
+console.log('Run: node broker-test/test-lib-phase-b.js && node broker-test/test-routes-phase-b2.js');

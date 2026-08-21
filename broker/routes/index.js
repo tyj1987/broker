@@ -1,4 +1,4 @@
-// broker/routes/index.js — Phase B/C route registry
+// broker/routes/index.js — Phase B–F route registry
 
 export { handleHealth } from './health.js';
 export { handleStatic, STATIC_MAP } from './static.js';
@@ -9,6 +9,7 @@ export { handleServices } from './services.js';
 export { handleClients } from './clients.js';
 export { handleProxy } from './proxy.js';
 export { handleMetrics } from './metrics.js';
+export { handleOps } from './ops.js';
 
 import { handleHealth } from './health.js';
 import { handleStatic } from './static.js';
@@ -19,8 +20,8 @@ import { handleServices } from './services.js';
 import { handleClients } from './clients.js';
 import { handleProxy } from './proxy.js';
 import { handleMetrics } from './metrics.js';
+import { handleOps } from './ops.js';
 
-/** Public routes (no session required). */
 export const PUBLIC_HANDLERS = [handleHealth, handleStatic, handleMetrics];
 
 export const API_HANDLERS = [
@@ -30,6 +31,7 @@ export const API_HANDLERS = [
   handleServices,
   handleClients,
   handleProxy,
+  handleOps,
 ];
 
 export const ALL_HANDLERS = [...PUBLIC_HANDLERS, ...API_HANDLERS];

@@ -53,3 +53,14 @@ export {
   preflightPaths,
   formatValidationReport,
 } from './config-validate.js';
+export {
+  buildBackupManifest,
+  redactConfigForExport,
+  writeBackupManifest,
+} from './backup.js';
+export {
+  probeTcp,
+  probeHttp,
+  runProbes,
+  probesFromConfig,
+} from './probes.js';

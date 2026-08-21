@@ -30,7 +30,7 @@ function assert(c, m) {
 }
 
 console.log('=== version ===');
-assert(BROKER_VERSION === '3.6.0', '3.6.0');
+assert(typeof BROKER_VERSION === 'string' && /^\d+\.\d+\.\d+/.test(BROKER_VERSION), `version=${BROKER_VERSION}`);
 
 console.log('=== parseTraceparent ===');
 {

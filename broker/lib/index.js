@@ -1,4 +1,4 @@
-// broker/lib/index.js — Phase B public surface for extracted helpers
+// broker/lib/index.js — public surface for extracted helpers
 
 export { sopsDecrypt, sopsEncryptAtomic } from './sops.js';
 export { send, readBody, jsonError } from './http.js';
@@ -14,3 +14,12 @@ export {
   LOGIN_LOCKOUT_MS,
 } from './session.js';
 export { buildRouteDeps, useModularRoutes } from './build-route-deps.js';
+export {
+  inc,
+  observeMs,
+  snapshot,
+  prometheusText,
+  timedRequest,
+  getCounter,
+} from './metrics.js';
+export { log } from './log.js';

@@ -8,76 +8,68 @@
 broker/
   server.js              # thin bootstrap + route dispatch (gradually shrinks)
   lib/
-    index.js             # re-exports
-    sops.js              # sopsDecrypt / sopsEncryptAtomic
-    http.js              # send / readBody / jsonError
-    zip.js               # buildZip / computeCrc32
-    audit.js             # createAudit()
-    rate-limit.js        # createRateLimiter / parseRateLimit
-    ip-allowlist.js      # (Phase A)
-  routes/                # (Phase B.2+)
-    health.js
-    auth.js              # login / logout / mfa
-    me.js
-    api-keys.js          # HTTP handlers (not storage — storage stays api-keys.js)
-    secrets.js
-    services.js
-    clients.js
-    proxy.js
-    audit-admin.js
-    healthcheck.js
+    index.js
+    sops.js / http.js / zip.js / audit.js / rate-limit.js / ip-allowlist.js
+    session.js           # Phase B.2
+  routes/
+    index.js             # dispatch()
+    health.js            # GET /health
+    static.js            # dashboard assets
+    auth.js / me.js / ...  (next)
 ```
 
 ## Status
 
-| Module | Status |
-|--------|--------|
-| `lib/sops.js` | ✅ extracted |
-| `lib/http.js` | ✅ extracted (uses `BROKER_VERSION`) |
-| `lib/zip.js` | ✅ extracted |
-| `lib/audit.js` | ✅ extracted |
-| `lib/rate-limit.js` | ✅ extracted |
-| `lib/ip-allowlist.js` | ✅ Phase A |
-| `broker-test/test-lib-phase-b.js` | ✅ |
-| `server.js` re-import | ⏳ gradual (see below) |
-| `routes/*` | ⏳ Phase B.2 |
+| Item | Status |
+|------|--------|
+| lib/* (B.1) | ✅ merged |
+| `lib/session.js` | ✅ B.2 |
+| `routes/health.js` | ✅ B.2 |
+| `routes/static.js` | ✅ B.2 |
+| `routes/index.js` + `dispatch` | ✅ B.2 |
+| `scripts/broker/apply-phase-b2-server-wire.mjs` | ✅ Phase A+B.2 surgical wire |
+| `broker-test/test-routes-phase-b2.js` | ✅ |
+| Full body deletion of inlined helpers | ⏳ after wire proven |
+| routes: auth / me / secrets / … | ⏳ B.3 |
 
-## Why not one big server.js rewrite?
+## Apply wire (repo root)
 
-- Diff would be unreviewable (~140KB move).
-- Risk of subtle breakage in auth / proxy paths.
-- Prefer **extract → unit test → rewire imports → delete dead copies**.
-
-## Wiring server.js (Phase B.1 complete path)
-
-After this branch merges, optionally replace inlined helpers with:
-
-```js
-import { sopsDecrypt, sopsEncryptAtomic } from './lib/sops.js';
-import { send, readBody, jsonError } from './lib/http.js';
-import { buildZip } from './lib/zip.js';
-import { createAudit } from './lib/audit.js';
-import { createRateLimiter } from './lib/rate-limit.js';
-import { BROKER_VERSION } from './version.js';
+```bash
+node scripts/broker/apply-phase-b2-server-wire.mjs
+node broker-test/test-lib-phase-b.js
+node broker-test/test-routes-phase-b2.js
+node broker-test/test-ip-allowlist.js
 ```
 
-Then delete the local function bodies. Keep behavior identical.
+The wire script is **idempotent**. It:
 
-## Phase B.2 (next)
+1. Imports `BROKER_VERSION`, `isClientIpAllowed`, lib http/zip, routes
+2. Fixes version banner / headers / health / User-Agent
+3. Cert issue default 90d
+4. API Key IP allowlist enforcement
+5. Removes dead `return` in secrets list
+6. Early-dispatches `handleHealth` + `handleStatic` before legacy blocks
 
-Extract route groups into `routes/*.js` that accept a shared `deps` object:
-
-```js
-// deps = { CONFIG, SECRET_CACHE, audit, send, getIdentity, ... }
-export async function handleMe(req, res, url, ctx, deps) { ... }
-```
-
-`server.js` becomes:
+## Route handler contract
 
 ```js
-if (await tryRoute(handleMe, ...)) return;
+/**
+ * @returns {boolean|Promise<boolean>} true if request was handled
+ */
+export function handleX(req, res, route, deps) { ... }
+
+// route = { method, pathname }
+// deps  = { send, config, secretCache, version, dashboardDir, ... }
 ```
+
+## Phase B.3 (next)
+
+- `routes/auth.js` — login / mfa / logout
+- `routes/me.js` — self-service
+- `lib` body removal: delete inlined `send`/`sops*`/`buildZip` once imports proven
+- Keep zero new npm deps
 
 ## Version
 
-Phase B starts at **3.3.0** once modules land and tests pass.
+- B.1 modules: **3.3.0**
+- B.2 routes skeleton: stay on **3.3.0** (patch docs only) until server.js is fully rewired in production

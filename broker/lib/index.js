@@ -6,3 +6,10 @@ export { buildZip, computeCrc32 } from './zip.js';
 export { createAudit } from './audit.js';
 export { parseRateLimit, createRateLimiter } from './rate-limit.js';
 export { isIpAllowed, normalizeIp, matchIpRule } from './ip-allowlist.js';
+export {
+  createSessionStore,
+  SESSION_TTL_MS,
+  SESSION_HEADER,
+  MAX_LOGIN_FAILS,
+  LOGIN_LOCKOUT_MS,
+} from './session.js';

@@ -36,7 +36,7 @@ console.log('=== handleHealth ===');
     payload = body;
     _res.end(JSON.stringify(body));
   };
-  const handled = handleHealth({}, res, { method: 'GET', pathname: '/health' }, {
+  const handled = await handleHealth({}, res, { method: 'GET', pathname: '/health' }, {
     send,
     version: BROKER_VERSION,
     secretCache: new Map([['X', {}]]),
@@ -47,7 +47,7 @@ console.log('=== handleHealth ===');
   assert(payload?.version === BROKER_VERSION, 'version');
   assert(payload?.sops_loaded === true, 'sops_loaded');
   assert(Array.isArray(payload?.services) && payload.services.includes('github'), 'services');
-  assert(handleHealth({}, res, { method: 'POST', pathname: '/health' }, { send }) === false, 'POST not handled');
+  assert(await handleHealth({}, res, { method: 'POST', pathname: '/health' }, { send }) === false, 'POST not handled');
 }
 
 console.log('=== handleStatic ===');

@@ -1,0 +1,139 @@
+site_name: Secret Broker
+site_description: AI-first mTLS secret broker with zero-credential-leakage
+site_url: https://docs.broker.example.com
+repo_url: https://github.com/tyj1987/broker
+repo_name: tyj1987/broker
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - meta
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.caret
+  - pymdownx.smartsymbols
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - pymdownx.emoji:
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+  - git-revision-date-localized:
+      enable_creation_date: true
+
+nav:
+  - Home: index.md
+  - Quickstart: QUICKSTART.md
+  - Architecture:
+    - Overview: DESIGN-V4-MASTER-PLAN.md
+    - Security Model: DESIGN-V4-SECURITY-MODEL.md
+    - Identity & MFA: DESIGN-V4-IDENTITY-MFA.md
+    - Provider Templates: DESIGN-V4-PROVIDER-TEMPLATES.md
+    - API Calling Standards: DESIGN-V4-API-CALLING-STANDARDS.md
+    - Roadmap: DESIGN-V4-ROADMAP.md
+  - Guides:
+    - Getting Started:
+      - Quickstart: QUICKSTART.md
+      - Installation: guides/installation.md
+      - First Secret: guides/first-secret.md
+    - Use Cases:
+      - AI Agents: guides/ai-agents.md
+      - Workload Identity: guides/workload-identity.md
+      - SSH Proxy: guides/ssh-proxy.md
+      - WebSocket Events: guides/websocket.md
+    - Operations:
+      - Auto-Rotation: guides/auto-rotation.md
+      - Backups: guides/backups.md
+      - Monitoring: guides/monitoring.md
+      - Multi-Tenant: guides/multi-tenant.md
+  - API Reference:
+    - OpenAPI Spec: api/openapi.md
+    - Error Codes: api/errors.md
+    - Rate Limits: api/rate-limits.md
+  - SDKs:
+    - Node: sdk/node.md
+    - Python: sdk/python.md
+    - Go: sdk/go.md
+    - VS Code: sdk/vscode.md
+  - Deployment:
+    - Helm: deploy/helm.md
+    - Terraform: deploy/terraform.md
+    - Grafana: deploy/grafana.md
+  - Operations:
+    - Runbook: RUNBOOK.md
+    - Security: security.md
+  - Reference:
+    - Changelog: CHANGELOG.md
+    - Roadmap: roadmap.md
+    - Contributing: contributing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/tyj1987
+      name: GitHub
+  generator: false
+  analytics:
+    provider: google
+    property: G-XXXXXXXXXX
+
+copyright: Copyright © 2026 tyj1987 — Released under the MIT License

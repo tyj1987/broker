@@ -1,0 +1,12 @@
+<!-- Custom HTML head for Material theme -->
+{% extends "base.html" %}
+
+{% block htmltitle %}
+  <title>{% if page.title %}{{ page.title }} — {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}</title>
+{% endblock %}
+
+{% block extrahead %}
+  <meta name="description" content="AI-first mTLS secret broker with zero-credential-leakage">
+  <meta name="theme-color" content="#3f51b5">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔐</text></svg>">
+{% endblock %}

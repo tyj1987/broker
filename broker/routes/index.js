@@ -10,6 +10,7 @@ export { handleClients } from './clients.js';
 export { handleProxy } from './proxy.js';
 export { handleMetrics } from './metrics.js';
 export { handleOps } from './ops.js';
+export { handleWorkloadIdentity } from './workload-identity.js';
 
 import { handleHealth } from './health.js';
 import { handleStatic } from './static.js';
@@ -21,6 +22,7 @@ import { handleClients } from './clients.js';
 import { handleProxy } from './proxy.js';
 import { handleMetrics } from './metrics.js';
 import { handleOps } from './ops.js';
+import { handleWorkloadIdentity } from './workload-identity.js';
 
 export const PUBLIC_HANDLERS = [handleHealth, handleStatic, handleMetrics];
 
@@ -32,6 +34,7 @@ export const API_HANDLERS = [
   handleClients,
   handleProxy,
   handleOps,
+  handleWorkloadIdentity,
 ];
 
 export const ALL_HANDLERS = [...PUBLIC_HANDLERS, ...API_HANDLERS];

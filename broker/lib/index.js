@@ -71,3 +71,13 @@ export {
   runProbes,
   probesFromConfig,
 } from './probes.js';
+// V4.1 任务 11: Workload Identity (K8s/ECS/GKE OIDC -> STS 临时凭证)
+export {
+  getCredentials as getWorkloadCredentials,
+  invalidateCache as invalidateWorkloadCache,
+  listCache as listWorkloadCache,
+  validateConfig as validateWorkloadConfig,
+  PROVIDER_NAMES as WORKLOAD_PROVIDER_NAMES,
+  REFRESH_SKEW_MS as WORKLOAD_REFRESH_SKEW_MS,
+  defaultHttpClient as defaultWorkloadHttpClient,
+} from './workload-identity.js';

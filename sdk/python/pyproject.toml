@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secret-broker"
+version = "4.1.0"
+description = "Official Python SDK for Secret Broker V4 (mTLS, zero hard deps)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "tyj1987", email = "broker@local" }]
+keywords = ["secret-broker", "credentials", "mtls", "ai", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []  # 零硬依赖:仅 stdlib
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "cryptography>=41.0",  # 仅用于生成测试用自签证书
+]
+
+[project.urls]
+Homepage = "https://github.com/tyj1987/broker"
+Documentation = "https://github.com/tyj1987/broker/blob/main/docs/DESIGN-V4-API-CALLING-STANDARDS.md"
+Issues = "https://github.com/tyj1987/broker/issues"
+
+[tool.setuptools.packages.find]
+include = ["secret_broker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,7 +1,14 @@
 # sops-age-template / SOPS+age 密钥模板
 
-> **v4 设计完成(2026-09-01)**：把 v3.8 (mTLS + TOTP + SOPS) 升级为 **AI-First 凭据管理平台**。
-> 6 种认证因子 / 40+ 服务商模板 / 8 种调用入口 / 100% OpenAPI / 零信任 + 自动 rotate。
+> **v4.1 GA (2026-09-01)** — 23 任务全部交付,1027 测试 100% 通过,`v4.1.0` tag 已打。
+>
+> 🎯 **V4.1 GA Quick Links**:
+> - [ARCHITECTURE.md](ARCHITECTURE.md) — one-page overview (start here)
+> - [V4.1-COMPLETE.md](V4.1-COMPLETE.md) — per-task plan vs actual + §14 验收清单
+> - [RELEASE-NOTES-v4.1.0.md](RELEASE-NOTES-v4.1.0.md) — high-level release notes
+> - [VERIFY.md](VERIFY.md) — 1-line verify recipe (`npm run test:verify-all` = 647/0)
+> - [CHANGELOG.md](CHANGELOG.md) — full version history
+> - [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) (Bug Bounty $5000)
 >
 > 📘 **V4 设计文档树**:
 > - [Master Plan](docs/DESIGN-V4-MASTER-PLAN.md) · [Quickstart](docs/QUICKSTART.md) (5 分钟)

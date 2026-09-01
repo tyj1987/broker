@@ -1,0 +1,7 @@
+Contact: mailto:security@broker.example.com
+Expires: 2027-12-31T23:59:59z
+Encryption: https://broker.example.com/.well-known/pgp-key.asc
+Preferred-Languages: en, zh
+Canonical: https://broker.example.com/.well-known/security.txt
+Policy: https://github.com/tyj1987/broker/blob/main/SECURITY.md
+Hiring: https://broker.example.com/jobs

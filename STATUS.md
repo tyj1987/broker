@@ -11,8 +11,8 @@
 | v3.8 client compatibility | ✅ Maintained |
 | `npm run test:verify-all` | ✅ 647 / 0 (broker 619 + Python SDK 28) |
 | CI workflows (`.github/workflows/`) | ✅ 2 (ci-v4.yml + test-sdks.yml) |
-| `v4.1.0` tag | ✅ Annotated |
-| GitHub Release | ⏳ Pending (requires `git push origin v4.1.0` to remote) |
+| `v4.1.0` tag | ✅ Annotated + pushed (ref `refs/tags/v4.1.0`, deref `28421d4f`) |
+| GitHub Release | ✅ Live (tyj1987/broker master + tag, 2026-09-01 12:48) |
 | Cloud marketplace images | ⏳ P1 in [ROADMAP-post-1.0.md](ROADMAP-post-1.0.md) |
 | SOC 2 Type 1 | ⏳ P1 in [ROADMAP-post-1.0.md](ROADMAP-post-1.0.md) |
 
@@ -27,8 +27,9 @@
 ## Operational
 
 - **Health check**: `curl -k --cert client.crt --key client.key --cacert ca.crt https://broker:8443/health`
-- **Local dev**: `cd broker && npm install && npm run test:verify-all`
-- **Production deploy**: Helm chart `deploy/helm/broker/` or `docker compose up -d broker`
+- **Local dev**: `cd broker && npm install && npm run test:verify-all` (or `scripts/dev/start-broker.ps1` for one-command plaintext bypass)
+- **Production deploy**: Helm chart `deploy/helm/broker/` or `docker compose up -d broker` or `DEPLOY-52TRZ.md` for git-pull + systemd
+- **Cloud target (broker.52trz.com)**: see [DEPLOY-52TRZ.md](DEPLOY-52TRZ.md) — 3 场景 (首次 / 从零 git / 更新)
 - **Incident response**: see [RUNBOOK.md](RUNBOOK.md)
 - **Security issue**: see [SECURITY.md](SECURITY.md) — bug bounty up to $5000
 

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "broker.fullname" . }}-test-connection"
+  labels:
+    {{- include "broker.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.7.1
+      command:
+        - /bin/sh
+        - -ec
+        - |
+          # /health is unauthenticated; verify broker is up
+          curl -ksS --max-time 5 https://{{ include "broker.fullname" . }}:{{ .Values.service.port }}/health || exit 1
+          echo "broker health ok"
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        runAsUser: 1000
+        capabilities:
+          drop:
+            - ALL

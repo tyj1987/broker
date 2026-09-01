@@ -1,0 +1,141 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "broker.fullname" . }}
+  labels:
+    {{- include "broker.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "broker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Force pod restart on ConfigMap/Secret change
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.brokerYaml }}
+        checksum/secrets: {{ .Values.secrets.brokerYaml | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "broker.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "broker.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: broker
+          image: {{ include "broker.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: mTLS
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: BROKER_CONFIG_PATH
+              value: /etc/broker/broker.yaml
+            - name: BROKER_TLS_CERT
+              value: /etc/broker/tls/tls.crt
+            - name: BROKER_TLS_KEY
+              value: /etc/broker/tls/tls.key
+            - name: BROKER_CA_CERT
+              value: /etc/broker/tls/ca.crt
+            - name: NODE_ENV
+              value: production
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: mTLS
+              scheme: HTTPS
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: mTLS
+              scheme: HTTPS
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/broker
+              readOnly: true
+            - name: tls
+              mountPath: /etc/broker/tls
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/broker
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/broker
+      volumes:
+        - name: config
+          projected:
+            sources:
+              - configMap:
+                  name: {{ include "broker.fullname" . }}-config
+              {{- if .Values.secrets.brokerYaml }}
+              - secret:
+                  name: {{ include "broker.fullname" . }}-secret
+                  items:
+                    - key: broker.yaml
+                      path: broker.yaml
+              {{- end }}
+        - name: tls
+          secret:
+            secretName: {{ include "broker.fullname" . }}-tls
+            defaultMode: 0400
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "broker.fullname" . }}-data
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

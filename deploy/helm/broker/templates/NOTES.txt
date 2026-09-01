@@ -1,0 +1,54 @@
+Secret Broker has been installed!
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+App version: {{ .Chart.AppVersion }}
+
+** Accessing the broker **
+
+The broker listens on mTLS port {{ .Values.service.port }} inside the cluster.
+The endpoint is:
+
+  https://{{ include "broker.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+To test from outside the cluster:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "broker.fullname" . }} 8443:{{ .Values.service.port }}
+
+Then:
+
+  curl -k --cert client.crt --key client.key --cacert ca.crt https://127.0.0.1:8443/health
+
+** Verifying the install **
+
+Run the bundled helm test:
+
+  helm test {{ .Release.Name }}
+
+** Upgrading **
+
+  helm upgrade {{ .Release.Name }} ./deploy/helm/broker
+
+** Uninstalling **
+
+  helm uninstall {{ .Release.Name }}
+
+CAUTION: persistent volume ({{ include "broker.fullname" . }}-data) is NOT removed automatically.
+
+{{- if .Values.config.workloadIdentity.enabled }}
+
+** Workload Identity **
+
+Workload identity is enabled. To use from a Pod, mount the projected token and
+set the audience via annotations:
+
+  apiVersion: v1
+  kind: Pod
+  spec:
+    serviceAccountName: {{ include "broker.serviceAccountName" . }}
+    projectedServiceAccountToken:
+      - path: broker-oidc
+        audience: broker.example.com
+        expirationSeconds: 3600
+{{- end }}

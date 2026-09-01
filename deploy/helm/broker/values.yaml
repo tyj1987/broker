@@ -1,0 +1,166 @@
+# Default values for broker.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# -- Number of broker replicas
+replicaCount: 2
+
+image:
+  # -- Image repository
+  repository: ghcr.io/tyj1987/broker
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to chart appVersion when empty)
+  tag: ""
+
+# -- Image pull secrets (e.g. for ghcr.io private repos)
+imagePullSecrets: []
+# - name: regcred
+
+# -- Override name
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Whether to create a service account
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- Service account name (generated if empty)
+  name: ""
+
+# -- Pod-level annotations
+podAnnotations: {}
+# -- Pod-level security context
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# -- Container-level security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Service port for the mTLS listener
+  port: 8443
+  # -- Container port
+  targetPort: 8443
+
+ingress:
+  # -- Whether to create an Ingress
+  enabled: false
+  className: ""
+  annotations: {}
+  # -- Ingress hosts
+  hosts:
+    - host: broker.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration
+  tls: []
+  # - secretName: broker-tls
+  #   hosts:
+  #     - broker.local
+
+resources:
+  # -- CPU/Memory limits
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  # -- CPU/Memory requests
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+# -- Horizontal Pod Autoscaler settings
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# -- Persistent volume for SOPS-encrypted secrets
+persistence:
+  enabled: true
+  # -- PVC size
+  size: 1Gi
+  # -- Storage class (use cluster default when empty)
+  storageClass: ""
+  # -- Access modes
+  accessModes:
+    - ReadWriteOnce
+
+# -- Node selector
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Configuration values injected into the broker ConfigMap
+config:
+  # -- Auto-rotate is OFF by default (most types need manual rotation)
+  autoRotate: false
+  # -- MFA policy
+  mfaPolicy:
+    enabled: true
+    factors:
+      - totp
+      - webauthn
+    riskThreshold: 60
+  # -- WebSocket events
+  websocket:
+    enabled: true
+    heartbeatIntervalMs: 30000
+  # -- Workload identity providers
+  workloadIdentity:
+    enabled: false
+    providers: {}
+    # aliyun:
+    #   oidcProviderArn: "acs:ram::123:oidc-provider/cluster"
+    #   roleArns: ["acs:ram::123:role/app"]
+  # -- SSH Proxy enabled
+  sshProxy:
+    enabled: true
+  # -- Auto-port rotation
+  alerting:
+    enabled: true
+    defaultChannel: console
+    channels: []
+
+# -- Secrets configuration
+# This MUST be provided at install time, e.g.:
+#   helm install broker ./deploy/helm/broker \
+#     --set-file secrets.brokerYaml=secrets/broker.yaml
+secrets:
+  # -- Path to a SOPS-encrypted broker.yaml (set via --set-file)
+  brokerYaml: ""
+  # -- Path to the broker's TLS cert (PEM)
+  tlsCert: ""
+  # -- Path to the broker's TLS key (PEM)
+  tlsKey: ""
+  # -- Path to the CA cert (PEM)
+  caCert: ""
+
+# -- Liveness/metrics probes
+probes:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3

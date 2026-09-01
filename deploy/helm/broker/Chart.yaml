@@ -1,0 +1,31 @@
+apiVersion: v2
+name: broker
+description: |
+  Secret Broker V4 — AI-first mTLS secret broker with zero-credential-leakage.
+  https://github.com/tyj1987/broker
+type: application
+
+# Chart version
+version: 4.1.0
+
+# Application version
+appVersion: "4.1.0"
+
+home: https://github.com/tyj1987/broker
+sources:
+  - https://github.com/tyj1987/broker
+
+maintainers:
+  - name: tyj1987
+    email: broker@local
+
+keywords:
+  - secret-broker
+  - credentials
+  - mtls
+  - ai
+  - security
+
+annotations:
+  category: Security
+  licenses: MIT

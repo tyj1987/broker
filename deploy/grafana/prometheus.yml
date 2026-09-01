@@ -1,0 +1,41 @@
+# Prometheus configuration for Secret Broker V4.1
+#
+# Mount into Prometheus container at /etc/prometheus/prometheus.yml
+# Auto-loads rules from alerts.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: "secret-broker"
+    version: "4.1.0"
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Secret Broker itself (port 9090 = metrics, separate from mTLS 8443)
+  - job_name: broker
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      # If using self-signed certs, set ca_file below
+      # ca_file: /etc/prometheus/broker-ca.crt
+      insecure_skip_verify: true   # for dev / internal Prometheus
+    static_configs:
+      - targets: ["broker:8443"]
+        labels:
+          service: secret-broker
+          tier: core
+
+  # Optional: node_exporter for host metrics
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node-exporter

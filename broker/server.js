@@ -1299,7 +1299,7 @@ async function handle(req, res) {
       send,
       jsonError,
       readBody,
-      version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : '3.8.0',
+      version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : 'unknown',
       secretCache: SECRET_CACHE,
       config: CONFIG,
       dashboardDir: join(__dirname, 'dashboard'),

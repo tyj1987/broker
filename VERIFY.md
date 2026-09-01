@@ -230,18 +230,27 @@ V4 P1: AI-First 凭据管理骨架 (10 任务)
 ## 16. 1 行验证命令(已实测 2026-09-01)
 
 ```bash
-(cd broker && npm install && npm run test:verify) && (cd sdk/python && python -m pytest tests/) && echo "✅ V4.1.0 验证通过"
+# Cross-platform (PowerShell / bash): all-in-one
+(cd broker && npm install && npm run test:verify-all) && echo "✅ V4.1.0 验证通过"
 ```
 
 实测输出:
 ```
-broker:test:verify → 619 passed, 0 failed
-sdk:python:pytest  → 28 passed, 0 failed
+broker:test:verify     → 619 passed, 0 failed  (modular 282 + v4-modules 201 + workload 56 + ssh 53 + ws 27)
+sdk:python:pytest      →  28 passed, 0 failed
+─────────────────────────────────────────────────────
+✅ TOTAL                → 647 passed, 0 failed
 ```
-合计 **647 passed, 0 failed**。
 
-`test:verify` 等价于 `test:modular + test:v4-modules + test:workload + test:ssh + test:ws`,
-是 GA release 的标准验证关卡。
+可用 npm scripts:
+- `npm run test:verify`     — broker 5 suites (619/0)
+- `npm run test:verify-all` — broker + Python SDK (647/0)
+- `npm run test:modular`    — v3.8 回归 (282/0)
+- `npm run test:v4-modules` — V4 集成 (201/0)
+- `npm run test:workload`   — P2-11 (56/0)
+- `npm run test:ssh`        — P2-12 (53/0)
+- `npm run test:ws`         — P2-13 (27/0)
+- `npm run test:python-sdk` — SDK 测试 (28/0)
 
 ## 17. broker 实际启动 smoke (可选,需 mTLS PKI)
 

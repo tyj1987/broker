@@ -29,6 +29,8 @@
     "test:ws": "node ../broker-test/test-ws.js",
     "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
     "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws",
+    "test:python-sdk": "cd ../sdk/python && python -m pip install --quiet pytest pytest-asyncio cryptography && python -m pytest tests/ -q && cd ../../broker",
+    "test:verify-all": "npm run test:verify && npm run test:python-sdk",
     "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
   },
   "dependencies": {

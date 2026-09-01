@@ -1,0 +1,38 @@
+name: ❓ Question
+description: Ask a usage / configuration question
+title: "[question]: "
+labels: ["question"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For usage questions. Bug reports and feature requests have their own templates.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What is your question?
+      description: Be as specific as possible. Include versions, config snippets, and the exact command or API call.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What did you try / read so far?
+      description: |
+        - Checked [docs/QUICKSTART.md](../docs/QUICKSTART.md) / [docs/DESIGN-V4-*.md](../docs/)
+        - Searched GitHub issues / discussions
+        - Read the relevant source
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: broker version + deployment method
+      placeholder: "v4.1.0 on K8s via Helm chart"
+    validations:
+      required: false

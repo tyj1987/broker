@@ -1,0 +1,74 @@
+name: ✨ Feature Request
+description: Suggest a new feature for Secret Broker
+title: "[feat]: "
+labels: ["enhancement", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please complete the sections below.
+        For significant design changes, please open a GitHub Discussion first
+        and link it here.
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Targeted milestone
+      description: Which release is this targeting? (best guess is fine)
+      options:
+        - "v4.1.1 (next patch)"
+        - "v4.2.0 (next minor)"
+        - "v5.0.0 (next major)"
+        - "backlog (no target)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem does this feature solve? Be specific about who is affected.
+      placeholder: |
+        As a [role], I want to [action], so that [benefit].
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you implement this? Sketch the API or config changes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider? Why this one?
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact assessment
+      description: |
+        Does this change any of the four non-negotiable architecture principles?
+        (See [CONTRIBUTING.md §Architecture principles](../CONTRIBUTING.md))
+        1. Zero credential leakage
+        2. mTLS-only
+        3. No new hard dependencies for SDKs
+        4. Backward compatibility
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: discussion
+    attributes:
+      label: Prior discussion
+      options:
+        - label: I have opened a GitHub Discussion for this and linked it
+        - label: This is a small enough change to skip the discussion
+        - label: I am willing to submit a PR for this

@@ -1,0 +1,98 @@
+name: 🐛 Bug Report
+description: File a bug report to help us improve Secret Broker
+title: "[bug]: "
+labels: ["bug", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please complete the sections below.
+        **For security vulnerabilities, see [SECURITY.md](../SECURITY.md) — do not file public issues.**
+
+  - type: input
+    id: version
+    attributes:
+      label: broker version
+      description: Output of `curl -k --cert client.crt --key client.key --cacert ca.crt https://broker:8443/health` or `npm run --silent -p version`
+      placeholder: "4.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      description: Which part of the system is impacted?
+      options:
+        - broker core (`broker/`)
+        - broker library (`broker/lib/`)
+        - broker routes (`broker/routes/`)
+        - SDK — Python
+        - SDK — Go
+        - SDK — Node
+        - SDK — VS Code extension
+        - Helm chart
+        - Terraform module
+        - Grafana dashboard
+        - documentation
+        - other (describe in description)
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: Node.js / Python / Go / OS version, deployment method (Docker / K8s / bare-metal)
+      placeholder: "Node 20.11 on Ubuntu 22.04, k3s v1.28"
+    validations:
+      required: false
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal command sequence that reproduces the bug
+      placeholder: |
+        1. Create secret `github.pat` with value `ghp_xxxx`
+        2. Run `secret-broker get github.pat`
+        3. See error "..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include the full error message.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste broker stdout/stderr or audit log excerpts. **Redact any secret values before pasting.**
+        The broker auto-redacts known patterns (ghp_, sk-, AKIA, JWTs), but please double-check.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+        - label: I have reproduced the bug against the latest `main` branch
+        - label: I have redacted all secret values in logs and screenshots
+        - label: This is NOT a security vulnerability (security issues go to security@broker.example.com)

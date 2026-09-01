@@ -1,0 +1,11 @@
+# GitHub Issue Forms configuration
+# https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 GitHub Discussions (design questions, RFCs)
+    url: https://github.com/tyj1987/broker/discussions
+    about: For open-ended design conversations before filing a feature request
+  - name: 🔐 SECURITY.md (vulnerability reports)
+    url: https://github.com/tyj1987/broker/blob/main/SECURITY.md
+    about: For security issues — DO NOT file a public issue

@@ -176,7 +176,6 @@ func redactPrefixThen(s, prefix string, _ int, c1, c2, c3, c4, c5, c6, c7, c8 by
 
 // redactJWT: matches eyJ<10+>.eyJ<10+>.eyJ<10+>
 func redactJWT(s, repl string) string {
-	seg1 := []byte("eyJ")
 	for i := 0; i+4 <= len(s); i++ {
 		if s[i] != 'e' || s[i+1] != 'y' || s[i+2] != 'J' {
 			continue

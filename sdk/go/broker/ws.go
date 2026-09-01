@@ -265,7 +265,7 @@ func (c *WSClient) readFrame() (byte, []byte, error) {
 		ln = int(binary.BigEndian.Uint64(buf))
 	}
 	var maskKey []byte
-	if masked {
+	if masked != 0 {
 		maskKey = make([]byte, 4)
 		if _, err := readFull(c.tls, maskKey); err != nil {
 			return 0, nil, err

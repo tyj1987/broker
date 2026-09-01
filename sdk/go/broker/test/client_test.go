@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"runtime"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -54,7 +56,7 @@ func mustCert(t *testing.T) (tls.Certificate, []byte) {
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		DNSNames:     []string{"localhost"},
-		IPAddresses:  []any{}, // omitted for brevity
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")}, // required for x509 IP SAN verification
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -171,7 +173,7 @@ func (m *mockBroker) record(r *http.Request) {
 // setupTestServer returns the broker URL, CA cert path, and a teardown.
 func setupTestServer(t *testing.T, secrets map[string]string) (string, string, func()) {
 	t.Helper()
-	_, caPEM := mustCert(t)
+	cert, caPEM := mustCert(t)
 	caPath := filepath.Join(t.TempDir(), "ca.crt")
 	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
 		t.Fatalf("write CA: %v", err)
@@ -181,7 +183,6 @@ func setupTestServer(t *testing.T, secrets map[string]string) (string, string, f
 		mb.secrets[k] = v
 	}
 	srv := httptest.NewUnstartedServer(mb.handler())
-	cert, _ := mustCert(t)
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
 	srv.StartTLS()
 	// httptest URL: https://127.0.0.1:PORT (use the one it gave us)
@@ -366,7 +367,7 @@ func TestRedactGithubInError(t *testing.T) {
 	url, ca, stop := setupTestServer(t, nil)
 	defer stop()
 	c, _ := broker.NewClient(broker.Config{Endpoint: url, CACert: ca})
-	_, err := c.Proxy(context.Background(), "github", "GET", "/test", nil, nil)
+	_, _, err := c.Proxy(context.Background(), "github", "GET", "/test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -395,6 +396,9 @@ func TestErrorTypes(t *testing.T) {
 }
 
 func TestExecSubprocess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: 'printenv' is a Linux/macOS coreutil, not on Windows")
+	}
 	// Test that env var injection works end-to-end
 	url, ca, stop := setupTestServer(t, map[string]string{"MY_SECRET": "value-123"})
 	defer stop()

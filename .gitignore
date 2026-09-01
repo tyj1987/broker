@@ -115,6 +115,12 @@ sdk/python/*.egg-info/
 sdk/go/bin/
 sdk/go/dist/
 
+# Release asset bundle (one-time upload to GitHub Release, do not commit)
+release-assets/*.tar.gz
+release-assets/*.zip
+# MANIFEST.md is the only release-assets file that goes in git (lists what to upload)
+!release-assets/MANIFEST.md
+
 # Terraform 变量文件（避免 commit 真密码 / 真 IP）
 infra/**/*.tfvars
 infra/**/*.tfvars.json

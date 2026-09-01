@@ -37,11 +37,11 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2026-09-15
 
 #### 2. Real GitHub release (W25)
-- [ ] `git push origin v4.1.0`
-- [ ] Create GitHub Release with `RELEASE-NOTES-v4.1.0.md` as body
-- [ ] Attach source tarball + wheel for the Python SDK
-- [ ] Attach Linux/Windows/macOS binaries of the Go SDK
-- **Target**: 2026-09-15
+- [x] `git push origin v4.1.0` ✅ 2026-09-01
+- [x] Create GitHub Release with `RELEASE-NOTES-v4.1.0.md` as body ✅ 2026-09-01 (id 380224739)
+- [x] Attach source tarball + wheel for the Python SDK ✅ 2026-09-01
+- [x] Attach Linux/Windows/macOS binaries of the Go SDK ✅ 2026-09-01 (4 binaries + linux-arm64)
+- **Target**: 2026-09-15 — **DONE 2026-09-01** (https://github.com/tyj1987/broker/releases/tag/v4.1.0)
 
 ### P1 — Required for "V4.1 is enterprise-ready"
 

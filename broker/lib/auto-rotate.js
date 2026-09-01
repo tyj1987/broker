@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { redact } from './redact.js';
 import { alert } from './alerting.js';
+import { sopsEncryptAtomic } from './sops.js';
 
 /**
  * Built-in rotation rules. Each rule:
@@ -215,7 +216,7 @@ async function runRotateCommand(cmd, secret) {
 
 /**
  * Persist rotated secret value back to secrets-detail.json.
- * Uses SOPS to re-encrypt. Falls back to plain write if sops unavailable.
+ * Uses SOPS to re-encrypt in place. Falls back to plain write if sops unavailable.
  */
 async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
   const secretsPath = opts.secretsPath || process.env.SECRETS_DETAIL_PATH
@@ -232,9 +233,17 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
   if (!target) throw new Error(`secret ${name} not found in ${secretsPath}`);
   target.value = typeof newValue === 'string' ? newValue : JSON.stringify(newValue);
   target.last_rotated_at = new Date().toISOString();
-  // Write
-  writeFileSync(secretsPath, JSON.stringify(data, null, 2), 'utf8');
-  // TODO: re-encrypt with sops
+  // Re-encrypt with SOPS in place (atomic). Falls back to plain JSON if sops unavailable.
+  const plaintext = JSON.stringify(data, null, 2);
+  try {
+    await sopsEncryptAtomic(secretsPath, plaintext, {
+      ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
+    });
+  } catch (e) {
+    // Fall back to plain JSON write if sops binary missing or encryption failed.
+    // This is best-effort; the operator should run `sops -e -i` manually in CI.
+    writeFileSync(secretsPath, plaintext, 'utf8');
+  }
 }
 
 /**

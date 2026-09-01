@@ -33,6 +33,38 @@ const DEFAULT_CHILD_TTL_SECONDS = 60 * 60;  // 1h
 const MASTER_KEY_SCOPES = ['keys:issue_child'];  // master key 只能创建子 key，不能直接调 service
 const DEFAULT_CHILD_SCOPES = ['secrets:resolve', 'services:proxy'];
 
+// V4.0 任务 6: 多维度限额
+// 历史 v3 rate_limit 字段是 "100/hour" 字符串;V4 支持每分钟/小时/天 三个维度
+// 旧的字符串格式仍可解析(向后兼容)
+export const RATE_LIMIT_PRESETS = {
+  '100/hour':  { minute: null, hour: 100, day: 1000 },
+  '1000/hour': { minute: null, hour: 1000, day: 10000 },
+  'unlimited': { minute: null, hour: null, day: null },
+};
+
+/**
+ * Normalize a rate_limit field from broker.yaml.
+ * Accepts:
+ *   - '100/hour' | 'unlimited'  (v3 strings)
+ *   - { minute, hour, day }     (v4 object)
+ * @returns {{ minute: number|null, hour: number|null, day: number|null } | null}
+ */
+export function normalizeRateLimit(rl) {
+  if (rl == null) return null; // unlimited
+  if (typeof rl === 'string') {
+    if (rl === 'unlimited') return { minute: null, hour: null, day: null };
+    return RATE_LIMIT_PRESETS[rl] || null;
+  }
+  if (typeof rl === 'object') {
+    return {
+      minute: Number.isFinite(rl.minute) ? rl.minute : null,
+      hour:   Number.isFinite(rl.hour)   ? rl.hour   : null,
+      day:    Number.isFinite(rl.day)    ? rl.day    : null,
+    };
+  }
+  return null;
+}
+
 // ============================================================
 // helpers
 // ============================================================

@@ -1,6 +1,15 @@
 # sops-age-template / SOPS+age 密钥模板
 
-> **v2.0 新增 Secret Broker**：把"AI 安全使用密钥"变成"AI 不接触密钥"。
+> **v4 设计完成(2026-09-01)**：把 v3.8 (mTLS + TOTP + SOPS) 升级为 **AI-First 凭据管理平台**。
+> 6 种认证因子 / 40+ 服务商模板 / 8 种调用入口 / 100% OpenAPI / 零信任 + 自动 rotate。
+>
+> 📘 **V4 设计文档树**:
+> - [Master Plan](docs/DESIGN-V4-MASTER-PLAN.md) · [Quickstart](docs/QUICKSTART.md) (5 分钟)
+> - [身份认证 + MFA](docs/DESIGN-V4-IDENTITY-MFA.md) · [服务商模板](docs/DESIGN-V4-PROVIDER-TEMPLATES.md)
+> - [API 调用规范](docs/DESIGN-V4-API-CALLING-STANDARDS.md) · [安全模型](docs/DESIGN-V4-SECURITY-MODEL.md)
+> - [实施路线图](docs/DESIGN-V4-ROADMAP.md) (6 个月,3 阶段)
+
+> **v2.0 起 Secret Broker**：把"AI 安全使用密钥"变成"AI 不接触密钥"。
 > AI 客户端通过 mTLS HTTPS 调用 broker，让 broker 替它调 GitHub / 阿里云 / 腾讯云 / SSH，
 > 明文密钥永远只在 broker 内存里。
 

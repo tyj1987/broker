@@ -35,9 +35,11 @@ export const TYPE_SCHEMAS = {
   github_pat: {
     label: 'GitHub Personal Access Token',
     description: 'https://github.com/settings/tokens — 选 classic, scope 按需',
+    rotate_recommendation_days: 90,
     fields: [
       { name: 'token', label: 'Token', kind: 'textarea', required: true, sensitive: true,
-        placeholder: 'ghp_...' },
+        placeholder: 'ghp_...',
+        validation_regex: '^ghp_[A-Za-z0-9]{36,}$' },
     ],
   },
   gitlab_pat: {
@@ -490,7 +492,15 @@ for (const [type, schema] of Object.entries(TYPE_SCHEMAS)) {
 
 // ----- helper: get schema by type, fallback to 'custom' -----
 export function getTypeSchema(type) {
-  return TYPE_SCHEMAS[type] || TYPE_SCHEMAS.custom;
+  const raw = TYPE_SCHEMAS[type] || TYPE_SCHEMAS.custom;
+  // 浅拷贝 + 字段深拷贝,把 validation_regex 字符串转 RegExp,避免调用方还需 new RegExp
+  const fields = raw.fields.map(f => {
+    if (typeof f.validation_regex === 'string') {
+      return { ...f, validation_regex: new RegExp(f.validation_regex) };
+    }
+    return { ...f };
+  });
+  return { ...raw, fields };
 }
 
 // ----- helper: 渲染默认值（创建 secret 时） -----
@@ -531,4 +541,251 @@ export function validateFields(type, fields) {
     }
   }
   return errors;
+}
+
+// ============================================================
+// V4 增量: 20 个新增 type schemas
+// 来自 DESIGN-V4-PROVIDER-TEMPLATES.md § 4.2
+// ============================================================
+
+const V4_TYPE_SCHEMAS = {
+  // ---- 容器镜像 ----
+  docker_hub_pat: {
+    label: 'Docker Hub Personal Access Token',
+    description: 'https://hub.docker.com/settings/security — Personal Access Token (2025 新)',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'username', label: 'Username', kind: 'text', required: true },
+      { name: 'pat', label: 'Personal Access Token', kind: 'textarea', required: true, sensitive: true,
+        placeholder: 'dckr_pat_...',
+        validation_regex: '^dckr_pat_[A-Za-z0-9_-]{20,}$',
+        help: 'Docker Hub 2025 起推荐 PAT(取代密码)' },
+    ],
+  },
+  ghcr_pat: {
+    label: 'GitHub Container Registry Token',
+    description: '用 GitHub PAT 推拉 ghcr.io,需 packages:read/write scope',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'token', label: 'GitHub PAT', kind: 'textarea', required: true, sensitive: true,
+        help: 'ghp_/github_pat_ + packages scope' },
+    ],
+  },
+  // ---- 云厂商 - 国际 ----
+  aws_access_key_v2: {
+    label: 'AWS Access Key (含 STS 临时凭证支持)',
+    description: 'https://console.aws.amazon.com/iam/home#/security_credentials',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'access_key_id', label: 'Access Key ID', kind: 'text', required: true,
+        validation_regex: '^(AKIA|ASIA)[A-Z0-9]{12,}$' },
+      { name: 'secret_access_key', label: 'Secret Access Key', kind: 'password', required: true, sensitive: true },
+      { name: 'session_token', label: 'Session Token (仅 STS)', kind: 'textarea', sensitive: true,
+        help: 'STS AssumeRole 返回的临时 token,留空表示长期 AK' },
+      { name: 'region', label: '默认 Region', kind: 'text', default: 'us-east-1',
+        placeholder: 'us-east-1' },
+    ],
+  },
+  azure_tenant: {
+    label: 'Azure Tenant (App Registration)',
+    description: 'https://portal.azure.com → App registrations',
+    rotate_recommendation_days: 180,
+    fields: [
+      { name: 'tenant_id', label: 'Tenant ID', kind: 'text', required: true,
+        validation_regex: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' },
+      { name: 'client_id', label: 'Client ID', kind: 'text', required: true,
+        validation_regex: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' },
+      { name: 'client_secret', label: 'Client Secret', kind: 'password', required: true, sensitive: true },
+      { name: 'subscription_id', label: 'Subscription ID (可选)', kind: 'text' },
+    ],
+  },
+  gcp_service_account_v2: {
+    label: 'GCP Service Account (含 Workload Identity)',
+    description: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'credentials_json', label: 'Service Account JSON (完整)', kind: 'textarea', required: true, sensitive: true,
+        file_upload: true,
+        help: '从 GCP 下载的 .json 文件完整内容' },
+      { name: 'project_id', label: 'Project ID', kind: 'text', required: true,
+        help: '从 credentials_json 提取的 project_id' },
+      { name: 'use_workload_identity', label: '优先用 Workload Identity', kind: 'checkbox', default: false,
+        help: 'GKE/Cloud Run 中勾选后,broker 用 metadata server 拿短命 token' },
+    ],
+  },
+  digitalocean: {
+    label: 'DigitalOcean PAT',
+    description: 'https://cloud.digitalocean.com/account/api/tokens',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'api_token', label: 'API Token', kind: 'textarea', required: true, sensitive: true,
+        validation_regex: '^dop_v1_[a-f0-9]{64}$' },
+    ],
+  },
+  oracle_cloud: {
+    label: 'Oracle Cloud API Key',
+    description: 'https://cloud.oracle.com/identity/domains/my-profile/api-keys',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'user_ocid', label: 'User OCID', kind: 'text', required: true,
+        placeholder: 'ocid1.user.oc1..aaaa...' },
+      { name: 'tenancy_ocid', label: 'Tenancy OCID', kind: 'text', required: true,
+        placeholder: 'ocid1.tenancy.oc1..aaaa...' },
+      { name: 'fingerprint', label: 'API Key Fingerprint', kind: 'text', required: true },
+      { name: 'private_key', label: 'Private Key (PEM)', kind: 'textarea', required: true, sensitive: true, file_upload: true },
+      { name: 'region', label: 'Region', kind: 'text', default: 'us-ashburn-1' },
+    ],
+  },
+  // ---- 代码平台 ----
+  github_app: {
+    label: 'GitHub App (替代 PAT)',
+    description: 'https://github.com/settings/apps — 比 PAT 更细粒度',
+    rotate_recommendation_days: 365,
+    fields: [
+      { name: 'app_id', label: 'App ID', kind: 'number', required: true,
+        help: '数字,GitHub App 详情页可见' },
+      { name: 'installation_id', label: 'Installation ID', kind: 'number', required: true },
+      { name: 'private_key', label: 'Private Key (.pem)', kind: 'textarea', required: true, sensitive: true, file_upload: true,
+        placeholder: '-----BEGIN RSA PRIVATE KEY-----...' },
+    ],
+  },
+  gitlab_pat: {
+    label: 'GitLab Personal Access Token',
+    description: 'https://gitlab.com/-/user_settings/personal_access_tokens',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'token', label: 'Token', kind: 'textarea', required: true, sensitive: true,
+        validation_regex: '^glpat-[A-Za-z0-9_\-]{20,}$' },
+    ],
+  },
+  gitee_pat: {
+    label: 'Gitee Personal Access Token',
+    description: 'https://gitee.com/profile/personal_access_tokens',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'token', label: 'Token', kind: 'textarea', required: true, sensitive: true },
+    ],
+  },
+  // ---- 通信 ----
+  feishu_app: {
+    label: '飞书应用凭证',
+    description: 'https://open.feishu.cn/app — 应用凭证',
+    rotate_recommendation_days: 365,
+    fields: [
+      { name: 'app_id', label: 'App ID', kind: 'text', required: true,
+        validation_regex: '^cli_[a-z0-9]{16,}$' },
+      { name: 'app_secret', label: 'App Secret', kind: 'password', required: true, sensitive: true },
+    ],
+  },
+  dingtalk_app: {
+    label: '钉钉应用凭证',
+    description: 'https://open-dev.dingtalk.com — 应用信息',
+    rotate_recommendation_days: 365,
+    fields: [
+      { name: 'app_key', label: 'AppKey', kind: 'text', required: true },
+      { name: 'app_secret', label: 'AppSecret', kind: 'password', required: true, sensitive: true },
+      { name: 'agent_id', label: 'AgentId', kind: 'text', required: true,
+        help: '机器人或应用 ID' },
+    ],
+  },
+  // ---- 支付 ----
+  wechat_miniprogram: {
+    label: '微信小程序凭证',
+    description: 'https://mp.weixin.qq.com — 开发管理',
+    rotate_recommendation_days: 365,
+    fields: [
+      { name: 'app_id', label: 'AppID', kind: 'text', required: true,
+        validation_regex: '^wx[a-f0-9]{16}$' },
+      { name: 'app_secret', label: 'AppSecret', kind: 'password', required: true, sensitive: true },
+    ],
+  },
+  alipay_key: {
+    label: '支付宝密钥',
+    description: 'https://open.alipay.com — 应用信息',
+    rotate_recommendation_days: 365,
+    fields: [
+      { name: 'app_id', label: 'App ID', kind: 'text', required: true,
+        placeholder: '2021000000000000' },
+      { name: 'private_key', label: '应用私钥 (PKCS8)', kind: 'textarea', required: true, sensitive: true, file_upload: true,
+        placeholder: '-----BEGIN PRIVATE KEY-----...' },
+      { name: 'alipay_public_key', label: '支付宝公钥', kind: 'textarea', required: true,
+        placeholder: '-----BEGIN PUBLIC KEY-----...' },
+    ],
+  },
+  // ---- 监控 ----
+  datadog_v2: {
+    label: 'Datadog API Key',
+    description: 'https://app.datadoghq.com/organization-settings/application-keys',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'api_key', label: 'API Key', kind: 'password', required: true, sensitive: true },
+      { name: 'app_key', label: 'Application Key', kind: 'password', sensitive: true,
+        help: '某些 API 需要' },
+      { name: 'site', label: 'Site', kind: 'select', default: 'datadoghq.com', options: [
+        { value: 'datadoghq.com', label: 'US (datadoghq.com)' },
+        { value: 'datadoghq.eu', label: 'EU (datadoghq.eu)' },
+        { value: 'us3.datadoghq.com', label: 'US3' },
+        { value: 'ap1.datadoghq.com', label: 'AP1' },
+      ] },
+    ],
+  },
+  // ---- 杂项 ----
+  npm_token: {
+    label: 'NPM Publish Token',
+    description: 'https://www.npmjs.com/settings/[user]/tokens',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'token', label: 'NPM Token', kind: 'textarea', required: true, sensitive: true,
+        validation_regex: '^npm_[A-Za-z0-9]{36}$' },
+    ],
+  },
+  pypi_token: {
+    label: 'PyPI API Token',
+    description: 'https://pypi.org/manage/account/token/',
+    rotate_recommendation_days: 90,
+    fields: [
+      { name: 'token', label: 'PyPI Token', kind: 'textarea', required: true, sensitive: true,
+        validation_regex: '^pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_\-]{50,}$' },
+    ],
+  },
+  // ---- SSH 跳板 (V4) ----
+  ssh_jump_host: {
+    label: 'SSH 跳板配置',
+    description: '通过 broker 中转到目标主机,AI 不接触私钥',
+    rotate_recommendation_days: 180,
+    fields: [
+      { name: 'jump_host', label: '跳板机地址', kind: 'text', required: true,
+        placeholder: 'jump.example.com' },
+      { name: 'jump_user', label: '跳板机用户', kind: 'text', required: true,
+        placeholder: 'bastion' },
+      { name: 'jump_key', label: '跳板机私钥', kind: 'textarea', required: true, sensitive: true, file_upload: true,
+        placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----...' },
+      { name: 'target_user', label: '目标机用户', kind: 'text', required: true,
+        placeholder: 'app' },
+      { name: 'target_host', label: '目标机地址', kind: 'text', required: true,
+        placeholder: 'internal.example.com' },
+      { name: 'target_port', label: '目标机端口', kind: 'number', default: 22 },
+    ],
+  },
+  // ---- DB ----
+  azure_storage: {
+    label: 'Azure Storage Account',
+    description: 'https://portal.azure.com → Storage accounts',
+    rotate_recommendation_days: 365,
+    fields: [
+      { name: 'account_name', label: 'Account Name', kind: 'text', required: true },
+      { name: 'account_key', label: 'Account Key', kind: 'password', required: true, sensitive: true,
+        help: 'Shared Key,用于 Blob/Queue/Table/File' },
+      { name: 'connection_string', label: 'Connection String (可选)', kind: 'textarea', sensitive: true,
+        file_upload: true,
+        help: '完整连接字符串,优先于 account_name + account_key' },
+    ],
+  },
+};
+
+// 合并 V4 schemas 到 TYPE_SCHEMAS
+for (const [type, schema] of Object.entries(V4_TYPE_SCHEMAS)) {
+  if (!TYPE_SCHEMAS[type]) {
+    TYPE_SCHEMAS[type] = schema;
+  }
 }

@@ -1,0 +1,132 @@
+# .github/workflows/ci-v4.yml
+# V4 跨平台 CI: Windows / Linux / macOS, Node 20.x
+# Includes V4 test suite (redact / mfa-policy / sms-provider / api-keys / signing)
+
+name: CI-V4
+
+on:
+  push:
+    branches: [main, master, optimize/**]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ============================================================
+  # 1. 密钥泄漏扫描 (跨平台统一)
+  # ============================================================
+  secret-scan:
+    name: gitleaks scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ============================================================
+  # 2. 跨平台 V4 测试矩阵
+  # ============================================================
+  test-v4:
+    name: V4 Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+          cache-dependency-path: broker/package.json
+
+      - name: Install broker deps
+        working-directory: broker
+        run: npm ci
+
+      - name: Run V4 unit tests
+        working-directory: broker
+        run: npm run test:v4
+
+      - name: Run V3 backward-compat tests
+        working-directory: broker
+        run: |
+          npm run test:lib
+          npm run test:ip
+          npm run test:routes
+          npm run test:obs
+          npm run test:trace
+          npm run test:ops
+          npm run test:backup
+
+  # ============================================================
+  # 3. NPM 依赖审计
+  # ============================================================
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20.x }
+      - working-directory: broker
+        run: npm audit --audit-level=high
+
+  # ============================================================
+  # 4. 签名算法跨平台 smoke
+  # ============================================================
+  signing-smoke:
+    name: Signing smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20.x, cache: 'npm', cache-dependency-path: broker/package.json }
+      - working-directory: broker
+        run: npm ci
+      - working-directory: broker
+        run: node ../broker-test/test-signing.js
+
+  # ============================================================
+  # 5. OpenAPI spec 校验
+  # ============================================================
+  openapi-lint:
+    name: OpenAPI lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20.x, cache: 'npm', cache-dependency-path: broker/package.json }
+      - working-directory: broker
+        run: npm ci
+      - name: Generate openapi.yaml
+        working-directory: broker
+        run: node bin/openapi-generate.js
+      - name: Validate structure
+        run: |
+          node -e "
+          const fs = require('fs');
+          const yaml = require('yaml');
+          const spec = yaml.parse(fs.readFileSync('docs/openapi.yaml', 'utf8'));
+          if (!spec.openapi) throw new Error('missing openapi version');
+          if (!spec.paths || Object.keys(spec.paths).length < 20) throw new Error('too few paths: ' + Object.keys(spec.paths).length);
+          if (!spec.components.schemas.ProxyRequest) throw new Error('missing ProxyRequest schema');
+          if (!spec.components.securitySchemes.mtls) throw new Error('missing mtls security');
+          console.log('OK paths=' + Object.keys(spec.paths).length + ' schemas=' + Object.keys(spec.components.schemas).length);
+          "

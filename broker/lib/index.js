@@ -6,6 +6,13 @@ export { buildZip, computeCrc32 } from './zip.js';
 export { createAudit } from './audit.js';
 export { parseRateLimit, createRateLimiter } from './rate-limit.js';
 export { isIpAllowed, normalizeIp, matchIpRule } from './ip-allowlist.js';
+// V4 任务 1 配套: 凭据零接触安全基础
+export { redact, redactDeep, redactJson, hasLikelySecret, SUPPORTED_PATTERNS } from './redact.js';
+// V4 任务 2: 风险评分 + MFA 决策
+export { calcRiskScore, SENSITIVE_ACTIONS } from './risk-score.js';
+export { decideMfaRequirement, checkMfaProgress, loadMfaPolicy, DEFAULT_POLICY as DEFAULT_MFA_POLICY } from './mfa-policy.js';
+// V4 任务 1 配套: 可插拔 SMS provider
+export { SmsRegistry, stubSmsProvider, makeWebhookSmsProvider, generateSmsCode } from './sms-provider.js';
 export {
   createSessionStore,
   SESSION_TTL_MS,

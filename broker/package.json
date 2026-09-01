@@ -18,7 +18,12 @@
     "test:trace": "node ../broker-test/test-phase-d-trace-audit.js",
     "test:ops": "node ../broker-test/test-phase-e-ops.js",
     "test:backup": "node ../broker-test/test-phase-f-backup-probes.js",
-    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup"
+    "test:redact": "node ../broker-test/test-redact.js",
+    "test:mfa": "node ../broker-test/test-mfa-policy.js",
+    "test:sms": "node ../broker-test/test-sms-provider.js",
+    "test:apikeys-v4": "node ../broker-test/test-api-keys-rate.js",
+    "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4",
+    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
   },
   "dependencies": {
     "yaml": "^2.9.0"

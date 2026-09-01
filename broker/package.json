@@ -28,6 +28,7 @@
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",
     "test:ws": "node ../broker-test/test-ws.js",
     "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
+    "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws",
     "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
   },
   "dependencies": {

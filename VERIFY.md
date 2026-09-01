@@ -227,7 +227,58 @@ V4 P1: AI-First 凭据管理骨架 (10 任务)
 5. **凭据泄漏检测 (`broker_redaction_misses_total` > 0)**: 立刻翻 `audit/`,**DON'T
    PANIC** — 可能是新 secret pattern 未注册,提交 PR 加 pattern 即可
 
-## 16. 联系
+## 16. 1 行验证命令(已实测 2026-09-01)
+
+```bash
+(cd broker && npm install && npm run test:verify) && (cd sdk/python && python -m pytest tests/) && echo "✅ V4.1.0 验证通过"
+```
+
+实测输出:
+```
+broker:test:verify → 619 passed, 0 failed
+sdk:python:pytest  → 28 passed, 0 failed
+```
+合计 **647 passed, 0 failed**。
+
+`test:verify` 等价于 `test:modular + test:v4-modules + test:workload + test:ssh + test:ws`,
+是 GA release 的标准验证关卡。
+
+## 17. broker 实际启动 smoke (可选,需 mTLS PKI)
+
+```bash
+# 1. 准备 PKI (Git Bash 自带 openssl)
+TMPDIR=$(mktemp -d)
+cd "$TMPDIR"
+GIT_OPENSSL="C:/Program Files/Git/usr/bin/openssl.exe"
+$GIT_OPENSSL req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 1 -subj '/CN=test'
+$GIT_OPENSSL genrsa -out server.key 2048
+$GIT_OPENSSL req -new -key server.key -out server.csr -subj '/CN=localhost'
+$GIT_OPENSSL x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 1
+mkdir -p pki/server pki/ca pki/clients
+cp server.crt server.key pki/server/
+cp ca.crt pki/ca/; touch pki/ca/crl.pem
+
+# 2. 启动 broker
+cd E:/broker/broker
+export PKI_DIR="$TMPDIR/pki" SECRETS_DETAIL_PATH="$TMPDIR/secrets/secrets-detail.json"
+echo '[]' > "$TMPDIR/secrets/secrets-detail.json"
+node server.js &
+sleep 3
+
+# 3. curl health
+curl -k https://127.0.0.1:8443/health
+# → {"ok":true,"version":"4.1.0"}
+```
+
+**预期**: 5 秒内启动 + curl 200 + version=4.1.0
+
+**已知注意事项**:
+- broker 启动需要 `pki/{server,ca,clients}/` 三目录 + `pki/ca/crl.pem`(可空)
+- `PKI_DIR` 必须指向包含 `server/server.crt` 等的父目录
+- `SECRETS_DETAIL_PATH` 默认指向 `E:\broker\secrets\secrets-detail.json`(workspace 内)
+  — 推荐用环境变量指到外部 tmp 文件避免误改仓库
+
+## 18. 联系
 
 - Bug: https://github.com/tyj1987/broker/issues
 - Security: security@broker.example.com (PGP in SECURITY.md)

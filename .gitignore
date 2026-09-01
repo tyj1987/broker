@@ -64,16 +64,18 @@ tmp/
 # ============================
 # Secret Broker 特定 / Secret Broker specific
 # ============================
-# PKI 证书和私钥（ca.crt 例外，需要分发给客户端）
+# PKI 证书和私钥（ca.crt 入库方便 dev 客户端导入, ca.key 私钥绝不入库）
 pki/**/*.key
-pki/**/*.crt
 pki/**/*.csr
 pki/**/*.ext
 pki/**/crl.pem
 pki/**/index.txt*
 pki/**/serial*
+pki/**/*.srl
 pki/**/openssl.cnf
-# 但保留 ca.crt（要分发）
+# 其他 server / client cert 各自生成, 不入库 (CN/SAN 跟环境绑)
+pki/**/*.crt
+# ca.crt 是公钥证书, 入库方便 dev 客户端验证 server cert
 !pki/ca/ca.crt
 !pki/ca/.gitkeep
 
@@ -88,6 +90,21 @@ audit/*.log
 secrets/healthcheck-state.json
 secrets/alert-history.jsonl
 secrets/secrets-detail.json  # 凭据 detail, SOPS 加密后的不入 (运行时明文)
+
+# v4.1 dev 明文配置 (本地启动用, 严禁入库)
+secrets/broker.yaml
+secrets/clients.json
+# broker SOPS 原子写回时的临时文件
+secrets/.broker.tmp.*.yaml
+
+# audit/ 下 dev 脚本副本 (scripts/dev/ 才是 source of truth) + 历史 session 报告
+audit/*.cmd
+audit/*.ps1
+audit/*.py
+audit/*.md
+
+# scripts/dev/.scratch/ 是 audit 副本备份目录, 不入库
+scripts/dev/.scratch/
 
 # Terraform 变量文件（避免 commit 真密码 / 真 IP）
 infra/**/*.tfvars

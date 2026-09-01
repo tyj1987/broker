@@ -248,8 +248,16 @@ let CONFIG = null;
 let SECRET_CACHE = new Map();
 
 async function loadConfig() {
-  console.log('[config] Decrypting broker.yaml via SOPS...');
-  const yamlText = await sopsDecrypt(CONFIG_PATH);
+  // Dev mode: skip sops and read the file as-is (for local testing only).
+  const skipSops = process.env.SOPS_SKIP === '1' || process.env.SOPS_SKIP === 'true';
+  if (skipSops) {
+    console.log('[config] SOPS_SKIP=1 — reading broker.yaml as plaintext (DEV ONLY)');
+  } else {
+    console.log('[config] Decrypting broker.yaml via SOPS...');
+  }
+  const yamlText = skipSops
+    ? readFileSync(CONFIG_PATH, 'utf8')
+    : await sopsDecrypt(CONFIG_PATH);
   const cfg = parseYaml(yamlText);
   if (!cfg || typeof cfg !== 'object') throw new Error('Invalid broker.yaml');
   cfg.services = cfg.services || {};
@@ -262,7 +270,10 @@ async function loadSecrets() {
   // 1. Try new structured store first
   if (existsSync(SECRETS_DETAIL_PATH)) {
     try {
-      const text = await sopsDecrypt(SECRETS_DETAIL_PATH);
+      const skipSops2 = process.env.SOPS_SKIP === '1' || process.env.SOPS_SKIP === 'true';
+      const text = skipSops2
+        ? readFileSync(SECRETS_DETAIL_PATH, 'utf8')
+        : await sopsDecrypt(SECRETS_DETAIL_PATH);
       const obj = JSON.parse(text);
       SECRET_CACHE.clear();
       for (const [name, entry] of Object.entries(obj.secrets || {})) {

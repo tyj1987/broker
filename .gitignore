@@ -122,7 +122,6 @@ release-assets/*.zip
 !release-assets/MANIFEST.md
 
 # Generated artifacts (rebuilt by bin/ scripts, not source)
-docs/openapi.yaml  # bin/openapi-generate.js — rebuilt by CI 'OpenAPI lint' job
 
 # Terraform 变量文件（避免 commit 真密码 / 真 IP）
 infra/**/*.tfvars
@@ -147,3 +146,4 @@ override.tf.json
 **/id_rsa
 **/id_ed25519
 
+docs/openapi.yaml

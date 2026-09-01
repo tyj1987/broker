@@ -11,7 +11,7 @@
 | v3.8 client compatibility | ✅ Maintained |
 | `npm run test:verify-all` | ✅ 647 / 0 (broker 619 + Python SDK 28) |
 | CI workflows (`.github/workflows/`) | ✅ 2 (ci-v4.yml + test-sdks.yml) |
-| `v4.1.0` tag | ✅ Annotated + pushed (ref `refs/tags/v4.1.0`, deref `3dcbde7` — includes Go SDK build fix + Python idn-email + dev tools + DEPLOY-52TRZ) |
+| `v4.1.0` tag | ✅ Annotated + pushed (ref `refs/tags/v4.1.0`, deref `673d8a1` — includes all post-GA fixes: Go SDK build fix + Python idn-email + dev tools + DEPLOY-52TRZ) |
 | GitHub Release | ✅ Live (tyj1987/broker master + tag, 2026-09-01 12:48) |
 | Cloud marketplace images | ⏳ P1 in [ROADMAP-post-1.0.md](ROADMAP-post-1.0.md) |
 | SOC 2 Type 1 | ⏳ P1 in [ROADMAP-post-1.0.md](ROADMAP-post-1.0.md) |

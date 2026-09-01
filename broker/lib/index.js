@@ -90,3 +90,15 @@ export {
   parseSshTarget,
   validateCommand,
 } from '../ssh-proxy.js';
+// V4.1 任务 13: WebSocket 实时事件流
+export {
+  attachWebSocket,
+  broadcastEvent as broadcastWsEvent,
+  subscribeClient as wsSubscribeClient,
+  unsubscribeClient as wsUnsubscribeClient,
+  updateClientFilter as wsUpdateClientFilter,
+  getStats as wsGetStats,
+  listSubscribers as wsListSubscribers,
+  HEARTBEAT_INTERVAL_MS as WS_HEARTBEAT_MS,
+  CLIENT_TIMEOUT_MS as WS_CLIENT_TIMEOUT_MS,
+} from './ws.js';

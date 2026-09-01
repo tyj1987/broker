@@ -25,9 +25,13 @@
     "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4",
     "test:workload": "node ../broker-test/test-workload-identity.js",
     "test:v4-modules": "node ../broker-test/test-v4-modules.js",
+    "test:ssh": "node ../broker-test/test-ssh-proxy.js",
+    "test:ws": "node ../broker-test/test-ws.js",
+    "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
     "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
   },
   "dependencies": {
+    "ws": "^8.21.3",
     "yaml": "^2.9.0"
   },
   "license": "MIT"

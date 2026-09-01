@@ -1,0 +1,192 @@
+# Prometheus alert rules for Secret Broker V4.
+# Load via: kubectl apply -f alerts.yml (as a PrometheusRule CRD) or
+#           scrape_configs in your prometheus.yml
+
+groups:
+  - name: broker-availability
+    interval: 30s
+    rules:
+      - alert: BrokerDown
+        expr: up{job="broker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: broker
+        annotations:
+          summary: "Secret Broker instance is down"
+          description: "Broker instance {{ $labels.instance }} has been down for > 2 minutes."
+
+      - alert: BrokerHighErrorRate
+        expr: |
+          (
+            sum(rate(broker_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(broker_http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "Broker 5xx error rate > 5%"
+          description: "5xx error rate is {{ $value | humanizePercentage }} over the last 5m."
+
+  - name: broker-security
+    interval: 30s
+    rules:
+      - alert: BruteForceDetected
+        expr: rate(broker_auth_failures_total[1m]) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: broker
+          category: security
+        annotations:
+          summary: "Possible brute-force attack on broker auth"
+          description: "{{ $value }} auth failures/sec for 2+ minutes from {{ $labels.client_cn }}."
+
+      - alert: ApiKeyRateLimit
+        expr: increase(broker_api_key_rate_limit_hits_total[5m]) > 100
+        for: 1m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "API key rate-limit hits spiking"
+          description: "{{ $value }} rate-limit hits in last 5m for client {{ $labels.client_cn }}."
+
+      - alert: MfaFailThreshold
+        expr: increase(broker_mfa_failures_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "MFA failure spike"
+          description: "Possible MFA brute-force from {{ $labels.client_cn }}."
+
+      - alert: SecretLeakInAudit
+        expr: rate(broker_redaction_misses_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: broker
+          category: security
+        annotations:
+          summary: "Possible secret leak detected"
+          description: "Redaction engine missed a pattern; check audit log immediately."
+
+  - name: broker-rotation
+    interval: 5m
+    rules:
+      - alert: SecretExpired
+        expr: broker_rotation_state_count{state="expired"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "{{ $value }} secrets past rotation deadline"
+          description: "Run auto-rotate or rotate manually."
+
+      - alert: SecretAboutToExpire
+        expr: broker_rotation_state_count{state="warn"} > 5
+        for: 0m
+        labels:
+          severity: info
+          service: broker
+        annotations:
+          summary: "Multiple secrets need rotation soon"
+          description: "{{ $value }} secrets in 'warn' state (>14 days before threshold)."
+
+      - alert: AutoRotateFailed
+        expr: increase(broker_rotation_failures_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "Auto-rotation failures detected"
+          description: "{{ $value }} auto-rotation failures in the last hour."
+
+  - name: broker-workload-identity
+    interval: 1m
+    rules:
+      - alert: WorkloadIdentityStsFailure
+        expr: rate(broker_workload_identity_assume_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "Workload identity STS exchange failing"
+          description: "Provider {{ $labels.provider }} error rate {{ $value }} /sec."
+
+      - alert: WorkloadIdentityCacheMiss
+        expr: rate(broker_workload_identity_cache_misses_total[5m]) > 5
+        for: 10m
+        labels:
+          severity: info
+          service: broker
+        annotations:
+          summary: "Many STS cache misses (tokens rotating)"
+          description: "Cluster may be restarting many pods simultaneously."
+
+  - name: broker-ssh
+    interval: 1m
+    rules:
+      - alert: SshProxyFailure
+        expr: rate(broker_ssh_operations_total{status="error"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "SSH proxy errors detected"
+          description: "Target: {{ $labels.target }}"
+
+      - alert: SshTunnelLeak
+        expr: broker_ssh_tunnels_active > 50
+        for: 10m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "Many active SSH tunnels"
+          description: "{{ $value }} tunnels open. Investigate abandoned sessions."
+
+  - name: broker-websocket
+    interval: 30s
+    rules:
+      - alert: WsSubscriberFlood
+        expr: rate(broker_ws_subscribers[5m]) > 100
+        for: 1m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "WebSocket subscriber spike"
+          description: "Possible connection storm or runaway client."
+
+  - name: broker-capacity
+    interval: 1m
+    rules:
+      - alert: BrokerCpuHot
+        expr: rate(process_cpu_seconds_total{job="broker"}[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "Broker CPU > 80%"
+          description: "Scale up replicas or investigate hot endpoint."
+
+      - alert: BrokerMemoryHot
+        expr: process_resident_memory_bytes{job="broker"} > 512 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+          service: broker
+        annotations:
+          summary: "Broker memory > 512MB"
+          description: "Possible memory leak or large in-flight cache."

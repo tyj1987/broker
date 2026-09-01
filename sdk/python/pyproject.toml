@@ -9,7 +9,7 @@ description = "Official Python SDK for Secret Broker V4 (mTLS, zero hard deps)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "tyj1987", email = "broker@local" }]
+authors = [{ name = "tyj1987", email = "broker@52trz.com" }]
 keywords = ["secret-broker", "credentials", "mtls", "ai", "mcp"]
 classifiers = [
     "Development Status :: 4 - Beta",

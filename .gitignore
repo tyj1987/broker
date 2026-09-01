@@ -121,6 +121,9 @@ release-assets/*.zip
 # MANIFEST.md is the only release-assets file that goes in git (lists what to upload)
 !release-assets/MANIFEST.md
 
+# Generated artifacts (rebuilt by bin/ scripts, not source)
+docs/openapi.yaml  # bin/openapi-generate.js — rebuilt by CI 'OpenAPI lint' job
+
 # Terraform 变量文件（避免 commit 真密码 / 真 IP）
 infra/**/*.tfvars
 infra/**/*.tfvars.json

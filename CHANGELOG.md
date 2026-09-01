@@ -150,6 +150,90 @@ V4 全量交付,6 个月路线图 (W1-W24) 全部完成。23 个任务全收官�
 - Cloud marketplace image / CVE 计划 Q4 2026
 - Tauri desktop client / Homebrew tap 计划 Q4 2026
 
+### Post-GA hotfixes (2026-09-01) — same tag v4.1.0
+
+Tag v4.1.0 重新指向 master HEAD 含以下 fix (原 v4.1.0 tag `e76bf3a` 标记时这些未包含):
+
+#### Fixed
+
+- **Go SDK 4 个 build-blocking bug** (sdk/go/broker/):
+  - `errors.go:179` — 删 unused `seg1 := []byte("eyJ")`
+  - `ws.go:268` — `if masked` → `if masked != 0` (byte 非 bool)
+  - `client.go:24` — 删 unused `"net"` import
+  - `broker/test/client_test.go:setupTestServer` — `mustCert(t)` 调 2 次 → 调 1 次复用 `(cert, caPEM)`, 否则 2 个不同 CA 导致 server cert 跟 client trust 的 CA 不匹配 → TLS verify fail
+  - 加 `if runtime.GOOS == "windows" { t.Skip(...) }` 跳过 `printenv` Linux-only test
+  - 测试用 cert 加 `IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}` for x509 IP SAN verification
+  - 修 `TestRedactGithubInError` 用 `_, _, err := c.Proxy(...)` (Proxy 返 3 值, 不是 2)
+  - 验证: `go test ./...` → 14/15 PASS + 1 SKIP (was claimed 15/15, 实际编译不过)
+  - 4 平台 cross-compile 全 OK (linux-amd64 / linux-arm64 / darwin-amd64 / windows-amd64.exe)
+- **Python SDK `pyproject.toml`**: `authors[0].email` 从 `'broker@local'` 改 `'broker@52trz.com'` (setuptools ≥68 校验 idn-email, `local` TLD < 2 chars 拒)
+- **server.js auto-rotate**: `persistRotatedSecret` 之前写 plaintext JSON (line 237 TODO), 现改用 `sopsEncryptAtomic` 重加密 (fallback 到 plaintext + 警告只在 sops binary 缺失)
+- **server.js fallback version string**: `server.js:1302` 死代码 fallback `3.8.0` → `'unknown'` (BROKER_VERSION 总从 `broker/version.js` import, hardcoded literal 误导)
+- **broker.yaml.server.js:3112** fingerprint 比对: 客户端 cert 指纹 server 端自带 `:` 分隔, 修 bug 后跟 `pki/ca/ca.crt` 匹配
+- **broker TLS_CRL**: Node 看到空 CRL 抛 "Failed to parse CRL" — workaround 设 `TLS_CRL=C:\nonexistent.crl` 让 `existsSync` 返 false
+
+#### Added
+
+- **`scripts/dev/`** (6 文件) — local dev plaintext bypass tools:
+  - `README.md` — 入口
+  - `start-broker.ps1` — detached PowerShell launcher
+  - `smoke-test.py` — 5 端点 mTLS smoke
+  - `run-curl.py` — Windows Schannel 不认 PEM 时替代 curl
+  - `dev-test.ps1` / `dev-test.cmd` — full dev verification
+- **broker/server.js SOPS_SKIP env var**: `SOPS_SKIP=1` 时 `loadConfig` / `loadSecrets` 直读 plaintext (DEV ONLY, 强烈警告生产删)
+- **`pki/ca/ca.crt` 入库**: dev CA public cert (CN=tyj1987-broker-dev-ca) — 客户端验证 dev server cert 不需重新生 PKI
+- **`.gitignore` 增补**:
+  - `secrets/broker.yaml` (dev 明文)
+  - `secrets/clients.json` (dev 明文)
+  - `secrets/.broker.tmp.*.yaml` (runtime tmp)
+  - `audit/*.cmd / *.ps1 / *.py / *.md` (dev script 副本)
+  - `scripts/dev/.scratch/`
+  - `pki/**/*.srl` (OpenSSL serial)
+  - `sdk/python/dist/` / `build/` / `*.egg-info` (build artifacts)
+  - `sdk/go/bin/` / `dist/`
+  - `release-assets/*.tar.gz` / `*.zip` (binaries 一次上传, 不入库)
+- **`scripts/broker/install-ecs.sh`** (已存在, 9 步 ECS bootstrap)
+- **`scripts/broker/update-ecs.sh`** (已存在, scp-based in-place update)
+- **`scripts/broker/update-from-github.sh`** (新增, 4 步 `git pull + reset + npm install + restart`)
+- **`scripts/broker/migrate-v3-to-v4.sh`** (新增, 8 步 V3→V4 in-place upgrade + auto-rollback.sh)
+- **`scripts/broker/preflight-v3-to-v4.sh`** (新增, 7 步 dry-run check, exit 1 on any FAIL)
+- **`scripts/broker/upgrade-v3-to-v4.sh`** (新增, wrapper 支持 `--local` + `--remote` modes, 私人 repo aware)
+- **`DEPLOY-52TRZ.md`** (10 节 deploy guide: 首次 / 从零 git / 更新 3 场景, DNS/TLS/SOPS/systemd/备份/安全 checklist/故障排查)
+- **`STATUS.md`** (sentinel — V4.1.0 GA state + 5-doc entry map)
+- **`V4.1-COMPLETE.md`** (per-task plan vs actual + §14 验收清单)
+- **`RELEASE-NOTES-v4.1.0.md`** (GitHub Release body)
+- **`RELEASE-DEEPLINK.txt`** (one-click browser form, fallback to manual paste)
+- **`release-assets/MANIFEST.md`** (8-asset release manifest with SHA-256)
+- **`ROADMAP-post-1.0.md`** (P0-P3, 13 项目, 2026 Q4 → 2027 Q2)
+
+#### Changed
+
+- **v4.1.0 tag 移到 master HEAD**: 原 tag `e76bf3a` 标记时 Go SDK 4 个 build-blocking bug 未修, 实质上 v4.1.0 SDK 不能用. 现 tag 指向 `6c78f4f` (master HEAD) 含所有 post-GA fix
+- **`broker/package.json`**: 加 `test:verify` + `test:verify-all` + `test:python-sdk` 1-shot scripts (broker 619 + Python SDK 28 = 647/0)
+- **`broker/version.js`**: `BROKER_VERSION = '4.1.0'`
+
+#### Verified post-fix (2026-09-01)
+
+- `npm run test:verify-all` → **647/0** (broker 619 + Python SDK 28)
+  - modular routes: 140/0
+  - v4 modules: 343/0 (redact 45 + mfa 35 + sms 35 + apikeys 27 + v4-modules 201)
+  - workload: 56/0
+  - ssh: 53/0
+  - ws: 27/0
+  - python sdk: 28/0
+- `go test ./...` → 14/15 PASS + 1 SKIP (printenv Linux-only)
+- Python wheel `secret_broker-4.1.0-py3-none-any.whl` (11.5KB) + sdist (15.7KB) built, 28/28 tests from wheel
+- 4 Go binaries built: linux-amd64 (5.3MB) / linux-arm64 (5.1MB) / darwin-amd64 (5.4MB) / windows-amd64.exe (5.4MB)
+- Source tarball 547KB + zip 687KB
+- Local broker 跑 46+ min uptime, V3.8.0 deploy on `broker.52trz.com` 仍稳 (10.3 day uptime)
+
+#### Known upgrade risk (V3.x → V4.1.0)
+
+- V3 broker.yaml / common.env / clients.json / PKI 全 backward compat (V4 server.js 自动 migrate common.env → secrets-detail.json)
+- V3 env `HOST` → V4 `BROKER_BIND` rename (migrate script auto-handle)
+- `migrate-v3-to-v4.sh` 在 /opt/secret-broker-v3-backup-<ts>/ 自动生成 rollback.sh
+- 详 `DEPLOY-52TRZ.md` §2 + `migrate-v3-to-v4.sh` header
+
 ---
 
 ## [4.0.0-design] - 2026-09-01 (设计阶段)

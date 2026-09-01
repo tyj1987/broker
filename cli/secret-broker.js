@@ -234,6 +234,66 @@ async function cmdExec(args) {
 }
 
 // ============================================================
+// SSH subcommands (V4.1 任务 12)
+// ============================================================
+async function cmdSshExec(args) {
+  // secret-broker ssh-exec --target user@host[:port] --command "cmd" [--secret <name>] [--timeout <ms>]
+  let target = null, command = null, secretName = 'ssh.connection', timeoutMs = null;
+  let i = 0;
+  while (i < args.length) {
+    if (args[i] === '--target' && i + 1 < args.length) { target = args[++i]; i++; }
+    else if (args[i] === '--command' && i + 1 < args.length) { command = args[++i]; i++; }
+    else if (args[i] === '--secret' && i + 1 < args.length) { secretName = args[++i]; i++; }
+    else if (args[i] === '--timeout' && i + 1 < args.length) { timeoutMs = parseInt(args[++i], 10); i++; }
+    else die(`Unknown ssh-exec arg: ${args[i]}`);
+  }
+  if (!target || !command) {
+    die('Usage: secret-broker ssh-exec --target user@host[:port] --command "cmd" [--secret <name>] [--timeout <ms>]');
+  }
+  const r = await mTLSRequest({
+    method: 'POST',
+    path: '/api/v1/ssh/exec',
+    body: { target, command, secret_name: secretName, timeout_ms: timeoutMs },
+  });
+  if (r.status !== 200) die(`ssh-exec failed: ${r.status} ${JSON.stringify(r.body)}`);
+  if (r.body.stdout) process.stdout.write(r.body.stdout);
+  if (r.body.stderr) process.stderr.write(r.body.stderr);
+  process.exit(r.body.exitCode || 0);
+}
+
+async function cmdSshTunnel(args) {
+  // secret-broker ssh-tunnel --target user@host[:port] --local-port N --remote-host H --remote-port N [--secret <name>]
+  let target = null, localPort = null, remoteHost = null, remotePort = null, secretName = 'ssh.connection';
+  let i = 0;
+  while (i < args.length) {
+    if (args[i] === '--target' && i + 1 < args.length) { target = args[++i]; i++; }
+    else if (args[i] === '--local-port' && i + 1 < args.length) { localPort = parseInt(args[++i], 10); i++; }
+    else if (args[i] === '--remote-host' && i + 1 < args.length) { remoteHost = args[++i]; i++; }
+    else if (args[i] === '--remote-port' && i + 1 < args.length) { remotePort = parseInt(args[++i], 10); i++; }
+    else if (args[i] === '--secret' && i + 1 < args.length) { secretName = args[++i]; i++; }
+    else die(`Unknown ssh-tunnel arg: ${args[i]}`);
+  }
+  if (!target || !localPort || !remoteHost || !remotePort) {
+    die('Usage: secret-broker ssh-tunnel --target user@host[:port] --local-port N --remote-host H --remote-port N [--secret <name>]');
+  }
+  const r = await mTLSRequest({
+    method: 'POST',
+    path: '/api/v1/ssh/tunnel',
+    body: { target, local_port: localPort, remote_host: remoteHost, remote_port: remotePort, secret_name: secretName },
+  });
+  if (r.status !== 200) die(`ssh-tunnel failed: ${r.status} ${JSON.stringify(r.body)}`);
+  info(`Tunnel ${r.body.id} open: localhost:${r.body.localPort} -> ${r.body.remote} via ${r.body.target}`);
+  // 保持客户端活着直到 SIGINT
+  process.on('SIGINT', async () => {
+    info(`\nClosing tunnel ${r.body.id}...`);
+    await mTLSRequest({ method: 'POST', path: '/api/v1/ssh/tunnel/stop', body: { id: r.body.id } });
+    process.exit(0);
+  });
+  // 阻塞
+  await new Promise(() => {});
+}
+
+// ============================================================
 // PKI subcommands
 // ============================================================
 function cmdPKI(args) {
@@ -315,6 +375,8 @@ function main() {
     proxy:     () => cmdProxy(rest),
     exec:      () => cmdExec(rest),
     pki:       () => cmdPKI(rest),
+    'ssh-exec':   () => cmdSshExec(rest),
+    'ssh-tunnel': () => cmdSshTunnel(rest),
     help:      () => printHelp(),
     '--help':  () => printHelp(),
     '-h':      () => printHelp(),

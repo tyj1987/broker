@@ -81,3 +81,12 @@ export {
   REFRESH_SKEW_MS as WORKLOAD_REFRESH_SKEW_MS,
   defaultHttpClient as defaultWorkloadHttpClient,
 } from './workload-identity.js';
+// V4.1 任务 12: SSH Proxy (broker 持私钥,AI 不接触)
+export {
+  sshExec,
+  sshTunnel,
+  stopTunnel,
+  listTunnels,
+  parseSshTarget,
+  validateCommand,
+} from '../ssh-proxy.js';

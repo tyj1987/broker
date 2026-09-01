@@ -17,27 +17,32 @@ function ok(name, cond) {
 function section(t) { console.log(`\n[${t}]`); }
 
 // === calcRiskScore ===
+// All tests use a fixed `now` at local noon (12:00) to keep tests
+// deterministic across timezones / CI runner hours. Without this, the
+// `unusual_hour` factor (hour<6 || hour>=23) would fire during UTC 23-05
+// and break the 6 strict-equality tests below (CI failures 2026-09-01).
+const TEST_NOW = new Date(2026, 8, 1, 12, 0, 0);  // 2026-09-01 12:00 local
 section('calcRiskScore basics');
 {
-  const r = calcRiskScore({ client: { role: 'developer' } });
+  const r = calcRiskScore({ client: { role: 'developer' }, now: TEST_NOW });
   ok('no context = 0', r.score === 0 && r.factors.length === 0);
 }
 {
-  const r = calcRiskScore({ source_ip: '8.8.8.8', client: { ip_whitelist: ['10.0.0.0/8'] } });
+  const r = calcRiskScore({ source_ip: '8.8.8.8', client: { ip_whitelist: ['10.0.0.0/8'] }, now: TEST_NOW });
   ok('unusual_ip = 30', r.score === 30 && r.factors.includes('unusual_ip'));
 }
 {
-  const old = Date.now() - 40 * 86400_000;  // 40 days ago
-  const r = calcRiskScore({ last_login_at: old });
+  const old = TEST_NOW.getTime() - 40 * 86400_000;  // 40 days before TEST_NOW
+  const r = calcRiskScore({ last_login_at: old, now: TEST_NOW });
   ok('stale_account >30d = 20', r.score === 20 && r.factors.includes('stale_account'));
 }
 {
-  const old = Date.now() - 10 * 86400_000;  // 10 days ago
-  const r = calcRiskScore({ last_login_at: old });
+  const old = TEST_NOW.getTime() - 10 * 86400_000;  // 10 days before TEST_NOW
+  const r = calcRiskScore({ last_login_at: old, now: TEST_NOW });
   ok('stale 7-30d = 10', r.score === 10);
 }
 {
-  const r = calcRiskScore({ action: 'rotate-cert' });
+  const r = calcRiskScore({ action: 'rotate-cert', now: TEST_NOW });
   ok('sensitive_action = 25', r.score === 25 && r.factors.includes('sensitive_action'));
 }
 {
@@ -46,7 +51,7 @@ section('calcRiskScore basics');
   ok('unusual_hour at 3 = 10', r.score === 10 && r.factors.includes('unusual_hour'));
 }
 {
-  const r = calcRiskScore({ user_agent: 'A', last_user_agent: 'B' });
+  const r = calcRiskScore({ user_agent: 'A', last_user_agent: 'B', now: TEST_NOW });
   ok('user_agent_changed = 15', r.score === 15 && r.factors.includes('user_agent_changed'));
 }
 {

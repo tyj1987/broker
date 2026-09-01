@@ -1,0 +1,113 @@
+{
+  "name": "secret-broker",
+  "displayName": "Secret Broker",
+  "description": "AI-first mTLS secret broker for VS Code / Cursor",
+  "version": "4.1.0",
+  "publisher": "tyj1987",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["secret-broker", "credentials", "ai", "mtls", "security"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tyj1987/broker.git"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/secrets-detail.json",
+    "onCommand:secretBroker.health",
+    "onCommand:secretBroker.list",
+    "onCommand:secretBroker.get",
+    "onCommand:secretBroker.resolve",
+    "onCommand:secretBroker.proxy",
+    "onCommand:secretBroker.sshExec",
+    "onCommand:secretBroker.login"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "secretBroker.health",
+        "title": "Secret Broker: Health Check",
+        "category": "Secret Broker"
+      },
+      {
+        "command": "secretBroker.list",
+        "title": "Secret Broker: List Secrets",
+        "category": "Secret Broker"
+      },
+      {
+        "command": "secretBroker.get",
+        "title": "Secret Broker: Get Secret",
+        "category": "Secret Broker"
+      },
+      {
+        "command": "secretBroker.resolve",
+        "title": "Secret Broker: Resolve to Env",
+        "category": "Secret Broker"
+      },
+      {
+        "command": "secretBroker.proxy",
+        "title": "Secret Broker: Proxy Request",
+        "category": "Secret Broker"
+      },
+      {
+        "command": "secretBroker.sshExec",
+        "title": "Secret Broker: SSH Exec",
+        "category": "Secret Broker"
+      },
+      {
+        "command": "secretBroker.login",
+        "title": "Secret Broker: Login",
+        "category": "Secret Broker"
+      }
+    ],
+    "configuration": {
+      "title": "Secret Broker",
+      "properties": {
+        "secretBroker.endpoint": {
+          "type": "string",
+          "default": "https://127.0.0.1:8443",
+          "description": "Broker endpoint URL"
+        },
+        "secretBroker.clientCert": {
+          "type": "string",
+          "default": "",
+          "description": "Path to mTLS client cert (PEM)"
+        },
+        "secretBroker.clientKey": {
+          "type": "string",
+          "default": "",
+          "description": "Path to mTLS client key (PEM)"
+        },
+        "secretBroker.caCert": {
+          "type": "string",
+          "default": "",
+          "description": "Path to broker CA cert (PEM)"
+        },
+        "secretBroker.redactInUI": {
+          "type": "boolean",
+          "default": true,
+          "description": "Always redact secret values in UI; require explicit reveal"
+        },
+        "secretBroker.statusBarEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show broker health in status bar"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "vsce package",
+    "test": "node ./out/test/run.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

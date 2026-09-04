@@ -82,14 +82,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20.x }
       - working-directory: broker
-        # Retry 3x with 5s backoff: npm audit endpoint is occasionally 503
-        # from CI runners (registry.npmjs.org/-/npm/v1/security/audits/quick).
-        # First 2x failures are flaky infra, not a real vuln signal.
+        # Retry 3x with 30s backoff + reset lockfile between attempts.
+        # npm audit can mutate package-lock.json on failure; subsequent runs
+        # see "Invalid package tree" 400 from the registry. The 503 from
+        # registry.npmjs.org is transient infra on GH Actions runners.
         run: |
           for i in 1 2 3; do
             if npm audit --audit-level=high; then exit 0; fi
-            echo "::warning::npm audit attempt $i failed (likely npm registry 503); retrying in 5s"
-            sleep 5
+            echo "::warning::npm audit attempt $i failed; resetting lockfile and retrying in 30s"
+            git checkout -- package-lock.json 2>/dev/null || true
+            sleep 30
           done
           echo "::error::npm audit failed after 3 attempts"
           exit 1

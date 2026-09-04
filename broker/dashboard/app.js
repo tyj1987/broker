@@ -6,6 +6,12 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 async function api(path, opts = {}, timeoutMs = 15000) {
+  // Auto-stringify object bodies so callers can pass `body: { ... }` directly.
+  // fetch() with a plain object sends "[object Object]" which breaks JSON.parse on server.
+  const merged = { ...opts };
+  if (merged.body && typeof merged.body === 'object' && !(merged.body instanceof FormData) && !(merged.body instanceof Blob) && !(merged.body instanceof ArrayBuffer)) {
+    merged.body = JSON.stringify(merged.body);
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -13,8 +19,8 @@ async function api(path, opts = {}, timeoutMs = 15000) {
     res = await fetch(path, {
       credentials: 'include',
       signal: ctrl.signal,
-      ...opts,
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      ...merged,
+      headers: { 'Content-Type': 'application/json', ...(merged.headers || {}) },
     });
   } catch (ex) {
     if (ex && ex.name === 'AbortError') {
@@ -55,27 +61,68 @@ function showLogin() {
 }
 
 // ---------- 登录 ----------
+let _pendingMfaToken = null;  // server 返的 mfa_token，等用户输完 6 位 code 再提交
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = $('#login-error');
   err.hidden = true;
+  err.className = 'status-error';
   const client = $('#login-client').value.trim();
   const password = $('#login-password').value;
+  const mfaCode = $('#login-mfa-code').value.trim();
+  const mfaWrap = $('#login-mfa-wrap');
   const btn = e.target.querySelector('button[type=submit]');
-  btn.disabled = true; btn.textContent = '登录中...';
+  const originalLabel = _pendingMfaToken ? '验证 2FA / Verify' : '登录 / Login';
+  btn.disabled = true; btn.textContent = '处理中...';
   try {
-    await api('/api/v1/login', { method: 'POST', body: JSON.stringify({ client, password }) });
+    if (_pendingMfaToken) {
+      // 第二步：提交 2FA code
+      await api('/api/v1/login/mfa', { method: 'POST', body: { mfa_token: _pendingMfaToken, code: mfaCode } });
+      _pendingMfaToken = null;
+      mfaWrap.hidden = true;
+      $('#login-mfa-code').value = '';
+      await boot();
+      return;
+    }
+    // 第一步：密码登录
+    const r1 = await api('/api/v1/login', { method: 'POST', body: { client, password } });
+    if (r1 && r1.mfa_required) {
+      // 需要 2FA：显示输入框，等用户填完再提交
+      _pendingMfaToken = r1.mfa_token || null;
+      mfaWrap.hidden = false;
+      err.textContent = '需要二次验证 — 输 6 位 TOTP code 或恢复码 / 2FA required';
+      err.className = 'status-warn';
+      err.hidden = false;
+      btn.disabled = false; btn.textContent = '验证 2FA / Verify';
+      $('#login-mfa-code').focus();
+      return;
+    }
+    // 没要求 2FA：直接 boot
     await boot();
   } catch (ex) {
     err.textContent = `登录失败：${ex.message}`;
     err.hidden = false;
+    err.className = 'status-error';
   } finally {
-    btn.disabled = false; btn.textContent = '登录 / Login';
+    btn.disabled = false; btn.textContent = _pendingMfaToken ? '验证 2FA / Verify' : '登录 / Login';
   }
 });
 
+// 用户在 mfa 输入框按 Enter 也提交
+$('#login-mfa-code').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#login-form').requestSubmit(); }
+});
+
+
+
 $('#btn-logout').addEventListener('click', async () => {
   try { await api('/api/v1/logout', { method: 'POST' }); } catch {}
+  // 清掉 MFA 状态，让下次登录从头开始
+  _pendingMfaToken = null;
+  const mfaWrap = $('#login-mfa-wrap');
+  if (mfaWrap) mfaWrap.hidden = true;
+  const mfaCode = $('#login-mfa-code');
+  if (mfaCode) mfaCode.value = '';
   showLogin();
 });
 

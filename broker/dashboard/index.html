@@ -28,6 +28,10 @@
         <label>密码
           <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password">
         </label>
+        <label id="login-mfa-wrap" hidden>
+          二次验证码 / 2FA code
+          <input id="login-mfa-code" type="text" placeholder="123456 或恢复码" autocomplete="one-time-code" maxlength="11" pattern="[0-9A-Za-z-]{6,11}" inputmode="numeric">
+        </label>
         <div id="login-error" class="status-error" hidden></div>
         <button type="submit" class="btn btn-primary btn-block">登录 / Login</button>
       </form>

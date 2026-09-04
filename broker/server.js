@@ -521,6 +521,8 @@ function normalizeServiceConfig(body) {
   if (body.action !== undefined) out.action = String(body.action);
   // Token reference: just the name of the secret; never the value
   if (body.token_secret !== undefined) out.token_secret = String(body.token_secret);
+  // Aliyun OpenAPI v2: structured secret name (with access_key_id + access_key_secret fields)
+  if (body.ak_secret !== undefined) out.ak_secret = String(body.ak_secret);
   // inject_headers: must be a flat string->string map
   if (body.inject_headers && typeof body.inject_headers === 'object') {
     const h = {};

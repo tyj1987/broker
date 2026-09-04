@@ -82,7 +82,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20.x }
       - working-directory: broker
-        run: npm audit --audit-level=high
+        # Retry 3x with 5s backoff: npm audit endpoint is occasionally 503
+        # from CI runners (registry.npmjs.org/-/npm/v1/security/audits/quick).
+        # First 2x failures are flaky infra, not a real vuln signal.
+        run: |
+          for i in 1 2 3; do
+            if npm audit --audit-level=high; then exit 0; fi
+            echo "::warning::npm audit attempt $i failed (likely npm registry 503); retrying in 5s"
+            sleep 5
+          done
+          echo "::error::npm audit failed after 3 attempts"
+          exit 1
 
   # ============================================================
   # 4. 签名算法跨平台 smoke
@@ -119,6 +129,7 @@ jobs:
         working-directory: broker
         run: node bin/openapi-generate.js
       - name: Validate structure
+        working-directory: broker
         run: |
           node -e "
           const fs = require('fs');

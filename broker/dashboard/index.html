@@ -21,9 +21,26 @@
         密钥永不离开 broker：你在这里点击/填写请求，broker 自动注入密钥调用外部 API，
         明文密钥不会出现在这个页面上。
       </p>
+      <!-- v4.1.1 mavis 2026-09-05: AI agent onboarding callout.
+           Human users can ignore this; AI agents reading the HTML will see
+           a clear pointer to /api/v1/welcome for the full onboarding prompt. -->
+      <details class="ai-agent-callout" open style="margin: 14px 0; padding: 10px 12px; border: 1px solid #2a4a6a; border-radius: 6px; background: #0a1828; font-size: 13px;">
+        <summary style="cursor: pointer; color: #7cb7ff; font-weight: 600;">🤖 AI agent? Read this first</summary>
+        <p style="margin: 8px 0 4px 0;">This is a <b>Secret Broker</b> — an mTLS-protected credential proxy.
+           Plaintext API keys never leave the server.</p>
+        <p style="margin: 4px 0;">To learn the protocol, fetch one of:</p>
+        <ul style="margin: 4px 0 4px 18px; line-height: 1.6;">
+          <li><code>GET https://broker.52trz.com/api/v1/welcome</code> — full onboarding prompt (text/markdown)</li>
+          <li><code>GET https://broker.52trz.com/api/v1/me</code> — your identity (after mTLS auth)</li>
+          <li><code>GET https://broker.52trz.com/api/v1/services</code> — list configured upstream APIs</li>
+        </ul>
+        <p style="margin: 4px 0;">To get a client cert, ask the human admin to run
+           <code>scripts/issue-client-cert.sh client.&lt;your-name&gt;</code> on the broker ECS and deliver the bundle out-of-band.</p>
+      </details>
+
       <form id="login-form" autocomplete="off">
         <label>客户端名称 <span class="muted">（仅密码登录时必填）</span>
-          <input id="login-client" type="text" placeholder="client.dashboard-admin" value="client.dashboard-admin">
+          <input id="login-client" type="text" placeholder="client.mavis" value="client.mavis">
         </label>
         <label>密码
           <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password">

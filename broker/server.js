@@ -1,4 +1,4 @@
-// server.js
+﻿// server.js
 // Secret Broker 服务端入口
 // 监听 mTLS HTTPS，SOPS 解密配置，代理模式转发外部 API
 //
@@ -717,7 +717,7 @@ function readAudit({ since, limit = 100 } = {}) {
 // Session tokens (for dashboard / browser usage; mTLS is still supported)
 // ============================================================
 const SESSIONS = new Map();  // token -> { cn, fp, role, clientName, expiresAt }
-const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 min
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days, sliding on access
 const SESSION_HEADER = 'x-auth-token';
 
 function makeSession(ctx) {
@@ -1501,6 +1501,80 @@ async function handle(req, res) {
     return send(res, 200, { logged_out: true });
   }
 
+  // ----- GET /api/v1/welcome (public, no auth) -----
+  // mavis 2026-09-05: AI agent onboarding prompt.
+  // Returns text/markdown so any AI can fetch it and learn the protocol.
+  if (m === 'GET' && p === '/api/v1/welcome') {
+    const allowedServices = Object.keys(CONFIG.services || {}).join(', ');
+    const text = [
+      '# Secret Broker — AI Agent Onboarding',
+      '',
+      'This server is a **mTLS Secret Broker**. AI agents do not see plaintext credentials;',
+      'the broker injects them at request time. All calls are audit-logged with your cert',
+      'fingerprint.',
+      '',
+      '## What you need',
+      '',
+      '1. A **client certificate** (PEM) signed by this broker\'s CA, installed in your',
+      '   trust store + mTLS client keychain. CN must match `clients.<name>` in broker.yaml.',
+      '2. Optionally a **Bearer API key** for sessions without mTLS (see /api/v1/api-keys',
+      '   docs, requires admin role).',
+      '',
+      '## How to get onboarded',
+      '',
+      'Tell the human admin: "I\'m <your-name>, please issue me a client cert',
+      '`client.<your-name>` with scopes: <list which services / secrets you need>."',
+      'The admin runs `scripts/issue-client-cert.sh client.<your-name>` on the broker',
+      'ECS and securely delivers the cert+key bundle to you out-of-band. **NEVER**',
+      'paste private keys in chat / git / email — bundle goes via scp or encrypted USB.',
+      '',
+      '## How to use this server',
+      '',
+      'Once you have a cert:',
+      '',
+      '| Endpoint                                       | What it does                                         |',
+      '| ---------------------------------------------- | ---------------------------------------------------- |',
+      '| `GET /api/v1/me`                                 | your identity, role, allowed services/secrets         |',
+      '| `GET /api/v1/services`                          | configured upstream APIs                              |',
+      '| `GET /api/v1/secrets`                           | list secrets you can resolve (names + descriptions)  |',
+      '| `POST /api/v1/proxy/<service>`                 | **recommended** — call upstream, key never leaves     |',
+      '| `POST /api/v1/secrets/resolve`                 | pull plaintext (only if your role allows, audit-logged)|',
+      '',
+      '`/api/v1/proxy/<service>` body shape:',
+      '```json',
+      '{"method":"GET","path":"/user","query":{},"headers":{},"body":""}',
+      '```',
+      '',
+      '## Security model',
+      '',
+      '- You never see plaintext credentials.',
+      '- Every call is audit-logged with your cert fingerprint.',
+      '- Rate limits apply per cert (broker.yaml: `clients.<name>.rate_limit`).',
+      '- Whitelist applies: `allowed_proxy` and `allowed_resolve`.',
+      '',
+      '## Currently configured services',
+      '',
+      allowedServices || '(none yet)',
+      '',
+      '## Source',
+      '',
+      '- Dashboard: https://broker.52trz.com/  (login with cert or password+2FA)',
+      '- AGENTS.md: https://github.com/tyj1987/broker/blob/master/AGENTS.md',
+      '',
+      '## Quick test (with cert)',
+      '',
+      '```bash',
+      'curl --cert client.<name>.crt --key client.<name>.key --cacert ca.crt \\',
+      '  https://broker.52trz.com/api/v1/me',
+      '```',
+      '',
+      'Welcome aboard.',
+    ].join('\n');
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return send(res, 200, text, {"Content-Type": "text/markdown; charset=utf-8"});
+  }
+
   // ----- Everything below needs auth (mTLS cert or session token) -----
   const ctx = getIdentity(req);
   if (!ctx || !ctx.certSubject) {
@@ -1624,6 +1698,7 @@ async function handle(req, res) {
       warning: 'key_pem is a SECRET. Save it now — broker will not return it again.',
     });
   }
+
 
   // ----- GET /api/v1/me/audit -----
   if (m === 'GET' && p === '/api/v1/me/audit') {

@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, sta
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, X509Certificate } from "node:crypto";
 // v3.0: 强认证 (TOTP + MFA 状态机)
 import {
   createMfaPending,
@@ -3096,6 +3096,56 @@ function getIdentity(req) {
       certSubject: session.cert?.subject || { CN: session.cn },
       via: 'session',
     };
+  }
+  // 2.5 nginx-forwarded mTLS (mavis 2026-09-04): when broker is behind nginx with
+  //     ssl_verify_client optional, nginx sends X-SSL-Client-Cert (URL-escaped PEM)
+  //     + X-SSL-Client-Verify (SUCCESS|FAILED|NONE). Trust nginx for chain
+  //     verification (only nginx holds the CA) and do a fingerprint match
+  //     against broker.yaml as defense-in-depth.
+  //     X-SSL-Client-Verify:SUCCESS is the only path that grants access.
+  if (!req.socket.peerCertificate || !req.socket.peerCertificate.subject) {
+    const headerCert = req.headers['x-ssl-client-cert'];
+    const headerVerify = req.headers['x-ssl-client-verify'];
+    if (headerCert && headerVerify === 'SUCCESS') {
+      try {
+        const pem = decodeURIComponent(headerCert);
+        const x509 = new X509Certificate(pem);
+        // Defense-in-depth: cert's issuer DN must match our CA's subject DN.
+        // This catches forged headers (anyone who can reach broker on HTTP
+        // can't fake nginx's verify status, but they CAN fake this header).
+        const caX509 = new X509Certificate(readFileSync(TLS_CA));
+        if (x509.issuer !== caX509.subject) {
+          audit({ action: 'connect', status: 'denied', reason: 'header_cert_issuer_mismatch', client_issuer: x509.issuer, ca_subject: caX509.subject, remote: req.socket.remoteAddress });
+          // fall through to mTLS path which will return null
+        } else {
+          const fp = x509.fingerprint256;
+          // Subject DN: single-line, comma-separated, e.g. "CN=foo,O=bar".
+          const subjectStr = x509.subject.replace(/\r/g, '');
+          const cnMatch = subjectStr.split(',').find(p => p.trim().startsWith('CN='));
+          const cn = cnMatch ? cnMatch.trim().slice(3) : null;
+          if (cn && fp) {
+            let matched = null, matchedBy = null;
+            for (const [name, c] of Object.entries(CONFIG.clients)) {
+              if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fp.toUpperCase()) {
+                matched = c; matchedBy = name; break;
+              }
+            }
+            if (matched) {
+              recordClientSeen(matchedBy);
+              audit({ action: 'connect', status: 'ok', cn, fp, remote: req.socket.remoteAddress, via: 'mtls-via-nginx' });
+              return {
+                cn, fp, client: matched, clientName: matchedBy,
+                certSubject: { CN: cn },
+                via: 'mtls-via-nginx',
+              };
+            }
+            audit({ action: 'connect', status: 'denied', reason: 'header_cert_not_registered', cn, fp, remote: req.socket.remoteAddress });
+          }
+        }
+      } catch (e) {
+        audit({ action: 'connect', status: 'denied', reason: 'header_cert_parse_error', error: e.message, remote: req.socket.remoteAddress });
+      }
+    }
   }
   // 2. mTLS client cert (from CLI / scripts)
   const peer = req.socket.peerCertificate;

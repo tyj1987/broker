@@ -147,3 +147,4 @@ override.tf.json
 **/id_ed25519
 
 docs/openapi.yaml
+**/docs/openapi.yaml

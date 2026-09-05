@@ -1389,15 +1389,22 @@ async function handle(req, res) {
   // per-client lockout (5 fails -> 15 min). mTLS remains the strong default.
   if (m === 'POST' && p === '/api/v1/login') {
     const body = await readBody(req) || {};
-    const password = body.password;
-    if (!password) return jsonError(res, 400, 'Missing {password}');
+    const password = body.password;  // optional when mTLS path is taken
     const ctx0 = getIdentity(req);
+    if (!ctx0 && !password) return jsonError(res, 400, 'Missing {password}');
     let targetClient = null, targetName = null, lockKey = null, via = 'mtls';
-    if (ctx0 && ctx0.via === 'mtls') {
-      if (!ctx0.client.password) return jsonError(res, 403, 'No password configured for this client');
+    let skipPasswordCheck = false;
+    if (ctx0 && (ctx0.via === 'mtls' || ctx0.via === 'mtls-via-nginx')) {
+      // mTLS cert IS the credential. mavis 2026-09-05: previously this branch
+      // refused with 403 if cert's client had no password, which prevented
+      // mavis (cert-only) from ever creating a session. Now: cert is enough.
+      // To log in as a different client via password, remove this mTLS cert
+      // from your browser and reload.
       targetClient = ctx0.client;
       targetName = ctx0.clientName;
       lockKey = `${targetName}|mtls`;
+      via = 'mtls';
+      skipPasswordCheck = true;
     } else {
       // password-only login: client name is required and must opt in
       const clientName = (body.client || '').trim();
@@ -1415,13 +1422,19 @@ async function handle(req, res) {
       audit({ action: 'login', status: 'denied', reason: 'lockout', client: lockKey });
       return jsonError(res, 429, 'Too many failed login attempts. Locked until later.');
     }
-    const ok = await verifyClientPassword(password, targetClient.password);
-    if (!ok) {
-      recordLoginFail(lockKey);
-      audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
-      return jsonError(res, 401, 'Bad password');
+    if (skipPasswordCheck) {
+      // mTLS cert already authenticated; password check is skipped.
+      // Audit the bypass so it's clear in the log.
+      audit({ action: 'login', status: 'ok', cn: ctx0.cn, client: targetName, via: 'mtls', mfa_method: 'cert-bypass' });
+    } else {
+      const ok = await verifyClientPassword(password, targetClient.password);
+      if (!ok) {
+        recordLoginFail(lockKey);
+        audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
+        return jsonError(res, 401, 'Bad password');
+      }
+      clearLoginLock(lockKey);
     }
-    clearLoginLock(lockKey);
 
     // v3.0: MFA 状态机 — 启 TOTP 的 client 必须二次验证
     const fp = ctx0 ? ctx0.fp : null;

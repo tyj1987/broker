@@ -1,0 +1,210 @@
+# CODEOWNERS — broker project review routing
+#
+# GitHub auto-assigns reviewers based on file paths. Last rule wins
+# (longest match first). When a PR touches files in multiple sections,
+# all matching owners are assigned.
+#
+# Owners use GitHub username format: @username
+# Email notifications are sent for every PR review assignment.
+#
+# V4.1.1 SDK parity note: all 4 SDKs (Python, Go, Node CLI, VSCode) must
+# stay in sync. If a PR changes one SDK, the PR is auto-assigned to all
+# 4 SDK owners (see /sdk/ catch-all rules at the bottom).
+#
+# Last verified: 2026-09-06 (V4.1.1 release prep)
+
+# === Default ownership (everything not matched below) ===
+# Catch-all: broker maintainers review general changes.
+*                                    @tyj1987
+
+# === Broker server (highest scrutiny — security-critical) ===
+
+# Core server + version
+/broker/server.js                   @tyj1987
+/broker/version.js                  @tyj1987
+/broker/package.json                @tyj1987
+/broker/bin/                        @tyj1987
+
+# Modular routes (auth, audit, sessions)
+/broker/lib/audit.js                @tyj1987
+/broker/lib/session.js              @tyj1987
+/broker/lib/auth.js                 @tyj1987
+/broker/lib/mfa-policy.js           @tyj1987
+/broker/lib/risk-score.js           @tyj1987
+/broker/lib/webauthn.js             @tyj1987
+/broker/lib/sms-provider.js         @tyj1987
+
+# Secret handling (zero-credential-leakage critical)
+/broker/lib/redact.js               @tyj1987
+/broker/lib/sops.js                 @tyj1987
+/broker/lib/auto-rotate.js          @tyj1987
+
+# Network + transport
+/broker/lib/http.js                 @tyj1987
+/broker/lib/ws.js                   @tyj1987
+/broker/lib/ssh.js                  @tyj1987
+/broker/lib/ip-allowlist.js         @tyj1987
+/broker/lib/rate-limit.js           @tyj1987
+
+# Observability
+/broker/lib/log.js                  @tyj1987
+/broker/lib/metrics.js              @tyj1987
+/broker/lib/trace.js                @tyj1987
+/broker/lib/audit-policy.js         @tyj1987
+/broker/lib/probes.js               @tyj1987
+/broker/lib/shutdown.js             @tyj1987
+/broker/lib/backup.js               @tyj1987
+
+# Workload identity (cloud STS)
+/broker/lib/workload-identity.js    @tyj1987
+
+# Service templates + signing
+/broker/lib/template-parser.js      @tyj1987
+/broker/signing/                    @tyj1987
+/broker/services/                   @tyj1987
+
+# Tests
+/broker/test/                       @tyj1987
+/broker-test/                       @tyj1987
+
+# === SDKs (V4.1.1 parity — all 4 must stay in sync) ===
+
+# Python SDK (zero hard dependencies — stdlib only)
+/sdk/python/                        @tyj1987
+/sdk/python/secret_broker/          @tyj1987
+/sdk/python/tests/                  @tyj1987
+/sdk/python/examples/               @tyj1987
+/sdk/python/pyproject.toml          @tyj1987
+/sdk/python/secret_broker/__init__.py @tyj1987
+
+# Go SDK (zero hard dependencies — stdlib only)
+/sdk/go/                            @tyj1987
+/sdk/go/broker/                     @tyj1987
+/sdk/go/test/                       @tyj1987
+/sdk/go/examples/                   @tyj1987
+/sdk/go/go.mod                      @tyj1987
+
+# Node CLI (zero npm dependencies — built-in https + tls)
+/cli/                               @tyj1987
+/cli/secret-broker.js               @tyj1987
+/cli/test-error.js                  @tyj1987
+/cli/test.js                        @tyj1987
+/cli/examples/                      @tyj1987
+
+# VSCode extension (zero npm dependencies — built-in https + tls)
+/sdk/vscode/                        @tyj1987
+/sdk/vscode/src/                    @tyj1987
+/sdk/vscode/src/client.ts           @tyj1987
+/sdk/vscode/src/extension.ts        @tyj1987
+/sdk/vscode/src/test/               @tyj1987
+/sdk/vscode/examples/               @tyj1987
+/sdk/vscode/package.json            @tyj1987
+/sdk/vscode/tsconfig.json           @tyj1987
+
+# === Deployment (infra + packaging) ===
+
+# Containers
+/Dockerfile                         @tyj1987
+/docker-compose.yml                 @tyj1987
+/broker/Dockerfile                  @tyj1987
+
+# Kubernetes (Helm)
+/deploy/helm/                       @tyj1987
+
+# Terraform (cloud infrastructure)
+/deploy/terraform/                  @tyj1987
+
+# AWS (Packer AMI + CloudFormation)
+/deploy/packer/                     @tyj1987
+
+# Package managers
+/deploy/homebrew/                   @tyj1987
+/deploy/apt/                        @tyj1987
+/snap/                              @tyj1987
+/winget/                            @tyj1987
+
+# Specific production deploys
+/DEPLOY-52TRZ.md                    @tyj1987
+
+# === Desktop + mobile (V2 stretch goals) ===
+
+# Tauri desktop
+/desktop/                           @tyj1987
+/desktop/src-tauri/                 @tyj1987
+/desktop/src/                       @tyj1987
+
+# Mobile (future — when SDKs exist)
+/sdk/ios/                           @tyj1987
+/sdk/android/                       @tyj1987
+
+# === Documentation (cross-cutting) ===
+
+# Public docs (high scrutiny — user-facing)
+/docs/                              @tyj1987
+/docs/SDK-REFERENCE.md              @tyj1987
+/docs/SDK-UPGRADE-GUIDE.md          @tyj1987
+/docs/ERROR-CODES.md                @tyj1987
+/docs/RUNBOOK-v4.1.1.md             @tyj1987
+/docs/ANNOUNCEMENT-TEMPLATES-v4.1.1.md @tyj1987
+
+# Top-level docs (entry points)
+/README.md                          @tyj1987
+/CHANGELOG.md                       @tyj1987
+/STATUS.md                          @tyj1987
+/RELEASE-NOTES-v4.1.1.md            @tyj1987
+/RELEASE-NOTES-v4.1.0.md            @tyj1987
+/ROADMAP-post-1.0.md                @tyj1987
+/AWAITING-USER.md                   @tyj1987
+/AGENTS.md                          @tyj1987
+/RUNBOOK.md                         @tyj1987
+/ARCHITECTURE.md                    @tyj1987
+/QUICKSTART.md                      @tyj1987
+/SECURITY.md                        @tyj1987
+/SECURITY-AUDIT-2026-09-05.md       @tyj1987
+/DEPLOY-52TRZ.md                    @tyj1987
+/VERIFY.md                          @tyj1987
+/V4.1-COMPLETE.md                   @tyj1987
+/CONTRIBUTING.md                    @tyj1987
+
+# Design specs (architecture decisions)
+/docs/DESIGN-*.md                   @tyj1987
+/docs/SECURITY-CONTROLS-*.md        @tyj1987
+/docs/HOMEBREW.md                   @tyj1987
+/docs/SNAP-APT-WINGET.md            @tyj1987
+/docs/CLOUD-MARKETPLACE.md          @tyj1987
+/docs/V4.1.2-PATCH-PREP.md          @tyj1987
+/docs/PHASE-*.md                    @tyj1987
+
+# === CI / GitHub Actions ===
+
+/.github/workflows/                 @tyj1987
+/.github/workflows/ci-v4.yml        @tyj1987
+/.github/workflows/test-sdks.yml    @tyj1987
+/.github/workflows/deploy.yml       @tyj1987
+/.github/workflows/ci.yml           @tyj1987
+/.github/workflows/wire-server.yml  @tyj1987
+/.github/PULL_REQUEST_TEMPLATE.md   @tyj1987
+/.github/CODEOWNERS                  @tyj1987
+/.github/ISSUE_TEMPLATE/             @tyj1987
+
+# === Scripts (release + preflight) ===
+
+/scripts/                           @tyj1987
+/scripts/release/                   @tyj1987
+/scripts/release/v4.1.1.sh          @tyj1987
+/scripts/preflight-v4.1.1.mjs       @tyj1987
+/scripts/dev/                       @tyj1987
+
+# === Sensitive paths (always require codeowner review) ===
+
+# Encrypted secrets (NEVER commit plaintext)
+/secrets/                           @tyj1987
+/secrets/broker.yaml.example        @tyj1987
+/secrets/clients.json.example       @tyj1987
+
+# mTLS PKI
+/pki/                               @tyj1987
+/broker/pki/                        @tyj1987
+
+# Audit logs (production data, not in repo)
+/audit/                             @tyj1987

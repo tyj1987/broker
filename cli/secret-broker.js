@@ -30,6 +30,94 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 // ============================================================
+// BrokerError (V4.1.1) — typed error for broker responses
+//
+// Parity with Python SDK exceptions.V4.1.1 + Go SDK errors.go V4.1.1.
+// ============================================================
+export class BrokerError extends Error {
+  /**
+   * @param {object} opts
+   * @param {string} opts.message - human-readable message
+   * @param {number} [opts.status] - HTTP status code (0 for connection errors)
+   * @param {string} [opts.code] - broker-specific error code from response body
+   * @param {string} [opts.requestId] - X-Request-Id response header
+   * @param {number} [opts.retryAfter] - Retry-After response header (seconds)
+   * @param {string} [opts.op] - logical operation, e.g. "get_secret"
+   */
+  constructor({ message, status = 0, code = '', requestId = '', retryAfter = 0, op = '' } = {}) {
+    super(message);
+    this.name = 'BrokerError';
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+    this.retryAfter = retryAfter;
+    this.op = op;
+  }
+
+  /** True if this error is worth retrying (5xx / 429 / connection). */
+  get isRetryable() {
+    if (this.status === 0) return true;   // connection error
+    if (this.status === 429) return true;    // rate limit
+    if (this.status >= 500 && this.status < 600) return true;
+    return false;
+  }
+
+  /** Human-readable string with status + code + request_id + retry_after. */
+  toString() {
+    const meta = [];
+    if (this.status) meta.push(`status=${this.status}`);
+    if (this.code) meta.push(`code=${this.code}`);
+    if (this.requestId) meta.push(`request_id=${this.requestId}`);
+    if (this.retryAfter > 0) meta.push(`retry_after=${this.retryAfter}s`);
+    const suffix = meta.length ? ` [${meta.join(' ')}]` : '';
+    return `${this.name}: ${this.message}${suffix}`;
+  }
+
+  /** Structured representation for logging / audit export. Body omitted (may contain secrets). */
+  toJSON() {
+    return {
+      error_type: this.name,
+      op: this.op,
+      message: this.message,
+      status: this.status,
+      code: this.code,
+      request_id: this.requestId,
+      retry_after: this.retryAfter,
+      is_retryable: this.isRetryable,
+    };
+  }
+}
+
+/**
+ * Parse a broker error response into a BrokerError.
+ * @param {number} status - HTTP status code
+ * @param {object} headers - response headers (lowercased keys)
+ * @param {*} body - response body (parsed JSON or string)
+ * @param {string} [op] - logical operation name
+ * @returns {BrokerError}
+ */
+export function parseBrokerError(status, headers, body, op = '') {
+  const requestId = (headers['x-request-id'] || '').toString();
+  const retryAfter = parseInt(headers['retry-after'] || '0', 10) || 0;
+
+  // Extract code from body if it's an object with error.code
+  let code = '';
+  let message = `HTTP ${status}`;
+  if (body && typeof body === 'object' && body.error) {
+    if (typeof body.error === 'object') {
+      code = body.error.code || '';
+      message = body.error.message || message;
+    } else {
+      message = String(body.error);
+    }
+  } else if (typeof body === 'string' && body) {
+    message = body;
+  }
+
+  return new BrokerError({ message, status, code, requestId, retryAfter, op });
+}
+
+// ============================================================
 // Config
 // ============================================================
 const HOME = homedir();
@@ -44,9 +132,77 @@ function loadConfig() {
 }
 
 // ============================================================
-// HTTP client (mTLS)
+// HTTP client (mTLS) — V4.1.1 with retry
 // ============================================================
-function mTLSRequest({ method = 'GET', path = '/', body = null, headers = {} }) {
+
+/**
+ * Sleep helper that respects abort signals.
+ * @param {number} ms
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<void>}
+ */
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('aborted'));
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
+  });
+}
+
+/**
+ * mTLSRequest — V4.1.1 with optional retry on 5xx / 429 / connection errors.
+ *
+ * @param {object} opts
+ * @param {string} [opts.method='GET']
+ * @param {string} [opts.path='/']
+ * @param {*} [opts.body=null]
+ * @param {object} [opts.headers={}]
+ * @param {number} [opts.maxRetries=0] - number of retries on transient errors (default 0 = no retry)
+ * @param {number} [opts.retryBackoff=500] - initial backoff in ms (doubles each attempt)
+ * @returns {Promise<{status: number, headers: object, body: *, raw: Buffer}>}
+ * @throws {BrokerError} on HTTP 4xx/5xx
+ * @throws {BrokerError} (status=0) on connection error
+ */
+async function mTLSRequest({ method = 'GET', path = '/', body = null, headers = {}, maxRetries = 0, retryBackoff = 500 } = {}) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: retryBackoff * 2^(attempt-1)
+      let backoff = retryBackoff << (attempt - 1);
+      // If last error had Retry-After, respect it (capped at 30s)
+      if (lastErr instanceof BrokerError && lastErr.retryAfter > 0) {
+        const fromHeader = lastErr.retryAfter * 1000;
+        if (fromHeader < backoff && fromHeader < 30000) backoff = fromHeader;
+      }
+      await sleep(backoff);
+    }
+    try {
+      const r = await mTLSRequestOnce({ method, path, body, headers });
+      if (r.status >= 400) {
+        const be = parseBrokerError(r.status, r.headers, r.body, `${method} ${path}`);
+        lastErr = be;
+        if (be.isRetryable) continue;
+        throw be;
+      }
+      return r;
+    } catch (err) {
+      // Network / TLS / timeout — wrap in BrokerError (status=0)
+      if (err instanceof BrokerError) {
+        lastErr = err;
+        if (err.isRetryable) continue;
+        throw err;
+      }
+      const be = new BrokerError({ message: err.message || String(err), op: `${method} ${path}` });
+      lastErr = be;
+      if (be.isRetryable) continue;
+      throw be;
+    }
+  }
+  // Exhausted retries
+  throw lastErr;
+}
+
+function mTLSRequestOnce({ method = 'GET', path = '/', body = null, headers = {} }) {
   const cfg = loadConfig();
   const url = new URL(path, cfg.endpoint);
   return new Promise((resolve, reject) => {
@@ -427,4 +583,8 @@ Examples:
 `);
 }
 
-main();
+// Run main() only when this file is executed as a CLI, not when imported.
+// When imported (e.g. for testing), main() is a no-op so the exports work.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}

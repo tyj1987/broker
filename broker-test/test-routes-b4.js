@@ -1,10 +1,12 @@
 // broker-test/test-routes-b4.js
 // Run: node broker-test/test-routes-b4.js
 
-import { handleSecrets } from '../broker/routes/secrets.js';
-import { handleServices } from '../broker/routes/services.js';
-import { handleClients } from '../broker/routes/clients.js';
-import { handleProxy } from '../broker/routes/proxy.js';
+// chore/oss-modular-security: handler implementations moved to
+// broker/experimental/modular-routes/ (UNSUPPORTED reference). Tests follow.
+import { handleSecrets } from '../broker/experimental/modular-routes/secrets.js';
+import { handleServices } from '../broker/experimental/modular-routes/services.js';
+import { handleClients } from '../broker/experimental/modular-routes/clients.js';
+import { handleProxy } from '../broker/experimental/modular-routes/proxy.js';
 
 let passed = 0, failed = 0;
 function assert(c, m) {

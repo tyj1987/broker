@@ -5,7 +5,8 @@ import {
   writeBackupManifest,
 } from '../broker/lib/backup.js';
 import { runProbes, probesFromConfig, probeTcp } from '../broker/lib/probes.js';
-import { handleOps } from '../broker/routes/ops.js';
+// chore/oss-modular-security: handleOps moved to experimental (UNSUPPORTED).
+import { handleOps } from '../broker/experimental/modular-routes/ops.js';
 import { handleHealth } from '../broker/routes/health.js';
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

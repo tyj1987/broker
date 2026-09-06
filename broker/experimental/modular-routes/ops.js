@@ -1,7 +1,7 @@
 // broker/routes/ops.js — admin ops: backup manifest, redacted config
 // Phase F. Requires admin ctx.
 
-import { buildBackupManifest, redactConfigForExport } from '../lib/backup.js';
+import { buildBackupManifest, redactConfigForExport } from '../../lib/backup.js';
 
 /**
  * @returns {boolean|Promise<boolean>}

@@ -3,7 +3,10 @@
 
 import { handleHealth } from '../broker/routes/health.js';
 import { handleStatic, STATIC_MAP } from '../broker/routes/static.js';
-import { dispatch } from '../broker/routes/index.js';
+// chore/oss-modular-security: dispatcher (routes/index.js) removed.
+// `dispatch([h1, h2, h3])` returned true once any handler returned true;
+// its only test block has been dropped with the dispatcher. Inline path
+// coverage lives in broker/server.js + broker-test/test-*.js.
 import { createSessionStore, SESSION_TTL_MS } from '../broker/lib/session.js';
 import { BROKER_VERSION } from '../broker/version.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -62,17 +65,6 @@ console.log('=== handleStatic ===');
   assert(handleStatic({}, res, { method: 'GET', pathname: '/nope' }, { dashboardDir: dir }) === false, 'unknown path');
   assert(Object.keys(STATIC_MAP).length >= 10, 'STATIC_MAP size');
   rmSync(dir, { recursive: true, force: true });
-}
-
-console.log('=== dispatch ===');
-{
-  let order = [];
-  const h1 = async () => { order.push(1); return false; };
-  const h2 = async () => { order.push(2); return true; };
-  const h3 = async () => { order.push(3); return true; };
-  const r = await dispatch([h1, h2, h3]);
-  assert(r === true, 'dispatch stops');
-  assert(order.join(',') === '1,2', 'order');
 }
 
 console.log('=== createSessionStore ===');

@@ -61,18 +61,11 @@ import {
   isClientIpAllowed,
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
+import { handleHealth } from './routes/health.js';
+import { handleStatic } from './routes/static.js';
+import { handleMetrics } from './routes/metrics.js';
+import { handleSshProxy } from './routes/ssh-proxy.js';
 import {
-  handleHealth,
-  handleStatic,
-  handleMetrics,
-  handleOps,
-  dispatch,
-  API_HANDLERS,
-  handleSshProxy,
-} from './routes/index.js';
-import {
-  buildRouteDeps,
-  useModularRoutes,
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,

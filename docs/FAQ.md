@@ -271,4 +271,200 @@ We will:
 - Coordinate disclosure with you (default 30 days)
 - Credit you in the advisory
 
+## V4.1.1 FAQ (2026-09-06)
+
+### Q: What's in V4.1.1?
+
+V4.1.1 is a backward-compatible security & correctness patch over V4.1.0
+with two main improvements:
+
+1. **mTLS cert-as-session fix** (broker side): mavis / Claude /
+   Codex / Cursor and other cert-only AI agents can now log in via
+   the mTLS path. V4.1.0 returned 403 "No password configured for
+   this client"; V4.1.1 treats the cert as the credential. Every
+   cert-as-session login writes an audit entry with
+   `mfa_method: cert-bypass` for SOC 2 / compliance.
+
+2. **4-SDK unified error contract** (Python, Go, Node CLI, VSCode):
+   all 4 SDKs now expose a single `BrokerError` class with
+   structured fields (`status`, `code`, `requestId`,
+   `retryAfter`, `is_retryable`, `toString`, `toJSON`). Plus a
+   `parseBrokerError(status, headers, body, op)` factory and
+   built-in retry (5xx / 429 / connection with exponential
+   backoff + `Retry-After` header override).
+
+See [RELEASE-NOTES-v4.1.1.md](../RELEASE-NOTES-v4.1.1.md) and
+[SECURITY.md §V4.1.1 Security Notes](../SECURITY.md#v411-security-notes-2026-09-06).
+
+### Q: Do I have to upgrade from V4.1.0 to V4.1.1?
+
+**Recommended but not required.** V4.1.1 is a backward-compatible
+patch; existing V4.1.0 SDK code continues to work unchanged.
+Upgrade at your convenience — zero downtime, no schema change.
+
+However, if you use:
+- **cert-only AI agents** (mavis / Claude / Codex / Cursor):
+  V4.1.1 enables the mTLS cert-as-session path. V4.1.0 returned
+  403; V4.1.1 returns 200 + session cookie.
+- **V4.1.0 SDK code with `BrokerAuthError` etc.**: V4.1.1 keeps
+  the old 6-class hierarchy exported for one release, but emits
+  `DeprecationWarning`. New code should switch to
+  `BrokerError` + `e.code === 'auth_failed'` checks.
+  See [SDK-UPGRADE-GUIDE.md](SDK-UPGRADE-GUIDE.md).
+
+### Q: My V4.1.0 SDK code throws a `DeprecationWarning` after upgrading to V4.1.1. What do I do?
+
+The 6 typed error classes (`BrokerAuthError`, `ErrAuth`, etc.)
+are still exported in V4.1.1 for one release, but emit
+`DeprecationWarning` on import. Migrate to the new
+`BrokerError` + `e.code` pattern:
+
+```python
+# V4.1.0 (deprecated, still works in V4.1.1)
+try:
+    c.get_secret("github.pat")
+except BrokerAuthError as e:
+    ...
+
+# V4.1.1 (recommended)
+try:
+    c.get_secret("github.pat")
+except BrokerError as e:
+    if e.status == 401 or e.code == "auth_failed":
+        ...  # your auth handling
+```
+
+See [SDK-UPGRADE-GUIDE.md](SDK-UPGRADE-GUIDE.md) for full migration
+examples for all 4 SDKs (Python / Go / Node CLI / VSCode).
+
+### Q: What is the V4.1.1 retry behavior?
+
+All 4 SDKs now automatically retry **retryable errors** (5xx /
+429 / connection failures) with exponential backoff:
+
+| Setting | Default | Configurable via |
+|---------|---------|------------------|
+| `maxRetries` | `2` (so up to 3 total attempts) | `Config.max_retries` / `Config.MaxRetries` / `config.maxRetries` |
+| `retryBackoffMs` | `500` ms (doubled each retry) | `Config.retry_backoff_ms` / `Config.RetryBackoffMs` / `config.retryBackoffMs` |
+
+**Backoff curve** (default settings): 500 ms → 1000 ms → 2000 ms.
+If the broker returns `Retry-After: 30`, the SDK waits 30
+seconds (overrides exponential backoff).
+
+Set `maxRetries=0` to disable retry (useful if you have your
+own retry logic).
+
+### Q: Does V4.1.1 introduce new broker error codes?
+
+No. V4.1.1 introduces no new error codes from the broker. The
+change is **in the SDKs** (single `BrokerError` class replacing
+6 typed classes). The underlying codes broker returns are
+unchanged. See [ERROR-CODES.md](ERROR-CODES.md) for the full
+registry of 25 broker error codes.
+
+### Q: How do I handle the cert-bypass audit entries for SOC 2 / ISO 27001?
+
+V4.1.1 writes a new audit field for cert-as-session logins:
+
+```json
+{
+  "ts": "2026-09-06T12:34:56.789Z",
+  "event": "login",
+  "client": "mavis",
+  "ip": "127.0.0.1",
+  "user_agent": "secret-broker-cli/4.1.1",
+  "auth_method": "mtls",
+  "mfa_method": "cert-bypass",
+  "session_id": "...",
+  "session_duration_s": 604800
+}
+```
+
+The `mfa_method: cert-bypass` field is the new V4.1.1 marker.
+SOC 2 / ISO 27001 audits can filter the audit log by this field
+to identify all cert-only logins (i.e. logins that bypassed
+TOTP / WebAuthn). This is documented in
+[SECURITY.md §V4.1.1 Security Notes](../SECURITY.md#v411-security-notes-2026-09-06).
+
+### Q: When should I migrate to V4.1.1?
+
+| Your situation | Recommendation |
+|----------------|----------------|
+| Using V4.1.0 SDK, integration works fine | Stay on V4.1.0 indefinitely; SDK auto-upgrade is safe but not required. |
+| Use cert-only AI agents (mavis / Claude / Codex / Cursor) | Upgrade immediately — V4.1.0 returns 403 for cert-only clients. |
+| Need richer error context (for monitoring / audit) | Upgrade; switch to `BrokerError` pattern. |
+| Hitting transient 5xx / 429 frequently | Upgrade; built-in retry (default 2 retries, exp backoff). |
+| Mission-critical, cannot risk any SDK change | Stay on V4.1.0; V4.1.1 is forward-compatible. |
+
+### Q: How do I verify V4.1.1 release readiness?
+
+After merging all V4.1.1 PRs (per AWAITING-USER V13), run:
+
+```bash
+node scripts/verify-v4.1.1-release.mjs --strict
+```
+
+This runs both:
+- `preflight-v4.1.1.mjs` (broker + versions + docs).
+- `verify-sdk-v4.1.1-parity.mjs` (4-SDK parity contract).
+
+Exit 0 = ready to tag `v4.1.1` and ship. Non-zero = see output
+for which work remains.
+
+See [RUNBOOK-v4.1.1.md §Step 1](RUNBOOK-v4.1.1.md) for full details.
+
+### Q: How do I upgrade my 52trz.com (or production) install from V4.1.0 to V4.1.1?
+
+In-place upgrade, zero downtime, ~5 minutes:
+
+```bash
+ssh user@broker.52trz.com
+cd /opt/secret-broker
+sudo cp -a secrets pki audit secrets.bak.$(date +%Y%m%d)  # safety backup
+sudo git fetch
+sudo git checkout v4.1.1
+sudo npm install --omit=dev
+sudo systemctl restart secret-broker
+sleep 3
+curl -k --cert /opt/secret-broker/pki/clients/admin.crt \
+        --key /opt/secret-broker/pki/clients/admin.key \
+        https://broker.52trz.com:8443/health
+# Expect: {"status":"ok","version":"4.1.1",...}
+```
+
+Then verify the cert-as-session fix:
+
+```bash
+curl -k --cert /opt/secret-broker/pki/clients/mavis.crt \
+        --key /opt/secret-broker/pki/clients/mavis.key \
+        -c /tmp/mavis-cookies.txt \
+        -X POST https://broker.52trz.com:8443/api/v1/login \
+        -H 'Content-Type: application/json' \
+        -d '{}'
+# Expect: 200 OK + Set-Cookie: broker_session=... (V4.1.0: 403)
+```
+
+See [DEPLOY-52TRZ.md](../../DEPLOY-52TRZ.md) and
+[RUNBOOK-v4.1.1.md §Step 7](RUNBOOK-v4.1.1.md).
+
+### Q: Where do I report a V4.1.1-specific issue?
+
+V4.1.1 falls under the standard 4.x bug bounty (up to $5000).
+Follow [SECURITY.md §Reporting a Vulnerability](../SECURITY.md#reporting-a-vulnerability)
+or email **security@broker.example.com**.
+
+For non-security issues (e.g. documentation bug, V4.1.1 SDK
+question), open a GitHub issue using the V4.1.1-era
+[PR template](https://github.com/tyj1987/broker/blob/main/.github/PULL_REQUEST_TEMPLATE.md)
+or [discussion](https://github.com/tyj1987/broker/discussions).
+
+## Related
+
+- [RELEASE-NOTES-v4.1.1.md](../RELEASE-NOTES-v4.1.1.md) — official release body.
+- [SDK-UPGRADE-GUIDE.md](SDK-UPGRADE-GUIDE.md) — V4.1.0 → V4.1.1 migration.
+- [ERROR-CODES.md](ERROR-CODES.md) — 25 broker error codes.
+- [SECURITY.md](../SECURITY.md#v411-security-notes-2026-09-06) — V4.1.1 security notes.
+- [RUNBOOK-v4.1.1.md](RUNBOOK-v4.1.1.md) — 8 步 release manual.
+- [V4.1.1-COMMITS.md](V4.1.1-COMMITS.md) — 21 commits × 10 sections.
+
 See [SECURITY.md](../SECURITY.md) for the full Bug Bounty program.

@@ -3134,6 +3134,37 @@ function getIdentity(req) {
       via: 'session',
     };
   }
+  // HOTFIX 2026-09-06: nginx proxy_ssl presents client.mavis — never trust peer from loopback.
+  // Require nginx-verified external client cert via X-SSL-Client-* headers.
+  const remote = req.socket?.remoteAddress || '';
+  const fromLocalProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+  // Only treat as nginx when it forwarded X-SSL-Client-Verify (always set by our vhost).
+  // Direct localhost mTLS to :8443 has no such header — keep peer-cert auth.
+  if (fromLocalProxy && req.headers['x-ssl-client-verify'] !== undefined) {
+    const verify = String(req.headers['x-ssl-client-verify'] || '');
+    const escaped = req.headers['x-ssl-client-cert'];
+    if (verify !== 'SUCCESS' || !escaped) return null;
+    try {
+      const pem = decodeURIComponent(String(escaped));
+      const { X509Certificate } = require('node:crypto');
+      const x509 = new X509Certificate(pem);
+      const fp = x509.fingerprint256;
+      const cnMatch = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '');
+      const cn = cnMatch ? cnMatch[1] : (x509.subject || '');
+      if (!fp) return null;
+      let matched = null, matchedBy = null;
+      for (const [name, c] of Object.entries(CONFIG.clients)) {
+        if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fp.toUpperCase()) {
+          matched = c; matchedBy = name; break;
+        }
+      }
+      if (!matched) return null;
+      recordClientSeen(matchedBy);
+      return { cn: cn || matchedBy, fp, client: matched, clientName: matchedBy, certSubject: { CN: cn || matchedBy }, via: 'mtls-header' };
+    } catch (e) {
+      return null;
+    }
+  }
   // 2. mTLS client cert (from CLI / scripts)
   const peer = req.socket.peerCertificate;
   let cert = null;

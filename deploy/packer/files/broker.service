@@ -1,0 +1,38 @@
+[Unit]
+Description=Secret Broker — mTLS credential proxy for AI clients
+Documentation=https://github.com/tyj1987/broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=broker
+Group=broker
+WorkingDirectory=/opt/secret-broker
+Environment="NODE_ENV=production"
+Environment="BROKER_BIND=0.0.0.0"
+Environment="BROKER_PORT=8443"
+Environment="PKI_DIR=/etc/secret-broker/pki"
+Environment="AUDIT_DIR=/var/log/secret-broker"
+Environment="SECRETS_DETAIL_PATH=/etc/secret-broker/secrets/secrets-detail.json"
+Environment="CONFIG_PATH=/etc/secret-broker/broker.yaml"
+Environment="CLIENTS_JSON=/etc/secret-broker/clients.json"
+Environment="CA_CERT_PATH=/etc/secret-broker/pki/ca/ca.crt"
+Environment="TLS_CERT=/etc/secret-broker/pki/server/server.crt"
+Environment="TLS_KEY=/etc/secret-broker/pki/server/server.key"
+Environment="TLS_CRL="
+ExecStart=/usr/bin/node /opt/secret-broker/broker/server.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/secret-broker /etc/secret-broker
+
+[Install]
+WantedBy=multi-user.target

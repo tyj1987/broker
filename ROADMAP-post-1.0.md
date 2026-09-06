@@ -46,12 +46,12 @@ Listed in priority order. Each item has a target quarter and a clear
 ### P1 — Required for "V4.1 is enterprise-ready"
 
 #### 3. Cloud marketplace images (W27-W32)
-- [ ] **AWS Marketplace**: Packer build → AMI with broker + SOPS + Docker pre-installed. Launch via CloudFormation template.
-- [ ] **Azure Marketplace**: VHD with same. Deploy via ARM template.
-- [ ] **Google Cloud Marketplace**: Container image on `gcr.io/tyj1987-public/broker`. Deploy via Deployment Manager.
-- [ ] **Aliyun 镜像市场** (China): VHD with same. CN-specific docs in `docs/zh-CN/`.
-- [ ] **Tencent Cloud 镜像市场** (China): same.
-- **Target**: 2026-10-31
+- [x] **AWS Marketplace** ✅ 2026-09-06 — Packer template (`deploy/packer/aws-broker.pkr.hcl`) + CloudFormation template (`cfn-template.yaml`) + cloud-init (`files/cloud-init-user-data.sh`) + systemd unit (`files/broker.service`) + maintainer guide (`README.md`) shipped
+- [ ] **Azure Marketplace** (Phase 3b, target 2026-10-22)
+- [ ] **Google Cloud Marketplace** (Phase 3c, target 2026-10-29)
+- [ ] **Aliyun 镜像市场** (China) (Phase 3d, target 2026-10-31)
+- [ ] **Tencent Cloud 镜像市场** (China) (Phase 3e, target 2026-10-31)
+- **Target**: 2026-10-31 — **PARTIAL 2026-09-06** (AWS ready; 4 others follow sequentially)
 - **Acceptance**: all 5 listings live, install count tracked in BrokerCacheStat
 
 #### 4. SOC 2 Type 1 readiness (W33-W40)

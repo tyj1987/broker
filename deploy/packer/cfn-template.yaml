@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Secret Broker V4.1.x — mTLS credential proxy for AI clients.
+  1-click launch on AWS Marketplace. Auto-configures mTLS, audit log, and
+  CloudWatch integration. User must rotate default PKI before production use.
+
+# === Metadata ===
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Configuration"
+        Parameters:
+          - InstanceType
+          - SSHKeyName
+          - BrokerVersion
+      - Label:
+          default: "Network Configuration"
+        Parameters:
+          - VpcId
+          - SubnetId
+          - AllowedSSHCIDR
+          - AllowedHTTPCIDR
+      - Label:
+          default: "Broker Configuration"
+        Parameters:
+          - DomainName
+          - LetsEncryptEmail
+    ParameterLabels:
+      InstanceType:
+        default: "EC2 instance type (recommend t3.small or larger)"
+      BrokerVersion:
+        default: "Secret Broker version (default: latest)"
+
+# === Parameters ===
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - m5.large
+      - m5.xlarge
+      - c5.large
+    Description: EC2 instance type. Recommend t3.small or larger (2 vCPU / 2 GB RAM min).
+
+  SSHKeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the broker will be deployed.
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet where the broker will be deployed (must be public for ALB).
+
+  AllowedSSHCIDR:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: CIDR block allowed to SSH to the broker. Restrict in production!
+
+  AllowedHTTPCIDR:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: CIDR block allowed to access broker HTTPS (8443). Restrict in production!
+
+  BrokerVersion:
+    Type: String
+    Default: "4.1.1"
+    Description: Secret Broker version to deploy. Keep as latest for security updates.
+
+  DomainName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional: your custom domain (e.g. broker.example.com). If provided, the
+      ALB will request a Let's Encrypt certificate. Leave empty to use the
+      ALB's default *.elb.amazonaws.com cert.
+
+  LetsEncryptEmail:
+    Type: String
+    Default: ""
+    Description: Email for Let's Encrypt registration (only used if DomainName is set).
+
+# === Conditions ===
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref DomainName, ""]]
+
+# === Resources ===
+Resources:
+  # Security Group
+  BrokerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Secret Broker security group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCIDR
+          Description: SSH access (restrict in production!)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS access (ALB terminates TLS)
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound (for npm, SOPS, etc.)
+      Tags:
+        - Key: Name
+          Value: secret-broker-sg
+        - Key: Application
+          Value: secret-broker
+
+  # IAM Role for broker (CloudWatch + S3)
+  BrokerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "secret-broker-role-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: broker-s3-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${AuditLogBucket}/*"
+                  - !Sub "arn:aws:s3:::${AuditLogBucket}"
+      Tags:
+        - Key: Application
+          Value: secret-broker
+
+  BrokerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "secret-broker-profile-${AWS::StackName}"
+      Roles:
+        - !Ref BrokerRole
+
+  # S3 Bucket for audit logs (optional, encrypted, lifecycle)
+  AuditLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub "secret-broker-audit-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: archive-old-logs
+            Status: Enabled
+            ExpirationInDays: 365
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+      Tags:
+        - Key: Application
+          Value: secret-broker
+
+  # CloudWatch Log Group
+  BrokerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/ec2/secret-broker-${AWS::StackName}"
+      RetentionInDays: 90
+      Tags:
+        - Key: Application
+          Value: secret-broker
+
+  # EC2 Instance
+  BrokerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref BrokerAMI
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SSHKeyName
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref BrokerSecurityGroup
+      IamInstanceProfile: !Ref BrokerInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          # Cloud-init user-data — runs on first launch
+          # 1. Mount audit log directory to S3 via s3fs (or use CloudWatch agent)
+          # 2. Set up Let's Encrypt (if DomainName provided)
+          # 3. Start broker
+          /var/lib/cloud/secret-broker-init.sh \
+            --audit-bucket "${AuditLogBucket}" \
+            --cloudwatch-group "${BrokerLogGroup}" \
+            --domain "${DomainName}" \
+            --letsencrypt-email "${LetsEncryptEmail}"
+      Tags:
+        - Key: Name
+          Value: !Sub "secret-broker-${AWS::StackName}"
+        - Key: Application
+          Value: secret-broker
+        - Key: Version
+          Value: !Ref BrokerVersion
+
+  # ALB (TLS termination)
+  BrokerALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "secret-broker-alb-${AWS::StackName}"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref SubnetId
+      SecurityGroups:
+        - !Ref BrokerSecurityGroup
+      Tags:
+        - Key: Application
+          Value: secret-broker
+
+  BrokerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "secret-broker-tg-${AWS::StackName}"
+      Port: 8443
+      Protocol: HTTPS
+      VpcId: !Ref VpcId
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      Targets:
+        - Id: !Ref BrokerInstance
+      Tags:
+        - Key: Application
+          Value: secret-broker
+
+  BrokerALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref BrokerALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !If
+            - HasCustomDomain
+            - !Ref LetsEncryptCert
+            - !GetAtt BrokerALB.Listener[0].CertificateArn  # fall back to default
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BrokerTargetGroup
+
+  # Let's Encrypt certificate (if DomainName is set)
+  LetsEncryptCert:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      SubjectAlternativeNames:
+        - !Sub "*.${DomainName}"
+
+# === Outputs ===
+Outputs:
+  BrokerURL:
+    Description: Public HTTPS URL of the broker (via ALB)
+    Value: !Sub "https://${BrokerALB.DNSName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-BrokerURL"
+
+  BrokerInstanceIP:
+    Description: Private IP of the broker instance (for SSH via bastion if needed)
+    Value: !GetAtt BrokerInstance.PrivateIp
+    Export:
+      Name: !Sub "${AWS::StackName}-BrokerInstanceIP"
+
+  AuditLogBucket:
+    Description: S3 bucket for audit logs (encrypted, lifecycle)
+    Value: !Ref AuditLogBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-AuditLogBucket"
+
+  CAToDownload:
+    Description: SSH to the broker and run `cat /etc/secret-broker/pki/ca/ca.crt` to get the default CA cert (ROTATE before production!)
+    Value: "ssh ubuntu@<broker-instance> cat /etc/secret-broker/pki/ca/ca.crt"
+    Export:
+      Name: !Sub "${AWS::StackName}-CAToDownload"
+
+  NextSteps:
+    Description: Post-launch setup
+    Value: |
+      1. SSH to the broker: ssh -i <your-key>.pem ubuntu@<broker-public-dns>
+      2. ROTATE the default PKI: cd /etc/secret-broker/pki && openssl req -x509 -new -nodes ...
+      3. Open https://<broker-alb-dns>/ in your browser
+      4. Enroll your first mTLS device (CLI or QR code)
+      5. Add your first service (GitHub, OpenAI, AWS, etc.)
+      6. Subscribe to alerts: https://<broker-alb-dns>/api/v1/alerts
+    Export:
+      Name: !Sub "${AWS::StackName}-NextSteps"

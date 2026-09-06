@@ -107,10 +107,11 @@ Listed in priority order. Each item has a target quarter and a clear
 ### P3 — Stretch goals
 
 #### 11. Mobile clients (Q1 2027)
-- [ ] iOS app: Swift + Network.framework mTLS
-- [ ] Android app: Kotlin + OkHttp mTLS
+- [x] Design spec ✅ 2026-09-06 — `docs/DESIGN-MOBILE-CLIENTS.md` (15 KB, iOS Swift + Android Kotlin detailed design)
+- [ ] iOS app: Swift + Network.framework mTLS (Phase 11.1-11.5, 14 weeks, 2026-12-15 → 2027-03-15)
+- [ ] Android app: Kotlin + OkHttp mTLS (Phase 11.6-11.10, 12 weeks, 2027-01-15 → 2027-03-31)
 - [ ] Both: Touch ID / Face ID for MFA
-- **Target**: 2027-03-31
+- **Target**: 2027-03-31 — **PARTIAL 2026-09-06** (design done; iOS + Android parallel 6-month full-time)
 
 #### 12. V4.2.0 (Q2 2027)
 - [x] Design spec ✅ 2026-09-06 — `docs/DESIGN-V4.2.0.md` (18 KB, 4 features detailed design)

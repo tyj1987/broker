@@ -1,0 +1,214 @@
+{
+  "_comment": "VSCode / Cursor / Windsurf / VSCodium workspace settings. Complements .editorconfig. Applies to: broker (Node.js), sdk/python/, sdk/go/, sdk/vscode/, cli/. Last updated: 2026-09-06 (V4.1.1 release prep).",
+  "_see_also": [
+    "../../.editorconfig (cross-editor defaults)",
+    "../../CONTRIBUTING.md (V4.1.1 contributing guide)",
+    "../../AGENTS.md (broker project onboarding for AI agents)"
+  ],
+
+  "editor.formatOnSave": true,
+  "editor.formatOnPaste": false,
+  "editor.renderWhitespace": "boundary",
+  "editor.rulers": [80, 100, 120],
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+  "editor.stickyScroll.enabled": true,
+  "editor.minimap.enabled": false,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.detectIndentation": true,
+  "editor.wordWrap": "off",
+  "editor.linkedEditing": true,
+
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+  "files.eol": "\n",
+  "files.autoSave": "onFocusChange",
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.git/**": true,
+    "**/out/**": true,
+    "**/dist/**": true,
+    "**/.pytest-tmp/**": true,
+    "**/release-assets/**": true
+  },
+
+  "files.associations": {
+    "*.yaml": "yaml",
+    "*.yml": "yaml",
+    "Dockerfile": "dockerfile",
+    ".editorconfig": "editorconfig",
+    ".gitignore": "ignore",
+    ".gitattributes": "gitattributes"
+  },
+
+  "[markdown]": {
+    "editor.formatOnSave": true,
+    "editor.wordWrap": "on",
+    "editor.quickSuggestions": {
+      "strings": false,
+      "comments": false,
+      "other": false
+    }
+  },
+
+  "[json]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2
+  },
+
+  "[jsonc]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2
+  },
+
+  "[typescript]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  "[typescriptreact]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  "[javascript]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4,
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": false,
+    "editor.defaultFormatter": "golang.go"
+  },
+
+  "[yaml]": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2
+  },
+
+  "[shell]": {
+    "editor.formatOnSave": false,
+    "editor.tabSize": 2,
+    "files.eol": "\n"
+  },
+
+  "[powershell]": {
+    "editor.formatOnSave": false,
+    "editor.tabSize": 2,
+    "files.eol": "\n"
+  },
+
+  "typescript.preferences.importModuleSpecifier": "non-relative",
+  "typescript.suggest.autoImports": true,
+  "typescript.updateImportsOnFileMove.enabled": "always",
+
+  "javascript.preferences.importModuleSpecifier": "non-relative",
+  "javascript.suggest.autoImports": true,
+  "javascript.updateImportsOnFileMove.enabled": "always",
+
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.extraPaths": [
+    "./sdk/python"
+  ],
+
+  "go.toolsManagement.checkForUpdates": "weekly",
+  "go.lint.tool": "golangci-lint",
+  "go.lint.enable": [
+    "golint",
+    "govet",
+    "staticcheck"
+  ],
+  "go.test.coverShowCounts": true,
+  "go.test.coverOnSave": false,
+
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "terminal.integrated.defaultProfile.osx": "zsh",
+  "terminal.integrated.cwd": "${workspaceFolder}",
+  "terminal.integrated.env.linux": {},
+  "terminal.integrated.env.osx": {},
+
+  "extensions.supportUntrustedWorkspaces": {
+    "ms-python.python": false,
+    "ms-python.black-formatter": false,
+    "golang.go": false,
+    "dbaeumer.vscode-eslint": false,
+    "esbenp.prettier-vscode": false
+  },
+
+  "extensions.recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "ms-python.python",
+    "ms-python.black-formatter",
+    "golang.go",
+    "streetsidesoftware.code-spell-checker",
+    "tamasfe.even-better-toml"
+  ],
+
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/node_modules": true,
+    "**/out": true,
+    "**/dist": true,
+    "**/.pytest-tmp": true
+  },
+
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/out": true,
+    "**/dist": true,
+    "**/release-assets": true,
+    "**/sdk/vscode/out": true,
+    "**/sdk/python/.pytest-tmp": true,
+    "**/.git": true
+  },
+
+  "workbench.editor.enablePreview": false,
+  "workbench.editor.enablePreviewFromQuickOpen": false,
+  "workbench.tree.indent": 2,
+  "workbench.iconTheme": "vs-seti",
+  "workbench.startupEditor": "none",
+
+  "explorer.compactFolders": false,
+  "explorer.sortOrder": "foldersThenFiles",
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  "git.enableSmartCommit": true,
+  "git.inputValidationSubjectLength": 72,
+  "git.inputValidationEnabled": true,
+  "git.openRepositoryInParentFolders": "always",
+  "git.pruneOnFetch": true,
+
+  "github.gitProtocol": "https",
+  "github.pullRequests.createOnPublishBranch": "all",
+
+  "extensions.ignoreRecommendations": false,
+  "extensions.autoCheckUpdates": true,
+  "extensions.showRecommendationsOnlyOnDemand": false,
+
+  "security.workspace.trust.untrustedFiles": "newWindow",
+  "security.workspace.trust.enabled": true,
+  "security.workspace.trust.banner": "always"
+}

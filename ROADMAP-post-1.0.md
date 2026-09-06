@@ -82,9 +82,9 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2026-12-15
 
 #### 7. Homebrew tap (W37)
-- [ ] `brew install tyj1987/broker/broker` (CLI)
-- [ ] Auto-update on `brew upgrade`
-- **Target**: 2026-10-15
+- [x] `brew install tyj1987/broker/broker` (CLI) ✅ 2026-09-06 — `deploy/homebrew/broker.rb` shipped in branch `feat/homebrew-tap-prep` (待 user 建 `homebrew-broker` tap repo + push)
+- [ ] Auto-update on `brew upgrade` (依赖 user 推 homebrew-broker tap repo + 在 V4.x.y release 时 bump formula)
+- **Target**: 2026-10-15 — **PARTIAL 2026-09-06** (formula + docs ready, awaiting user to publish tap)
 
 #### 8. Snap / apt / winget packages (W38-W40)
 - [ ] Snap store: `snap install broker`

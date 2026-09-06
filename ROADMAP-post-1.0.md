@@ -55,21 +55,21 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Acceptance**: all 5 listings live, install count tracked in BrokerCacheStat
 
 #### 4. SOC 2 Type 1 readiness (W33-W40)
-- [ ] Document all controls (CC1-CC9 + selected TSC)
-- [ ] Implement evidence collection (audit chain, config snapshots)
-- [ ] Third-party pen test (commissioned)
-- [ ] Auditor engagement
-- [ ] Fix any findings
-- [ ] Submit for Type 1 report
-- **Target**: 2026-12-15
+- [x] Document all controls (CC1-CC9 + selected TSC) ✅ 2026-09-06 — `docs/SECURITY-CONTROLS-SOC2.md` (16 KB, 65 criteria mapped, 46% implemented, 8% partial, 45% planned)
+- [ ] Implement evidence collection (audit chain, config snapshots) (Phase 2)
+- [ ] Third-party pen test (commissioned) (Phase 3, $30-80k)
+- [ ] Auditor engagement (Phase 3, $50-150k)
+- [ ] Fix any findings (Phase 4)
+- [ ] Submit for Type 1 report (Phase 5)
+- **Target**: 2026-12-15 — **PARTIAL 2026-09-06** (control docs done; pen test + auditor + report remain)
 - **Acceptance**: Type 1 report received, all Critical/High findings remediated
 
 #### 5. ISO 27001 Annex A controls mapping (W33-W36)
-- [ ] Map broker features to Annex A controls (A.5-A.18)
-- [ ] Gap analysis
-- [ ] Implement missing controls
-- [ ] Internal audit
-- **Target**: 2026-11-30
+- [x] Map broker features to Annex A controls (A.5-A.18) ✅ 2026-09-06 — `docs/SECURITY-CONTROLS-ISO27001.md` (20 KB, 93 controls mapped, 39% implemented, 19% partial, 25% planned, 17% out of scope)
+- [x] Gap analysis ✅ 2026-09-06 — embedded in §8 of ISO doc
+- [ ] Implement missing controls (Phase 2, 1-2 weeks quick wins)
+- [ ] Internal audit (Phase 3, 2-4 weeks)
+- **Target**: 2026-11-30 — **PARTIAL 2026-09-06** (mapping + gap analysis done; missing controls + internal audit remain)
 
 ### P2 — Quality of life
 

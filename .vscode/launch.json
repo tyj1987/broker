@@ -1,0 +1,208 @@
+{
+  "_comment": "VSCode / Cursor / Windsurf / VSCodium debug launch configurations. Complements .vscode/settings.json. Allows F5 to run broker + 4 SDKs locally. Last updated: 2026-09-06 (V4.1.1 release prep).",
+  "_see_also": [
+    "../../.vscode/settings.json (workspace settings)",
+    "../../.editorconfig (cross-editor defaults)",
+    "../../AGENTS.md (broker project onboarding)",
+    "../../CONTRIBUTING.md V4.1.1 (contributing guide)"
+  ],
+
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Broker: start (foreground, port 8443)",
+      "program": "${workspaceFolder}/broker/server.js",
+      "cwd": "${workspaceFolder}/broker",
+      "args": [],
+      "env": {
+        "NODE_ENV": "development",
+        "BROKER_PORT": "8443",
+        "BROKER_LOG_LEVEL": "debug"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**",
+        "${workspaceFolder}/node_modules/**"
+      ],
+      "presentation": {
+        "group": "broker",
+        "order": 1
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Broker: start (background, attach debugger)",
+      "program": "${workspaceFolder}/broker/server.js",
+      "cwd": "${workspaceFolder}/broker",
+      "args": [],
+      "env": {
+        "NODE_ENV": "development",
+        "BROKER_PORT": "8443"
+      },
+      "runtimeArgs": [
+        "--inspect=9229"
+      ],
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Broker: attach to running instance (9229)",
+      "port": 9229,
+      "address": "localhost",
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Broker: test (all 629 tests)",
+      "program": "${workspaceFolder}/broker/node_modules/.bin/_mocha",
+      "cwd": "${workspaceFolder}/broker",
+      "args": [
+        "--recursive",
+        "test/"
+      ],
+      "env": {
+        "NODE_ENV": "test"
+      },
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "broker",
+        "order": 2
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Broker: smoke (curl /health)",
+      "program": "${workspaceFolder}/scripts/dev/smoke-broker.js",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Node CLI: test-error.js (21 V4.1.1 tests)",
+      "program": "${workspaceFolder}/cli/test-error.js",
+      "cwd": "${workspaceFolder}/cli",
+      "runtimeArgs": [
+        "--test"
+      ],
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "4-SDK parity",
+        "order": 1
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "VSCode SDK: error.test.ts (38 V4.1.1 tests)",
+      "program": "${workspaceFolder}/sdk/vscode/out/test/error.test.js",
+      "cwd": "${workspaceFolder}/sdk/vscode",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "4-SDK parity",
+        "order": 2
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "VSCode SDK: client.test.ts (legacy)",
+      "program": "${workspaceFolder}/sdk/vscode/out/test/client.test.js",
+      "cwd": "${workspaceFolder}/sdk/vscode",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "4-SDK parity",
+        "order": 3
+      }
+    },
+
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "V4.1.1 preflight check",
+      "program": "${workspaceFolder}/scripts/preflight-v4.1.1.mjs",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--strict"
+      ],
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "release",
+        "order": 1
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "V4.1.1 SDK parity verification",
+      "program": "${workspaceFolder}/scripts/verify-sdk-v4.1.1-parity.mjs",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--strict"
+      ],
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "release",
+        "order": 2
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "V4.1.1 verify-all (combined runner)",
+      "program": "${workspaceFolder}/scripts/verify-v4.1.1-release.mjs",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--strict"
+      ],
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "release",
+        "order": 3
+      }
+    }
+  ],
+
+  "compounds": [
+    {
+      "name": "V4.1.1 release verify (all 3 scripts)",
+      "configurations": [
+        "V4.1.1 preflight check",
+        "V4.1.1 SDK parity verification",
+        "V4.1.1 verify-all (combined runner)"
+      ],
+      "preLaunchTask": "verify-v4.1.1: install",
+      "stopAll": true
+    },
+    {
+      "name": "Broker dev: start + test",
+      "configurations": [
+        "Broker: start (foreground, port 8443)",
+        "Broker: test (all 629 tests)"
+      ],
+      "preLaunchTask": "broker: install",
+      "stopAll": false
+    },
+    {
+      "name": "4-SDK V4.1.1 parity tests",
+      "configurations": [
+        "Node CLI: test-error.js (21 V4.1.1 tests)",
+        "VSCode SDK: error.test.ts (38 V4.1.1 tests)"
+      ],
+      "preLaunchTask": "sdks: build",
+      "stopAll": true
+    }
+  ]
+}

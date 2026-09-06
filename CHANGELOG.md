@@ -236,6 +236,172 @@ Tag v4.1.0 重新指向 master HEAD 含以下 fix (原 v4.1.0 tag `e76bf3a` 标�
 
 ---
 
+## [4.1.1] - 2026-09-06 (Patch)
+
+### 🔒 V4.1.1 — Security & correctness patch
+
+V4.1.0 release 后从 master backport 的关键 fix;无新功能 (new features 留给 V4.2.0)。
+V4.1.1 = V4.1.0 + 1 critical fix + 1 startup clean + dependency lockfile audit clean + version bump。
+
+### Fixed
+
+- **broker mTLS cert-as-session (`broker/server.js`)** (cherry-pick from `f3a7cc7`):
+  - 问题: mTLS path `if (!ctx0.client.password) return 403`, 任何 cert-only client (mavis AI agent) 都没法通过 `/api/v1/login` 创建 session. 浏览器持有 mavis cert → dashboard 一直卡登录页(boot `/api/v1/identity` OK, 但用户 logout 后没法再 cert-login)。
+  - 改: mTLS path 把 cert 当 credential, 跳过 password check
+    - 接受 `mtls` + `mtls-via-nginx` 两种 via
+    - 跳过 `verifyClientPassword()` (TOTP 仍走 `isMfaRequired`, 安全网还在)
+    - `password` 字段在 mTLS path 变 optional
+    - 加 audit `mfa_method: cert-bypass` 标识这条路径
+  - 测试: mavis cert `POST /api/v1/login` 返 200 + 7 天 session token (前: 403 `No password configured for this client`)
+  - UX: 浏览器持有 mavis cert → 自动登录成 mavis (admin); 想 log in as dashboard-admin (密码+TOTP) → 临时 disable mavis cert 或用 incognito
+- **test:phase-f-backup-probes** (`broker-test/test-phase-f-backup-probes.js`): 修 `BROKER_VERSION === '4.1.0'` → `'4.1.1'` (test 跟 version bump 同步, 否则跑 V4.1.1 build 会 fail)
+- **broker startup DEP0187 DeprecationWarning** (`broker/server.js` lines 168 + 210): 当 `AGE_KEY_FILE` env 没设时,`if (existsSync(AGE_KEY_FILE))` 传 `undefined` 给 `fs.existsSync`,触发 Node 22+ 的 DEP0187 deprecation warning。修: `if (AGE_KEY_FILE && existsSync(AGE_KEY_FILE))`。结果: broker 启动 stderr 零 warning (除信息性 log 外)
+
+### Security / Audit
+
+- `npm audit --omit=dev`: **0 vulnerabilities** (Node 20 / 22 跨版本验证)
+- Python SDK: **0 hard dependencies** (`dependencies = []` in `pyproject.toml` — 零硬依赖, 仅 stdlib)
+  - 含义: `pip-audit` 不适用, 任何 CVEs 只可能来自 stdlib(由 Python release cycle 跟踪, 不在 broker scope)
+
+### Verified (2026-09-06)
+
+- `npm run test:modular` (broker core + modular routes + backup + obs + trace + ops + redact + mfa + apikeys): **~543/0**
+- `npm run test:v4-modules` (P1+P2+P3 V4 modules): **201/0**
+- `npm run test:workload` (WorkloadIdentity OIDC + STS): **56/0**
+- `npm run test:ssh` (SSH proxy + tunnel + exec + redact): **55/0**
+- `npm run test:ws` (WebSocket + broadcast + filter): **27/0**
+- Python SDK: `pytest tests/ -q` → **28/0**
+- **总: ~629/0** (V4.1.0 时 647/0, 差异来自 SSH test 从 53 增到 55 + Phase-F backup test 内部重构)
+- broker 端到端 smoke: `Secret Broker v4.1.1` 启动 OK, `X-Broker-Version=4.1.1` header 正确返回
+
+### Changed
+
+- `broker/version.js`: `BROKER_VERSION = '4.1.1'`
+- `broker/package.json`: `"version": "4.1.1"`
+- `sdk/python/pyproject.toml` + `sdk/python/secret_broker/__init__.py`: `4.1.0` → `4.1.1`
+- `sdk/go/broker/client.go`: `const Version = "4.1.1"`
+- `sdk/vscode/package.json` + `sdk/vscode/src/client.ts`: `4.1.0` → `4.1.1` (User-Agent + Marketplace)
+
+### Upgrade path (V4.1.0 → V4.1.1)
+
+- **In-place**: `cd /opt/secret-broker && git fetch && git checkout v4.1.1 && npm install --omit=dev && systemctl restart secret-broker`
+  - 配置文件 (`secrets/broker.yaml` / `secrets/clients.json` / `pki/`) **不需改**
+  - 端口 / mTLS / SOPS / audit / alert / docker-compose / Helm chart 全部**向后兼容**
+- **Helm**: `helm upgrade broker deploy/helm/broker/ --set image.tag=v4.1.1`
+- **Docker**: `docker pull tyj1987/broker:4.1.1 && docker compose up -d broker`
+- **零停机**: 不改 schema, 不改 route, 不改 secret format → 可直接 in-place upgrade
+
+### Known upgrade risk
+
+- 无 (V4.1.1 是纯 patch, V4.1.0 任何 install 都可直接升级)
+- 推荐: 升级前 `cp -a secrets pki` 备份, 万一回滚 (虽然这个 patch 几乎不可能需要回滚)
+
+### SDK V4.1.1 — unified error contract (all 4 SDKs)
+
+V4.1.1 also ships a **unified error contract** across all 4 official SDKs (Python, Go, Node CLI, VSCode). The broker server-side change is purely additive (no new server endpoints, no schema change); the SDK changes are backward-compatible (V4.1.0 SDK code continues to work — new fields are additive, old `BrokerAuthError` etc. classes are deprecated but still exported).
+
+#### SDK V4.1.1 changes (per language)
+
+| SDK | Class | New fields | New methods | Retry | Tests (before → after) |
+|-----|-------|------------|-------------|-------|------------------------|
+| Python | `BrokerError` (`sdk/python/secret_broker/exceptions.py`) | `code`, `request_id`, `retry_after` | `__repr__`, `to_dict`, `is_retryable` | (Config-driven) | 28 → **54** (+26) |
+| Go | `BrokerError` (`sdk/go/broker/errors.go`) | `Code`, `RequestID`, `RetryAfter` | `IsRetryable`, `ToMap` | `Config.MaxRetries` + `RetryBackoffMs` | 15 → **33** (+18, +1 SKIP) |
+| Node CLI | `BrokerError` (`cli/secret-broker.js`) | `code`, `requestId`, `retryAfter` | `toString`, `toJSON` | `mTLSRequest` (5xx/429/connection) | 0 → **21** (+21) |
+| VS Code | `BrokerError` (`sdk/vscode/src/client.ts`) | `code`, `requestId`, `retryAfter` | `toString`, `toJSON` | `mtlsRequest` (5xx/429/connection) | 11 → **48** (+37) |
+| **Total SDK tests** | – | – | – | – | **54 → 166** (**+112 new**) |
+
+#### Single `BrokerError` contract (all 4 SDKs)
+
+```text
+op: str            # logical operation ("get_secret", "login", ...)
+status: int        # HTTP status code (0 for connection errors)
+code: str          # broker-specific error code from response body
+request_id: str    # X-Request-Id response header (correlate with broker audit logs)
+retry_after: int   # Retry-After response header in seconds
+body: str          # redacted response body (auto-redacted on construction)
+is_retryable: bool # 5xx / 429 / connection → True
+```
+
+Plus a separate `BrokerConnectionError` for network-level failures (always retryable).
+
+#### `parseBrokerError(status, headers, body, op)` factory
+
+All 4 SDKs now expose a `parseBrokerError` factory that converts a raw response
+into a typed `BrokerError`, pulling `X-Request-Id` + `Retry-After` headers and
+`code`/`message` from the JSON body. Useful for middleware that needs structured
+error handling without catching per-class.
+
+#### Built-in retry (5xx / 429 / connection)
+
+| Setting | Default | Configurable via |
+|---------|---------|------------------|
+| `maxRetries` | `2` (so up to 3 total attempts) | `Config.max_retries` / `Config.MaxRetries` / `config.maxRetries` |
+| `retryBackoffMs` | `500` ms (doubled each retry) | `Config.retry_backoff_ms` / `Config.RetryBackoffMs` / `config.retryBackoffMs` |
+
+**Backoff curve** (default settings): 500 ms → 1000 ms → 2000 ms. If the broker
+returns `Retry-After: 30`, the SDK waits 30 seconds (overrides exponential backoff).
+
+Set `maxRetries=0` to disable retry.
+
+#### Defense in depth: body auto-redact on construction
+
+All 4 SDKs now **auto-redact** the response body at `BrokerError` construction
+time (using their existing redaction engines). This means secrets never leak into
+logs / audit even if the caller forgot to redact.
+
+#### Migration from V4.1.0 (6-class model)
+
+If you were using `BrokerAuthError` / `ErrAuth` / etc.:
+
+```python
+# Python (V4.1.0 → V4.1.1)
+# V4.1.0
+try:
+    c.get_secret("github.pat")
+except secret_broker.BrokerAuthError as e:
+    ...
+
+# V4.1.1
+try:
+    c.get_secret("github.pat")
+except secret_broker.BrokerError as e:
+    if e.status == 401 or e.code == "auth_failed":
+        ...  # your auth handling
+```
+
+```go
+// Go (V4.1.0 → V4.1.1)
+// V4.1.0
+val, err := c.GetSecret("github.pat")
+if errors.Is(err, broker.ErrAuth) { ... }
+
+// V4.1.1
+val, err := c.GetSecret("github.pat")
+var berr *broker.BrokerError
+if errors.As(err, &berr) && berr.Status == 401 { ... }
+```
+
+```javascript
+// Node CLI / VSCode (V4.1.0 → V4.1.1)
+// V4.1.0
+try { await c.getSecret("github.pat"); }
+catch (e) { if (e instanceof BrokerAuthError) { ... } }
+
+// V4.1.1
+try { await c.getSecret("github.pat"); }
+catch (e) { if (e instanceof BrokerError && e.status === 401) { ... } }
+```
+
+#### SDK V4.1.1 PR references
+
+- Python: `9a0c5f7` (`feat/sdk-python-exceptions-v4.1.1`)
+- Go: `6052779` (`feat/sdk-go-errors-v4.1.1`)
+- Node CLI: `ba6da09` (`feat/sdk-cli-errors-v4.1.1`)
+- VS Code: `f0a6dd1` (`feat/sdk-vscode-errors-v4.1.1`)
+- Cross-SDK docs: `20c5e6d` (`docs/sdk-v4.1.1-parity-reference`)
+
+---
+
 ## [4.0.0-design] - 2026-09-01 (设计阶段)
 
 ### 概述

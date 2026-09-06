@@ -1,0 +1,93 @@
+# EditorConfig — broker project
+#
+# Maintains consistent coding styles across editors and IDEs.
+# https://editorconfig.org/
+#
+# Applies to: VSCode, Cursor, Windsurf, VSCodium, Sublime Text, vim,
+# JetBrains (IntelliJ / WebStorm / GoLand / PyCharm), and any editor
+# that supports EditorConfig.
+#
+# V4.1.1 SDK parity note: all 4 SDKs (Python, Go, Node CLI, VSCode)
+# share these defaults, so editing across the codebase feels
+# consistent regardless of language.
+#
+# Last verified: 2026-09-06 (V4.1.1 release prep)
+
+root = true
+
+# === Default for all files ===
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+end_of_line = lf
+
+# === Markdown (docs, *.md) ===
+# - trim_trailing_whitespace must be false (Markdown: 2 trailing spaces = line break)
+# - Use 2-space indent for lists
+[*.md]
+trim_trailing_whitespace = false
+indent_size = 2
+
+# === JavaScript / TypeScript / JSON / YAML / TOML ===
+# (broker, cli, sdk/vscode, deploy/, scripts/)
+[*.{js,mjs,cjs,ts,tsx,jsx,json,yaml,yml,toml}]
+indent_size = 2
+quote_type = double
+max_line_length = 120
+
+# === Go ===
+# (sdk/go/)
+[*.go]
+indent_style = tab
+indent_size = 4
+max_line_length = 120
+
+# === Python ===
+# (sdk/python/)
+[*.{py,pyi}]
+indent_size = 4
+max_line_length = 100
+# Black-compatible defaults (https://black.readthedocs.io/)
+
+# === Shell / PowerShell ===
+[*.{sh,ps1}]
+indent_size = 2
+
+# === Markdown inside docs/ (longer lines OK for tables) ===
+[docs/**/*.md]
+max_line_length = off
+
+# === Broker config files ===
+[broker/{*.js,lib/**/*.js,test/**/*.js}]
+indent_size = 2
+max_line_length = 120
+
+# === SDK Python (test files may be longer) ===
+[sdk/python/tests/**/*.py]
+max_line_length = 120
+
+# === SDK Go (test files use 120) ===
+[sdk/go/**/*_test.go]
+max_line_length = 120
+
+# === Broker pki/ — never edit, just for safety ===
+[/pki/**]
+insert_final_newline = false
+trim_trailing_whitespace = false
+
+# === Broker secrets/ — encrypted, never edit plaintext ===
+[/secrets/**]
+insert_final_newline = false
+trim_trailing_whitespace = false
+
+# === Generated / build output (rare, just in case) ===
+[*.{min.js,min.css,bundle.js,lock}]
+insert_final_newline = false
+trim_trailing_whitespace = false
+
+# === Markdown table cells (preserve 2-space trailing) ===
+# Handled by [*.md] section above; this is just a reminder.

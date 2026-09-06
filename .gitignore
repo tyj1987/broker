@@ -147,3 +147,19 @@ override.tf.json
 **/id_ed25519
 
 docs/openapi.yaml
+# --- ECS runtime secrets / host material (never commit) ---
+broker.env
+broker.env.*
+master-key.txt
+.dashboard-password
+age/key.txt
+secrets/broker_dec.yaml
+secrets/secrets-meta.json
+secrets/common.env
+secrets/*.bak*
+secrets/broker.yaml.*
+pki/clients/
+pki/server/
+broker/**/*.bak*
+broker/server.js.bak*
+broker/server.js.patch.*

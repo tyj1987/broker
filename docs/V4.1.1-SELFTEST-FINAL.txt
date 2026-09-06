@@ -1,0 +1,11 @@
+verify-v4.1.1-release self-test
+
+  ✓ preflight-v4.1.1.mjs --self-test exits 0
+  ✓ verify-sdk-v4.1.1-parity.mjs --self-test exits 0
+  ✓ --preflight + --sdk exits 1 (conflict detected)
+  ✓ preflight --self-test ignores --version override
+
+  4 passed, 0 failed
+
+✓ self-test OK
+

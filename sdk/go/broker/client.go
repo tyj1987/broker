@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,6 +43,8 @@ type Client struct {
 	http            *http.Client
 	workloadIdentity *WorkloadIdentity
 	sessionCookie   string
+	maxRetries      int
+	retryBackoff    time.Duration
 }
 
 // Config holds Client configuration.
@@ -60,6 +63,12 @@ type Config struct {
 	Timeout time.Duration
 	// WorkloadIdentity: optional K8s/ECS/GKE binding for STS exchange.
 	WorkloadIdentity *WorkloadIdentity
+	// MaxRetries: number of retries on 5xx / 429 / connection errors (default 0 = no retry).
+	// Each retry uses exponential backoff: RetryBackoff * 2^attempt.
+	MaxRetries int
+	// RetryBackoff: initial backoff duration (default 500ms). Doubles each attempt.
+	// Set to 0 to use default.
+	RetryBackoff time.Duration
 }
 
 // NewClient creates a new BrokerClient.
@@ -109,6 +118,15 @@ func NewClient(cfg Config) (*Client, error) {
 		DisableCompression:    true,
 	}
 
+	maxRetries := cfg.MaxRetries
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	retryBackoff := cfg.RetryBackoff
+	if retryBackoff == 0 {
+		retryBackoff = 500 * time.Millisecond
+	}
+
 	return &Client{
 		endpoint: strings.TrimRight(cfg.Endpoint, "/"),
 		http: &http.Client{
@@ -116,6 +134,8 @@ func NewClient(cfg Config) (*Client, error) {
 			Timeout:   cfg.Timeout,
 		},
 		workloadIdentity: cfg.WorkloadIdentity,
+		maxRetries:       maxRetries,
+		retryBackoff:     retryBackoff,
 	}, nil
 }
 
@@ -124,8 +144,9 @@ func NewClient(cfg Config) (*Client, error) {
 // ============================================================
 
 type apiResponse struct {
-	Status int
-	Body   []byte
+	Status  int
+	Body    []byte
+	Headers map[string][]string
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, query url.Values) (*apiResponse, error) {
@@ -162,23 +183,58 @@ func (c *Client) do(ctx context.Context, method, path string, body any, query ur
 	if err != nil {
 		return nil, newConnError(method+" "+path, err)
 	}
-	return &apiResponse{Status: resp.StatusCode, Body: raw}, nil
+	return &apiResponse{Status: resp.StatusCode, Body: raw, Headers: resp.Header}, nil
 }
 
 func (c *Client) doAndCheck(ctx context.Context, op, method, path string, body any, query url.Values, out any) error {
-	resp, err := c.do(ctx, method, path, body, query)
-	if err != nil {
-		return err
-	}
-	if resp.Status >= 400 {
-		return newError(op, resp.Status, string(resp.Body))
-	}
-	if out != nil && len(resp.Body) > 0 {
-		if err := json.Unmarshal(resp.Body, out); err != nil {
-			return fmt.Errorf("decode %s response: %w", op, err)
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: RetryBackoff * 2^(attempt-1)
+			// attempt=1 -> 1x, attempt=2 -> 2x, attempt=3 -> 4x
+			backoff := c.retryBackoff << (attempt - 1)
+			// If the last error has Retry-After, respect it (capped at 30s)
+			if be, ok := lastErr.(*BrokerError); ok && be.RetryAfter > 0 {
+				if time.Duration(be.RetryAfter)*time.Second < backoff && time.Duration(be.RetryAfter)*time.Second < 30*time.Second {
+					backoff = time.Duration(be.RetryAfter) * time.Second
+				}
+			}
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
+
+		resp, err := c.do(ctx, method, path, body, query)
+		if err != nil {
+			// Connection error — retry if retryable
+			lastErr = err
+			var be *BrokerError
+			if errors.As(err, &be) && be.IsRetryable() {
+				continue
+			}
+			return err
+		}
+		if resp.Status >= 400 {
+			err := newError(op, resp.Status, string(resp.Body), resp.Headers)
+			lastErr = err
+			var be *BrokerError
+			if errors.As(err, &be) && be.IsRetryable() {
+				continue
+			}
+			return err
+		}
+		// Success
+		if out != nil && len(resp.Body) > 0 {
+			if err := json.Unmarshal(resp.Body, out); err != nil {
+				return fmt.Errorf("decode %s response: %w", op, err)
+			}
+		}
+		return nil
 	}
-	return nil
+	// Exhausted retries
+	return lastErr
 }
 
 // ============================================================
@@ -265,7 +321,7 @@ func (c *Client) Proxy(ctx context.Context, service, method, subPath string, bod
 		return 0, nil, err
 	}
 	if resp.Status >= 400 {
-		return resp.Status, resp.Body, newError("proxy", resp.Status, string(resp.Body))
+		return resp.Status, resp.Body, newError("proxy", resp.Status, string(resp.Body), resp.Headers)
 	}
 	return resp.Status, resp.Body, nil
 }

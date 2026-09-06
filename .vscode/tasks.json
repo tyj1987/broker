@@ -1,0 +1,253 @@
+{
+  "_comment": "VSCode / Cursor / Windsurf / VSCodium task runner. Complements .vscode/launch.json. Run via Ctrl+Shift+P > 'Tasks: Run Task' or Terminal > 'Run Task'. Last updated: 2026-09-06 (V4.1.1 release prep).",
+  "_see_also": [
+    "../../.vscode/launch.json (F5 debug)",
+    "../../.vscode/settings.json (workspace settings)",
+    "../../.editorconfig (cross-editor defaults)",
+    "../../AGENTS.md (broker project onboarding)"
+  ],
+
+  "version": "2.0.0",
+  "tasks": [
+
+    {
+      "label": "broker: install",
+      "type": "shell",
+      "command": "npm install",
+      "options": {
+        "cwd": "${workspaceFolder}/broker"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "broker: test (all 629 tests)",
+      "type": "shell",
+      "command": "npm run test:verify-all",
+      "options": {
+        "cwd": "${workspaceFolder}/broker"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "broker: smoke (start + /health)",
+      "type": "shell",
+      "command": "node server.js",
+      "options": {
+        "cwd": "${workspaceFolder}/broker"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+
+    {
+      "label": "sdk: install all 4 SDKs",
+      "type": "shell",
+      "command": "bash -c 'cd sdk/python && pip install -e \".[test]\" && cd ../go && go mod download && cd ../../cli && npm install && cd ../sdk/vscode && npm install'",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "sdk-python: test (54 tests)",
+      "type": "shell",
+      "command": "pytest tests/ -q",
+      "options": {
+        "cwd": "${workspaceFolder}/sdk/python"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "sdk-go: test (33 tests + 1 SKIP)",
+      "type": "shell",
+      "command": "go test ./...",
+      "options": {
+        "cwd": "${workspaceFolder}/sdk/go"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "sdk-cli: test (21 V4.1.1 tests)",
+      "type": "shell",
+      "command": "node --test test-error.js",
+      "options": {
+        "cwd": "${workspaceFolder}/cli"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "sdk-vscode: build",
+      "type": "shell",
+      "command": "npm run build",
+      "options": {
+        "cwd": "${workspaceFolder}/sdk/vscode"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "sdk-vscode: test (38 V4.1.1 tests)",
+      "type": "shell",
+      "command": "node ./out/test/error.test.js",
+      "options": {
+        "cwd": "${workspaceFolder}/sdk/vscode"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "dependsOn": ["sdk-vscode: build"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+
+    {
+      "label": "verify-v4.1.1: preflight (broker side)",
+      "type": "shell",
+      "command": "node scripts/preflight-v4.1.1.mjs --strict",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "verify-v4.1.1: 4-SDK parity",
+      "type": "shell",
+      "command": "node scripts/verify-sdk-v4.1.1-parity.mjs --strict",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "verify-v4.1.1: combined (1 command)",
+      "type": "shell",
+      "command": "node scripts/verify-v4.1.1-release.mjs --strict",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+
+    {
+      "label": "docs: list all 72 doc files",
+      "type": "shell",
+      "command": "git ls-files | grep -E '\\.(md|mdx)$' | sort",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "git: status (uncommitted changes)",
+      "type": "shell",
+      "command": "git status --short",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "git: list all V4.1.1 branches in origin",
+      "type": "shell",
+      "command": "git branch -a | Select-String 'origin/.*v4\\.1\\.1|origin/(feat|fix|docs|chore|ci|release)/'",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "git: log recent commits",
+      "type": "shell",
+      "command": "git log --oneline -20",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}

@@ -122,10 +122,11 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2027-06-30 — **PARTIAL 2026-09-06** (design done; implementation 12-15 weeks full-time)
 
 #### 13. Marketplace self-service (Q2 2027)
-- [ ] Third-party providers can publish templates via `secret-broker marketplace publish`
-- [ ] Review process via GitHub Discussions
-- [ ] Auto-update on `secret-broker sync`
-- **Target**: 2027-06-30
+- [x] Design spec ✅ 2026-09-06 — `docs/DESIGN-MARKETPLACE-SELF-SERVICE.md` (16 KB, 3rd-party provider publish + GitHub review + auto-update)
+- [ ] Third-party providers can publish templates via `secret-broker marketplace publish` (Phase 13.2, 2027-04-30)
+- [ ] Review process via GitHub Discussions (Phase 13.4, 2027-05-31)
+- [ ] Auto-update on `secret-broker sync` (Phase 13.5, 2027-06-15)
+- **Target**: 2027-06-30 — **PARTIAL 2026-09-06** (design done; implementation 19 weeks full-time)
 
 ## Out of scope (will NOT be done in broker)
 

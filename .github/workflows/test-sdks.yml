@@ -6,12 +6,12 @@ name: SDK tests
 
 on:
   push:
-    branches: [main, v4.x]
+    branches: [main, master, v4.x]
     paths:
       - 'sdk/**'
       - '.github/workflows/test-sdks.yml'
   pull_request:
-    branches: [main, v4.x]
+    branches: [main, master, v4.x]
     paths:
       - 'sdk/**'
 

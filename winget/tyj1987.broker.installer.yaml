@@ -1,0 +1,52 @@
+# winget installer manifest for Secret Broker
+# Multi-file manifest schema 1.6.0
+# Publish: wingetcreate new https://github.com/tyj1987/broker  (interactive wizard)
+# Or manual: fork microsoft/winget-pkgs + PR to https://github.com/microsoft/winget-pkgs/tree/master/manifests/t/tyj1987/broker/4.1.1
+#
+# This file is the installer manifest, paired with the version + locale manifests.
+# All three files must be submitted together to winget-pkgs.
+
+PackageIdentifier: tyj1987.broker
+PackageVersion: 4.1.1
+PackageLocale: en-US
+InstallerType: zip
+InstallMode: interactive
+Commands:
+  - secret-broker
+  - secret-broker-server
+PackageLocale: en-US
+
+# Architecture: x64 (Windows 10 1809+ x64; Win11 native)
+Architecture: x64
+
+# Source: V4.1.1 source tarball.zip from GitHub release
+InstallerUrl: https://github.com/tyj1987/broker/releases/download/v4.1.1/broker-4.1.1.zip
+InstallerSha256: PLACEHOLDER_SHA256_V4_1_1_ZIP
+
+# Behavior on install/upgrade/uninstall
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/tyj1987/broker/releases/download/v4.1.1/broker-4.1.1.zip
+    InstallerSha256: PLACEHOLDER_SHA256_V4_1_1_ZIP
+    InstallerSwitches:
+      # PowerShell Expand-Archive extraction (default) — no switches needed for zip
+      # Silent: /S (NSIS) or /quiet (MSI) — for zip, use the default
+    UpgradeBehavior: install
+    Commands:
+      - secret-broker
+      - secret-broker-server
+    FileExtensions:
+      - .yml
+      - .yaml
+    # Protocols (none for broker)
+
+# Dependencies
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: Microsoft.NodeJS.Runtime
+      MinimumVersion: 20.0.0
+
+# Manifest type
+ManifestType: installer
+ManifestVersion: 1.6.0

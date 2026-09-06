@@ -1,0 +1,14 @@
+#!/bin/sh
+# prerm script for secret-broker
+set -e
+
+case "$1" in
+  remove|purge|disappear|abort-install|abort-upgrade)
+    # No daemon to stop; systemd unit is user-managed.
+    true
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

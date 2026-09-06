@@ -87,10 +87,10 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2026-10-15
 
 #### 8. Snap / apt / winget packages (W38-W40)
-- [ ] Snap store: `snap install broker`
-- [ ] apt PPA: `apt install broker`
-- [ ] winget: `winget install tyj1987.broker`
-- **Target**: 2026-11-15
+- [x] Snap store: `snap install secret-broker` ✅ 2026-09-06 — `snap/snapcraft.yaml` shipped (待 user 注册 snap name + `snapcraft upload`)
+- [x] apt PPA: `apt install secret-broker` ✅ 2026-09-06 — `deploy/apt/debian/` + `build-deb.sh` shipped (待 user 建 `ppa:tyj1987/broker` + push)
+- [x] winget: `winget install tyj1987.broker` ✅ 2026-09-06 — `winget/tyj1987.broker.{installer,locale.en-US}.yaml` shipped (待 user PR 到 microsoft/winget-pkgs)
+- **Target**: 2026-11-15 — **PARTIAL 2026-09-06** (3 manifest + 1 build script + 3 README 准备, 等 user 推 registry)
 
 #### 9. V4.1.1 patch (Q4 2026)
 - [ ] Backport fixes from master

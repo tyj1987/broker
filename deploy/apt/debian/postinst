@@ -1,0 +1,43 @@
+#!/bin/sh
+# postinst script for secret-broker
+set -e
+
+case "$1" in
+  configure)
+    # Note: no system service registered here.
+    # Server is opt-in — user must set up PKI, config, and systemd unit manually.
+    # See docs/HOMEBREW.md §"Server 配置" + RUNBOOK.md for setup.
+
+    # Print a friendly message
+    cat <<'EOF'
+
+Secret Broker 4.1.1 installed.
+
+=== Quick start ===
+  secret-broker --help
+  secret-broker health
+  secret-broker list
+
+=== Server setup ===
+  sudo mkdir -p /etc/secret-broker/{secrets,pki}
+  sudo openssl req -x509 -new -nodes -newkey rsa:4096 -days 3650 \
+       -keyout /etc/secret-broker/pki/ca/ca.key \
+       -out /etc/secret-broker/pki/ca/ca.crt \
+       -subj "/CN=secret-broker-ca"
+  sudo age-keygen -o /etc/secret-broker/pki/age.key
+  sudo chmod 600 /etc/secret-broker/pki/age.key
+  sudo $EDITOR /etc/secret-broker/broker.yaml
+  sudo systemctl edit --full --force secret-broker.service  # see RUNBOOK.md §5
+  sudo systemctl enable --now secret-broker.service
+
+=== Uninstall ===
+  sudo apt purge secret-broker
+  # /etc/secret-broker/ is preserved; remove manually if desired.
+
+EOF
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,4 @@
+# Conffiles: config files that should NOT be auto-removed on `apt purge`.
+# secret-broker is a service, not a config-driven app — user manages PKI / config themselves.
+# We don't ship /etc/secret-broker/ in this package; user creates it manually per docs/HOMEBREW.md §"Server 配置".
+# Therefore no conffiles.

@@ -1,0 +1,44 @@
+# winget version manifest for Secret Broker
+# Pairs with: tyj1987.broker.installer.yaml + tyj1987.broker.locale.en-US.yaml
+# Publish: submit to https://github.com/microsoft/winget-pkgs/tree/master/manifests/t/tyj1987/broker/4.1.1/
+
+PackageIdentifier: tyj1987.broker
+PackageVersion: 4.1.1
+PackageLocale: en-US
+PackageName: Secret Broker
+Publisher: tyj1987
+PublisherUrl: https://github.com/tyj1987
+PublisherSupportUrl: https://github.com/tyj1987/broker/issues
+PrivacyUrl: https://github.com/tyj1987/broker/blob/master/SECURITY.md
+Author: tyj1987
+Copyright: Copyright (c) 2026 tyj1987
+CopyrightUrl: https://github.com/tyj1987/broker/blob/master/LICENSE
+Description: mTLS credential proxy for AI clients (CLI + server). Holds your service secrets (GitHub, OpenAI, AWS, Aliyun, ...) and injects them into API calls made by AI agents, so the AI never sees plaintext credentials. Authentication: mTLS client cert, password, TOTP, WebAuthn, SMS, or recovery code.
+Moniker: secret-broker
+Tags:
+  - secret-management
+  - credentials
+  - mtls
+  - ai
+  - mcp
+  - broker
+  - security
+  - zero-knowledge
+  - proxy
+  - cli
+  - open-source
+  - mit
+  - ai-tools
+  - mavis
+  - claude
+  - codex
+  - chatgpt
+ShortDescription: mTLS credential proxy for AI agents
+PurchaseUrl: null
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/tyj1987/broker/releases/download/v4.1.1/broker-4.1.1.zip
+    InstallerSha256: PLACEHOLDER_SHA256_V4_1_1_ZIP
+ManifestType: version
+ManifestVersion: 1.6.0

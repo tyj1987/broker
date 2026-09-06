@@ -1,0 +1,118 @@
+# Snapcraft manifest for Secret Broker — mTLS credential proxy for AI clients
+# Build: snapcraft (on Ubuntu 18.04+ VM / LXD / multipass)
+# Publish: snap login + snapcraft upload --release=stable secret-broker_v4.1.1_amd64.snap
+# Source: https://github.com/tyj1987/broker
+
+name: secret-broker
+base: core22
+version: '4.1.1'
+summary: mTLS credential proxy for AI clients
+description: |
+  Secret Broker is an mTLS credential proxy for AI clients (Mavis, Claude, Codex,
+  etc.). It holds your service secrets (GitHub, OpenAI, AWS, Aliyun, ...) and
+  injects them into API calls made by AI agents, so the AI never sees plaintext
+  credentials.
+
+  This snap installs:
+    * `secret-broker`         — zero-dep Node CLI (health / list / get / proxy / exec / pki)
+    * `secret-broker-server`  — Node broker server (needs PKI + config + secrets)
+
+  Authentication: mTLS client cert (recommended), password, TOTP, WebAuthn,
+  SMS, or recovery code.
+
+grade: stable
+confinement: strict
+
+# Architectures snapcraft supports as of core22
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+  - build-on: armhf
+
+# Source: V4.1.1 GitHub release source tarball
+parts:
+  secret-broker:
+    plugin: nil
+    source: https://github.com/tyj1987/broker/archive/refs/tags/v4.1.1.tar.gz
+    source-checksum: sha256-PLACEHOLDER_SHA256_V4_1_1_TARBALL  # computed from V4.1.1 tarball
+    build-packages:
+      - nodejs
+    override-build: |
+      set -eux
+      # Install broker server (uses Node.js + source)
+      mkdir -p $CRAFT_PART_INSTALL/opt/secret-broker/libexec
+      cp -r broker cli bin scripts package.json package-lock.json \
+            ARCHITECTURE.md RUNBOOK.md CHANGELOG.md VERIFY.md STATUS.md README.md LICENSE \
+            $CRAFT_PART_INSTALL/opt/secret-broker/libexec/ || true
+
+      # CLI is zero-dep (stdlib only), just symlink to bin
+      install -m 0755 -D cli/secret-broker.js \
+        $CRAFT_PART_INSTALL/opt/secret-broker/libexec/secret-broker.js
+
+      # Wrapper scripts
+      cat > $CRAFT_PART_INSTALL/opt/secret-broker/bin/secret-broker <<'WRAP'
+      #!/bin/bash
+      exec /usr/bin/node /opt/secret-broker/libexec/secret-broker.js "$@"
+      WRAP
+      chmod 0755 $CRAFT_PART_INSTALL/opt/secret-broker/bin/secret-broker
+
+      cat > $CRAFT_PART_INSTALL/opt/secret-broker/bin/secret-broker-server <<'WRAP'
+      #!/bin/bash
+      set -euo pipefail
+      exec /usr/bin/node /opt/secret-broker/libexec/broker/server.js "$@"
+      WRAP
+      chmod 0755 $CRAFT_PART_INSTALL/opt/secret-broker/bin/secret-broker-server
+
+      mkdir -p $CRAFT_PART_INSTALL/bin
+      ln -sf /opt/secret-broker/bin/secret-broker $CRAFT_PART_INSTALL/bin/secret-broker
+      ln -sf /opt/secret-broker/bin/secret-broker-server $CRAFT_PART_INSTALL/bin/secret-broker-server
+    stage-packages:
+      - nodejs
+
+apps:
+  secret-broker:
+    command: bin/secret-broker
+    extensions: [node]
+    plugs:
+      - network
+      - home
+      - removable-media
+    # CLI config lives in ~/.broker/ — needs home interface
+  secret-broker-server:
+    command: bin/secret-broker-server
+    extensions: [node]
+    daemon: simple
+    restart-condition: on-failure
+    plugs:
+      - network
+      - network-bind
+      - home
+      - removable-media
+    # Server needs network-bind for mTLS listener on 8443
+    # Server data lives in /var/lib/secret-broker/ — needs home + removable-media
+
+# confinement: strict requires explicit interfaces; we listed the most common above.
+# For production: also need `system-files` interface for cert/CA access in /etc.
+# Add as needed when tight confinement is enforced.
+
+# License: MIT (matches broker repo)
+license: MIT
+
+# Contact
+contact:
+  name: tyj1987
+  url: https://github.com/tyj1987/broker
+  email: broker@52trz.com
+
+# Issues
+issues:
+  - https://github.com/tyj1987/broker/issues
+
+# Source code
+source-code: https://github.com/tyj1987/broker
+
+# Website
+website: https://github.com/tyj1987/broker
+
+# Icon (optional; snapcraft recommends 256x256 PNG)
+# icon: snap/local/icon.png

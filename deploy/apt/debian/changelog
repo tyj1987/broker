@@ -1,0 +1,5 @@
+secret-broker (4.1.1-1) unstable; urgency=medium
+
+  * Initial deb package for V4.1.1.
+
+ -- tyj1987 <broker@52trz.com>  Sun, 06 Sep 2026 19:00:00 +0800

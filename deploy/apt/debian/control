@@ -1,0 +1,29 @@
+Source: secret-broker
+Section: net
+Priority: optional
+Maintainer: tyj1987 <broker@52trz.com>
+Build-Depends: debhelper (>= 12), nodejs (>= 20), wget, ca-certificates
+Standards-Version: 4.6.0
+Homepage: https://github.com/tyj1987/broker
+Vcs-Browser: https://github.com/tyj1987/broker
+Vcs-Git: https://github.com/tyj1987/broker.git
+
+Package: secret-broker
+Architecture: amd64 arm64 armhf
+Depends: ${misc:Depends}, nodejs (>= 20)
+Description: mTLS credential proxy for AI clients (CLI + server)
+ Secret Broker is an mTLS credential proxy for AI clients (Mavis, Claude,
+ Codex, etc.). It holds your service secrets (GitHub, OpenAI, AWS, Aliyun,
+ ...) and injects them into API calls made by AI agents, so the AI never
+ sees plaintext credentials.
+ .
+ This package installs:
+   * secret-broker         — zero-dep Node CLI (health, list, get, proxy, exec, pki)
+   * secret-broker-server  — Node broker server (needs PKI, config, and secrets)
+ .
+ Authentication factors: mTLS client cert (recommended), password, TOTP,
+ WebAuthn, SMS, or recovery code.
+ .
+ Backward-compatible V4.0.x and V3.x → V4.1.0/V4.1.1 in-place upgrade
+ supported via `migrate-v3-to-v4.sh` (not included in this package —
+ see broker repo's scripts/broker/ for the upgrade tool).

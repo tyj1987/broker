@@ -1,0 +1,60 @@
+# winget locale manifest (en-US) for Secret Broker
+# Pairs with: tyj1987.broker.installer.yaml + tyj1987.broker.yaml
+
+PackageIdentifier: tyj1987.broker
+PackageVersion: 4.1.1
+PackageLocale: en-US
+Publisher: tyj1987
+PackageName: Secret Broker
+License: MIT License (https://github.com/tyj1987/broker/blob/master/LICENSE)
+ShortDescription: mTLS credential proxy for AI clients
+Description: |-
+  Secret Broker is an mTLS credential proxy for AI clients (Mavis, Claude,
+  Codex, etc.). It holds your service secrets (GitHub, OpenAI, AWS, Aliyun,
+  ...) and injects them into API calls made by AI agents, so the AI never
+  sees plaintext credentials.
+
+  This package installs:
+    * secret-broker         — zero-dependency Node CLI (health, list, get, proxy, exec, pki)
+    * secret-broker-server  — Node broker server (needs PKI, config, and secrets)
+
+  Authentication factors: mTLS client cert (recommended), password, TOTP,
+  WebAuthn, SMS, or recovery code.
+
+  Backward-compatible V4.0.x and V3.x → V4.1.0/V4.1.1 in-place upgrade
+  supported via `migrate-v3-to-v4.sh` on Linux / macOS.
+Moniker: secret-broker
+Tags:
+  - secret-management
+  - credentials
+  - mtls
+  - ai
+  - mcp
+  - broker
+  - security
+  - zero-knowledge
+  - proxy
+  - cli
+  - open-source
+  - mit
+  - ai-tools
+  - mavis
+  - claude
+  - codex
+  - chatgpt
+ReleaseNotes: |-
+  V4.1.1 (2026-09-06) — Security & correctness patch:
+    * mTLS cert-as-session: cert-only clients (Mavis / Claude / Codex) can now
+      POST /api/v1/login with their mTLS cert as the credential, bypassing
+      the password check (TOTP MFA still applies if required)
+    * Broker startup: fix DEP0187 DeprecationWarning in Node 22+ (no more
+      "Passing invalid argument types to fs.existsSync is deprecated")
+    * Version bump 4.1.0 → 4.1.1 (broker + 4 SDKs)
+    * Test: phase-f-backup-probes synced to V4.1.1
+    * No new features, fully backward-compatible with V4.1.0
+
+  Full release notes: https://github.com/tyj1987/broker/releases/tag/v4.1.1
+ReleaseNotesUrl: https://github.com/tyj1987/broker/releases/tag/v4.1.1
+PurchaseUrl: null
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

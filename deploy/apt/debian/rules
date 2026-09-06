@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+# debian/rules for secret-broker
+# Build: dpkg-buildpackage -us -uc -b
+# Or:   bash deploy/apt/build-deb.sh (uses fpm — simpler)
+
+%:
+	dh $@
+
+# Override the auto-generated install step:
+# We pre-stage the contents in debian/secret-broker/ via override_dh_auto_install
+override_dh_auto_install:
+	# Stage the libexec tree
+	mkdir -p debian/secret-broker/opt/secret-broker/libexec
+	cp -r $(CURDIR)/broker $(CURDIR)/cli $(CURDIR)/bin $(CURDIR)/scripts \
+		$(CURDIR)/package.json $(CURDIR)/package-lock.json \
+		$(CURDIR)/ARCHITECTURE.md $(CURDIR)/RUNBOOK.md $(CURDIR)/CHANGELOG.md \
+		$(CURDIR)/VERIFY.md $(CURDIR)/STATUS.md $(CURDIR)/README.md $(CURDIR)/LICENSE \
+		debian/secret-broker/opt/secret-broker/libexec/ 2>/dev/null || true
+
+	# Stage bin wrappers
+	mkdir -p debian/secret-broker/opt/secret-broker/bin
+	cat > debian/secret-broker/opt/secret-broker/bin/secret-broker <<'WRAP'
+#!/bin/bash
+exec /usr/bin/node /opt/secret-broker/libexec/secret-broker.js "$$@"
+WRAP
+	chmod 0755 debian/secret-broker/opt/secret-broker/bin/secret-broker
+
+	cat > debian/secret-broker/opt/secret-broker/bin/secret-broker-server <<'WRAP'
+#!/bin/bash
+set -euo pipefail
+exec /usr/bin/node /opt/secret-broker/libexec/broker/server.js "$$@"
+WRAP
+	chmod 0755 debian/secret-broker/opt/secret-broker/bin/secret-broker-server
+
+	# /usr/bin/ symlinks
+	mkdir -p debian/secret-broker/usr/bin
+	ln -sf /opt/secret-broker/bin/secret-broker debian/secret-broker/usr/bin/secret-broker
+	ln -sf /opt/secret-broker/bin/secret-broker-server debian/secret-broker/usr/bin/secret-broker-server
+
+override_dh_strip:
+	# Node.js app, no C/C++ binaries to strip
+	true
+
+override_dh_shlibdeps:
+	# Skip automatic shlibdeps — nodejs package brings its own runtime
+	true

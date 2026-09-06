@@ -1,0 +1,16 @@
+#!/bin/sh
+# postrm script for secret-broker
+set -e
+
+case "$1" in
+  purge)
+    # Remove our data directory IF user wants a clean uninstall
+    # (commented out by default — user data is precious)
+    # rm -rf /var/lib/secret-broker /etc/secret-broker
+    true
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

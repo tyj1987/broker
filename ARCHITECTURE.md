@@ -85,10 +85,46 @@ Risk score (5 dimensions) decides which factors are required per action.
 
 ## 4 SDKs
 
-- **Node** (`sdk/node/`) — `npm install @tyj1987/broker-sdk`
-- **Python** (`sdk/python/`) — `pip install secret-broker` (zero hard deps)
-- **Go** (`sdk/go/`) — `go get github.com/tyj1987/broker-sdk-go` (zero hard deps)
-- **VS Code / Cursor** (`sdk/vscode/`) — install `.vsix` from releases
+- **Node CLI** (`cli/`) — `npm install -g @tyj1987/secret-broker` (zero npm deps)
+- **Python** (`sdk/python/`) — `pip install secret-broker` (zero hard deps; stdlib only)
+- **Go** (`sdk/go/`) — `go get github.com/tyj1987/broker-sdk-go` (zero hard deps; stdlib only)
+- **VS Code / Cursor / Windsurf / VSCodium** (`sdk/vscode/`) — install `.vsix` from releases (zero npm deps; built-in https + tls)
+
+### V4.1.1 SDK parity (added 2026-09-06)
+
+All 4 SDKs now share a **unified error contract**:
+
+- **Single `BrokerError` class** with structured fields:
+  - `op` (logical operation, e.g. `"get_secret"`)
+  - `status` (HTTP status code; `0` for connection errors)
+  - `code` (broker-specific error code, e.g. `"auth_failed"`, `"rate_limited"`)
+  - `requestId` / `request_id` (X-Request-Id response header)
+  - `retryAfter` / `retry_after` (Retry-After response header in seconds)
+  - `body` (auto-redacted response body)
+  - `is_retryable` / `isRetryable` (5xx / 429 / connection → `true`)
+
+- **Methods**: `toString()` / `toJSON()` / `to_map()` / `to_dict()` (body omitted).
+
+- **Factory**: `parseBrokerError(status, headers, body, op)` (typed error from raw response).
+
+- **Built-in retry**: 5xx / 429 / connection with exponential backoff
+  (500ms → 1s → 2s), honors `Retry-After` response header.
+  Defaults: `maxRetries=2`, `retryBackoffMs=500`.
+
+- **BrokerConnectionError** (network failures, always retryable).
+
+- **Auto-redact body on construction** (defense in depth — secrets never
+  leak into logs / audit even if caller forgot to redact).
+
+See [docs/SDK-REFERENCE.md §V4.1.1 SDK parity](docs/SDK-REFERENCE.md#v411-sdk-parity)
+for the full contract, or [docs/SDK-UPGRADE-GUIDE.md](docs/SDK-UPGRADE-GUIDE.md)
+for the V4.1.0 → V4.1.1 migration guide.
+
+**Before V4.1.1**: each SDK had its own 6-class error hierarchy
+(`BrokerAuthError`, `ErrAuth`, `BrokerPermissionError`, etc.) with
+subtle behavior differences. After V4.1.1: all 4 SDKs use the same
+single `BrokerError` class — no more "code worked in Python but
+behaved differently in Go".
 
 ## 4 deployment surfaces
 
@@ -101,9 +137,13 @@ Risk score (5 dimensions) decides which factors are required per action.
 
 - **Observability**: Prometheus metrics, structured audit logs, OpenAPI 3.1 schema,
   Grafana dashboard (14 panels + 28 alert rules)
-- **Documentation site**: MkDocs + Material theme (`docs/`)
+- **Documentation site**: MkDocs + Material theme (`docs/`) — 72 doc files
+  indexed in [docs/DOCS-INDEX.md](docs/DOCS-INDEX.md)
 - **Bug bounty**: 4 tier rewards up to $5000 (`SECURITY.md`)
-- **Project hygiene**: PR template, 3 issue templates, CONTRIBUTING, VERIFY, LICENSE
+- **Project hygiene**: PR template (V4.1.1-era with 30+ areas), 3 issue templates,
+  CONTRIBUTING (V4.1.1 update), VERIFY, LICENSE, AGENTS.md (broker project
+  onboarding for AI agents), CODEOWNERS (4-SDK parity routing),
+  .editorconfig (cross-editor), .vscode/{settings,launch,tasks}.json
 
 ## Storage layout
 

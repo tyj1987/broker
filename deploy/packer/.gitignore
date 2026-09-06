@@ -1,0 +1,11 @@
+# Packer local artifacts (do NOT commit)
+variables.pkrvars.hcl
+variables.pkrvars.hcl.json
+manifest.json
+packer_cache/
+.terraform.tfstate*
+*.log
+
+# AWS credentials (NEVER commit)
+aws-credentials*
+.aws/

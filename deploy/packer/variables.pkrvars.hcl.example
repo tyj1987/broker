@@ -1,0 +1,28 @@
+# AWS Marketplace Packer variables (EXAMPLE — copy to variables.pkrvars.hcl and edit)
+
+# AWS region for the AMI build (us-east-1, us-west-2, eu-west-1, etc.)
+region = "us-east-1"
+
+# Broker version to bake into the AMI
+broker_version = "4.1.1"
+
+# EC2 instance type used for the Packer build (2 vCPU / 2 GB minimum)
+instance_type = "t3.small"
+
+# AMI name prefix (will be suffixed with -<version>-<timestamp>)
+ami_name_prefix = "secret-broker"
+
+# Additional AWS account IDs to share the AMI with (for testing before publishing)
+# Get your account ID with: aws sts get-caller-identity --query Account --output text
+share_account_ids = ["123456789012"]  # replace with your testing account ID
+
+# --- Usage ---
+# 1. Copy this file: cp variables.pkrvars.hcl.example variables.pkrvars.hcl
+# 2. Edit variables.pkrvars.hcl (set region + share_account_ids)
+# 3. Set AWS credentials: export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+# 4. Initialize plugins: packer init .
+# 5. Build: packer build -var-file=variables.pkrvars.hcl .
+
+# --- Security note ---
+# variables.pkrvars.hcl is gitignored (see .gitignore). Do NOT commit your real account IDs.
+# For local dev, ~/.aws/credentials is also gitignored.

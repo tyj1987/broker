@@ -185,7 +185,15 @@ header('AWAITING-USER');
 header('Origin state (informational)');
 {
   const branches = tryGit('ls-remote --heads origin') || '';
-  const v411Branches = branches.split('\n').filter(l => l.includes('/v4.1.1') || l.includes('/sdk-') && l.includes('v4.1.1') || l.includes('/awaiting-user') || l.includes('/roadmap-v4.1.1') || l.includes('/sdk-upgrade-guide') || l.includes('/release-v4.1.1') || l.includes('/sdk-v4.1.1-parity'));
+  // Match branch name against exact version token v4.1.1, NOT v4.1.10 / v4.1.100
+  // (avoids false positives when future V4.1.1x branches land).
+  // Old filter (clauses like /v4.1.1) only matched 18/34 branches because most
+  // V4.1.1 branches use `-v4.1.1` (dash) not `/v4.1.1` (slash) in the name.
+  const v411Branches = branches.split('\n').filter(l => {
+    const m = l.match(/refs\/heads\/(.+)$/);
+    if (!m) return false;
+    return /(?:^|[^.\d])v?4\.1\.1(?:[^.\d]|$)/.test(m[1]);
+  });
   record('PASS', 'origin branches', `${v411Branches.length} V4.1.1-related branches in origin`);
   const aheadCount = tryGit(`rev-list --count master..origin/release/${VERSION}`) || '0';
   record(parseInt(aheadCount, 10) > 0 ? 'PASS' : 'WARN', 'release/v4.1.1 ahead of master', `${aheadCount} commits ahead`);

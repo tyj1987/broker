@@ -1,4 +1,4 @@
-# VERIFY.md — V4.1.0 验证步骤
+# VERIFY.md — 验证步骤 (V4.1.1, 2026-09-06)
 
 > 一键复现 + 验证 V4.1.0 GA 全部交付。复制粘贴即可。
 > 任何 CI / reviewer / user 都可以独立验证。
@@ -153,26 +153,57 @@ curl -k --cert ../tests/certs/client.crt --key ../tests/certs/client.key \
 kill $BROKER_PID
 ```
 
-## 12. 验证总测试数字
+## 12. 验证总测试数字 (V4.1.1, 795 tests)
 
 ```bash
-cd broker
-echo "=== 期望总测试: ~1027 ==="
-echo "modular:       $(npm run test:modular 2>&1 | grep -c 'passed') suites"
-echo "v4-modules:    $(node broker-test/test-v4-modules.js 2>&1 | grep -oE '[0-9]+ passed')"
-echo "workload:      $(node broker-test/test-workload-identity.js 2>&1 | grep -oE '[0-9]+ passed')"
-echo "ssh:           $(node broker-test/test-ssh-proxy.js 2>&1 | grep -oE '[0-9]+ passed')"
-echo "ws:            $(node broker-test/test-ws.js 2>&1 | grep -oE '[0-9]+ passed')"
-echo "python:        $(cd ../sdk/python && python -m pytest tests/ -q 2>&1 | grep -oE '[0-9]+ passed')"
+echo "=== V4.1.1 期望总测试: 795 ==="
+echo "modular:       $(cd broker && npm run test:modular 2>&1 | grep -oE '[0-9]+ passed')"
+echo "v4-modules:    $(cd broker && node broker-test/test-v4-modules.js 2>&1 | grep -oE '[0-9]+ passed')"
+echo "workload:      $(cd broker && node broker-test/test-workload-identity.js 2>&1 | grep -oE '[0-9]+ passed')"
+echo "ssh:           $(cd broker && node broker-test/test-ssh-proxy.js 2>&1 | grep -oE '[0-9]+ passed')"
+echo "ws:            $(cd broker && node broker-test/test-ws.js 2>&1 | grep -oE '[0-9]+ passed')"
+echo "python:        $(cd sdk/python && python -m pytest tests/ -q 2>&1 | grep -oE '[0-9]+ passed')"
+echo "go:            $(cd sdk/go && go test ./... 2>&1 | grep -oE '[0-9]+ PASS')"
+echo "node-cli:      $(cd cli && node --test test-error.js 2>&1 | grep -oE 'pass [0-9]+')"
+echo "vscode:        $(cd sdk/vscode && npm run build && node ./out/test/error.test.js 2>&1 | grep -oE 'passed, [0-9]+ failed')"
 ```
 
-## 13. 检查 Git 历史
+**期望**: broker 629 + Python 54 + Go 33 + Node CLI 21 + VSCode 48 = **795 tests total** (V4.1.0: 658).
+
+## 13. V4.1.1 release readiness verify (1 command)
 
 ```bash
-git log v3.8.0..v4.1.0 --oneline
+node scripts/verify-v4.1.1-release.mjs --strict
 ```
 
-**期望看到 14 个 commit (V4 P1 + P2 + P3 + GA + 收口)**:
+**期望**: exit 0 (all green) — broker + versions + 4-SDK parity 都通过。
+
+脚本会跑两个子命令:
+- `scripts/preflight-v4.1.1.mjs` (broker + versions + docs)
+- `scripts/verify-sdk-v4.1.1-parity.mjs` (4-SDK parity contract)
+
+如果任一 FAIL,查看具体输出,合并缺失的 PR 后重跑。
+
+## 14. 检查 Git 历史 (V4.1.1)
+
+```bash
+git log v4.1.0..v4.1.1 --oneline 2>/dev/null || echo "v4.1.1 not tagged yet"
+```
+
+**期望** (V4.1.1 tag 后):
+- 1-3 commit (broker fix + 4 SDK V4.1.1 parity cherry-picks + docs).
+- All V4.1.1 SDK V4.1.1 code in 4 SDK branches merged.
+
+**当前状态** (2026-09-06, 27 PR in origin, 等待 user merge):
+- 4 SDK V4.1.1 PRs (`9a0c5f7` Python, `6052779` Go, `ba6da09` CLI, `f0a6dd1` VSCode).
+- 4 docs/release PRs (`20c5e6d`, `4222d76`, `b3fb75c`, `5ba6130`).
+- 4 tooling/onboarding PRs (`10faca4`, `1a92da5`, `9a46932`, `c90b48f`).
+- 6 community/devops/docs PRs (`068f944`, `9539784`, `f2122c0`, `00863a2`, `de2a866`, `283b213`).
+- 3 user/process PRs (`715ba09`, `605554e`, `d14f6a7`).
+- 3 chore/VSCode PRs (`c66e99f`, `bc9f20c`, `744149d`, `be10b39`, `3e85bbb`, `e6bc69d`, `f54325b`).
+- 1 misc (`8ab4670` ROADMAP, `172682a` UPGRADE-GUIDE, `641a1f4` FINAL-STATE, `cd62a38` COMMITS).
+
+V4.1.1 release commit count: 1 broker fix + 4 SDK + ~17 docs/tooling = ~22 commits since V4.1.0.
 ```
 V3 completion: V4.1-COMPLETE.md
 V3 P2 task 17: 4 spec docs

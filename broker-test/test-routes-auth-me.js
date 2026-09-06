@@ -30,7 +30,7 @@ function baseDeps(over = {}) {
     jsonError: (res, status, msg) => { res.status = status; res.body = { error: msg, status }; },
     readBody: async () => ({}),
     audit: () => {},
-    config: { clients: { alice: { role: 'developer', password: 'scrypt$x', allow_password_login: true } } },
+    config: { security_profile: 'compatibility', clients: { alice: { role: 'developer', password: 'scrypt$x', allow_password_login: true } } },
     getIdentity: () => null,
     verifyClientPassword: async () => true,
     isMfaRequired: () => false,
@@ -68,8 +68,34 @@ console.log('=== handleAuth password login ok ===');
   });
   const h = await handleAuth({}, res, { method: 'POST', pathname: '/api/v1/login' }, deps);
   assert(h === true, 'handled');
-  assert(res.status === 200 && res.body?.token === 'tok-test', 'token');
+  assert(res.status === 200 && !res.body?.token, 'session token absent from response body');
+  assert(String(res.headers['Set-Cookie'] || '').includes('HttpOnly'), 'session delivered as HttpOnly cookie');
   assert(res.body?.via === 'password', 'via password');
+}
+
+console.log('=== handleAuth strict rejects legacy login ===');
+{
+  const res = mockRes();
+  const deps = baseDeps({
+    config: { security_profile: 'strict', clients: { alice: { role: 'admin', allow_password_login: true } } },
+    readBody: async () => ({ client: 'alice', password: 'secret' }),
+  });
+  await handleAuth({}, res, { method: 'POST', pathname: '/api/v1/login' }, deps);
+  assert(res.status === 403, 'strict legacy login denied');
+}
+
+console.log('=== handleAuth controlled mTLS needs no password ===');
+{
+  const res = mockRes();
+  const client = { role: 'developer', allow_password_login: false };
+  const deps = baseDeps({
+    config: { security_profile: 'controlled', clients: { alice: client } },
+    readBody: async () => ({}),
+    getIdentity: () => ({ via: 'mtls-via-nginx', cn: 'alice', fp: 'AA', clientName: 'alice', client }),
+    verifyClientPassword: async () => { throw new Error('password verifier must not run'); },
+  });
+  await handleAuth({}, res, { method: 'POST', pathname: '/api/v1/login' }, deps);
+  assert(res.status === 200 && res.body?.via === 'mtls', 'controlled mTLS session created');
 }
 
 console.log('=== handleAuth logout ===');

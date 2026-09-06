@@ -27,8 +27,8 @@ function ok(name, cond, detail) {
 }
 function section(s) { console.log(`\n--- ${s} ---`); }
 
-const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
-const cron = await import('file:///C:/home/my-first-app/broker/cron-tasks.js');
+const hc = await import(new URL('../broker/healthcheck.js', import.meta.url));
+const cron = await import(new URL('../broker/cron-tasks.js', import.meta.url));
 
 let mockHttp = null;
 let mockTcp = null;

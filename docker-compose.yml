@@ -21,15 +21,11 @@ services:
   # 主服务: Secret Broker
   # ==========================================================
   broker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-    image: ghcr.io/tyj1987/broker:4.1.0
+    image: ghcr.io/tyj1987/broker@${BROKER_IMAGE_DIGEST:?set BROKER_IMAGE_DIGEST to the verified sha256 digest}
     container_name: secret-broker
     restart: unless-stopped
     ports:
-      - "8443:8443"     # mTLS HTTPS - 客户端证书保证安全
+      - "127.0.0.1:8443:8443" # backend is reachable only by the local trusted proxy
     volumes:
       - ./secrets:/var/lib/broker/secrets:ro
       - ./pki:/run/secrets/broker/pki:ro
@@ -39,23 +35,22 @@ services:
       - NODE_ENV=production
       - BROKER_BIND=0.0.0.0
       - BROKER_PORT=8443
-      - PKI_DIR=/run/secrets/broker/pki
-      - AUDIT_DIR=/var/lib/broker/audit
-      - SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json
+      - BROKER_PKI_DIR=/run/secrets/broker/pki
+      - BROKER_AUDIT_DIR=/var/lib/broker/audit
+      - BROKER_SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json
       - BROKER_CONFIG_PATH=/var/lib/broker/secrets/broker.yaml
+      - BROKER_HEALTH_SOCKET_PATH=/tmp/broker-health.sock
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     healthcheck:
       # distroless has no shell/curl — use node's https module directly
       test:
-        - "node"
+        - "/nodejs/bin/node"
         - "-e"
-        - "require('node:https').get({host:'127.0.0.1',port:8443,rejectUnauthorized:false,requestCert:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        - "require('node:http').get({socketPath:'/tmp/broker-health.sock',path:'/health'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -81,7 +76,7 @@ services:
   # 可选: Prometheus (监控)
   # ==========================================================
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
     container_name: broker-prometheus
     profiles: ["monitoring"]
     restart: unless-stopped
@@ -102,7 +97,7 @@ services:
   # 可选: Grafana (可视化)
   # ==========================================================
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
     container_name: broker-grafana
     profiles: ["monitoring"]
     restart: unless-stopped
@@ -114,7 +109,7 @@ services:
       - ./deploy/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - grafana-data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
     networks:
       - broker-net
 

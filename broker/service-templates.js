@@ -17,11 +17,17 @@ export const SERVICE_TEMPLATES = {
     inject_headers: {
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'secret-broker/2.0 (proxy)',
+      'User-Agent': 'secret-broker/4.1 (proxy)',
     },
     secret_placeholder: '{{secret.<TOKEN_SECRET>.token}}',
     default_secret_field: 'token',
     secret_help: '使用 github_pat 类型的密钥 (含 token 字段)',
+    official_docs_url: 'https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api',
+    template_version: '2026-09-05',
+    operations: {
+      get_authenticated_user: { method: 'GET', path: '/user' },
+      list_repositories: { method: 'GET', path: '/user/repos', allowed_parameters: ['visibility', 'affiliation', 'sort', 'direction', 'per_page', 'page'] },
+    },
     dashboard_actions: [
       { label: '我的信息', method: 'GET', path: '/user' },
       { label: '我的仓库 (前 5)', method: 'GET', path: '/user/repos', query: { per_page: '5' } },
@@ -35,27 +41,39 @@ export const SERVICE_TEMPLATES = {
     type: 'bearer',
     upstream: 'https://api.openai.com',
     inject_headers: {
-      'User-Agent': 'secret-broker/2.0',
+      'User-Agent': 'secret-broker/4.1',
     },
     secret_placeholder: '{{secret.<TOKEN_SECRET>.value}}',
     default_secret_field: 'value',
     secret_help: '使用 openai_key 类型的密钥 (含 value 字段)',
+    official_docs_url: 'https://developers.openai.com/api/reference/overview',
+    template_version: '2026-09-05',
+    operations: {
+      list_models: { method: 'GET', path: '/v1/models' },
+      create_response: { method: 'POST', path: '/v1/responses', allow_body: true, max_body_bytes: 65536 },
+    },
     dashboard_actions: [
       { label: '列出模型', method: 'GET', path: '/v1/models' },
-      { label: '简单对话', method: 'POST', path: '/v1/chat/completions' },
+      { label: '创建响应', method: 'POST', path: '/v1/responses' },
     ],
   },
 
   aliyun_ecs: {
     label: '阿里云 ECS',
     icon: '☁️',
-    description: 'AccessKey + Aliyun v2 签名，调 DescribeInstances 等 ECS OpenAPI',
-    type: 'aliyun_v2',
+    description: 'RAM Role/STS + Aliyun Signature V3，调 ECS OpenAPI',
+    type: 'aliyun_v3',
     upstream: 'https://ecs.aliyuncs.com',
     region: 'cn-beijing',
     inject_headers: {},
     secret_placeholder: 'aliyun_ak (含 access_key_id + access_key_secret 字段)',
     secret_help: '必须用 aliyun_ak 类型 (含 access_key_id + access_key_secret + region)',
+    official_docs_url: 'https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature',
+    template_version: '2026-09-05',
+    operations: {
+      describe_instances: { method: 'GET', path: '/', provider_action: 'DescribeInstances', api_version: '2014-05-26', allowed_parameters: ['RegionId', 'PageNumber', 'PageSize'], required_parameters: ['RegionId'] },
+      describe_regions: { method: 'GET', path: '/', provider_action: 'DescribeRegions', api_version: '2014-05-26' },
+    },
     dashboard_actions: [
       { label: '列 ECS 实例', method: 'GET', path: '/?Action=DescribeInstances&RegionId=cn-beijing' },
       { label: '列云盘', method: 'GET', path: '/?Action=DescribeDisks&RegionId=cn-beijing' },
@@ -66,8 +84,8 @@ export const SERVICE_TEMPLATES = {
   aliyun_ram: {
     label: '阿里云 RAM (域名 / DNS)',
     icon: '☁️',
-    description: 'AccessKey + Aliyun v2 签名，调 Alidns / Ram 等任意 OpenAPI',
-    type: 'aliyun_v2',
+    description: 'RAM Role/STS + Aliyun Signature V3，调 Alidns OpenAPI',
+    type: 'aliyun_v3',
     upstream: 'https://alidns.aliyuncs.com',
     region: 'cn-beijing',
     inject_headers: {},
@@ -128,6 +146,12 @@ export const SERVICE_TEMPLATES = {
     secret_placeholder: '{{secret.<CLOUDFLARE_SECRET>.api_token}}',
     default_secret_field: 'api_token',
     secret_help: '使用 cloudflare_token 类型的密钥 (含 api_token + account_id 字段)',
+    official_docs_url: 'https://developers.cloudflare.com/fundamentals/api/get-started/keys/',
+    template_version: '2026-09-06',
+    operations: {
+      verify_token: { method: 'GET', path: '/user/tokens/verify' },
+      list_zones: { method: 'GET', path: '/zones', allowed_parameters: ['name', 'status', 'account.id', 'page', 'per_page', 'order', 'direction', 'match'] },
+    },
     dashboard_actions: [
       { label: '验证 Token', method: 'GET', path: '/user' },
       { label: '列出 Zones', method: 'GET', path: '/zones', query: { per_page: '50' } },
@@ -469,6 +493,29 @@ export const SERVICE_TEMPLATES = {
   },
 
   // ---- 云厂商 - 中国 ----
+  tencent_cvm: {
+    id: 'tencent_cvm',
+    label: '腾讯云 CVM',
+    display_name: '腾讯云 CVM API 3.0',
+    provider: 'Tencent Cloud',
+    category: 'cloud_cn',
+    icon: '☁️',
+    description: 'TC3-HMAC-SHA256 signed CVM operations',
+    type: 'tencent_v3',
+    auth_type: 'tencent_v3',
+    default_secret_type: 'tencent_sk',
+    default_secret_field: 'secret_key',
+    upstream: 'https://cvm.tencentcloudapi.com',
+    region: 'ap-shanghai',
+    service_code: 'cvm',
+    api_version: '2017-03-12',
+    operations: {
+      describe_instances: { method: 'POST', path: '/', provider_action: 'DescribeInstances', allow_body: true, max_body_bytes: 65536 },
+    },
+    official_docs_url: 'https://cloud.tencent.com/document/product/213/15728',
+    template_version: '2026-09-06',
+  },
+
   aliyun_oss: {
     id: 'aliyun_oss',
     label: '阿里云 OSS',
@@ -559,12 +606,21 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'docker_hub_pat',
     default_secret_field: 'pat',
     upstream: 'https://registry-1.docker.io',
+    registry_auth_realm: 'https://auth.docker.io/token',
+    registry_service: 'registry.docker.io',
+    registry_scope: 'repository:library/alpine:pull',
+    registry_auth_hosts: ['auth.docker.io'],
     healthcheck: { method: 'GET', path: '/v2/', expect_status: 401 },  // 401 表示服务在
     default_actions: [
       { label: '验证 Token', method: 'GET', path: '/v2/' },
     ],
     official_docs_url: 'https://docs.docker.com/reference/api/registry/',
-    template_version: '2025-Q3',
+    template_version: '2026-09-06',
+    operations: {
+      list_alpine_tags: { method: 'GET', path: '/v2/library/alpine/tags/list', resource: 'library/alpine' },
+    },
+    production_ready: false,
+    readiness_reason: 'Bearer exchange is wired and locally contract-tested; an isolated Docker account live contract has not been recorded.',
   },
   ghcr: {
     id: 'ghcr',
@@ -929,14 +985,35 @@ export const SERVICE_TEMPLATES = {
 // Helper for /api/v1/admin/service-templates: return a sanitized view for UI.
 export function publicTemplateList() {
   const out = {};
+  const executableTypes = new Set(['github_token', 'bearer', 'header', 'aliyun_v2', 'aliyun_v3', 'tencent_v3', 'docker_registry']);
   for (const [id, t] of Object.entries(SERVICE_TEMPLATES)) {
+    const effectiveType = t.type || t.auth_type;
+    const executable = executableTypes.has(effectiveType) && t.operations && Object.keys(t.operations).length > 0;
     out[id] = {
       label: t.label,
       icon: t.icon,
       description: t.description,
       type: t.type,
-      disabled: !!t.disabled,
-      disabled_reason: t.disabled_reason || null,
+      auth_type: t.auth_type || t.type,
+      upstream: t.upstream || null,
+      region: t.region || null,
+      service_code: t.service_code || null,
+      api_version: t.api_version || null,
+      registry_auth_realm: t.registry_auth_realm || null,
+      registry_service: t.registry_service || null,
+      registry_scope: t.registry_scope || null,
+      registry_auth_hosts: t.registry_auth_hosts || [],
+      inject_headers: t.inject_headers || {},
+      header_name: t.header_name || null,
+      header_value_template: t.header_value_template || null,
+      operations: t.operations || {},
+      dashboard_actions: t.dashboard_actions || t.default_actions || [],
+      official_docs_url: t.official_docs_url || null,
+      template_version: t.template_version || null,
+      production_ready: t.production_ready === true,
+      readiness_reason: t.readiness_reason || 'Live provider contract evidence has not been recorded.',
+      disabled: !!t.disabled || !executable,
+      disabled_reason: t.disabled_reason || (!executable ? 'No validated typed-operation adapter is available.' : null),
     };
   }
   return out;

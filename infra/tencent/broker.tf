@@ -57,15 +57,15 @@ resource "tencentcloud_security_group_lite_rule" "ssh" {
   description       = "SSH from admin"
 }
 
-# mTLS HTTPS 公网
-resource "tencentcloud_security_group_lite_rule" "mtls" {
+# Public traffic terminates at nginx on 443. Broker 8443 stays loopback-only.
+resource "tencentcloud_security_group_lite_rule" "https" {
   security_group_id = tencentcloud_security_group.broker.id
   type              = "ingress"
   protocol          = "TCP"
-  port              = "8443"
+  port              = "443"
   cidr_ip           = "0.0.0.0/0"
   policy            = "accept"
-  description       = "mTLS HTTPS (client cert auth)"
+  description       = "Public TLS edge; broker backend 8443 is not exposed"
 }
 
 # 出站
@@ -108,7 +108,7 @@ resource "tencentcloud_instance" "broker" {
   security_groups            = [tencentcloud_security_group.broker.id]
   internet_max_bandwidth_out = 10
   allocate_public_ip         = false  # 用 EIP 关联
-  password                   = var.ssh_password
+  key_name                   = var.ssh_key_name
   instance_charge_type       = "POSTPAID_BY_HOUR"
   system_disk_type           = "CLOUD_PREMIUM"
   system_disk_size           = 40

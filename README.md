@@ -249,11 +249,17 @@ $env:SOPS_AGE_KEY_FILE = "C:\Users\User\.config\sops\age\key.txt"
 
 # 3. 写 broker.yaml
 @"
+security_profile: controlled  # 仅本地快速开始；生产必须迁移到 strict + 实体 FIDO2
 services:
   github:
     type: github_token
     token_secret: github.pat
     upstream: https://api.github.com
+    environment: development
+    operations:
+      get_authenticated_user:
+        method: GET
+        path: /user
 clients:
   client.test:
     cert_fingerprint_sha256: "<填 issue-client-cert.ps1 输出的指纹>"
@@ -261,6 +267,10 @@ clients:
     allowed_proxy:
       - service: github
         paths: [".*"]
+    allowed_operations:
+      - service: github
+        operations: [get_authenticated_user]
+        environments: [development]
 "@ | Out-File secrets\broker.yaml -Encoding UTF8
 sops --encrypt --in-place secrets\broker.yaml
 

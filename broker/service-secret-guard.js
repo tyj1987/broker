@@ -37,15 +37,17 @@ const secretGuardCache = new Map();  // tokenSecret -> { result, cached_at }
  *   - 注入的 healthcheck.getSecretStatus 函数, 方便测试
  * @returns {{allowed: boolean, status: string, detail: string, latency_ms?: number, ts?: string}}
  */
-export function checkSecretForService(tokenSecret, getSecretStatusFn) {
+export function checkSecretForService(tokenSecret, getSecretStatusFn, opts = {}) {
+  const failClosed = opts.failClosed === true;
+  const maxStatusAgeMs = Number(opts.maxStatusAgeMs || SECRET_GUARD_TTL_MS * 2);
   if (!tokenSecret) {
-    return { allowed: true, status: 'no_secret', detail: 'service has no token_secret configured' };
+    return { allowed: !failClosed, status: 'no_secret', detail: 'service has no credential reference configured' };
   }
   if (typeof getSecretStatusFn !== 'function') {
-    // 注入失败 = 不阻断 (安全兜底, 不要因为 guard 自身坏而阻断业务)
-    return { allowed: true, status: 'no_check_fn', detail: 'getSecretStatus not provided' };
+    return { allowed: !failClosed, status: 'no_check_fn', detail: 'getSecretStatus not provided' };
   }
-  const cached = secretGuardCache.get(tokenSecret);
+  const cacheKey = `${failClosed ? 'strict' : 'compat'}:${tokenSecret}`;
+  const cached = secretGuardCache.get(cacheKey);
   const now = Date.now();
   if (cached && (now - cached.cached_at) < SECRET_GUARD_TTL_MS) {
     return cached.result;
@@ -53,8 +55,9 @@ export function checkSecretForService(tokenSecret, getSecretStatusFn) {
   const s = getSecretStatusFn(tokenSecret);
   let result;
   if (!s) {
-    // 无 healthcheck 数据 (还没跑过), 放过
-    result = { allowed: true, status: 'unknown', detail: 'no healthcheck data yet' };
+    result = { allowed: !failClosed, status: 'unknown', detail: 'no healthcheck data yet' };
+  } else if (failClosed && (!s.ts || !Number.isFinite(Date.parse(s.ts)) || now - Date.parse(s.ts) > maxStatusAgeMs)) {
+    result = { allowed: false, status: 'stale', detail: 'credential health evidence is missing or stale' };
   } else if (s.status === 'ok' || s.status === 'skipped' || s.status === 'unknown') {
     result = { allowed: true, status: s.status, detail: s.detail, latency_ms: s.latency_ms, ts: s.ts };
   } else if (s.status === 'expired' || s.status === 'unreachable' || s.status === 'misconfigured' || s.status === 'fail') {
@@ -64,12 +67,15 @@ export function checkSecretForService(tokenSecret, getSecretStatusFn) {
     // 未知 status (e.g. 未来新 status), 保守阻断
     result = { allowed: false, status: s.status, detail: s.detail || 'unknown secret status' };
   }
-  secretGuardCache.set(tokenSecret, { result, cached_at: now });
+  secretGuardCache.set(cacheKey, { result, cached_at: now });
   return result;
 }
 
 export function clearSecretGuardCache(name) {
-  if (name) secretGuardCache.delete(name);
+  if (name) {
+    secretGuardCache.delete(`strict:${name}`);
+    secretGuardCache.delete(`compat:${name}`);
+  }
   else secretGuardCache.clear();
 }
 
@@ -84,6 +90,7 @@ export function guardHint(status) {
     case 'unreachable':   return 'fix the upstream network/firewall';
     case 'misconfigured': return 'fix the secret config (broker.yaml)';
     case 'fail':          return 'check the secret status';
+    case 'stale':         return 'run a fresh credential health check';
     default:              return 'check the secret status';
   }
 }

@@ -89,7 +89,45 @@ console.log('=== createSessionStore ===');
   assert(store.checkLoginLock('u|pw') === false, 'locked after fails');
   store.clearLoginLock('u|pw');
   assert(store.checkLoginLock('u|pw') === true, 'cleared');
-  assert(SESSION_TTL_MS === 30 * 60 * 1000, 'default TTL const');
+  assert(SESSION_TTL_MS === 15 * 60 * 1000, 'default TTL const');
+}
+
+console.log('=== session revocation and current authorization ===');
+{
+  const clients = { admin: { role: 'admin', cert_fingerprint_sha256: 'AA' } };
+  const store = createSessionStore({ ttlMs: 60_000, resolveClient: name => clients[name] });
+  const token = store.makeSession({ cn: 'a', fp: 'aa', clientName: 'admin', client: clients.admin, cert: {} });
+  const req = { headers: { [store.header]: token } };
+  assert(store.getSession(req)?.role === 'admin', 'current client accepted');
+  clients.admin = { role: 'readonly', cert_fingerprint_sha256: 'AA' };
+  assert(store.getSession(req)?.role === 'readonly', 'role downgrade takes effect immediately');
+  clients.admin.cert_fingerprint_sha256 = 'BB';
+  assert(store.getSession(req) === null, 'certificate rotation revokes bound session');
+
+  const webToken = store.makeSession({ cn: 'a@webauthn', fp: null, clientName: 'admin', client: clients.admin, cert: {} });
+  const webReq = { headers: { cookie: `other=x; broker_session=${webToken}` } };
+  assert(!!store.getSession(webReq), 'webauthn session accepted');
+  clients.admin.disabled = true;
+  assert(store.getSession(webReq) === null, 'disabled client session revoked');
+
+  clients.admin = { role: 'admin', cert_fingerprint_sha256: 'CC', revoked_at: new Date().toISOString() };
+  const revokedToken = store.makeSession({ cn: 'revoked', fp: null, clientName: 'admin', client: clients.admin, cert: {} });
+  assert(store.getSession({ headers: { [store.header]: revokedToken } }) === null, 'revoked client session denied');
+
+  clients.admin = { role: 'admin', cert_fingerprint_sha256: 'CC' };
+  const missingToken = store.makeSession({ cn: 'missing', fp: null, clientName: 'admin', client: clients.admin, cert: {} });
+  delete clients.admin;
+  assert(store.getSession({ headers: { [store.header]: missingToken } }) === null, 'deleted client session denied');
+
+  clients.admin = { role: 'admin', cert_fingerprint_sha256: 'CC' };
+  const one = store.makeSession({ cn: 'one', fp: null, clientName: 'admin', client: clients.admin, cert: {} });
+  const two = store.makeSession({ cn: 'two', fp: null, clientName: 'admin', client: clients.admin, cert: {} });
+  assert(store.deleteSessionsForClient('admin') === 2, 'all client sessions revoked');
+  assert(store.getSession({ headers: { [store.header]: one } }) === null && store.getSession({ headers: { [store.header]: two } }) === null, 'revoked sessions unusable');
+
+  const expiredStore = createSessionStore({ ttlMs: -1, resolveClient: name => clients[name] });
+  const expired = expiredStore.makeSession({ cn: 'expired', fp: null, clientName: 'admin', client: clients.admin, cert: {} });
+  assert(expiredStore.getSession({ headers: { [expiredStore.header]: expired } }) === null, 'expired session removed');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

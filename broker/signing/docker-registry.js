@@ -1,116 +1,121 @@
-// broker/signing/docker-registry.js — V4 Docker Registry V2 auth
-// Reference: https://docs.docker.com/reference/api/registry/auth/
-//
-// Flow:
-//   1. GET /v2/ -> 401 with WWW-Authenticate: Bearer realm="...", service="...", scope="..."
-//   2. GET <realm>?service=...&scope=... -> { token: "..." }
-//   3. Subsequent requests: Authorization: Bearer <token>
-//
-// Implementations often pre-cache the realm/service from the first response
-// or accept a pre-fetched token. We provide both styles.
+// Docker Registry HTTP API V2 bearer-token authentication.
+// The token realm is administrator-pinned or challenge-discovered and then
+// checked against an explicit hostname allowlist before credentials are sent.
 
-import { request as httpsRequest, request as httpRequest } from 'node:http';
-import { request as httpsRequestHttps, request as httpRequestHttps } from 'node:https';
+import { request as httpsRequest } from 'node:https';
 import { URL } from 'node:url';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { assertSafeDestination } from '../lib/outbound-policy.js';
 
-/**
- * @param {{
- *   registry: string,            // e.g. 'https://registry-1.docker.io'
- *   scope?: string,              // e.g. 'repository:library/alpine:pull'
- *   username?: string,           // for index.docker.io
- *   password?: string,
- *   fetchImpl?: typeof fetch,    // optional injection
- * }} args
- * @returns {Promise<{token: string, expires_in?: number}>}
- */
-export async function getDockerRegistryToken(args) {
-  if (!args || !args.registry) throw new Error('docker-registry: registry required');
-  const u = new URL(args.registry);
-  const isHttps = u.protocol === 'https:';
-  const fetchFn = args.fetchImpl || (isHttps ? httpsFetch : httpFetch);
+const MAX_AUTH_RESPONSE_BYTES = 64 * 1024;
+const SCOPE_RE = /^[a-z0-9]+:[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*:[a-z]+(?:,[a-z]+)*$/;
 
-  // Step 1: probe /v2/ to get the auth challenge
-  const probeUrl = `${args.registry.replace(/\/$/, '')}/v2/`;
-  const probeRes = await fetchFn(probeUrl, { method: 'GET' });
-  if (probeRes.status !== 401) {
-    // registry says "no auth needed" — return a dummy bearer (some private ones)
-    return { token: '' };
+function assertHttpsEndpoint(value, label, allowedHosts) {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
+    throw new Error(`docker-registry: ${label} must be a credential-free HTTPS endpoint on port 443`);
   }
-  const wwwAuth = (probeRes.headers && (probeRes.headers.get ? probeRes.headers.get('www-authenticate') : probeRes.headers['www-authenticate'] || probeRes.headers['WWW-Authenticate'])) || '';
-  // Format: Bearer realm="https://auth...",service="...",scope="..."
-  const realmMatch = /realm="([^"]+)"/.exec(wwwAuth);
-  const serviceMatch = /service="([^"]+)"/.exec(wwwAuth);
-  if (!realmMatch) throw new Error('docker-registry: no Bearer realm in 401 response');
-  const realm = realmMatch[1];
-  const service = serviceMatch ? serviceMatch[1] : '';
+  if (allowedHosts && !allowedHosts.includes(url.hostname.toLowerCase())) {
+    throw new Error(`docker-registry: ${label} host is not allowlisted`);
+  }
+  return url;
+}
 
-  // Step 2: get token
-  const tokenUrl = new URL(realm);
-  tokenUrl.searchParams.set('service', service);
+function headerValue(response, name) {
+  if (response?.headers?.get) return response.headers.get(name);
+  const headers = response?.headers || {};
+  return headers[name.toLowerCase()] || headers[name] || headers[name.toUpperCase()] || '';
+}
+
+async function responseJson(response) {
+  if (typeof response?.json === 'function') return response.json();
+  if (response?.json && typeof response.json === 'object') return response.json;
+  if (typeof response?.body === 'string') return JSON.parse(response.body);
+  throw new Error('docker-registry: token service returned an invalid response');
+}
+
+function parseBearerChallenge(value) {
+  if (!/^Bearer\s/i.test(value || '')) throw new Error('docker-registry: registry did not return a Bearer challenge');
+  const params = {};
+  for (const match of value.slice(7).matchAll(/([a-z]+)="([^"]*)"/gi)) params[match[1].toLowerCase()] = match[2];
+  if (!params.realm) throw new Error('docker-registry: no Bearer realm in 401 response');
+  return params;
+}
+
+export async function getDockerRegistryToken(args) {
+  if (!args?.registry) throw new Error('docker-registry: registry required');
+  const registry = assertHttpsEndpoint(args.registry, 'registry', args.allowedRegistryHosts);
+  if (args.scope && !SCOPE_RE.test(args.scope)) throw new Error('docker-registry: invalid repository scope');
+  const fetchFn = args.fetchImpl || ((value, options) => secureFetch(value, options, args.resolveHostname));
+
+  let realm = args.realm;
+  let service = args.service || '';
+  if (!realm) {
+    const probeRes = await fetchFn(new URL('/v2/', registry).toString(), { method: 'GET', redirect: 'manual' });
+    if (probeRes.status === 200) return { token: '' };
+    if (probeRes.status !== 401) throw new Error(`docker-registry: registry probe failed: ${probeRes.status}`);
+    const challenge = parseBearerChallenge(headerValue(probeRes, 'www-authenticate'));
+    realm = challenge.realm;
+    if (service && challenge.service && challenge.service !== service) {
+      throw new Error('docker-registry: challenge service does not match configured audience');
+    }
+    service = service || challenge.service || '';
+  }
+
+  const authHosts = (args.allowedAuthHosts || []).map(host => String(host).toLowerCase());
+  if (authHosts.length === 0) throw new Error('docker-registry: allowedAuthHosts is required');
+  const tokenUrl = assertHttpsEndpoint(realm, 'token realm', authHosts);
+  if (service) tokenUrl.searchParams.set('service', service);
   if (args.scope) tokenUrl.searchParams.set('scope', args.scope);
+
   const headers = {};
   if (args.username) {
-    const basic = Buffer.from(`${args.username}:${args.password || ''}`).toString('base64');
-    headers['Authorization'] = `Basic ${basic}`;
+    if (!args.password) throw new Error('docker-registry: PAT required when username is configured');
+    headers.Authorization = `Basic ${Buffer.from(`${args.username}:${args.password}`).toString('base64')}`;
   }
-  const tokRes = await fetchFn(tokenUrl.toString(), { method: 'GET', headers });
-  if (!tokRes.ok) {
-    throw new Error(`docker-registry: token fetch failed: ${tokRes.status}`);
+  const tokenRes = await fetchFn(tokenUrl.toString(), { method: 'GET', headers, redirect: 'manual' });
+  if (tokenRes.status < 200 || tokenRes.status >= 300) {
+    throw new Error(`docker-registry: token fetch failed: ${tokenRes.status}`);
   }
-  const body = await tokRes.json();
-  return { token: body.token || body.access_token, expires_in: body.expires_in };
+  const body = await responseJson(tokenRes);
+  const token = body?.token || body?.access_token;
+  if (typeof token !== 'string' || token.length < 16) throw new Error('docker-registry: token service returned no usable token');
+  const expiresIn = Number(body.expires_in);
+  return { token, ...(Number.isFinite(expiresIn) && expiresIn > 0 ? { expires_in: expiresIn } : {}) };
 }
 
 export async function signDockerRegistry(args) {
-  const tok = await getDockerRegistryToken(args);
-  return { 'Authorization': tok.token ? `Bearer ${tok.token}` : '' };
+  const result = await getDockerRegistryToken(args);
+  return result.token ? { Authorization: `Bearer ${result.token}` } : {};
 }
 
-// Tiny fetch implementations over node:http(s)
-function httpsFetch(url, opts = {}) {
+async function secureFetch(value, opts = {}, resolveHostname) {
+  const url = assertHttpsEndpoint(value, 'request');
+  const resolved = resolveHostname
+    ? await resolveHostname(url.hostname)
+    : (await dnsLookup(url.hostname, { all: false, verbatim: true })).address;
+  assertSafeDestination(url.hostname, resolved);
   return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const req = httpsRequestHttps({
-      method: opts.method || 'GET',
-      hostname: u.hostname,
-      port: u.port || 443,
-      path: u.pathname + u.search,
-      headers: opts.headers || {},
-    }, (res) => {
+    const request = httpsRequest({
+      protocol: 'https:', hostname: resolved, servername: url.hostname, port: url.port || 443,
+      path: url.pathname + url.search, method: opts.method || 'GET',
+      headers: { Host: url.host, ...(opts.headers || {}) }, rejectUnauthorized: true, timeout: 10_000,
+    }, response => {
       const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = JSON.parse(text); } catch (_) {}
-        resolve({ status: res.statusCode, headers: res.headers, body: text, json });
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > MAX_AUTH_RESPONSE_BYTES) response.destroy(new Error('docker-registry: auth response too large'));
+        else chunks.push(chunk);
+      });
+      response.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: response.statusCode, headers: response.headers, body, json: () => JSON.parse(body) });
       });
     });
-    req.on('error', reject);
-    req.end();
-  });
-}
-function httpFetch(url, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const req = httpRequestHttps({
-      method: opts.method || 'GET',
-      hostname: u.hostname,
-      port: u.port || 80,
-      path: u.pathname + u.search,
-      headers: opts.headers || {},
-    }, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = JSON.parse(text); } catch (_) {}
-        resolve({ status: res.statusCode, headers: res.headers, body: text, json });
-      });
-    });
-    req.on('error', reject);
-    req.end();
+    request.on('error', reject);
+    request.on('timeout', () => request.destroy(new Error('docker-registry: auth request timeout')));
+    request.end();
   });
 }
 

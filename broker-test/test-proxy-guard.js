@@ -13,7 +13,7 @@ import {
   clearSecretGuardCache,
   guardHint,
   SECRET_GUARD_TTL_MS,
-} from 'file:///C:/home/my-first-app/broker/service-secret-guard.js';
+} from '../broker/service-secret-guard.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -182,6 +182,22 @@ function makeStatusLookup(table) {
     const r3 = checkSecretForService('GITHUB_PAT', { not: 'a function' });
     ok('getSecretStatusFn 非函数 → allowed=true, status=no_check_fn',
        r3.allowed === true && r3.status === 'no_check_fn');
+  }
+
+  // ======== 7. SECRET_GUARD_TTL_MS = 5 min ========
+  section('strict fail-closed mode');
+  {
+    reset();
+    ok('strict missing credential reference denied', checkSecretForService(null, () => null, { failClosed: true }).allowed === false);
+    ok('strict missing checker denied', checkSecretForService('S', null, { failClosed: true }).allowed === false);
+    ok('strict unknown health denied', checkSecretForService('UNKNOWN', () => null, { failClosed: true }).allowed === false);
+    const fresh = new Date().toISOString();
+    const freshResult = checkSecretForService('FRESH', () => ({ status: 'ok', detail: 'ok', ts: fresh }), { failClosed: true });
+    ok('strict fresh healthy evidence allowed', freshResult.allowed === true && freshResult.status === 'ok');
+    const old = new Date(Date.now() - 60_000).toISOString();
+    const staleResult = checkSecretForService('STALE', () => ({ status: 'ok', detail: 'old', ts: old }), { failClosed: true, maxStatusAgeMs: 1000 });
+    ok('strict stale health evidence denied', staleResult.allowed === false && staleResult.status === 'stale');
+    ok('stale hint requests fresh check', guardHint('stale').includes('fresh'));
   }
 
   // ======== 7. SECRET_GUARD_TTL_MS = 5 min ========

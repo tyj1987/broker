@@ -7,6 +7,7 @@
 
 import { createServer as createMockServer, request as httpRequest } from 'node:http';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}`); } }
@@ -138,7 +139,7 @@ process.env.MCP_PORT = String(MCP_PORT);
 let mcpProc;
 async function startMcpServer() {
   // 启动子进程 (绝对路径)
-  const mcpPath = 'C:/home/my-first-app/broker/mcp-server.js';
+  const mcpPath = fileURLToPath(new URL('../broker/mcp-server.js', import.meta.url));
   return new Promise((resolve, reject) => {
     mcpProc = spawn('node', [mcpPath], {
       env: { ...process.env },

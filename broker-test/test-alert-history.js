@@ -25,7 +25,7 @@ function ok(name, cond, detail) {
 }
 function section(s) { console.log(`\n--- ${s} ---`); }
 
-const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
+const hc = await import(new URL('../broker/healthcheck.js', import.meta.url));
 
 (async () => {
   // ======== Setup: 隔离 ALERT_HISTORY_PATH 到 tempdir ========

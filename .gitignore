@@ -145,6 +145,8 @@ override.tf.json
 *.pem
 **/id_rsa
 **/id_ed25519
+# Python SDK test scratch directory (pytest --basetemp)
+**/.pytest-tmp/
 
 docs/openapi.yaml
 **/docs/openapi.yaml

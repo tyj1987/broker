@@ -10,7 +10,7 @@
 // Used for newer Aliyun OpenAPI (e.g. ACK, ECS 2024+).
 // Falls back to aliyun-v2 for older endpoints.
 
-import { createHmac, createHash } from 'node:crypto';
+import { createHmac, createHash, randomUUID } from 'node:crypto';
 
 function sha256Hex(s) {
   return createHash('sha256').update(s || '').digest('hex');
@@ -61,17 +61,22 @@ function signedHeaders(headers) {
  * }} args
  * @returns {object} headers to merge (Authorization, x-acs-date, x-acs-content-sha256)
  */
-export function signAliyunV3({ method, host, path, query, headers = {}, body, secret, now }) {
+export function signAliyunV3({ method, host, path, query, headers = {}, body, secret, action, version, nonce, now }) {
+  if (!action || !version) throw new Error('Aliyun V3 requires action and version');
   const date = now || new Date();
-  const rfcDate = date.toUTCString();
+  const acsDate = date.toISOString().replace(/\.\d{3}Z$/, 'Z');
   const bodyStr = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
   const payloadHash = sha256Hex(bodyStr);
 
   // Always required headers
   const allHeaders = {
     host,
-    'x-acs-date': rfcDate,
+    'x-acs-action': action,
+    'x-acs-version': version,
+    'x-acs-date': acsDate,
     'x-acs-content-sha256': payloadHash,
+    'x-acs-signature-nonce': nonce || randomUUID().replaceAll('-', ''),
+    ...(secret.security_token ? { 'x-acs-security-token': secret.security_token } : {}),
     ...Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])),
   };
   const canonical = canonicalHeaders(allHeaders);
@@ -98,8 +103,12 @@ export function signAliyunV3({ method, host, path, query, headers = {}, body, se
     ...headers,
     'host': host,
     'Authorization': `ACS3-HMAC-SHA256 Credential=${secret.access_key_id},SignedHeaders=${signed},Signature=${signature}`,
-    'x-acs-date': rfcDate,
+    'x-acs-action': action,
+    'x-acs-version': version,
+    'x-acs-date': acsDate,
     'x-acs-content-sha256': payloadHash,
+    'x-acs-signature-nonce': allHeaders['x-acs-signature-nonce'],
+    ...(secret.security_token ? { 'x-acs-security-token': secret.security_token } : {}),
   };
 }
 

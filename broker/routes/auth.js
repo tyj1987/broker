@@ -9,6 +9,9 @@
 //   makeSession, deleteSession, checkLoginLock, recordLoginFail, clearLoginLock
 //   SESSION_TTL_MS, SESSION_HEADER
 
+import { securityProfile, permits } from '../lib/security-profile.js';
+import { recordMfaFailure, clearMfaFailures } from '../auth-flow.js';
+
 /**
  * @returns {Promise<boolean>} true if handled
  */
@@ -22,20 +25,32 @@ export async function handleAuth(req, res, route, deps) {
     makeSession, deleteSession,
     checkLoginLock, recordLoginFail, clearLoginLock,
     SESSION_TTL_MS, SESSION_HEADER,
+    persistConfig,
   } = deps;
 
   // ----- POST /api/v1/login -----
   if (method === 'POST' && p === '/api/v1/login') {
+    if (securityProfile(config) === 'strict') {
+      audit({ action: 'login', status: 'denied', reason: 'legacy_login_disabled_in_strict_profile' });
+      jsonError(res, 403, 'Use WebAuthn login in strict profile');
+      return true;
+    }
     const body = await readBody(req) || {};
     const password = body.password;
-    if (!password) { jsonError(res, 400, 'Missing {password}'); return true; }
     const ctx0 = getIdentity(req);
+    if ((!ctx0 || !['mtls', 'mtls-via-nginx'].includes(ctx0.via)) && !permits(config, 'password')) {
+      audit({ action: 'login', status: 'denied', reason: 'password_disabled_by_security_profile' });
+      jsonError(res, 403, 'Password login is disabled by the active security profile');
+      return true;
+    }
+    if (!ctx0 && !password) { jsonError(res, 400, 'Missing {password}'); return true; }
     let targetClient = null, targetName = null, lockKey = null, via = 'mtls';
-    if (ctx0 && ctx0.via === 'mtls') {
-      if (!ctx0.client.password) { jsonError(res, 403, 'No password configured for this client'); return true; }
+    let skipPasswordCheck = false;
+    if (ctx0 && ['mtls', 'mtls-via-nginx'].includes(ctx0.via)) {
       targetClient = ctx0.client;
       targetName = ctx0.clientName;
       lockKey = `${targetName}|mtls`;
+      skipPasswordCheck = true;
     } else {
       const clientName = (body.client || '').trim();
       const c = clientName ? config.clients[clientName] : null;
@@ -54,18 +69,24 @@ export async function handleAuth(req, res, route, deps) {
       jsonError(res, 429, 'Too many failed login attempts. Locked until later.');
       return true;
     }
-    const ok = await verifyClientPassword(password, targetClient.password);
-    if (!ok) {
-      recordLoginFail(lockKey);
-      audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
-      jsonError(res, 401, 'Bad password');
-      return true;
+    if (!skipPasswordCheck) {
+      const ok = await verifyClientPassword(password, targetClient.password);
+      if (!ok) {
+        recordLoginFail(lockKey);
+        audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
+        jsonError(res, 401, 'Bad password');
+        return true;
+      }
+      clearLoginLock(lockKey);
     }
-    clearLoginLock(lockKey);
 
     const fp = ctx0 ? ctx0.fp : null;
     if (isMfaRequired(targetClient, via)) {
       const mfaToken = createMfaPending(targetName, fp);
+      if (!mfaToken) {
+        jsonError(res, 429, 'Too many failed MFA attempts. Locked until later.');
+        return true;
+      }
       audit({ action: 'login', status: 'mfa_required', client: targetName, via });
       send(res, 200, {
         ok: false,
@@ -83,9 +104,8 @@ export async function handleAuth(req, res, route, deps) {
       cert: { subject: { CN: cn } }, client: targetClient,
     });
     audit({ action: 'login', status: 'ok', cn, client: targetName, via });
-    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    res.setHeader('Set-Cookie', `broker_session=${token}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     send(res, 200, {
-      token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
       cn,
       role: targetClient.role,
@@ -112,22 +132,58 @@ export async function handleAuth(req, res, route, deps) {
       jsonError(res, 404, 'Client no longer exists');
       return true;
     }
+    if (pending.fp) {
+      const boundIdentity = getIdentity(req);
+      if (!boundIdentity || !['mtls', 'mtls-via-nginx'].includes(boundIdentity.via) ||
+          String(boundIdentity.fp || '').toUpperCase() !== String(pending.fp).toUpperCase()) {
+        recordMfaFailure(mfaToken);
+        audit({ action: 'login_mfa', status: 'denied', reason: 'certificate_binding_mismatch', client: pending.clientName });
+        jsonError(res, 401, 'MFA transaction is bound to the initiating client certificate');
+        return true;
+      }
+    }
     const mfaResult = verifyMfaCode(targetClient, code);
     if (!mfaResult.ok) {
+      recordMfaFailure(mfaToken);
       audit({ action: 'login_mfa', status: 'denied', reason: 'bad_code', client: pending.clientName });
       jsonError(res, 401, 'Bad TOTP code or recovery code');
       return true;
     }
+    if (mfaResult.method === 'recovery' || mfaResult.method === 'totp') {
+      if (typeof persistConfig !== 'function') {
+        jsonError(res, 503, 'MFA state persistence is unavailable');
+        return true;
+      }
+      let rollback;
+      if (mfaResult.method === 'recovery') {
+        const hashes = targetClient.totp_recovery_codes_hash;
+        const [removed] = hashes.splice(mfaResult.recovery_index, 1);
+        rollback = () => hashes.splice(mfaResult.recovery_index, 0, removed);
+      } else {
+        const previousCounter = targetClient.totp_last_used_counter;
+        targetClient.totp_last_used_counter = mfaResult.totp_counter;
+        rollback = () => previousCounter === undefined
+          ? delete targetClient.totp_last_used_counter
+          : (targetClient.totp_last_used_counter = previousCounter);
+      }
+      try {
+        await persistConfig();
+      } catch {
+        rollback();
+        jsonError(res, 503, 'MFA state could not be consumed durably');
+        return true;
+      }
+    }
     consumeMfaPending(mfaToken);
+    clearMfaFailures(pending.clientName);
     const cn = pending.fp ? `${pending.clientName}@mtls` : `${pending.clientName}@web`;
     const token = makeSession({
       cn, fp: pending.fp, role: targetClient.role, clientName: pending.clientName,
       cert: { subject: { CN: cn } }, client: targetClient,
     });
     audit({ action: 'login', status: 'ok', cn, client: pending.clientName, via: 'mfa', mfa_method: mfaResult.method });
-    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    res.setHeader('Set-Cookie', `broker_session=${token}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     send(res, 200, {
-      token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
       cn,
       role: targetClient.role,
@@ -149,7 +205,7 @@ export async function handleAuth(req, res, route, deps) {
       }
       deleteSession(token);
     }
-    res.setHeader('Set-Cookie', 'broker_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+    res.setHeader('Set-Cookie', 'broker_session=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
     send(res, 200, { logged_out: true });
     return true;
   }

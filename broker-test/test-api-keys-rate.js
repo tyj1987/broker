@@ -5,6 +5,14 @@ import {
   generateMasterKey,
   normalizeRateLimit,
   RATE_LIMIT_PRESETS,
+  consumeRateLimit,
+  createApiKey,
+  findApiKey,
+  listApiKeys,
+  revokeApiKey,
+  recordUse,
+  parseBearer,
+  isExpired,
 } from '../broker/api-keys.js';
 import { isClientIpAllowed } from '../broker/api-keys.js';
 
@@ -42,6 +50,48 @@ ok('preset 100/hour present', !!RATE_LIMIT_PRESETS['100/hour']);
 ok('preset 1000/hour present', !!RATE_LIMIT_PRESETS['1000/hour']);
 ok('preset unlimited present', !!RATE_LIMIT_PRESETS['unlimited']);
 
+section('enforcement fails closed');
+{
+  const buckets = new Map();
+  const key = { id: 'k1', rate_limit: { minute: 2, hour: 3, day: 4 } };
+  ok('first request allowed', consumeRateLimit(key, buckets, 100_000));
+  ok('second request allowed', consumeRateLimit(key, buckets, 100_001));
+  ok('minute quota enforced', !consumeRateLimit(key, buckets, 100_002));
+  ok('window expiry permits request', consumeRateLimit(key, buckets, 160_001));
+  ok('hour quota enforced independently', !consumeRateLimit(key, buckets, 160_002));
+  ok('explicit unlimited accepted', consumeRateLimit({ id: 'k2', rate_limit: 'unlimited' }, buckets));
+  ok('missing limit rejected', !consumeRateLimit({ id: 'k3' }, buckets));
+  ok('unknown limit rejected', !consumeRateLimit({ id: 'k4', rate_limit: 'bogus' }, buckets));
+  ok('zero limit rejects', !consumeRateLimit({ id: 'k5', rate_limit: { minute: 0 } }, buckets));
+  ok('invalid bucket store rejects', !consumeRateLimit(key, {}, 1));
+}
+
+section('lifecycle and malformed input');
+{
+  const keys = [];
+  const created = createApiKey(keys, 'one', 'client-a', { allowed_services: ['github'] });
+  ok('created key can be found', findApiKey(keys, created.secret)?.id === created.key_obj.id);
+  ok('bad secret rejected', findApiKey(keys, 'not-the-key') === null);
+  ok('missing key list rejected', findApiKey(null, created.secret) === null);
+  ok('bearer parsed', parseBearer(`Bearer ${created.secret}`) === created.secret);
+  ok('malformed bearer rejected', parseBearer(`Basic ${created.secret}`) === null);
+  ok('missing bearer rejected', parseBearer('') === null);
+  recordUse(keys[0]);
+  ok('usage recorded', keys[0].use_count === 1 && !!keys[0].last_used_at);
+  recordUse(null);
+  ok('client list filtered', listApiKeys(keys, { clientOnly: 'client-a' }).length === 1 && listApiKeys(keys, { clientOnly: 'other' }).length === 0);
+  ok('invalid list is empty', listApiKeys(null).length === 0);
+  ok('unknown revoke rejected', revokeApiKey(keys, 'missing', 'admin').reason === 'not_found');
+  ok('key revoked', revokeApiKey(keys, created.key_obj.id, 'admin').ok === true);
+  ok('revoked key cannot authenticate', findApiKey(keys, created.secret) === null);
+  ok('duplicate revoke rejected', revokeApiKey(keys, created.key_obj.id, 'admin').reason === 'already_revoked');
+  ok('invalid expiry fails closed', isExpired({ expires_at: 'not-a-date' }));
+  ok('missing expiry fails closed', isExpired({}));
+  ok('expired key rejected', isExpired({ expires_at: new Date(Date.now() - 1).toISOString() }));
+  ok('future key remains valid', !isExpired({ expires_at: new Date(Date.now() + 60_000).toISOString() }));
+  ok('numeric rate format rejected', normalizeRateLimit(100) === null);
+}
+
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');
 {
@@ -55,6 +105,13 @@ section('generateApiKey with new fields');
   ok('rate_limit.day = 1000', key_obj.rate_limit.day === 1000);
   ok('ip_whitelist stored', Array.isArray(key_obj.ip_whitelist) && key_obj.ip_whitelist.length === 2);
   // v3 string backward compat
+}
+{
+  let invalidRejected = false;
+  try { generateApiKey('bad', 'client', { ttl_ms: -1 }); } catch { invalidRejected = true; }
+  ok('negative TTL rejected', invalidRejected);
+  const capped = generateApiKey('capped', 'client', { ttl_ms: 365 * 86400_000 }).key_obj;
+  ok('ordinary key TTL capped at 24 hours', new Date(capped.expires_at).getTime() <= Date.now() + 86400_500);
 }
 {
   const { key_obj } = generateApiKey('test', 'client', {

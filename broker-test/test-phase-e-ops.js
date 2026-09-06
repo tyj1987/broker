@@ -25,18 +25,20 @@ console.log('=== validateBrokerConfig ===');
   const bad = validateBrokerConfig(null);
   assert(bad.ok === false, 'null config');
 
-  const emptyClients = validateBrokerConfig({ clients: {} });
+  const emptyClients = validateBrokerConfig({ security_profile: 'controlled', clients: {} });
   assert(emptyClients.ok === true, 'empty clients ok');
   // empty map: no "no admin" warn (only when there are clients but none is admin)
   assert(!emptyClients.warnings.some((w) => /no client with role admin/i.test(w.message)), 'empty has no admin warn');
 
   const noAdmin = validateBrokerConfig({
+    security_profile: 'controlled',
     clients: { ci: { role: 'ci' } },
   });
   assert(noAdmin.ok === true, 'no-admin config ok');
   assert(noAdmin.warnings.some((w) => /no client with role admin/i.test(w.message)), 'no admin warn');
 
   const good = validateBrokerConfig({
+    security_profile: 'controlled',
     clients: {
       admin: { role: 'admin' },
       ci: { role: 'ci', rate_limit: '100/hour' },
@@ -46,6 +48,21 @@ console.log('=== validateBrokerConfig ===');
     },
   });
   assert(good.ok === true && good.errors.length === 0, 'good config');
+
+  const strictWithoutOperations = validateBrokerConfig({
+    security_profile: 'strict',
+    webauthn: { rp_id: 'broker.example', origin: 'https://broker.example' },
+    clients: { admin: { role: 'admin' } },
+    services: { gh: { upstream: 'https://api.github.com' } },
+  });
+  assert(strictWithoutOperations.ok === false, 'strict requires typed operations');
+
+  const strictWithoutWebAuthn = validateBrokerConfig({
+    security_profile: 'strict',
+    clients: {},
+    services: {},
+  });
+  assert(strictWithoutWebAuthn.errors.some((e) => e.path === 'webauthn.rp_id'), 'strict requires WebAuthn RP ID');
 
   const badUrl = validateBrokerConfig({
     clients: { a: { role: 'admin' } },

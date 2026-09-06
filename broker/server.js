@@ -7,17 +7,20 @@
 //   PORT=8443 CONFIG_PATH=/opt/broker/secrets/broker.yaml AGE_KEY_FILE=/opt/broker/pki/age.key node server.js
 
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
-import { request as httpRequest } from 'node:http';
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync, renameSync, chmodSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID, X509Certificate } from "node:crypto";
+import { isIP } from 'node:net';
 // v3.0: 强认证 (TOTP + MFA 状态机)
 import {
   createMfaPending,
   getMfaPending,
   consumeMfaPending,
+  recordMfaFailure,
+  clearMfaFailures,
   verifyMfaCode,
   isMfaRequired,
   MFA_TOKEN_TTL_MS,
@@ -59,6 +62,7 @@ import {
   createChildKey,
   canCreateChild,
   isClientIpAllowed,
+  consumeRateLimit,
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
 import {
@@ -91,6 +95,7 @@ import {
   runProbes,
   probesFromConfig,
   buildBackupManifest,
+  createSessionStore,
 } from './lib/index.js';
 // v3.0: schema migration (in start())
 import { EventEmitter } from 'node:events';
@@ -101,6 +106,23 @@ import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
 import {
   checkPathAllowed, canProxy, isServiceAllowed, clientNamesAllowedFor,
 } from './can-proxy.js';
+import {
+  buildPinnedUrl, sanitizeCallerHeaders, normalizeMethod,
+  assertSafeDestination, DEFAULT_MAX_RESPONSE_BYTES, mergeOutboundHeaders,
+} from './lib/outbound-policy.js';
+import { securityProfile, permits, normalizeOperations, tlsAuthorizationPolicy } from './lib/security-profile.js';
+import { createWebAuthnService } from './lib/webauthn-service.js';
+import { createSensitiveApprovalStore } from './lib/sensitive-approval.js';
+import { renderSecretFields } from './lib/secret-view.js';
+import { validateHealthSocketPath, isAllowedLocalHealthRequest } from './lib/local-health.js';
+import { isTrustedProxySocket, resolveSourceIp } from './lib/trusted-proxy.js';
+import { signAliyunV3 } from './signing/aliyun-v3.js';
+import { signTencentV3 } from './signing/tencent-v3.js';
+import { signDockerRegistry } from './signing/docker-registry.js';
+import { redact } from './lib/redact.js';
+import { prepareReadOnlyServiceTest } from './lib/service-test-policy.js';
+import { executeTypedOperation } from './lib/typed-operation-executor.js';
+import { runtimeConfig } from './lib/runtime-config.js';
 import {
   issueClientCert, certFingerprint, readClientCertPem, readClientKeyPem,
   deleteClientCertFiles, readCaCertPem, paths as certPaths,
@@ -114,21 +136,33 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ============================================================
 // Config & env
 // ============================================================
-const PORT           = parseInt(process.env.PORT || '8443', 10);
-const HOST           = process.env.HOST || '0.0.0.0';
-const CONFIG_PATH    = process.env.CONFIG_PATH || resolvePath(__dirname, '../secrets/broker.yaml');
-const SECRETS_PATH   = process.env.SECRETS_PATH || resolvePath(__dirname, '../secrets/common.env');
+const RUNTIME = runtimeConfig(process.env, {
+  configPath: resolvePath(__dirname, '../secrets/broker.yaml'),
+  secretsPath: resolvePath(__dirname, '../secrets/common.env'),
+  secretsDetailPath: resolvePath(__dirname, '../secrets/secrets-detail.json'),
+  pkiDir: resolvePath(__dirname, '../pki'),
+  auditDir: resolvePath(__dirname, '../audit'),
+  tlsCert: resolvePath(__dirname, '../pki/server/server.crt'),
+  tlsKey: resolvePath(__dirname, '../pki/server/server.key'),
+  tlsCa: resolvePath(__dirname, '../pki/ca/ca.crt'),
+  tlsCrl: resolvePath(__dirname, '../pki/ca/crl.pem'),
+});
+const PORT           = RUNTIME.port;
+const HOST           = RUNTIME.host;
+const CONFIG_PATH    = RUNTIME.configPath;
+const SECRETS_PATH   = RUNTIME.secretsPath;
 // Phase 1.1.1: structured secrets (multi-field support). If this file doesn't
 // exist, broker auto-migrates from common.env on first start and writes here.
-const SECRETS_DETAIL_PATH = process.env.SECRETS_DETAIL_PATH || resolvePath(__dirname, '../secrets/secrets-detail.json');
-const PKI_DIR        = process.env.PKI_DIR || resolvePath(__dirname, '../pki');
-const AGE_KEY_FILE   = process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE;
-const AUDIT_DIR      = process.env.AUDIT_DIR || resolvePath(__dirname, '../audit');
-const TLS_CERT       = process.env.TLS_CERT || join(PKI_DIR, 'server/server.crt');
-const TLS_KEY        = process.env.TLS_KEY  || join(PKI_DIR, 'server/server.key');
-const TLS_CA         = process.env.TLS_CA   || join(PKI_DIR, 'ca/ca.crt');
-const TLS_CRL        = process.env.TLS_CRL  || join(PKI_DIR, 'ca/crl.pem');
+const SECRETS_DETAIL_PATH = RUNTIME.secretsDetailPath;
+const PKI_DIR        = RUNTIME.pkiDir;
+const AGE_KEY_FILE   = RUNTIME.ageKeyFile;
+const AUDIT_DIR      = RUNTIME.auditDir;
+const TLS_CERT       = RUNTIME.tlsCert;
+const TLS_KEY        = RUNTIME.tlsKey;
+const TLS_CA         = RUNTIME.tlsCa;
+const TLS_CRL        = RUNTIME.tlsCrl;
 const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
+const HEALTH_SOCKET_PATH = RUNTIME.healthSocketPath;
 
 console.log('============================================');
 console.log(`  Secret Broker v${BROKER_VERSION}`);
@@ -241,6 +275,7 @@ function sopsEncryptAtomic(targetPath, plaintext) {
 // Config loader
 // ============================================================
 let CONFIG = null;
+let WEBAUTHN_SERVICE = null;
 // Phase 1.1.1: structured secrets. Each entry is:
 //   { type, description, fields: { [fieldName]: value }, created_at, updated_at, updated_by }
 // `type` is a key in type-schemas.js. `fields` is dynamic per type.
@@ -263,6 +298,7 @@ async function loadConfig() {
   cfg.services = cfg.services || {};
   cfg.clients = cfg.clients || {};
   CONFIG = cfg;
+  WEBAUTHN_SERVICE = createWebAuthnService({ config: CONFIG, persistConfig, audit });
   console.log(`[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`);
 }
 
@@ -466,7 +502,7 @@ function normalizeClientConfig(body) {
   if (body.password === null || body.password === '') delete out.password;  // explicit clear
   if (body.allow_password_login !== undefined) out.allow_password_login = !!body.allow_password_login;
   if (body.role !== undefined) {
-    if (!['admin', 'developer', 'readonly'].includes(String(body.role))) {
+    if (!['admin', 'developer', 'ci', 'readonly', 'user'].includes(String(body.role))) {
       throw new Error(`Invalid role: ${body.role}`);
     }
     out.role = String(body.role);
@@ -476,6 +512,9 @@ function normalizeClientConfig(body) {
   }
   if (body.allowed_proxy !== undefined) {
     out.allowed_proxy = Array.isArray(body.allowed_proxy) ? body.allowed_proxy : [];
+  }
+  if (body.allowed_operations !== undefined) {
+    out.allowed_operations = Array.isArray(body.allowed_operations) ? body.allowed_operations : [];
   }
   if (body.rate_limit !== undefined) out.rate_limit = String(body.rate_limit);
   if (body.description !== undefined) out.description = String(body.description);
@@ -519,10 +558,20 @@ function normalizeServiceConfig(body) {
   if (body.description !== undefined) out.description = String(body.description);
   if (body.region !== undefined) out.region = String(body.region);
   if (body.action !== undefined) out.action = String(body.action);
+  if (body.api_version !== undefined) out.api_version = String(body.api_version);
+  if (body.service_code !== undefined) out.service_code = String(body.service_code);
+  if (body.environment !== undefined) out.environment = String(body.environment);
+  if (body.credential_source !== undefined) out.credential_source = String(body.credential_source);
+  if (body.registry_auth_realm !== undefined) out.registry_auth_realm = String(body.registry_auth_realm);
+  if (body.registry_service !== undefined) out.registry_service = String(body.registry_service);
+  if (body.registry_scope !== undefined) out.registry_scope = String(body.registry_scope);
+  if (Array.isArray(body.registry_auth_hosts)) out.registry_auth_hosts = body.registry_auth_hosts.map(value => String(value));
   // Token reference: just the name of the secret; never the value
   if (body.token_secret !== undefined) out.token_secret = String(body.token_secret);
   // Aliyun OpenAPI v2: structured secret name (with access_key_id + access_key_secret fields)
   if (body.ak_secret !== undefined) out.ak_secret = String(body.ak_secret);
+  if (body.access_key_secret !== undefined) out.access_key_secret = String(body.access_key_secret);
+  if (body.access_secret_secret !== undefined) out.access_secret_secret = String(body.access_secret_secret);
   // inject_headers: must be a flat string->string map
   if (body.inject_headers && typeof body.inject_headers === 'object') {
     const h = {};
@@ -538,6 +587,15 @@ function normalizeServiceConfig(body) {
   // allow_paths: array of regex strings
   if (Array.isArray(body.allow_paths)) {
     out.allow_paths = body.allow_paths.map(s => String(s));
+  }
+  if (Array.isArray(body.allow_methods)) {
+    out.allow_methods = body.allow_methods.map(s => String(s).toUpperCase());
+  }
+  // Typed operations are the only data-plane interface in strict mode. Keep
+  // the catalog through API create/update, but sanitize every executable
+  // field before persistence.
+  if (body.operations !== undefined) {
+    out.operations = normalizeOperations(body.operations);
   }
   // dashboard_actions: array of {label, method, path, query?}
   if (Array.isArray(body.dashboard_actions)) {
@@ -565,18 +623,48 @@ function validateServiceConfig(name, cfg) {
   else {
     // Allow any type we have callUpstream support for. (We don't restrict to
     // a known set because Phase 3 may add more.)
-    const supported = new Set(['github_token', 'bearer', 'header', 'aliyun_v2', 'ssh_proxy']);
+    const supported = new Set(['github_token', 'bearer', 'header', 'aliyun_v2', 'aliyun_v3', 'tencent_v3', 'docker_registry', 'ssh_proxy']);
     if (!supported.has(cfg.type)) errs.push(`Unknown service type: ${cfg.type}`);
   }
   if (!cfg.upstream && cfg.type !== 'ssh_proxy') errs.push('Missing upstream URL');
   if (cfg.upstream) {
-    try { new URL(cfg.upstream); } catch (e) { errs.push('upstream is not a valid URL'); }
+    try {
+      const upstream = new URL(cfg.upstream);
+      if (upstream.protocol !== 'https:' || upstream.username || upstream.password || (upstream.port && upstream.port !== '443')) {
+        errs.push('upstream must be credential-free HTTPS on port 443');
+      }
+      const hostname = upstream.hostname.toLowerCase();
+      if (isIP(hostname) || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+        errs.push('upstream must use a public DNS hostname, not an IP or local name');
+      }
+    } catch (e) { errs.push('upstream is not a valid URL'); }
   }
   if (cfg.type === 'header' && !cfg.header_value_template) {
     errs.push('type=header requires header_value_template (e.g. "Bearer {{secret.X.value}}")');
   }
   if (cfg.type === 'aliyun_v2' && !cfg.region) {
     errs.push('type=aliyun_v2 requires region');
+  }
+  if (cfg.type === 'tencent_v3' && (!cfg.region || !cfg.service_code || !cfg.api_version)) {
+    errs.push('type=tencent_v3 requires region, service_code, and api_version');
+  }
+  if (cfg.type === 'docker_registry') {
+    if (!cfg.token_secret) errs.push('type=docker_registry requires token_secret');
+    if (!cfg.registry_auth_realm || !cfg.registry_service || !cfg.registry_scope) {
+      errs.push('type=docker_registry requires fixed registry_auth_realm, registry_service, and registry_scope');
+    }
+    if (!Array.isArray(cfg.registry_auth_hosts) || cfg.registry_auth_hosts.length === 0) {
+      errs.push('type=docker_registry requires a non-empty registry_auth_hosts allowlist');
+    }
+    try {
+      const realm = new URL(cfg.registry_auth_realm || '');
+      if (realm.protocol !== 'https:' || realm.username || realm.password || (realm.port && realm.port !== '443') || isIP(realm.hostname)) {
+        errs.push('registry_auth_realm must be credential-free HTTPS on port 443');
+      }
+      if (Array.isArray(cfg.registry_auth_hosts) && !cfg.registry_auth_hosts.map(String).map(value => value.toLowerCase()).includes(realm.hostname.toLowerCase())) {
+        errs.push('registry_auth_realm hostname must be present in registry_auth_hosts');
+      }
+    } catch { errs.push('registry_auth_realm is not a valid URL'); }
   }
   if (cfg.token_secret && !isValidSecretName(cfg.token_secret)) {
     errs.push(`token_secret "${cfg.token_secret}" is not a valid secret name`);
@@ -587,6 +675,21 @@ function validateServiceConfig(name, cfg) {
 // Get a secret by name. Returns the full entry {type, fields, ...} or null.
 function getSecret(name) {
   return SECRET_CACHE.get(name) || null;
+}
+
+function storedCredentialReference(service) {
+  return service?.token_secret || service?.ak_secret || service?.access_key_secret || null;
+}
+
+function guardServiceCredential(service) {
+  // IMDS/OIDC-backed credentials are fetched and validated for every upstream
+  // signing operation; they deliberately have no static secret health record.
+  if (service?.credential_source === 'imds' || service?.credential_source === 'workload_identity') {
+    return { allowed: true, status: 'dynamic_identity', detail: 'short-lived workload credential' };
+  }
+  return checkSecretForService(storedCredentialReference(service), healthcheckGetSecretStatus, {
+    failClosed: securityProfile(CONFIG) === 'strict',
+  });
 }
 
 // Get a specific field from a secret. Returns the value or undefined.
@@ -673,6 +776,8 @@ function audit(event) {
   return e;
 }
 
+const SENSITIVE_APPROVALS = createSensitiveApprovalStore({ audit });
+
 // Phase 1.4: filtered audit read.
 // Filters: client (cn substring), service, action, status, since, until.
 // Returns up to `limit` events (default 100, max 5000).
@@ -716,72 +821,24 @@ function readAudit({ since, limit = 100 } = {}) {
 // ============================================================
 // Session tokens (for dashboard / browser usage; mTLS is still supported)
 // ============================================================
-const SESSIONS = new Map();  // token -> { cn, fp, role, clientName, expiresAt }
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days, sliding on access
+const SESSION_TTL_MS = 15 * 60 * 1000;
+const SESSION_ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1000;
 const SESSION_HEADER = 'x-auth-token';
-
-function makeSession(ctx) {
-  const token = randomUUID();
-  SESSIONS.set(token, {
-    cn: ctx.cn,
-    fp: ctx.fp,
-    role: ctx.client.role,
-    clientName: ctx.clientName,
-    cert: ctx.cert,
-    client: ctx.client,
-    expiresAt: Date.now() + SESSION_TTL_MS,
-    createdAt: Date.now(),
-  });
-  return token;
-}
-
-function getSession(req) {
-  const t = req.headers[SESSION_HEADER]
-    || (req.headers.cookie || '').match(/broker_session=([^;]+)/)?.[1];
-  if (!t) return null;
-  const s = SESSIONS.get(t);
-  if (!s) return null;
-  if (Date.now() > s.expiresAt) {
-    SESSIONS.delete(t);
-    return null;
-  }
-  // sliding expiration
-  s.expiresAt = Date.now() + SESSION_TTL_MS;
-  return s;
-}
-
-function deleteSession(token) {
-  if (token) SESSIONS.delete(token);
-}
-
-// Login brute-force protection (per client + auth mode)
-const LOGIN_ATTEMPTS = new Map();  // `${clientName}|${mode}` -> { fails, lockedUntil }
-const MAX_LOGIN_FAILS = 5;
-const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
-
-function checkLoginLock(key) {
-  const a = LOGIN_ATTEMPTS.get(key);
-  if (!a) return true;
-  // lockedUntil === 0 means "no lock armed yet"; only block while armed
-  if (a.lockedUntil && Date.now() < a.lockedUntil) return false;
-  return true;
-}
-
-function recordLoginFail(key) {
-  const a = LOGIN_ATTEMPTS.get(key) || { fails: 0, lockedUntil: 0 };
-  // if a previous lockout expired, start the counter over
-  if (a.lockedUntil && Date.now() >= a.lockedUntil) {
-    a.fails = 0;
-    a.lockedUntil = 0;
-  }
-  a.fails += 1;
-  if (a.fails >= MAX_LOGIN_FAILS) a.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
-  LOGIN_ATTEMPTS.set(key, a);
-}
-
-function clearLoginLock(key) {
-  LOGIN_ATTEMPTS.delete(key);
-}
+const {
+  sessions: SESSIONS,
+  makeSession,
+  getSession,
+  deleteSession,
+  deleteSessionsForClient,
+  checkLoginLock,
+  recordLoginFail,
+  clearLoginLock,
+} = createSessionStore({
+  ttlMs: SESSION_TTL_MS,
+  absoluteTtlMs: SESSION_ABSOLUTE_TTL_MS,
+  header: SESSION_HEADER,
+  resolveClient: (name) => CONFIG.clients?.[name],
+});
 
 
 function getClientContext(socket) {
@@ -1179,18 +1236,13 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
     if (serviceCfg.type === 'bearer') {
       injectHeaders['Authorization'] = `Bearer ${token}`;
     } else if (serviceCfg.type === 'github_token') {
-      injectHeaders['Authorization'] = `token ${token}`;
+      injectHeaders['Authorization'] = `Bearer ${token}`;
     } else if (serviceCfg.type === 'header') {
       const tpl = serviceCfg.header_value_template || 'Bearer {{secret}}';
       injectHeaders[serviceCfg.header_name || 'Authorization'] = tpl.replace('{{secret}}', token);
     }
     // Build URL: caller-provided path + query against upstream
-    url = new URL(path, serviceCfg.upstream);
-    if (query && typeof query === 'object') {
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
-      }
-    }
+    url = buildPinnedUrl(serviceCfg.upstream, path, query);
   } else if (serviceCfg.type === 'aliyun_v2') {
     // Aliyun OpenAPI v2: pull creds from IMDS (preferred) or SOPS, then sign
     let creds = null;
@@ -1214,25 +1266,95 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
     const action = getAliyunAction(path, serviceCfg, query);
     if (!action) throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
     url = buildAliyunSignedUrl(serviceCfg.upstream, action, query, serviceCfg.region, creds);
+  } else if (serviceCfg.type === 'aliyun_v3') {
+    let creds;
+    if (serviceCfg.credential_source === 'imds') {
+      const imds = await getAliyunCreds('imds');
+      creds = { access_key_id: imds.accessKeyId, access_key_secret: imds.accessKeySecret, security_token: imds.securityToken };
+    } else {
+      const secretEntry = getSecret(serviceCfg.ak_secret);
+      const accessKeyId = secretEntry?.fields?.[serviceCfg.ak_id_field || 'access_key_id'];
+      const accessKeySecret = secretEntry?.fields?.[serviceCfg.ak_secret_field || 'access_key_secret'];
+      const securityToken = secretEntry?.fields?.[serviceCfg.security_token_field || 'security_token'];
+      if (!accessKeyId || !accessKeySecret) throw new Error('Aliyun V3 credentials are unavailable');
+      creds = { access_key_id: accessKeyId, access_key_secret: accessKeySecret, security_token: securityToken };
+    }
+    const action = serviceCfg.action || query?.Action;
+    const version = serviceCfg.api_version || query?.Version;
+    const businessQuery = { ...(query || {}) };
+    delete businessQuery.Action;
+    delete businessQuery.Version;
+    url = buildPinnedUrl(serviceCfg.upstream, path, businessQuery);
+    Object.assign(injectHeaders, signAliyunV3({
+      method: normalizeMethod(method), host: url.host, path: url.pathname,
+      query: Object.fromEntries(url.searchParams), body, secret: creds, action, version,
+    }));
+  } else if (serviceCfg.type === 'tencent_v3') {
+    let creds;
+    if (serviceCfg.ak_secret) {
+      const secretEntry = getSecret(serviceCfg.ak_secret);
+      const secretId = secretEntry?.fields?.[serviceCfg.ak_id_field || 'secret_id'];
+      const secretKey = secretEntry?.fields?.[serviceCfg.ak_secret_field || 'secret_key'];
+      const token = secretEntry?.fields?.[serviceCfg.security_token_field || 'token'];
+      if (!secretId || !secretKey) throw new Error('Tencent V3 credentials are unavailable');
+      creds = { secret_id: secretId, secret_key: secretKey, token };
+    } else {
+      const secretId = getSecretField(serviceCfg.access_key_secret, 'value');
+      const secretKey = getSecretField(serviceCfg.access_secret_secret, 'value');
+      if (!secretId || !secretKey) throw new Error('Tencent V3 credentials are unavailable');
+      creds = { secret_id: secretId, secret_key: secretKey };
+    }
+    const action = serviceCfg.action || query?.Action;
+    const version = serviceCfg.api_version || query?.Version;
+    if (!action || !version || !serviceCfg.service_code || !serviceCfg.region) {
+      throw new Error('Tencent V3 requires fixed action, api_version, service_code, and region');
+    }
+    const businessQuery = { ...(query || {}) };
+    delete businessQuery.Action;
+    delete businessQuery.Version;
+    url = buildPinnedUrl(serviceCfg.upstream, path, businessQuery);
+    Object.assign(injectHeaders, signTencentV3({
+      method: normalizeMethod(method), host: url.host, path: url.pathname,
+      query: Object.fromEntries(url.searchParams), body, secret: creds,
+      action, version, service: serviceCfg.service_code, region: serviceCfg.region,
+    }));
+  } else if (serviceCfg.type === 'docker_registry') {
+    const secretEntry = getSecret(serviceCfg.token_secret);
+    const username = secretEntry?.fields?.[serviceCfg.username_field || 'username'];
+    const pat = secretEntry?.fields?.[serviceCfg.token_field || 'pat'];
+    if (!username || !pat) throw new Error('Docker Registry credentials are unavailable');
+    url = buildPinnedUrl(serviceCfg.upstream, path, query);
+    const registryHost = new URL(serviceCfg.upstream).hostname.toLowerCase();
+    Object.assign(injectHeaders, await signDockerRegistry({
+      registry: serviceCfg.upstream,
+      realm: serviceCfg.registry_auth_realm,
+      service: serviceCfg.registry_service,
+      scope: serviceCfg.registry_scope,
+      username,
+      password: pat,
+      allowedRegistryHosts: [registryHost],
+      allowedAuthHosts: serviceCfg.registry_auth_hosts,
+      resolveHostname: resolveHostnameDoH,
+    }));
   } else {
     throw new Error(`Unsupported service type: ${serviceCfg.type}`);
   }
 
   // Build outgoing request
-  const outHeaders = {
+  const callerHeaders = sanitizeCallerHeaders(headers, serviceCfg.allowed_caller_headers);
+  const baseHeaders = {
     'User-Agent': `secret-broker/${BROKER_VERSION}`,
     ...outboundTraceHeaders({
       traceparent: typeof getTraceparent === 'function' ? getTraceparent() : undefined,
       requestId: typeof getRequestId === 'function' ? getRequestId() : undefined,
     }),
-    ...injectHeaders,
-    ...(headers || {}),
   };
+  const outHeaders = mergeOutboundHeaders(baseHeaders, callerHeaders, injectHeaders);
   // Host header 必须用 upstream 的 host，否则 upstream 验签会失败
   outHeaders['Host'] = url.host;
 
   const fetchOpts = {
-    method: method || 'GET',
+    method: normalizeMethod(method),
     headers: outHeaders,
     redirect: 'manual',
   };
@@ -1250,14 +1372,17 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   // is blocked (c-ares fails with ENOTFOUND). Pre-resolve via DNS-over-HTTPS
   // (which goes over TCP 443) and connect to the IP directly.
   const ip = url.protocol === 'https:' ? await resolveHostnameDoH(url.hostname) : url.hostname;
+  assertSafeDestination(url.hostname, ip);
   const isHttps = url.protocol === 'https:';
   const requestLib = isHttps ? httpsRequest : httpRequest;
   const upstreamResp = await new Promise((resolve, reject) => {
     const req = requestLib({
       protocol: url.protocol,
       hostname: ip,
+      servername: isHttps ? url.hostname : undefined,
+      rejectUnauthorized: true,
       port: url.port || (isHttps ? 443 : 80),
-      method: method || 'GET',
+      method: normalizeMethod(method),
       path: url.pathname + url.search,
       headers: outHeaders,  // Host: url.host set above
       timeout: 15000,
@@ -1279,10 +1404,21 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   delete respHeaders['connection'];
   delete respHeaders['keep-alive'];
   delete respHeaders['content-encoding'];  // 避免 content-length mismatch
+  delete respHeaders['set-cookie'];
+  delete respHeaders['proxy-authenticate'];
 
   // IncomingMessage has no .arrayBuffer(); collect from 'data' events.
   const chunks = [];
-  for await (const chunk of upstreamResp) chunks.push(chunk);
+  let responseBytes = 0;
+  const maxResponseBytes = Number(serviceCfg.max_response_bytes || DEFAULT_MAX_RESPONSE_BYTES);
+  for await (const chunk of upstreamResp) {
+    responseBytes += chunk.length;
+    if (responseBytes > maxResponseBytes) {
+      upstreamResp.destroy();
+      throw new Error('Upstream response exceeded configured limit');
+    }
+    chunks.push(chunk);
+  }
   const respBuf = Buffer.concat(chunks);
   return {
     status: upstreamResp.statusCode,
@@ -1385,15 +1521,64 @@ async function handle(req, res) {
     }
   }
 
+  // ----- WebAuthn login (strict browser control-plane authentication) -----
+  if (m === 'POST' && p === '/api/v1/login/webauthn/begin') {
+    const body = await readBody(req) || {};
+    const clientName = String(body.client || '').trim();
+    if (!clientName || !CONFIG.clients[clientName]) return jsonError(res, 404, 'Client not found');
+    try {
+      const registered = WEBAUTHN_SERVICE.listCredentials(clientName);
+      if (securityProfile(CONFIG) === 'strict' && registered.length < 2) {
+        audit({ action: 'webauthn_auth_begin', client: clientName, status: 'denied', reason: 'two_hardware_keys_required' });
+        return jsonError(res, 403, 'Strict profile requires two registered hardware security keys');
+      }
+      return send(res, 200, await WEBAUTHN_SERVICE.beginAuthentication(clientName));
+    } catch (error) {
+      audit({ action: 'webauthn_auth_begin', client: clientName, status: 'denied', reason: 'invalid_request' });
+      return jsonError(res, 400, 'Unable to begin WebAuthn authentication');
+    }
+  }
+
+  if (m === 'POST' && p === '/api/v1/login/webauthn/finish') {
+    const body = await readBody(req) || {};
+    const clientName = String(body.client || '').trim();
+    if (!clientName || !body.response || !CONFIG.clients[clientName]) return jsonError(res, 400, 'Missing {client,response}');
+    try {
+      await WEBAUTHN_SERVICE.finishAuthentication(clientName, body.response);
+      const targetClient = CONFIG.clients[clientName];
+      const cn = `${clientName}@webauthn`;
+      const token = makeSession({ cn, fp: null, role: targetClient.role, clientName, cert: { subject: { CN: cn } }, client: targetClient });
+      res.setHeader('Set-Cookie', `broker_session=${token}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+      audit({ action: 'login', status: 'ok', cn, client: clientName, via: 'webauthn' });
+      return send(res, 200, {
+        expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+        cn,
+        role: targetClient.role,
+        via: 'webauthn',
+      });
+    } catch (error) {
+      audit({ action: 'login', status: 'denied', client: clientName, via: 'webauthn', reason: 'verification_failed' });
+      return jsonError(res, 401, 'WebAuthn authentication failed');
+    }
+  }
+
   // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
   // Login must work from a browser that may not have a client cert installed.
   // Security: password-only login requires the client to be explicitly marked
   // `allow_password_login: true` in broker.yaml AND is protected by a
   // per-client lockout (5 fails -> 15 min). mTLS remains the strong default.
   if (m === 'POST' && p === '/api/v1/login') {
+    if (securityProfile(CONFIG) === 'strict') {
+      audit({ action: 'login', status: 'denied', reason: 'legacy_login_disabled_in_strict_profile' });
+      return jsonError(res, 403, 'Use WebAuthn login in strict profile');
+    }
     const body = await readBody(req) || {};
     const password = body.password;  // optional when mTLS path is taken
     const ctx0 = getIdentity(req);
+    if ((!ctx0 || !['mtls', 'mtls-via-nginx'].includes(ctx0.via)) && !permits(CONFIG, 'password')) {
+      audit({ action: 'login', status: 'denied', reason: 'password_disabled_by_security_profile' });
+      return jsonError(res, 403, 'Password login is disabled by the active security profile');
+    }
     if (!ctx0 && !password) return jsonError(res, 400, 'Missing {password}');
     let targetClient = null, targetName = null, lockKey = null, via = 'mtls';
     let skipPasswordCheck = false;
@@ -1443,6 +1628,7 @@ async function handle(req, res) {
     const fp = ctx0 ? ctx0.fp : null;
     if (isMfaRequired(targetClient, via)) {
       const mfaToken = createMfaPending(targetName, fp);
+      if (!mfaToken) return jsonError(res, 429, 'Too many failed MFA attempts. Locked until later.');
       audit({ action: 'login', status: 'mfa_required', client: targetName, via });
       return send(res, 200, {
         ok: false,
@@ -1456,9 +1642,8 @@ async function handle(req, res) {
     const cn = ctx0 ? ctx0.cn : `${targetName}@web`;
     const token = makeSession({ cn, fp, role: targetClient.role, clientName: targetName, cert: { subject: { CN: cn } }, client: targetClient });
     audit({ action: 'login', status: 'ok', cn, client: targetName, via });
-    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    res.setHeader('Set-Cookie', `broker_session=${token}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     return send(res, 200, {
-      token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
       cn,
       role: targetClient.role,
@@ -1482,18 +1667,49 @@ async function handle(req, res) {
       audit({ action: 'login_mfa', status: 'denied', reason: 'client_gone', client: pending.clientName });
       return jsonError(res, 404, 'Client no longer exists');
     }
+    if (pending.fp) {
+      const boundIdentity = getIdentity(req);
+      if (!boundIdentity || !['mtls', 'mtls-via-nginx'].includes(boundIdentity.via) ||
+          String(boundIdentity.fp || '').toUpperCase() !== String(pending.fp).toUpperCase()) {
+        recordMfaFailure(mfaToken);
+        audit({ action: 'login_mfa', status: 'denied', reason: 'certificate_binding_mismatch', client: pending.clientName });
+        return jsonError(res, 401, 'MFA transaction is bound to the initiating client certificate');
+      }
+    }
     const mfaResult = verifyMfaCode(targetClient, code);
     if (!mfaResult.ok) {
+      recordMfaFailure(mfaToken);
       audit({ action: 'login_mfa', status: 'denied', reason: 'bad_code', client: pending.clientName });
       return jsonError(res, 401, 'Bad TOTP code or recovery code');
     }
+    if (mfaResult.method === 'recovery' || mfaResult.method === 'totp') {
+      let rollback;
+      if (mfaResult.method === 'recovery') {
+        const hashes = targetClient.totp_recovery_codes_hash;
+        const [removed] = hashes.splice(mfaResult.recovery_index, 1);
+        rollback = () => hashes.splice(mfaResult.recovery_index, 0, removed);
+      } else {
+        const previousCounter = targetClient.totp_last_used_counter;
+        targetClient.totp_last_used_counter = mfaResult.totp_counter;
+        rollback = () => previousCounter === undefined
+          ? delete targetClient.totp_last_used_counter
+          : (targetClient.totp_last_used_counter = previousCounter);
+      }
+      try {
+        await persistConfig();
+      } catch (error) {
+        rollback();
+        audit({ action: 'login_mfa', status: 'error', reason: 'mfa_state_persist_failed', client: pending.clientName });
+        return jsonError(res, 503, 'MFA state could not be consumed durably');
+      }
+    }
     consumeMfaPending(mfaToken);
+    clearMfaFailures(pending.clientName);
     const cn = pending.fp ? `${pending.clientName}@mtls` : `${pending.clientName}@web`;
     const token = makeSession({ cn, fp: pending.fp, role: targetClient.role, clientName: pending.clientName, cert: { subject: { CN: cn } }, client: targetClient });
     audit({ action: 'login', status: 'ok', cn, client: pending.clientName, via: 'mfa', mfa_method: mfaResult.method });
-    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    res.setHeader('Set-Cookie', `broker_session=${token}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     return send(res, 200, {
-      token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
       cn,
       role: targetClient.role,
@@ -1510,7 +1726,7 @@ async function handle(req, res) {
       if (s) audit({ action: 'logout', cn: s.cn, fp: s.fp, status: 'ok' });
       deleteSession(token);
     }
-    res.setHeader('Set-Cookie', 'broker_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+    res.setHeader('Set-Cookie', 'broker_session=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
     return send(res, 200, { logged_out: true });
   }
 
@@ -1603,6 +1819,24 @@ async function handle(req, res) {
     return jsonError(res, 429, 'Rate limit exceeded');
   }
 
+  function consumeSensitiveApproval(action, resource, payload = {}) {
+    if (securityProfile(CONFIG) !== 'strict') return true;
+    const approvalId = String(req.headers['x-broker-approval'] || '');
+    if (!approvalId || ctx.via !== 'session') return false;
+    try {
+      return SENSITIVE_APPROVALS.consumeApproval({
+        approvalId,
+        requester: ctx.clientName,
+        action,
+        resource,
+        payload,
+      });
+    } catch {
+      audit({ action: 'sensitive_operation', operation: action, resource, cn: ctx.cn, status: 'denied', reason: 'approval_invalid' });
+      return false;
+    }
+  }
+
   // ============================================================
   // v3.0: Self-service (我的资料) — 任何已登录 client 都能用
   // ============================================================
@@ -1640,6 +1874,102 @@ async function handle(req, res) {
       last_cert_rotation: c.last_cert_rotation || null,
       rate_limit: c.rate_limit || '100/hour',
     });
+  }
+
+  // ----- WebAuthn hardware-key enrollment -----
+  if (m === 'GET' && p === '/api/v1/me/webauthn/credentials') {
+    return send(res, 200, { items: WEBAUTHN_SERVICE.listCredentials(ctx.clientName) });
+  }
+
+  if (m === 'POST' && p === '/api/v1/me/webauthn/register/begin') {
+    if (!['mtls', 'mtls-via-nginx'].includes(ctx.via)) {
+      audit({ action: 'webauthn_register_begin', cn: ctx.cn, status: 'denied', reason: 'mtls_reauthentication_required' });
+      return jsonError(res, 403, 'mTLS reauthentication is required to register a hardware key');
+    }
+    try {
+      return send(res, 200, await WEBAUTHN_SERVICE.beginRegistration(ctx.clientName, ctx.client.description || ctx.clientName));
+    } catch (error) {
+      audit({ action: 'webauthn_register_begin', cn: ctx.cn, status: 'error', reason: 'registration_begin_failed' });
+      return jsonError(res, 400, 'Unable to begin WebAuthn registration');
+    }
+  }
+
+  if (m === 'POST' && p === '/api/v1/me/webauthn/register/finish') {
+    if (!['mtls', 'mtls-via-nginx'].includes(ctx.via)) {
+      audit({ action: 'webauthn_register_finish', cn: ctx.cn, status: 'denied', reason: 'mtls_reauthentication_required' });
+      return jsonError(res, 403, 'mTLS reauthentication is required to register a hardware key');
+    }
+    const body = await readBody(req) || {};
+    if (!body.response) return jsonError(res, 400, 'Missing {response}');
+    try {
+      const credential = await WEBAUTHN_SERVICE.finishRegistration(ctx.clientName, body.response);
+      return send(res, 200, { ok: true, credential });
+    } catch (error) {
+      audit({ action: 'webauthn_register_finish', cn: ctx.cn, status: 'denied', reason: 'verification_failed' });
+      return jsonError(res, 400, 'WebAuthn registration failed');
+    }
+  }
+
+  // ----- Short-lived WebAuthn reauthentication grants -----
+  if (m === 'POST' && p === '/api/v1/me/reauth/webauthn/begin') {
+    if (ctx.via !== 'session' || !ctx.sessionId) return jsonError(res, 403, 'A browser session is required');
+    try {
+      return send(res, 200, await WEBAUTHN_SERVICE.beginAuthentication(ctx.clientName));
+    } catch {
+      return jsonError(res, 400, 'Unable to begin WebAuthn reauthentication');
+    }
+  }
+
+  if (m === 'POST' && p === '/api/v1/me/reauth/webauthn/finish') {
+    if (ctx.via !== 'session' || !ctx.sessionId) return jsonError(res, 403, 'A browser session is required');
+    const body = await readBody(req) || {};
+    if (!body.response) return jsonError(res, 400, 'Missing {response}');
+    try {
+      const verified = await WEBAUTHN_SERVICE.finishAuthentication(ctx.clientName, body.response);
+      return send(res, 200, SENSITIVE_APPROVALS.issueReauth({
+        clientName: ctx.clientName,
+        sessionId: ctx.sessionId,
+        method: 'webauthn',
+        credentialId: verified.credential_id,
+      }));
+    } catch {
+      audit({ action: 'reauth', cn: ctx.cn, status: 'denied', reason: 'webauthn_verification_failed' });
+      return jsonError(res, 401, 'WebAuthn reauthentication failed');
+    }
+  }
+
+  if (m === 'POST' && p === '/api/v1/admin/approvals') {
+    if (ctx.client.role !== 'admin' || ctx.via !== 'session') return jsonError(res, 403, 'Admin browser session required');
+    const body = await readBody(req) || {};
+    try {
+      return send(res, 201, SENSITIVE_APPROVALS.requestApproval({
+        requester: ctx.clientName,
+        action: String(body.action || ''),
+        resource: String(body.resource || ''),
+        payload: body.payload || {},
+        reauthGrant: String(body.reauth_grant || ''),
+        sessionId: ctx.sessionId,
+      }));
+    } catch {
+      return jsonError(res, 403, 'Valid WebAuthn reauthentication is required');
+    }
+  }
+
+  const approvalMatch = p.match(/^\/api\/v1\/admin\/approvals\/([^/]+)\/approve$/);
+  if (m === 'POST' && approvalMatch) {
+    if (ctx.client.role !== 'admin' || ctx.via !== 'session') return jsonError(res, 403, 'Admin browser session required');
+    const body = await readBody(req) || {};
+    try {
+      return send(res, 200, SENSITIVE_APPROVALS.approve({
+        approvalId: approvalMatch[1],
+        approver: ctx.clientName,
+        role: ctx.client.role,
+        reauthGrant: String(body.reauth_grant || ''),
+        sessionId: ctx.sessionId,
+      }));
+    } catch {
+      return jsonError(res, 403, 'Approval rejected');
+    }
   }
 
   // ----- POST /api/v1/me/change-password -----
@@ -1876,6 +2206,7 @@ async function handle(req, res) {
       scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
       allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
       allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
       ttl_ms: body.ttl_seconds ? body.ttl_seconds * 1000 : undefined,
@@ -1988,6 +2319,9 @@ async function handle(req, res) {
     const { id, secret, key_obj } = generateMasterKey(name, ctx.clientName, {
       default_child_ttl_seconds: body.default_child_ttl_seconds,
       child_scopes: Array.isArray(body.child_scopes) ? body.child_scopes : undefined,
+      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
       ttl_ms: body.ttl_ms,
@@ -2034,6 +2368,7 @@ async function handle(req, res) {
       scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
       allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
       allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : undefined,
       ttl_seconds: body.ttl_seconds ? parseInt(body.ttl_seconds, 10) : undefined,
@@ -2088,6 +2423,10 @@ async function handle(req, res) {
         upstream: svc.upstream || '',
         region: svc.region || '',
         action: svc.action || '',
+        api_version: svc.api_version || '',
+        service_code: svc.service_code || '',
+        environment: svc.environment || 'default',
+        ak_secret: svc.ak_secret || null,
         token_secret: svc.token_secret || null,
         secret_health: secretHealth,
         allowed: isServiceAllowed(ctx, name),
@@ -2143,9 +2482,13 @@ async function handle(req, res) {
 
   // ----- POST /api/v1/secrets/resolve -----
   if (m === 'POST' && p === '/api/v1/secrets/resolve') {
+    if (!permits(CONFIG, 'secret_resolve')) {
+      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'security_profile' });
+      return jsonError(res, 403, 'Plaintext secret resolution is disabled by the active security profile');
+    }
     const body = await readBody(req);
     if (!body || !body.name) return jsonError(res, 400, 'Missing {name}');
-    if (!canResolve(ctx, body.name)) {
+    if ((ctx.apiKey && !canResolveSecret(ctx.apiKey, body.name)) || !canResolve(ctx, body.name)) {
       audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'denied' });
       return jsonError(res, 403, 'Not allowed to resolve this secret');
     }
@@ -2253,7 +2596,7 @@ async function handle(req, res) {
         name,
         type: entry.type || 'custom',
         description: entry.description || '',
-        fields: entry.fields || {},
+        fields: renderSecretFields(entry.fields, securityProfile(CONFIG)),
         created_at: entry.created_at || null,
         updated_at: entry.updated_at || null,
         updated_by: entry.updated_by || null,
@@ -2299,6 +2642,10 @@ async function handle(req, res) {
     if (SECRET_CACHE.has(name)) {
       audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
       return jsonError(res, 409, `Secret ${name} already exists. Use PUT to update.`);
+    }
+    const approvalPayload = { name, type, description: description || '', fields };
+    if (!consumeSensitiveApproval('secret.create', `secret.${name}`, approvalPayload)) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
     }
     const now = new Date().toISOString();
     const who = ctx.cn || 'admin';
@@ -2346,6 +2693,14 @@ async function handle(req, res) {
     if (errs.length > 0) {
       return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
     }
+    const approvalPayload = {
+      type: body.type,
+      description: body.description,
+      fields: body.fields,
+    };
+    if (!consumeSensitiveApproval('secret.update', `secret.${name}`, approvalPayload)) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     updated.updated_at = new Date().toISOString();
     updated.updated_by = ctx.cn || 'admin';
     const prevSnapshot = JSON.parse(JSON.stringify(existing));
@@ -2367,6 +2722,9 @@ async function handle(req, res) {
     const name = updateMatch[1];
     const existing = SECRET_CACHE.get(name);
     if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
+    if (!consumeSensitiveApproval('secret.delete', `secret.${name}`, {})) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     SECRET_CACHE.delete(name);
     try {
       await persistSecretsDetail();
@@ -2415,6 +2773,7 @@ async function handle(req, res) {
         header_value_template: svc.header_value_template || null,
         allow_paths: svc.allow_paths || null,
         dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+        operations: svc.operations || {},
         allowed_clients: clientNamesAllowedFor(name),
         action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
       });
@@ -2443,12 +2802,17 @@ async function handle(req, res) {
       upstream: svc.upstream || '',
       region: svc.region || '',
       action: svc.action || '',
+      api_version: svc.api_version || '',
+      service_code: svc.service_code || '',
+      environment: svc.environment || 'default',
+      ak_secret: svc.ak_secret || null,
       token_secret: svc.token_secret || null,
       inject_headers: svc.inject_headers || {},
       header_name: svc.header_name || null,
       header_value_template: svc.header_value_template || null,
       allow_paths: svc.allow_paths || null,
       dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+      operations: svc.operations || {},
       allowed_clients: clientNamesAllowedFor(name),
     });
   }
@@ -2458,7 +2822,9 @@ async function handle(req, res) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
     const body = await readBody(req) || {};
     const name = body.name;
-    const cfg = normalizeServiceConfig(body);
+    let cfg;
+    try { cfg = normalizeServiceConfig(body); }
+    catch (e) { return jsonError(res, 400, `Validation failed: ${e.message}`); }
     const errs = validateServiceConfig(name, cfg);
     if (errs.length > 0) {
       audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
@@ -2467,6 +2833,9 @@ async function handle(req, res) {
     if (CONFIG.services[name]) {
       audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
       return jsonError(res, 409, `Service ${name} already exists. Use PUT to update.`);
+    }
+    if (!consumeSensitiveApproval('service.create', `service.${name}`, cfg)) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
     }
     CONFIG.services[name] = cfg;
     try {
@@ -2492,7 +2861,9 @@ async function handle(req, res) {
     const existing = CONFIG.services[name];
     if (!existing) return jsonError(res, 404, `Service ${name} not found`);
     const body = await readBody(req) || {};
-    const patch = normalizeServiceConfig(body);
+    let patch;
+    try { patch = normalizeServiceConfig(body); }
+    catch (e) { return jsonError(res, 400, `Validation failed: ${e.message}`); }
     // Build the next config: existing first, then patch overrides. For
     // array fields, if the client sent an array (even empty), use it as-is;
     // if they sent nothing, preserve the existing array.
@@ -2507,6 +2878,9 @@ async function handle(req, res) {
     if (errs.length > 0) {
       audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
       return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    }
+    if (!consumeSensitiveApproval('service.update', `service.${name}`, patch)) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
     }
     const prev = { ...existing };
     CONFIG.services[name] = next;
@@ -2527,6 +2901,9 @@ async function handle(req, res) {
     const name = svcMatch[1];
     const existing = CONFIG.services[name];
     if (!existing) return jsonError(res, 404, `Service ${name} not found`);
+    if (!consumeSensitiveApproval('service.delete', `service.${name}`, {})) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     delete CONFIG.services[name];
     try {
       await persistConfig();
@@ -2548,21 +2925,32 @@ async function handle(req, res) {
     const svc = CONFIG.services[name];
     if (!svc) return jsonError(res, 404, `Service ${name} not found`);
     const body = await readBody(req) || {};
-    const method = (body.method || (svc.dashboard_actions && svc.dashboard_actions[0] && svc.dashboard_actions[0].method) || 'GET');
-    const path = (body.path || (svc.dashboard_actions && svc.dashboard_actions[0] && svc.dashboard_actions[0].path) || '/');
+    let operationId, request;
+    try { ({ operationId, request } = prepareReadOnlyServiceTest({ serviceName: name, service: svc, body, context: ctx })); }
+    catch (e) { return jsonError(res, e.statusCode || 403, e.message); }
+    const guard = guardServiceCredential(svc);
+    if (!guard.allowed) return jsonError(res, 503, `Service ${name} credential health is ${guard.status}`);
+    const method = request.method;
+    const path = request.path;
     const start = Date.now();
     try {
-      // Pass the service name so callUpstream's error messages are useful.
-      const r = await callUpstream({ ...svc, name }, method, path, body.query, body.headers, body.body, { serviceName: name });
-      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, upstream_status: r.status, latency_ms: r.latency, status: r.status >= 200 && r.status < 400 ? 'ok' : 'error' });
+      const operationService = {
+        ...svc, name,
+        ...(request.providerAction ? { action: request.providerAction } : {}),
+        ...(request.apiVersion ? { api_version: request.apiVersion } : {}),
+        ...(request.serviceCode ? { service_code: request.serviceCode } : {}),
+        ...(request.region ? { region: request.region } : {}),
+      };
+      const r = await callUpstream(operationService, method, path, request.query, {}, undefined, { serviceName: name });
+      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, operation: operationId, method, path, upstream_status: r.status, latency_ms: r.latency, status: r.status >= 200 && r.status < 400 ? 'ok' : 'error' });
       return send(res, 200, {
         ok: r.status >= 200 && r.status < 400,
         upstream_status: r.status,
         latency_ms: r.latency,
-        body_preview: r.body ? r.body.toString('utf8').slice(0, 500) : '',
+        body_preview: r.body ? redact(r.body.toString('utf8').slice(0, 500)) : '',
       });
     } catch (err) {
-      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error: err.message });
+      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, operation: operationId, method, path, status: 'error', error: err.message });
       return send(res, 502, { ok: false, error: err.message, latency_ms: Date.now() - start });
     }
   }
@@ -2647,6 +3035,9 @@ async function handle(req, res) {
     }
     let cfg;
     try { cfg = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
+    if (!consumeSensitiveApproval('client.create', `client.${name}`, cfg)) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     const prev = CONFIG.clients[name];
     CONFIG.clients[name] = cfg;
     try {
@@ -2669,6 +3060,9 @@ async function handle(req, res) {
     const body = await readBody(req) || {};
     let patch;
     try { patch = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
+    if (!consumeSensitiveApproval('client.update', `client.${name}`, patch)) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     // Apply patch over existing (don't touch cert_fingerprint_sha256; that's
     // owned by the enrollment flow).
     const prev = { ...existing };
@@ -2684,6 +3078,7 @@ async function handle(req, res) {
       audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
+    deleteSessionsForClient(name);
     audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
   }
@@ -2694,15 +3089,21 @@ async function handle(req, res) {
     const name = clientMatch[1];
     const existing = CONFIG.clients[name];
     if (!existing) return jsonError(res, 404, `Client ${name} not found`);
+    if (!consumeSensitiveApproval('client.delete', `client.${name}`, {})) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     delete CONFIG.clients[name];
-    // Best-effort: also remove cert files (revoke the cert material).
-    try { deleteClientCertFiles(name); } catch {}
     try {
       await persistConfig();
     } catch (e) {
       CONFIG.clients[name] = existing;
       audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
+    }
+    deleteSessionsForClient(name);
+    // Delete material only after the durable revocation succeeds.
+    try { deleteClientCertFiles(name); } catch (e) {
+      audit({ action: 'admin_clients_delete_material', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
     }
     audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2743,6 +3144,9 @@ async function handle(req, res) {
   // /enrollment?token=xxx). For Phase 1.3 we keep it simple.
   if (m === 'POST' && clientEnrollMatch && clientEnrollMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    if (securityProfile(CONFIG) === 'strict') {
+      return jsonError(res, 403, 'Private-key enrollment responses are forbidden in strict profile; use out-of-band issuance');
+    }
     const name = clientEnrollMatch[1];
     if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
     if (!clientsDirWritable()) {
@@ -2768,8 +3172,14 @@ async function handle(req, res) {
   // ----- POST /api/v1/admin/clients/:name/rotate -----
   if (m === 'POST' && clientRotateMatch && clientRotateMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    if (securityProfile(CONFIG) === 'strict') {
+      return jsonError(res, 403, 'Private-key rotation responses are forbidden in strict profile; use out-of-band issuance');
+    }
     const name = clientRotateMatch[1];
     if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
+    if (!consumeSensitiveApproval('client.rotate', `client.${name}`, {})) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     if (!clientsDirWritable()) {
       return jsonError(res, 503, 'pki/clients/ is not writable on this server. ' +
         'On production setups the PKI dir is mounted read-only; issue certs out-of-band via scripts/issue-client-cert.sh.');
@@ -2779,6 +3189,7 @@ async function handle(req, res) {
       audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Rotate failed: ${e.message}`);
     }
+    deleteSessionsForClient(name);
     audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, {
       ok: true,
@@ -2799,6 +3210,9 @@ async function handle(req, res) {
     const name = clientRevokeMatch[1];
     const c = CONFIG.clients[name];
     if (!c) return jsonError(res, 404, `Client ${name} not found`);
+    if (!consumeSensitiveApproval('client.revoke', `client.${name}`, {})) {
+      return jsonError(res, 403, 'Approved sensitive-operation grant required');
+    }
     if (!c.cert_fingerprint_sha256) {
       return send(res, 200, { ok: true, name, already_revoked: true });
     }
@@ -2811,6 +3225,7 @@ async function handle(req, res) {
       audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Revoke failed: ${e.message}`);
     }
+    deleteSessionsForClient(name);
     audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
   }
@@ -2821,6 +3236,9 @@ async function handle(req, res) {
   // zip itself must be delivered out-of-band.
   if (m === 'GET' && clientBundleMatch && clientBundleMatch[1]) {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    if (securityProfile(CONFIG) === 'strict') {
+      return jsonError(res, 403, 'Private-key bundle download is forbidden in strict profile');
+    }
     const name = clientBundleMatch[1];
     const c = CONFIG.clients[name];
     if (!c) return jsonError(res, 404, `Client ${name} not found`);
@@ -2871,9 +3289,31 @@ async function handle(req, res) {
     return res.end(zip);
   }
 
+  // ----- POST /api/v2/operations/:service/:operation -----
+  // Strict, typed data-plane API. The caller cannot choose a URL, method or headers.
+  const operationMatch = p.match(/^\/api\/v2\/operations\/([a-z0-9_-]+)\/([a-z0-9_.-]+)$/);
+  if (m === 'POST' && operationMatch) {
+    const [, serviceName, operationId] = operationMatch;
+    const payload = await readBody(req) || {};
+    const outcome = await executeTypedOperation({
+      config: CONFIG, ctx, serviceName, operationId, payload,
+      guardCredential: guardServiceCredential,
+      callUpstream,
+      audit,
+    });
+    if (!outcome.ok) return jsonError(res, outcome.status, outcome.message);
+    const result = outcome.result;
+    res.writeHead(result.status, { ...result.headers, 'X-Broker-Latency-Ms': String(result.latency), 'X-Broker-Version': BROKER_VERSION });
+    return res.end(result.body);
+  }
+
   // ----- POST /api/v1/proxy/:service -----
   const proxyMatch = p.match(/^\/api\/v1\/proxy\/([a-z0-9_-]+)$/);
   if (m === 'POST' && proxyMatch) {
+    if (!permits(CONFIG, 'legacy_proxy')) {
+      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'security_profile' });
+      return jsonError(res, 403, 'Free-form proxy is disabled; use a typed operation endpoint');
+    }
     const serviceName = proxyMatch[1];
     const svc = CONFIG.services[serviceName];
     if (!svc) {
@@ -2881,15 +3321,21 @@ async function handle(req, res) {
       return jsonError(res, 404, `Unknown service: ${serviceName}`);
     }
     const body = await readBody(req) || {};
-    const method = body.method || 'GET';
+    let method;
+    try { method = normalizeMethod(body.method || 'GET'); }
+    catch (e) { return jsonError(res, 400, e.message); }
     const path = body.path || '/';
-    if (!canProxy(ctx, serviceName, path)) {
+    if (Array.isArray(svc.allow_methods) && !svc.allow_methods.map(x => String(x).toUpperCase()).includes(method)) {
+      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'denied', reason: 'method_not_allowed' });
+      return jsonError(res, 403, `Method ${method} is not allowed for service ${serviceName}`);
+    }
+    if ((ctx.apiKey && !canProxyService(ctx.apiKey, serviceName)) || !canProxy(ctx, serviceName, path, method)) {
       audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'denied' });
       return jsonError(res, 403, `Not allowed to proxy ${serviceName}${path}`);
     }
     // v3.1 M5.5: Service ↔ Secret 联动 — 前置检查 token_secret 健康度
     // 当 secret 处于 expired / unreachable / misconfigured / fail 时, 提前 503 阻断
-    const guard = checkSecretForService(svc.token_secret, healthcheckGetSecretStatus);
+    const guard = guardServiceCredential(svc);
     if (!guard.allowed) {
       audit({
         action: 'proxy_blocked',
@@ -3157,7 +3603,7 @@ async function handle(req, res) {
 // ============================================================
 function getIdentity(req) {
   // 0. v3.0 M2: API Key Bearer 鉴权 (无 mTLS, 给 Web 端 AI 用)
-  const apiKeyCtx = getApiKeyIdentity(req);
+  const apiKeyCtx = permits(CONFIG, 'api_key') ? getApiKeyIdentity(req) : null;
   if (apiKeyCtx) {
     if (apiKeyCtx.rate_limited) {
       audit({ action: 'connect', status: 'denied', reason: 'api_key_rate_limit', cn: apiKeyCtx.clientName });
@@ -3183,6 +3629,7 @@ function getIdentity(req) {
       clientName: session.clientName,
       certSubject: session.cert?.subject || { CN: session.cn },
       via: 'session',
+      sessionId: session.sessionId,
     };
   }
   // 2.5 nginx-forwarded mTLS (mavis 2026-09-04): when broker is behind nginx with
@@ -3191,7 +3638,8 @@ function getIdentity(req) {
   //     verification (only nginx holds the CA) and do a fingerprint match
   //     against broker.yaml as defense-in-depth.
   //     X-SSL-Client-Verify:SUCCESS is the only path that grants access.
-  if (!req.socket.peerCertificate || !req.socket.peerCertificate.subject) {
+  const trustedProxy = isTrustedProxySocket(req.socket, CONFIG.trusted_proxy_fingerprints);
+  if (trustedProxy) {
     const headerCert = req.headers['x-ssl-client-cert'];
     const headerVerify = req.headers['x-ssl-client-verify'];
     if (headerCert && headerVerify === 'SUCCESS') {
@@ -3243,7 +3691,7 @@ function getIdentity(req) {
   } else if (peer) {
     cert = peer;
   }
-  if (!cert || !cert.subject) return null;
+  if (!req.socket.authorized || !cert || !cert.subject) return null;
   const cn = cert.subject.CN;
   const fp = cert.fingerprint256;
   if (!cn || !fp) return null;
@@ -3271,9 +3719,8 @@ function getApiKeyIdentity(req) {
   const k = findApiKey(CONFIG.api_keys, secret);
   if (!k) return null;
   // v3.2: enforce ip_whitelist when set
-  const remoteIp = req.socket?.remoteAddress
-    || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()
-    || '';
+  const trustedProxy = isTrustedProxySocket(req.socket, CONFIG.trusted_proxy_fingerprints);
+  const remoteIp = resolveSourceIp(req, trustedProxy);
   if (!isClientIpAllowed(k, remoteIp)) {
     audit({
       action: 'connect',
@@ -3298,24 +3745,7 @@ function getApiKeyIdentity(req) {
 // v3.0 M2: API Key 限速 (用 k.id 作 bucket key)
 const API_KEY_BUCKETS = new Map();
 function rateLimitApiKey(k) {
-  if (!k) return true;
-  const limit = k.rate_limit || '100/hour';
-  if (limit === 'unlimited') return true;
-  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return true;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
-  const key = 'apikey:' + k.id;
-  const now = Date.now();
-  const bucket = API_KEY_BUCKETS.get(key) || [];
-  const fresh = bucket.filter(t => now - t < windowMs);
-  if (fresh.length >= max) {
-    API_KEY_BUCKETS.set(key, fresh);
-    return false;
-  }
-  fresh.push(now);
-  API_KEY_BUCKETS.set(key, fresh);
-  return true;
+  return consumeRateLimit(k, API_KEY_BUCKETS);
 }
 
 // ============================================================
@@ -3326,18 +3756,34 @@ function start() {
     cert: readFileSync(TLS_CERT),
     key: readFileSync(TLS_KEY),
     ca: readFileSync(TLS_CA),
-    // requestCert: 客户端必须发证书 (TLS 握手时)
-    // rejectUnauthorized: false 因为 /health 允许无证书；其他路由在 handle() 里
-    // 检查 ctx.client 是否存在来决定 401
-    requestCert: true,
-    rejectUnauthorized: false,
-    minVersion: 'TLSv1.3',
+    // Strict production rejects an untrusted peer during the TLS handshake.
+    // Public health checks terminate at nginx; nginx reaches this port with
+    // its independently enrolled workload certificate.
+    ...tlsAuthorizationPolicy(CONFIG),
   };
   if (existsSync(TLS_CRL)) {
     tlsOpts.crl = readFileSync(TLS_CRL);
   }
 
   const server = createHttpsServer(tlsOpts, handle);
+  let healthServer = null;
+
+  if (HEALTH_SOCKET_PATH) {
+    const socketPath = validateHealthSocketPath(HEALTH_SOCKET_PATH);
+    if (existsSync(socketPath)) unlinkSync(socketPath);
+    healthServer = createHttpServer((req, res) => {
+      if (!isAllowedLocalHealthRequest(req.method, req.url)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end('{"error":"not_found"}');
+        return;
+      }
+      handle(req, res);
+    });
+    healthServer.listen(socketPath, () => {
+      chmodSync(socketPath, 0o600);
+      console.log(`[broker] local health socket listening at ${socketPath}`);
+    });
+  }
 
   server.on('tlsClientError', (err, tlsSocket) => {
     console.warn('[tls] client error:', err.message, 'from', tlsSocket.remoteAddress);
@@ -3354,7 +3800,7 @@ function start() {
 
   server.listen(PORT, HOST, () => {
     console.log(`[broker] mTLS HTTPS listening on https://${HOST}:${PORT}`);
-    console.log(`[broker] reload token: ${RELOAD_TOKEN}`);
+    console.log('[broker] reload token initialized');
 
     // v3.0 M4: 启动 cron 循环 (04:00 daily healthcheck)
     // v3.0 M5: 跟 /api/v1/healthcheck/run 一样支持 upstream: 'local' | 'mcp_server'
@@ -3406,7 +3852,10 @@ function start() {
   // Phase E: graceful shutdown (SIGTERM/SIGINT drain)
   const _shutdownCtl = installGracefulShutdown({
     server,
-    onShutdown: [() => stopCronLoop()],
+    onShutdown: [
+      () => stopCronLoop(),
+      () => new Promise((resolve) => healthServer ? healthServer.close(resolve) : resolve()),
+    ],
   });
   globalThis.__brokerShuttingDown = _shutdownCtl.shuttingDown;
 

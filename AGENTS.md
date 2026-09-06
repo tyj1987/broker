@@ -100,7 +100,7 @@ fetch(url, { dispatcher: new Agent({ cert, key, ca }) })
 ```
 URL:      https://broker.52trz.com/  (走 Cloudflare, 不需要 :8443)
 Client:   client.dashboard-admin (admin role, full access)
-Password: Tyj_198729
+Password: [REMOVED — suspected exposed credential; rotate before any production use]
 2FA:      Authenticator App 6 位 TOTP (或 10 个恢复码)
 ```
 
@@ -348,4 +348,3 @@ broker 的 "client" 是**逻辑身份**, 不是物理设备。一张 cert 可以
 4. **泄露立即 revoke** (broker.yaml 删 fingerprint + 重 issue, 旧 cert 5 分钟内失效)
 5. **物理机 0 → 1 + cert 跟着搬运** (而不是 cert 跟物理机共存亡)
 6. **永远不用 chat / email / git 传 cert** (用 scp / secret manager / 加密 USB)
-

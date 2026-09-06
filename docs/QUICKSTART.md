@@ -119,6 +119,18 @@ node cli\secret-broker.js exec --env "GH_TOKEN" -- git push origin main
 
 ## 常见问题
 
+### 生产只读 smoke
+
+域名若经过 Cloudflare，不能用域名的 8443 端口判断 ECS 源站是否暴露。必须提供 ECS 源站地址：
+
+```powershell
+$env:BROKER_ORIGIN_HOST = "<ECS源站地址>"
+cd broker
+npm run production:smoke
+```
+
+通过条件：443 返回健康响应且无凭据形态，源站 `8443` 连接被拒绝或超时。该命令不发送凭据，也不执行写操作。
+
 **Q: 怎么用 OpenAI 而不是 GitHub?**
 A: 同上,改 `secrets/common.env` 加 `OPENAI_API_KEY`,改 `secrets/broker.yaml` 加 `openai` service。详见 [PROVIDER-TEMPLATES.md](./DESIGN-V4-PROVIDER-TEMPLATES.md#openai)
 

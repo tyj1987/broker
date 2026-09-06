@@ -43,7 +43,8 @@ export interface SSHExecResult {
 }
 
 export interface LoginResponse {
-  session_token: string;
+  expires_at?: string;
+  via?: string;
   mfa_required?: boolean;
   mfa_token?: string;
 }
@@ -102,18 +103,14 @@ export class BrokerClient {
     }
   }
 
-  private buildContext(): tls.SecureContext {
-    const ctx = tls.createSecureContext({
+  private buildAgent(): https.Agent {
+    return new https.Agent({
       ca: this.config.caCert ? fs.readFileSync(this.config.caCert) : undefined,
       cert: this.config.clientCert ? fs.readFileSync(this.config.clientCert) : undefined,
       key: this.config.clientKey ? fs.readFileSync(this.config.clientKey) : undefined,
       minVersion: 'TLSv1.2' as tls.SecureVersion,
+      rejectUnauthorized: this.config.verifyTls !== false,
     });
-    return ctx;
-  }
-
-  private isVerifyDisabled(): boolean {
-    return this.config.verifyTls === true;
   }
 
   /**
@@ -149,18 +146,20 @@ export class BrokerClient {
       headers['cookie'] = `broker_session=${this.sessionCookie}`;
     }
     return new Promise((resolve, reject) => {
-      const ctx = this.buildContext();
+      const agent = this.buildAgent();
       const req = https.request(
         {
           method,
           hostname: u.hostname,
-          port: u.port || 443,
+          port: Number(u.port || 443),
           path: u.pathname + u.search,
           headers,
-          secureContext: ctx,
-          rejectUnauthorized: !this.isVerifyDisabled(),
+          agent,
         },
         (res) => {
+          const setCookie = res.headers['set-cookie'] || [];
+          const session = setCookie.map(String).map((value) => value.match(/broker_session=([^;]+)/)?.[1]).find(Boolean);
+          if (session) this.sessionCookie = session;
           const chunks: Buffer[] = [];
           res.on('data', (c) => chunks.push(c));
           res.on('end', () => {
@@ -237,7 +236,6 @@ export class BrokerClient {
       username, password, mfa_token: mfaToken, mfa_code: mfaCode,
     });
     const b = r.body as LoginResponse;
-    if (b.session_token) this.sessionCookie = b.session_token;
     return b;
   }
 

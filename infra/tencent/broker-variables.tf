@@ -11,9 +11,9 @@ variable "admin_cidr" {
   description = "你的办公出口 IP CIDR, 例如 203.0.113.5/32"
 }
 
-variable "ssh_password" {
+variable "ssh_key_name" {
   type        = string
-  sensitive   = true
+  description = "Name of an existing Tencent Cloud SSH key pair. Password login is forbidden."
 }
 
 variable "broker_domain" {

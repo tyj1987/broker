@@ -33,7 +33,7 @@ const p = {
   '/api/v1/login': {
     post: {
       tags: ['auth'],
-      summary: 'Password login (may require MFA)',
+      summary: 'Compatibility login; disabled in strict profile',
       requestBody: { content: { 'application/json': { schema: ref('LoginRequest') } } },
       responses: { 200: jsonOK('LoginResponse'), 401: respRef('Unauthorized') },
     },
@@ -45,6 +45,24 @@ const p = {
       requestBody: {
         content: { 'application/json': { schema: { type: 'object', required: ['mfa_token', 'code'], properties: { mfa_token: { type: 'string' }, code: { type: 'string' }, factor: { type: 'string', enum: ['totp', 'webauthn', 'sms', 'recovery'] } } } } },
       },
+      responses: { 200: jsonOK('LoginResponse'), 401: respRef('Unauthorized') },
+    },
+  },
+  '/api/v1/login/webauthn/begin': {
+    post: {
+      tags: ['auth'],
+      summary: 'Begin phishing-resistant WebAuthn authentication',
+      security: [],
+      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['client'], properties: { client: { type: 'string' } } } } } },
+      responses: { 200: desc('PublicKeyCredentialRequestOptionsJSON'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v1/login/webauthn/finish': {
+    post: {
+      tags: ['auth'],
+      summary: 'Verify WebAuthn assertion and establish HttpOnly session',
+      security: [],
+      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['client', 'response'], properties: { client: { type: 'string' }, response: { type: 'object' } } } } } },
       responses: { 200: jsonOK('LoginResponse'), 401: respRef('Unauthorized') },
     },
   },
@@ -96,6 +114,22 @@ const p = {
   '/api/v1/me/webauthn/credentials/{id}': {
     delete: { tags: ['me'], summary: 'Delete a WebAuthn credential', parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }], responses: { 200: desc('OK') } },
   },
+  '/api/v1/me/reauth/webauthn/begin': {
+    post: { tags: ['auth'], summary: 'Begin WebAuthn reauthentication for a sensitive operation', responses: { 200: desc('PublicKeyCredentialRequestOptionsJSON') } },
+  },
+  '/api/v1/me/reauth/webauthn/finish': {
+    post: { tags: ['auth'], summary: 'Finish WebAuthn reauthentication and issue a five-minute one-use grant', responses: { 200: desc('One-use reauthentication grant'), 401: respRef('Unauthorized') } },
+  },
+  '/api/v1/admin/approvals': {
+    post: { tags: ['admin'], summary: 'Request payload-bound approval for a sensitive operation', responses: { 201: desc('Pending approval'), 403: respRef('Forbidden') } },
+  },
+  '/api/v1/admin/approvals/{id}/approve': {
+    post: {
+      tags: ['admin'], summary: 'Approve using a distinct administrator and one-use WebAuthn grant',
+      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }],
+      responses: { 200: desc('Approved'), 403: respRef('Forbidden') },
+    },
+  },
   '/api/v1/secrets': {
     get: { tags: ['secrets'], summary: 'List visible secrets', responses: { 200: jsonOKList('Secret') } },
   },
@@ -103,6 +137,7 @@ const p = {
     post: {
       tags: ['secrets'],
       summary: 'Resolve a secret to plaintext (audited)',
+      deprecated: true,
       requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } },
       responses: { 200: desc('OK'), 403: respRef('Forbidden'), 404: respRef('NotFound') },
     },
@@ -113,7 +148,8 @@ const p = {
   '/api/v1/proxy/{service}': {
     post: {
       tags: ['proxy'],
-      summary: 'Proxy-mode: call external API (main entry)',
+      summary: 'Legacy free-form proxy; disabled in strict profile',
+      deprecated: true,
       parameters: [{ in: 'path', name: 'service', required: true, schema: { type: 'string' } }],
       requestBody: { content: { 'application/json': { schema: ref('ProxyRequest') } } },
       responses: {
@@ -125,6 +161,26 @@ const p = {
         429: respRef('RateLimited'),
         502: { description: 'Upstream error', content: { 'application/json': { schema: ref('Error') } } },
         503: { description: 'Service unavailable (e.g. secret expired)', content: { 'application/json': { schema: ref('Error') } } },
+      },
+    },
+  },
+  '/api/v2/operations/{service}/{operation}': {
+    post: {
+      tags: ['operations'],
+      summary: 'Invoke a policy-defined typed provider operation',
+      parameters: [
+        { in: 'path', name: 'service', required: true, schema: { type: 'string' } },
+        { in: 'path', name: 'operation', required: true, schema: { type: 'string' } },
+      ],
+      requestBody: { content: { 'application/json': { schema: ref('TypedOperationRequest') } } },
+      responses: {
+        200: { description: 'Provider business response; credentials are never returned' },
+        400: respRef('BadRequest'),
+        401: respRef('Unauthorized'),
+        403: respRef('Forbidden'),
+        404: respRef('NotFound'),
+        429: respRef('RateLimited'),
+        502: { description: 'Upstream error', content: { 'application/json': { schema: ref('Error') } } },
       },
     },
   },
@@ -158,6 +214,25 @@ const p = {
   '/api/v1/admin/services': {
     get: { tags: ['admin'], summary: 'List all services (admin)', responses: { 200: desc('OK') } },
     post: { tags: ['admin'], summary: 'Create service from template', responses: { 200: desc('OK') } },
+  },
+  '/api/v1/admin/services/{name}/test': {
+    post: {
+      tags: ['admin'],
+      summary: 'Test one registered read-only service operation',
+      parameters: [{ in: 'path', name: 'name', required: true, schema: { type: 'string' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: ref('ServiceTestRequest') } },
+      },
+      responses: {
+        200: { description: 'Redacted provider response preview' },
+        400: respRef('BadRequest'),
+        401: respRef('Unauthorized'),
+        403: respRef('Forbidden'),
+        404: respRef('NotFound'),
+        503: { description: 'Credential health evidence unavailable', content: { 'application/json': { schema: ref('Error') } } },
+      },
+    },
   },
   '/api/v1/admin/clients': {
     get: { tags: ['admin'], summary: 'List all clients (admin)', responses: { 200: desc('OK') } },
@@ -229,6 +304,23 @@ const s = {
       stream: { type: 'boolean', default: false },
     },
   },
+  TypedOperationRequest: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      parameters: { type: 'object', additionalProperties: true },
+      body: {},
+    },
+  },
+  ServiceTestRequest: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['operation_id'],
+    properties: {
+      operation_id: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' },
+      parameters: { type: 'object', additionalProperties: true },
+    },
+  },
   LoginRequest: {
     type: 'object',
     required: ['password'],
@@ -240,7 +332,6 @@ const s = {
   LoginResponse: {
     type: 'object',
     properties: {
-      token: { type: 'string' },
       expires_at: { type: 'string', format: 'date-time' },
       cn: { type: 'string' },
       role: { type: 'string', enum: ['developer', 'admin', 'ci'] },
@@ -280,6 +371,7 @@ const s = {
       ip_whitelist: { type: 'array', items: { type: 'string' } },
       allowed_secrets: { type: 'array', items: { type: 'string' } },
       allowed_services: { type: 'array', items: { type: 'string' } },
+      allowed_operations: { type: 'array', items: { type: 'string' } },
       created_at: { type: 'string', format: 'date-time' },
       expires_at: { type: 'string', format: 'date-time' },
       revoked_at: { type: 'string', format: 'date-time' },
@@ -309,6 +401,8 @@ const s = {
       allow_methods: { type: 'array', items: { type: 'string' } },
       allow_paths: { type: 'array', items: { type: 'string' } },
       healthcheck: { type: 'object' },
+      environment: { type: 'string' },
+      operations: { type: 'object', additionalProperties: { type: 'object' } },
     },
   },
   Health: {

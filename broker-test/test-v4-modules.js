@@ -69,7 +69,10 @@ section('auto-rotate');
   const ok3 = await tryRotate(
     { name: 's', type: 'github_pat', auto_rotate: true },
     {},
-    { runRotate: async () => { ran = true; return { ok: true, value: 'new-token' }; } },
+    {
+      runRotate: async () => { ran = true; return { ok: true, value: 'new-token' }; },
+      persistRotatedSecret: async () => {},
+    },
   );
   ok('tryRotate calls runRotate', ok3 === true && ran === true);
   // tryRotate fails
@@ -89,11 +92,26 @@ section('auto-rotate');
       { name: 'expired', type: 'github_pat', created_at: new Date(Date.now() - 100 * 86400_000).toISOString(), auto_rotate: true },
     ],
     {},
-    { runRotate: async () => ({ ok: true, value: 'new-value' }) },
+    {
+      runRotate: async () => ({ ok: true, value: 'new-value' }),
+      persistRotatedSecret: async () => {},
+    },
   );
   ok('checked = 3', r.checked === 3);
   ok('warned >= 2', r.warned >= 2);
   ok('rotated >= 1', r.rotated >= 1);
+}
+{
+  const result = await tryRotate(
+    { name: 'persist-fail', type: 'github_pat', auto_rotate: true },
+    {},
+    {
+      runRotate: async () => ({ ok: true, value: 'new-value' }),
+      persistRotatedSecret: async () => { throw new Error('encryption unavailable'); },
+      log: { info() {}, warn() {}, error() {} },
+    },
+  );
+  ok('persistence failure fails closed', result === false);
 }
 
 // ============================================================
@@ -171,7 +189,14 @@ section('OpenAPI');
   ok('has >= 30 paths', Object.keys(OPENAPI_SPEC.paths).length >= 30);
   ok('has /health', !!OPENAPI_SPEC.paths['/health']);
   ok('has /api/v1/proxy/{service}', !!OPENAPI_SPEC.paths['/api/v1/proxy/{service}']);
+  ok('has typed operation endpoint', !!OPENAPI_SPEC.paths['/api/v2/operations/{service}/{operation}']);
+  ok('has operation-bound service test endpoint', !!OPENAPI_SPEC.paths['/api/v1/admin/services/{name}/test']);
+  ok('service test requires operation id', OPENAPI_SPEC.components.schemas.ServiceTestRequest.required.includes('operation_id'));
+  ok('service test rejects extra request fields', OPENAPI_SPEC.components.schemas.ServiceTestRequest.additionalProperties === false);
+  ok('legacy proxy marked deprecated', OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.deprecated === true);
   ok('has ProxyRequest schema', !!OPENAPI_SPEC.components.schemas.ProxyRequest);
+  ok('has TypedOperationRequest schema', !!OPENAPI_SPEC.components.schemas.TypedOperationRequest);
+  ok('API keys expose operation grants', !!OPENAPI_SPEC.components.schemas.ApiKey.properties.allowed_operations);
   ok('has LoginResponse schema', !!OPENAPI_SPEC.components.schemas.LoginResponse);
   ok('has mTLS security scheme', !!OPENAPI_SPEC.components.securitySchemes.mtls);
   ok('has bearerAuth', !!OPENAPI_SPEC.components.securitySchemes.bearerAuth);
@@ -224,7 +249,7 @@ section('service-templates (V4 additions)');
 {
   const v4Templates = ['gitlab', 'gitee', 'github_app', 'gemini', 'deepseek', 'zhipu', 'mistral', 'cohere', 'moonshot', 'qwen',
     'aws', 'gcp', 'azure', 'digitalocean', 'oracle_cloud',
-    'aliyun_oss', 'aliyun_dns', 'tencent_cos', 'tencent_tcr',
+    'aliyun_oss', 'aliyun_dns', 'tencent_cvm', 'tencent_cos', 'tencent_tcr',
     'docker_hub', 'ghcr', 'quay', 'stripe', 'wechat_pay', 'alipay',
     'slack', 'discord', 'feishu', 'dingtalk', 'telegram', 'sendgrid',
     'postgresql_proxy', 'mysql_proxy', 'redis_proxy', 'mongodb_proxy',
@@ -247,7 +272,13 @@ section('service-templates (V4 additions)');
   ok('publicTemplateList has at least 40', Object.keys(list).length >= 40);
   const git = list.github;
   ok('public view has label/description', git.label && git.description);
-  ok('public view no upstream leak', !git.upstream);
+  ok('public view includes safe executable skeleton', git.upstream === 'https://api.github.com' && !!git.operations.get_authenticated_user);
+  ok('public view includes official source metadata', !!git.official_docs_url && !!git.template_version);
+  ok('public view defaults to not production-ready without contract evidence', git.production_ready === false);
+  ok('public view excludes secret reference helpers', git.secret_placeholder === undefined && git.secret_help === undefined);
+  const docker = list.docker_hub;
+  ok('Docker adapter is selectable after safe bearer wiring', docker.disabled === false);
+  ok('Docker template pins token realm and repository scope', docker.registry_auth_realm === 'https://auth.docker.io/token' && docker.registry_scope === 'repository:library/alpine:pull');
 }
 
 // ============================================================
@@ -263,8 +294,9 @@ section('webauthn');
   ok('user.id is buffer of name', Buffer.isBuffer(begin.publicKey.user.id) && begin.publicKey.user.id.toString() === 'tyj');
   ok('user.displayName = 脱永军', begin.publicKey.user.displayName === '脱永军');
   ok('has 2 algorithms (ES256+RS256)', begin.publicKey.pubKeyCredParams.length === 2);
-  ok('attestation = none', begin.publicKey.attestation === 'none');
-  ok('userVerification = preferred', begin.publicKey.authenticatorSelection.userVerification === 'preferred');
+  ok('attestation = direct', begin.publicKey.attestation === 'direct');
+  ok('userVerification = required', begin.publicKey.authenticatorSelection.userVerification === 'required');
+  ok('residentKey = required', begin.publicKey.authenticatorSelection.residentKey === 'required');
 }
 {
   // begin authentication

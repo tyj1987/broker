@@ -1,5 +1,5 @@
 // broker/webauthn.js — V4 WebAuthn / Passkey (FIDO2) 注册与认证
-// Reference: https://www.w3.org/TR/webauthn-2/
+// Reference: https://www.w3.org/TR/webauthn-3/
 //
 // NOTE: 生产实现需要 @simplewebauthn/server 包装:
 //   import { verifyRegistrationResponse, verifyAuthenticationResponse }
@@ -51,9 +51,9 @@ const DEFAULT_CONFIG = {
   rp_id: process.env.WEBAUTHN_RP_ID || 'localhost',
   rp_origin: process.env.WEBAUTHN_ORIGIN || 'https://localhost:8443',
   timeout_ms: 60_000,
-  user_verification: 'preferred',  // 'discouraged' | 'preferred' | 'required'
-  resident_key: 'preferred',
-  attestation: 'none',  // 'none' | 'indirect' | 'direct' | 'enterprise'
+  user_verification: 'required',
+  resident_key: 'required',
+  attestation: 'direct',
   algorithms: [-7, -257],  // ES256, RS256
 };
 

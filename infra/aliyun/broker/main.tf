@@ -69,14 +69,14 @@ resource "alicloud_security_group_rule" "ssh" {
   description       = "SSH from admin"
 }
 
-# mTLS HTTPS - 公网开放
-resource "alicloud_security_group_rule" "mtls" {
+# Public traffic terminates at nginx on 443. Broker 8443 stays loopback-only.
+resource "alicloud_security_group_rule" "https" {
   type              = "ingress"
   ip_protocol       = "tcp"
-  port_range        = "8443/8443"
+  port_range        = "443/443"
   security_group_id = alicloud_security_group.broker.id
   cidr_ip           = "0.0.0.0/0"
-  description       = "mTLS HTTPS (client cert auth required)"
+  description       = "Public TLS edge; broker backend 8443 is not exposed"
 }
 
 # 出站全开
@@ -115,7 +115,7 @@ resource "alicloud_instance" "broker" {
   security_groups            = [alicloud_security_group.broker.id]
   internet_max_bandwidth_out = 10
   internet_charge_type       = "PayByTraffic"
-  password                   = var.ssh_password
+  key_name                   = var.ssh_key_name
   instance_charge_type       = "PostPaid"
   system_disk_category       = "cloud_essd"
   system_disk_size           = 40
@@ -150,7 +150,7 @@ resource "alicloud_eip_association" "broker" {
 
 output "broker_public_ip" {
   value       = alicloud_eip.broker.ip_address
-  description = "Public EIP. SSH here, then point your broker client at https://<this>:8443"
+  description = "Public EIP for the nginx TLS edge; broker port 8443 remains private"
 }
 
 output "broker_ssh_cmd" {
@@ -158,13 +158,13 @@ output "broker_ssh_cmd" {
 }
 
 output "broker_endpoint" {
-  value       = "https://${var.broker_domain}:8443"
+  value       = "https://${var.broker_domain}"
   description = "mTLS endpoint. Add DNS A record broker.52trz.com -> <EIP> in Cloudflare first."
 }
 
 output "next_steps" {
   value = <<-EOT
-  1. SSH to ECS:  ssh root@${alicloud_eip.broker.ip_address}  (password in b.tfvars)
+  1. SSH to ECS using the configured cloud SSH key pair.
   2. cd /opt/secret-broker
   3. ./scripts/broker/init-ca.ps1   (or init-ca.sh if running in WSL)
   4. ./scripts/broker/issue-server-cert.ps1 -Domain ${var.broker_domain} -AltNames "localhost,127.0.0.1,${alicloud_eip.broker.ip_address}"

@@ -677,6 +677,9 @@ secret-broker get github.pat</code></pre>
             <option value="github_token">github_token · Authorization: token &lt;pat&gt;</option>
             <option value="header">header · 自定义 header 模板 (含 {{secret.x.y}})</option>
             <option value="aliyun_v2">aliyun_v2 · 阿里云 v2 签名 (AccessKey + Secret)</option>
+            <option value="aliyun_v3">aliyun_v3 · 阿里云 Signature V3</option>
+            <option value="tencent_v3">tencent_v3 · 腾讯云 TC3-HMAC-SHA256</option>
+            <option value="docker_registry">docker_registry · Registry V2 scoped bearer</option>
             <option value="ssh_proxy">ssh_proxy · SSH 代理（Phase 3 实现）</option>
           </select>
         </label>
@@ -685,6 +688,15 @@ secret-broker get github.pat</code></pre>
         </label>
         <label>区域 / Region（仅 aliyun_v2 必填）
           <input id="svc-region" type="text" placeholder="cn-beijing">
+        </label>
+        <label>服务代码 / Service Code（腾讯云必填）
+          <input id="svc-service-code" type="text" placeholder="cvm">
+        </label>
+        <label>API 版本 / API Version（云 API 必填）
+          <input id="svc-api-version" type="text" placeholder="2017-03-12">
+        </label>
+        <label>环境 / Environment
+          <input id="svc-environment" type="text" value="production" placeholder="production">
         </label>
         <label>Token Secret / 引用的密钥名
           <input id="svc-token-secret" type="text" placeholder="GITHUB_PAT">
@@ -696,6 +708,10 @@ secret-broker get github.pat</code></pre>
         <label>快捷操作 / Dashboard Actions（每行一条）
           <textarea id="svc-actions" rows="5" placeholder="GET /user  -- 我的信息&#10;GET /user/repos  query={per_page:5}  -- 我的仓库"></textarea>
           <span class="hint">格式：<code>METHOD /path [query={...}]  -- 标签</code>。每行一个。"测试"按钮会优先用第一行。</span>
+        </label>
+        <label>类型化操作 / Typed Operations（JSON）
+          <textarea id="svc-operations" rows="8" spellcheck="false" placeholder='{"list":{"method":"GET","path":"/v1/items"}}'></textarea>
+          <span class="hint">严格档必填。method/path/参数/正文上限会在服务端重新校验；不得填写 URL 或认证 Header。</span>
         </label>
         <div id="service-error" class="status-error" hidden></div>
         <div class="modal-actions">

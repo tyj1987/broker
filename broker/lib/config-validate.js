@@ -1,6 +1,9 @@
 // broker/lib/config-validate.js — lightweight config preflight (no deps)
 // Phase E. Not a full JSON Schema engine — critical invariants only.
 
+import { existsSync as nodeExistsSync } from 'node:fs';
+import { normalizeOperations } from './security-profile.js';
+
 /**
  * @typedef {{ level: 'error'|'warn', path: string, message: string }}
  */
@@ -18,6 +21,17 @@ export function validateBrokerConfig(config, opts = {}) {
   if (!config || typeof config !== 'object') {
     errors.push({ level: 'error', path: '', message: 'config must be an object' });
     return { ok: false, errors, warnings };
+  }
+
+  const profile = String(config.security_profile || 'strict').toLowerCase();
+  if (!['strict', 'controlled', 'compatibility'].includes(profile)) {
+    errors.push({ level: 'error', path: 'security_profile', message: 'must be strict, controlled, or compatibility' });
+  }
+  if (profile === 'strict') {
+    if (!config.webauthn?.rp_id) errors.push({ level: 'error', path: 'webauthn.rp_id', message: 'strict profile requires a WebAuthn RP ID' });
+    if (!config.webauthn?.origin || !String(config.webauthn.origin).startsWith('https://')) {
+      errors.push({ level: 'error', path: 'webauthn.origin', message: 'strict profile requires an HTTPS WebAuthn origin' });
+    }
   }
 
   if (!config.clients || typeof config.clients !== 'object') {
@@ -47,7 +61,12 @@ export function validateBrokerConfig(config, opts = {}) {
           message: 'allow_password_login true but no password set',
         });
       }
-      if (c.rate_limit && typeof c.rate_limit === 'string' && !/^\d+\/(second|minute|hour|day)$/i.test(c.rate_limit)) {
+      if (profile === 'strict' && c.allow_password_login) {
+        errors.push({ level: 'error', path: `clients.${name}.allow_password_login`, message: 'password login is forbidden in strict profile' });
+      }
+      if (c.rate_limit && typeof c.rate_limit === 'string' &&
+          c.rate_limit.toLowerCase() !== 'unlimited' &&
+          !/^\d+\/(second|minute|hour|day)$/i.test(c.rate_limit)) {
         warnings.push({
           level: 'warn',
           path: `clients.${name}.rate_limit`,
@@ -66,17 +85,24 @@ export function validateBrokerConfig(config, opts = {}) {
           errors.push({ level: 'error', path: `services.${name}`, message: 'must be object' });
           continue;
         }
-        if (s.base_url && typeof s.base_url === 'string') {
+        const upstream = s.upstream || s.base_url;
+        if (upstream && typeof upstream === 'string') {
           try {
-            // eslint-disable-next-line no-new
-            new URL(s.base_url);
+            const parsed = new URL(upstream);
+            if (parsed.protocol !== 'https:') errors.push({ level: 'error', path: `services.${name}.upstream`, message: 'upstream must use HTTPS' });
           } catch {
             errors.push({
               level: 'error',
-              path: `services.${name}.base_url`,
+              path: `services.${name}.upstream`,
               message: 'invalid URL',
             });
           }
+        }
+        if (profile === 'strict' && (!s.operations || typeof s.operations !== 'object' || Object.keys(s.operations).length === 0)) {
+          errors.push({ level: 'error', path: `services.${name}.operations`, message: 'strict profile requires typed operations' });
+        } else if (s.operations !== undefined) {
+          try { normalizeOperations(s.operations); }
+          catch (e) { errors.push({ level: 'error', path: `services.${name}.operations`, message: e.message }); }
         }
       }
     }
@@ -111,13 +137,7 @@ export function preflightPaths(paths = {}, fsApi = null) {
   const errors = [];
   const warnings = [];
   // dynamic import avoided; caller passes existsSync
-  const exists = fsApi?.existsSync || ((p) => {
-    try {
-      return require('node:fs').existsSync(p);
-    } catch {
-      return false;
-    }
-  });
+  const exists = fsApi?.existsSync || nodeExistsSync;
 
   // Use only if paths provided
   for (const [label, p] of Object.entries(paths)) {

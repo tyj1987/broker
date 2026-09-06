@@ -99,18 +99,22 @@ function computeCode(secret, timestamp = Date.now() / 1000, period = 30, digits 
  * @returns {boolean} 是否有效
  */
 function verify(secret, code, opts = {}) {
-  if (!secret || !code) return false;
+  return findMatchingCounter(secret, code, opts) !== null;
+}
+
+function findMatchingCounter(secret, code, opts = {}) {
+  if (!secret || !code) return null;
   const period = opts.period || 30;
   const digits = opts.digits || 6;
   const window = opts.window !== undefined ? opts.window : 1;
   // 输入必须是 digits 位数字
-  if (!/^\d+$/.test(code) || code.length !== digits) return false;
-  const now = Date.now() / 1000;
+  if (!/^\d+$/.test(code) || code.length !== digits) return null;
+  const currentCounter = Math.floor((Date.now() / 1000) / period);
   for (let w = -window; w <= window; w++) {
-    const t = now + w * period;
-    if (computeCode(secret, t, period, digits) === code) return true;
+    const counter = currentCounter + w;
+    if (computeCode(secret, counter * period, period, digits) === code) return counter;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -227,6 +231,7 @@ export {
   generateSecret,
   computeCode,
   verify,
+  findMatchingCounter,
   buildOtpauthURL,
   // Recovery codes
   generateRecoveryCodes,

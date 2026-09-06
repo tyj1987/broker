@@ -7,7 +7,7 @@
 #   3. terraform plan -var-file=b.tfvars
 #   4. terraform apply -var-file=b.tfvars
 #
-# 警告: b.tfvars 包含密码，请勿 commit（已加 .gitignore）
+# b.tfvars contains deployment identifiers only; never put passwords or private keys here.
 
 # 阿里云 region
 region = "cn-beijing"
@@ -16,9 +16,8 @@ region = "cn-beijing"
 # 怎么查：curl https://ifconfig.me
 admin_cidr = "1.2.3.4/32"   # ← 改成你办公出口 IP
 
-# ECS root 密码（首次登录用，登录后立即换 SSH key）
-# 至少 8 位，含大小写+数字+特殊字符
-ssh_password = "CHANGE_ME_STRONG_PASSWORD_123!"
+# Existing Aliyun SSH key-pair name. The private key stays out-of-band.
+ssh_key_name = "secret-broker-admin"
 
 # broker 域名（用户本机解析到 EIP 即可）
 # 用你自己的域名；DNS 解析你自己搞定

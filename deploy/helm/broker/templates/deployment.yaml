@@ -56,16 +56,19 @@ spec:
               value: /etc/broker/tls/ca.crt
             - name: NODE_ENV
               value: production
+            - name: BROKER_HEALTH_SOCKET_PATH
+              value: /tmp/broker-health.sock
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
-            httpGet:
-              path: /health
-              port: mTLS
-              scheme: HTTPS
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - "require('node:http').get({socketPath:'/tmp/broker-health.sock',path:'/live'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
@@ -73,10 +76,11 @@ spec:
           {{- end }}
           {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
-            httpGet:
-              path: /health
-              port: mTLS
-              scheme: HTTPS
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - "require('node:http').get({socketPath:'/tmp/broker-health.sock',path:'/ready'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}

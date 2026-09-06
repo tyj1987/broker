@@ -3,7 +3,8 @@
 
 import { randomUUID } from 'node:crypto';
 
-export const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min
+export const SESSION_TTL_MS = 15 * 60 * 1000; // 15 min inactivity
+export const SESSION_ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1000;
 export const SESSION_HEADER = 'x-auth-token';
 export const MAX_LOGIN_FAILS = 5;
 export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
@@ -13,9 +14,12 @@ export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
  */
 export function createSessionStore(opts = {}) {
   const ttlMs = opts.ttlMs ?? SESSION_TTL_MS;
+  const absoluteTtlMs = opts.absoluteTtlMs ?? SESSION_ABSOLUTE_TTL_MS;
   const header = opts.header ?? SESSION_HEADER;
   const maxFails = opts.maxFails ?? MAX_LOGIN_FAILS;
   const lockoutMs = opts.lockoutMs ?? LOGIN_LOCKOUT_MS;
+  const enforceCurrentClient = typeof opts.resolveClient === 'function';
+  const resolveClient = opts.resolveClient ?? ((_, session) => session.client);
 
   const sessions = new Map();
   const loginAttempts = new Map();
@@ -23,14 +27,16 @@ export function createSessionStore(opts = {}) {
   function makeSession(ctx) {
     const token = randomUUID();
     sessions.set(token, {
+      sessionId: randomUUID(),
       cn: ctx.cn,
       fp: ctx.fp,
       role: ctx.client.role,
       clientName: ctx.clientName,
       cert: ctx.cert,
       client: ctx.client,
-      expiresAt: Date.now() + ttlMs,
       createdAt: Date.now(),
+      expiresAt: Date.now() + ttlMs,
+      absoluteExpiresAt: Date.now() + absoluteTtlMs,
     });
     return token;
   }
@@ -41,16 +47,38 @@ export function createSessionStore(opts = {}) {
     if (!t) return null;
     const s = sessions.get(t);
     if (!s) return null;
-    if (Date.now() > s.expiresAt) {
+    if (Date.now() > s.expiresAt || Date.now() > s.absoluteExpiresAt) {
       sessions.delete(t);
       return null;
     }
-    s.expiresAt = Date.now() + ttlMs;
+    const currentClient = resolveClient(s.clientName, s);
+    if (!currentClient || currentClient.disabled === true || currentClient.revoked_at) {
+      sessions.delete(t);
+      return null;
+    }
+    if (enforceCurrentClient && s.fp && String(currentClient.cert_fingerprint_sha256 || '').toUpperCase() !== String(s.fp).toUpperCase()) {
+      sessions.delete(t);
+      return null;
+    }
+    s.client = currentClient;
+    s.role = currentClient.role;
+    s.expiresAt = Math.min(Date.now() + ttlMs, s.absoluteExpiresAt);
     return s;
   }
 
   function deleteSession(token) {
     if (token) sessions.delete(token);
+  }
+
+  function deleteSessionsForClient(clientName) {
+    let deleted = 0;
+    for (const [token, session] of sessions) {
+      if (session.clientName === clientName) {
+        sessions.delete(token);
+        deleted++;
+      }
+    }
+    return deleted;
   }
 
   function checkLoginLock(key) {
@@ -79,6 +107,7 @@ export function createSessionStore(opts = {}) {
     makeSession,
     getSession,
     deleteSession,
+    deleteSessionsForClient,
     checkLoginLock,
     recordLoginFail,
     clearLoginLock,

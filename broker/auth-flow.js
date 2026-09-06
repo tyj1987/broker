@@ -12,14 +12,31 @@
 //   1. /api/v1/login 调 verifyPassword() → 返 ok:false + mfa_token (若启用了 TOTP)
 //   2. /api/v1/login/mfa 调 verifyMfaCode() → 返 session
 
-import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { verify as verifyTotp, findRecoveryCode } from './totp.js';
+import { randomUUID } from 'node:crypto';
+import { findMatchingCounter, findRecoveryCode } from './totp.js';
 
 const MFA_TOKEN_TTL_MS = 5 * 60 * 1000;  // 5 分钟
 
 // 内存存活的 mfa_token 池
 // 形如: { token: { clientName, fp, createdAt, used } }
 const MFA_PENDING = new Map();
+const MFA_FAILURES = new Map();
+const MFA_MAX_FAILURES = 5;
+const MFA_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+
+function isMfaLocked(clientName) {
+  const value = MFA_FAILURES.get(clientName);
+  if (!value) return false;
+  if (Date.now() - value.startedAt >= MFA_FAILURE_WINDOW_MS) {
+    MFA_FAILURES.delete(clientName);
+    return false;
+  }
+  return value.failures >= MFA_MAX_FAILURES;
+}
+
+function clearMfaFailures(clientName) {
+  MFA_FAILURES.delete(clientName);
+}
 
 function gcMfaPending() {
   const now = Date.now();
@@ -40,8 +57,9 @@ GC_INTERVAL.unref?.();
  */
 function createMfaPending(clientName, fp = '') {
   gcMfaPending();
+  if (!clientName || isMfaLocked(clientName)) return null;
   const token = randomUUID();
-  MFA_PENDING.set(token, { clientName, fp, createdAt: Date.now(), used: false });
+  MFA_PENDING.set(token, { clientName, fp, createdAt: Date.now(), used: false, failures: 0 });
   return token;
 }
 
@@ -72,6 +90,20 @@ function consumeMfaPending(token) {
   return true;
 }
 
+function recordMfaFailure(token, maxFailures = 5) {
+  const value = MFA_PENDING.get(token);
+  if (!value || !Number.isSafeInteger(maxFailures) || maxFailures <= 0) return false;
+  value.failures = (value.failures || 0) + 1;
+  const aggregate = MFA_FAILURES.get(value.clientName);
+  const current = !aggregate || Date.now() - aggregate.startedAt >= MFA_FAILURE_WINDOW_MS
+    ? { failures: 0, startedAt: Date.now() }
+    : aggregate;
+  current.failures += 1;
+  MFA_FAILURES.set(value.clientName, current);
+  if (value.failures >= maxFailures) MFA_PENDING.delete(token);
+  return true;
+}
+
 /**
  * 验证 TOTP code 或恢复码
  * @param {object} clientConfig client.<NAME> 配置
@@ -83,8 +115,10 @@ function verifyMfaCode(clientConfig, code) {
 
   // 1. 先尝 TOTP code（6 位数字）
   if (/^\d{6}$/.test(code) && clientConfig.totp_secret) {
-    if (verifyTotp(clientConfig.totp_secret, code)) {
-      return { ok: true, method: 'totp' };
+    const counter = findMatchingCounter(clientConfig.totp_secret, code);
+    const lastCounter = Number(clientConfig.totp_last_used_counter ?? -1);
+    if (counter !== null && Number.isSafeInteger(lastCounter) && counter > lastCounter) {
+      return { ok: true, method: 'totp', totp_counter: counter };
     }
   }
 
@@ -92,9 +126,8 @@ function verifyMfaCode(clientConfig, code) {
   if (clientConfig.totp_recovery_codes_hash && clientConfig.totp_recovery_codes_hash.length > 0) {
     const idx = findRecoveryCode(code, clientConfig.totp_recovery_codes_hash);
     if (idx >= 0) {
-      // 用过的码立刻从列表删除
-      clientConfig.totp_recovery_codes_hash.splice(idx, 1);
-      return { ok: true, method: 'recovery' };
+      // The caller removes and durably persists this index transactionally.
+      return { ok: true, method: 'recovery', recovery_index: idx };
     }
   }
 
@@ -131,8 +164,13 @@ export {
   createMfaPending,
   getMfaPending,
   consumeMfaPending,
+  recordMfaFailure,
+  isMfaLocked,
+  clearMfaFailures,
   verifyMfaCode,
   isMfaRequired,
   MFA_TOKEN_TTL_MS,
+  MFA_MAX_FAILURES,
+  MFA_FAILURE_WINDOW_MS,
   _dumpMfaPending,
 };

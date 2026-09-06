@@ -13,6 +13,7 @@ import {
   findApiKey,
   canResolveSecret,
   canProxyService,
+  canInvokeApiKeyOperation,
 } from '../broker/api-keys.js';
 
 let pass = 0, fail = 0;
@@ -58,13 +59,13 @@ section('canCreateChild');
   ok('revoked denied', r3.ok === false && r3.reason === 'revoked');
   m.revoked_at = null;
 
-  const r4 = canCreateChild({ scopes: ['secrets:resolve'], is_master: true, can_create_child: true });
+  const r4 = canCreateChild({ ...m, scopes: ['secrets:resolve'], is_master: true, can_create_child: true });
   ok('wrong scope denied', r4.ok === false && r4.reason === 'no_keys_scope');
 
-  const r5 = canCreateChild({ scopes: ['keys:issue_child'], is_master: false, can_create_child: true });
+  const r5 = canCreateChild({ ...m, scopes: ['keys:issue_child'], is_master: false, can_create_child: true });
   ok('non-master denied', r5.ok === false && r5.reason === 'not_master');
 
-  const r6 = canCreateChild({ scopes: ['keys:issue_child'], is_master: true, can_create_child: false });
+  const r6 = canCreateChild({ ...m, scopes: ['keys:issue_child'], is_master: true, can_create_child: false });
   ok('no child perm denied', r6.ok === false && r6.reason === 'no_child_perm');
 
   const m2 = { ...m, expires_at: new Date(Date.now() - 1000).toISOString() };
@@ -82,6 +83,7 @@ section('createChildKey (scope 限定)');
     child_scopes: ['secrets:resolve', 'services:proxy'],
     allowed_secrets: ['GITHUB_PAT', 'ALIYUN_AK'],
     allowed_services: ['github', 'aliyun_ecs'],
+    allowed_operations: ['github:list_*', 'aliyun_ecs:describe_instances'],
   });
 
   // 3a. 默认 child 用 master 的 scopes
@@ -114,6 +116,11 @@ section('createChildKey (scope 限定)');
     allowed_services: ['github', 'aws_prod'],  // aws_prod 不在 master
   });
   ok('bad allowed_services filtered', r4.ok === true && !r4.key_obj.allowed_services.includes('aws_prod'));
+  const r4b = createChildKey(cfgKeys, master, 'child-bad-operation', {
+    allowed_operations: ['github:list_*', 'github:delete_repository'],
+  });
+  ok('bad allowed operation filtered', r4b.ok === true && !r4b.key_obj.allowed_operations.includes('github:delete_repository'));
+  ok('parent allowed operation retained', r4b.key_obj.allowed_operations.includes('github:list_*'));
 
   // 3e. custom ttl
   const r5 = createChildKey(cfgKeys, master, 'child-custom-ttl', { ttl_seconds: 600 });
@@ -172,6 +179,33 @@ section('findApiKey 兼容');
   const found2 = findApiKey(cfgKeys, r1.secret);
   ok('child found by secret', !!found2 && found2.id === r1.key_obj.id);
   ok('child parent_master_id matches', found2.parent_master_id === m.id);
+  m.revoked_at = new Date().toISOString();
+  ok('revoked parent invalidates existing child', findApiKey(cfgKeys, r1.secret) === null);
+}
+
+section('child cannot relax parent constraints');
+{
+  const cfgKeys = [];
+  const { key_obj: master } = generateMasterKey('bounded', 'admin', {
+    rate_limit: '100/hour',
+    ip_whitelist: ['203.0.113.0/24'],
+    allowed_secrets: ['ONE'],
+    allowed_services: ['github'],
+    default_child_ttl_seconds: 300,
+  });
+  cfgKeys.push(master);
+  const child = createChildKey(cfgKeys, master, 'attempt-escalation', {
+    rate_limit: 'unlimited',
+    ip_whitelist: null,
+    allowed_secrets: ['ONE', 'TWO'],
+    allowed_services: ['github', 'admin'],
+    ttl_seconds: 3600,
+  });
+  ok('child retains parent rate limit', child.key_obj.rate_limit === '100/hour');
+  ok('child retains parent IP boundary', JSON.stringify(child.key_obj.ip_whitelist) === JSON.stringify(['203.0.113.0/24']));
+  ok('child secret grants intersect parent', JSON.stringify(child.key_obj.allowed_secrets) === JSON.stringify(['ONE']));
+  ok('child service grants intersect parent', JSON.stringify(child.key_obj.allowed_services) === JSON.stringify(['github']));
+  ok('child TTL capped by parent policy', new Date(child.key_obj.expires_at).getTime() <= Date.now() + 301_000);
 }
 
 // ============================================================
@@ -183,8 +217,14 @@ section('child scope 仍受 canResolveSecret / canProxyService 限制');
   const { key_obj: m } = generateMasterKey('m', 'admin');
   const r1 = createChildKey(cfgKeys, m, 'c');
   const child = r1.key_obj;
-  ok('child can resolve', canResolveSecret(child, 'GITHUB_PAT') === true);
-  ok('child can proxy github', canProxyService(child, 'github') === true);
+  ok('empty secret grant denies by default', canResolveSecret(child, 'GITHUB_PAT') === false);
+  ok('empty service grant denies by default', canProxyService(child, 'github') === false);
+  ok('explicit secret wildcard permits', canResolveSecret({ ...child, allowed_secrets: ['*'] }, 'GITHUB_PAT') === true);
+  ok('explicit service wildcard permits', canProxyService({ ...child, allowed_services: ['*'] }, 'github') === true);
+  ok('operation deny defaults closed', canInvokeApiKeyOperation({ ...child, allowed_services: ['github'] }, 'github', 'list_repositories') === false);
+  ok('exact operation grant permits', canInvokeApiKeyOperation({ ...child, allowed_services: ['github'], allowed_operations: ['github:list_repositories'] }, 'github', 'list_repositories') === true);
+  ok('operation prefix grant permits', canInvokeApiKeyOperation({ ...child, allowed_services: ['github'], allowed_operations: ['github:list_*'] }, 'github', 'list_repositories') === true);
+  ok('operation grant cannot bypass service grant', canInvokeApiKeyOperation({ ...child, allowed_services: [], allowed_operations: ['*'] }, 'github', 'list_repositories') === false);
   ok('child cannot resolve if no secrets:resolve', canResolveSecret({ ...child, scopes: ['services:proxy'] }, 'X') === false);
 }
 

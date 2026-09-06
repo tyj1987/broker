@@ -1,7 +1,7 @@
 // broker-test/test-can-proxy.js — v3.0 canProxy / isServiceAllowed / clientNamesAllowedFor
 // 覆盖: rule 匹配 (string / object / regex / 累加语义)
 
-const cp = await import('file:///C:/home/my-first-app/broker/can-proxy.js');
+const cp = await import('../broker/can-proxy.js');
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -70,6 +70,27 @@ function ctxOf(client) { return { client }; }
       cp.canProxy(ctxOf({ role: 'developer', allowed_proxy: [{ service: 'github', paths: ['^/user$'] }] }), 'github', '/gists') === false);
     // 空 allow
     ok('空 allowed_proxy → false', cp.canProxy(ctxOf({ role: 'developer', allowed_proxy: [] }), 'github', '/user') === false);
+    ok('methods allow GET', cp.canProxy(ctxOf({ role: 'developer', allowed_proxy: [{ service: 'github', methods: ['GET'] }] }), 'github', '/user', 'GET') === true);
+    ok('methods deny POST', cp.canProxy(ctxOf({ role: 'developer', allowed_proxy: [{ service: 'github', methods: ['GET'] }] }), 'github', '/user', 'POST') === false);
+  }
+
+  section('typed operation policy');
+  {
+    const ctx = ctxOf({ role: 'admin', allowed_operations: [
+      { service: 'github', operations: ['list_*'], environments: ['production'], resources: ['org/acme/*'] },
+    ] });
+    const attrs = { serviceName: 'github', operationId: 'list_repositories', environment: 'production', resource: 'org/acme/repo' };
+    ok('strict admin requires and matches explicit operation grant', cp.canInvokeOperation(ctx, attrs, { strict: true }) === true);
+    ok('wrong operation denied', cp.canInvokeOperation(ctx, { ...attrs, operationId: 'delete_repository' }, { strict: true }) === false);
+    ok('wrong environment denied', cp.canInvokeOperation(ctx, { ...attrs, environment: 'development' }, { strict: true }) === false);
+    ok('wrong resource denied', cp.canInvokeOperation(ctx, { ...attrs, resource: 'org/other/repo' }, { strict: true }) === false);
+    ok('strict admin without explicit grant denied', cp.canInvokeOperation(ctxOf({ role: 'admin' }), attrs, { strict: true }) === false);
+    ok('controlled can migrate through legacy ACL', cp.canInvokeOperation(ctxOf({ role: 'developer', allowed_proxy: ['github'] }), { ...attrs, path: '/user/repos', method: 'GET' }, { strict: false }) === true);
+    ok('missing identity denied', cp.canInvokeOperation(null, attrs, { strict: true }) === false);
+    ok('malformed rule denied', cp.matchOperationRule('github:list', attrs) === false);
+    ok('exact operation rule matches', cp.matchOperationRule({ service: 'github', operations: ['list_repositories'] }, attrs) === true);
+    ok('service mismatch denied', cp.matchOperationRule({ service: 'openai', operations: ['*'] }, attrs) === false);
+    ok('missing operations denied', cp.matchOperationRule({ service: 'github' }, attrs) === false);
   }
 
   // ======== 4. isServiceAllowed (UI 角标) ========

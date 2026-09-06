@@ -37,7 +37,7 @@ resource "alicloud_ram_role" "broker" {
 
 resource "alicloud_ram_policy" "broker" {
   policy_name     = "secret-broker-policy"
-  description     = "Permissions for the secret-broker instance. Read-only on most products, write on ECS/VPC for management."
+  description     = "Read-only discovery permissions for the secret-broker instance runtime."
   force           = true
 
   policy_document = <<-EOT
@@ -58,10 +58,6 @@ resource "alicloud_ram_policy" "broker" {
             "ecs:DescribeRegions",
             "ecs:DescribeZones",
             "ecs:DescribeTags",
-            "ecs:StartInstance",
-            "ecs:StopInstance",
-            "ecs:RebootInstance",
-            "ecs:RunCommand",
             "ecs:DescribeInvocationResults"
           ],
           "Resource": "*"
@@ -72,9 +68,6 @@ resource "alicloud_ram_policy" "broker" {
             "vpc:DescribeVpcs",
             "vpc:DescribeVSwitches",
             "vpc:DescribeSecurityGroups",
-            "vpc:AllocateEipAddress",
-            "vpc:AssociateEipAddress",
-            "vpc:ReleaseEipAddress",
             "vpc:DescribeEipAddresses"
           ],
           "Resource": "*"
@@ -97,19 +90,6 @@ resource "alicloud_ram_policy" "broker" {
             "rds:DescribeAccounts"
           ],
           "Resource": "*"
-        },
-        {
-          "Effect": "Allow",
-          "Action": [
-            "oss:GetObject",
-            "oss:ListObjects",
-            "oss:ListBuckets",
-            "oss:GetBucket",
-            "oss:GetBucketLocation"
-          ],
-          "Resource": [
-            "acs:oss:*:*:*"
-          ]
         }
       ]
     }

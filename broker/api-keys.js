@@ -65,6 +65,31 @@ export function normalizeRateLimit(rl) {
   return null;
 }
 
+export function consumeRateLimit(k, buckets, now = Date.now()) {
+  if (!k?.id || !(buckets instanceof Map)) return false;
+  const raw = k.rate_limit;
+  const limits = normalizeRateLimit(raw);
+  if (!limits) return false;
+  const dimensions = [
+    ['minute', 60_000],
+    ['hour', 3_600_000],
+    ['day', 86_400_000],
+  ];
+  const active = dimensions.filter(([name]) => limits[name] !== null);
+  if (active.length === 0) return raw === 'unlimited';
+  const updates = [];
+  for (const [name, windowMs] of active) {
+    const max = limits[name];
+    if (!Number.isSafeInteger(max) || max <= 0) return false;
+    const bucketKey = `apikey:${k.id}:${name}`;
+    const fresh = (buckets.get(bucketKey) || []).filter(timestamp => Number.isFinite(timestamp) && now - timestamp < windowMs && timestamp <= now);
+    if (fresh.length >= max) return false;
+    updates.push([bucketKey, fresh]);
+  }
+  for (const [bucketKey, fresh] of updates) buckets.set(bucketKey, [...fresh, now]);
+  return true;
+}
+
 // ============================================================
 // helpers
 // ============================================================
@@ -88,7 +113,9 @@ export function generateApiKey(name, client, opts = {}) {
   const fingerprint = createHash('sha256').update(secret).digest('hex');
   const id = fingerprint.slice(0, 16);  // 短 id
   const now = new Date();
-  const ttlMs = opts.ttl_ms || DEFAULT_TTL_MS;
+  const requestedTtlMs = Number(opts.ttl_ms ?? (opts.is_master ? DEFAULT_MASTER_TTL_MS : DEFAULT_TTL_MS));
+  if (!Number.isFinite(requestedTtlMs) || requestedTtlMs <= 0) throw new Error('API key TTL must be a positive finite duration');
+  const ttlMs = Math.min(requestedTtlMs, opts.is_master ? DEFAULT_MASTER_TTL_MS : DEFAULT_TTL_MS);
   const key_obj = {
     id,
     name: name || 'unnamed',
@@ -96,6 +123,7 @@ export function generateApiKey(name, client, opts = {}) {
     scopes: opts.scopes || (opts.is_master ? MASTER_KEY_SCOPES : DEFAULT_CHILD_SCOPES),
     allowed_secrets: opts.allowed_secrets || [],
     allowed_services: opts.allowed_services || [],
+    allowed_operations: opts.allowed_operations || [],
     rate_limit: opts.rate_limit || '100/hour',
     ip_whitelist: opts.ip_whitelist || null,
     fingerprint_sha256: fingerprint,
@@ -174,23 +202,29 @@ export function createChildKey(cfgKeys, master, name, opts = {}) {
     return { ok: false, reason: 'no_valid_scopes' };
   }
 
-  let allowedSecrets = opts.allowed_secrets || master.allowed_secrets || [];
-  if (Array.isArray(allowedSecrets) && Array.isArray(master.allowed_secrets) && master.allowed_secrets.length > 0) {
-    allowedSecrets = allowedSecrets.filter(s => master.allowed_secrets.includes(s));
-  }
-  let allowedServices = opts.allowed_services || master.allowed_services || [];
-  if (Array.isArray(allowedServices) && Array.isArray(master.allowed_services) && master.allowed_services.length > 0) {
-    allowedServices = allowedServices.filter(a => master.allowed_services.includes(a));
-  }
+  const restrict = (requested, parent) => {
+    if (!Array.isArray(parent)) return [];
+    const wanted = Array.isArray(requested) ? requested : parent;
+    if (parent.includes('*')) return [...new Set(wanted)];
+    return [...new Set(wanted.filter(value => parent.includes(value)))];
+  };
+  const allowedSecrets = restrict(opts.allowed_secrets, master.allowed_secrets);
+  const allowedServices = restrict(opts.allowed_services, master.allowed_services);
+  const allowedOperations = restrict(opts.allowed_operations, master.allowed_operations);
 
-  const childTtlSec = opts.ttl_seconds || master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS;
+  const requestedTtlSec = Number(opts.ttl_seconds || master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS);
+  const parentRemainingSec = Math.max(0, Math.floor((new Date(master.expires_at).getTime() - Date.now()) / 1000));
+  const childTtlSec = Math.min(requestedTtlSec, master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS, parentRemainingSec);
+  if (!Number.isFinite(childTtlSec) || childTtlSec <= 0) return { ok: false, reason: 'invalid_ttl' };
 
   const { id, secret, key_obj } = generateApiKey(name, master.client, {
     scopes: childScopes,
     allowed_secrets: allowedSecrets,
     allowed_services: allowedServices,
-    rate_limit: opts.rate_limit || master.rate_limit || '100/hour',
-    ip_whitelist: opts.ip_whitelist || master.ip_whitelist || null,
+    allowed_operations: allowedOperations,
+    // Children cannot relax the parent's network or quota boundary.
+    rate_limit: master.rate_limit || '100/hour',
+    ip_whitelist: master.ip_whitelist || null,
     ttl_ms: childTtlSec * 1000,
     parent_master_id: master.id,
     created_by: `master:${master.id}`,
@@ -220,7 +254,11 @@ export function findApiKey(cfgKeys, secret) {
   const k = cfgKeys.find(x => x.fingerprint_sha256 === fp);
   if (!k) return null;
   if (k.revoked_at) return null;
-  if (k.expires_at && new Date(k.expires_at) < new Date()) return null;
+  if (isExpired(k)) return null;
+  if (k.parent_master_id) {
+    const parent = cfgKeys.find(candidate => candidate.id === k.parent_master_id);
+    if (!parent || parent.revoked_at || isExpired(parent) || !parent.is_master) return null;
+  }
   return k;
 }
 
@@ -229,10 +267,7 @@ export function findApiKey(cfgKeys, secret) {
  */
 export function canResolveSecret(k, secretName) {
   if (!k || !k.scopes || !k.scopes.includes('secrets:resolve')) return false;
-  if (Array.isArray(k.allowed_secrets) && k.allowed_secrets.length > 0) {
-    if (!k.allowed_secrets.includes(secretName)) return false;
-  }
-  return true;
+  return Array.isArray(k.allowed_secrets) && (k.allowed_secrets.includes(secretName) || k.allowed_secrets.includes('*'));
 }
 
 /**
@@ -240,18 +275,27 @@ export function canResolveSecret(k, secretName) {
  */
 export function canProxyService(k, serviceName) {
   if (!k || !k.scopes || !k.scopes.includes('services:proxy')) return false;
-  if (Array.isArray(k.allowed_services) && k.allowed_services.length > 0) {
-    if (!k.allowed_services.includes(serviceName)) return false;
-  }
-  return true;
+  return Array.isArray(k.allowed_services) && (k.allowed_services.includes(serviceName) || k.allowed_services.includes('*'));
+}
+
+export function canInvokeApiKeyOperation(k, serviceName, operationId) {
+  if (!canProxyService(k, serviceName) || !Array.isArray(k.allowed_operations)) return false;
+  const target = `${serviceName}:${operationId}`;
+  return k.allowed_operations.some(grant => {
+    if (grant === '*') return true;
+    if (typeof grant !== 'string') return false;
+    if (grant.endsWith('*') && grant.indexOf('*') === grant.length - 1) return target.startsWith(grant.slice(0, -1));
+    return grant === target;
+  });
 }
 
 /**
  * 检查 API Key 是否过期
  */
 export function isExpired(k) {
-  if (!k.expires_at) return false;
-  return new Date(k.expires_at) < new Date();
+  if (!k?.expires_at) return true;
+  const expiresAt = new Date(k.expires_at).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt <= Date.now();
 }
 
 /**
@@ -277,6 +321,7 @@ export function publicView(k) {
     scopes: k.scopes || [],
     allowed_secrets: k.allowed_secrets || [],
     allowed_services: k.allowed_services || [],
+    allowed_operations: k.allowed_operations || [],
     rate_limit: k.rate_limit || '100/hour',
     ip_whitelist: k.ip_whitelist || null,
     fingerprint_prefix: fp.slice(0, 8) + '...',

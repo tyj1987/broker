@@ -64,7 +64,19 @@ export function signTencentV3({
   service, action, version, region,
   timestamp, secret,
 }) {
+  const normalizedMethod = String(method || 'POST').toUpperCase();
+  if (!['GET', 'POST'].includes(normalizedMethod)) throw new Error('Tencent V3 method must be GET or POST');
+  if (typeof host !== 'string' || !/^[a-z0-9.-]+(?::\d+)?$/i.test(host)) throw new Error('Tencent V3 host is invalid');
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) throw new Error('Tencent V3 path is invalid');
+  for (const [label, value] of Object.entries({ service, action, version, region })) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(value)) throw new Error(`Tencent V3 ${label} is invalid`);
+  }
+  if (!secret || typeof secret.secret_id !== 'string' || !secret.secret_id ||
+      typeof secret.secret_key !== 'string' || !secret.secret_key) {
+    throw new Error('Tencent V3 credentials are invalid');
+  }
   const ts = timestamp || Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(ts) || ts <= 0) throw new Error('Tencent V3 timestamp is invalid');
   const bodyStr = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
   const payloadHash = sha256Hex(bodyStr);
 
@@ -84,7 +96,7 @@ export function signTencentV3({
   const canonical = canonicalHeaders(allHeaders);
   const signed = signedHeaders(allHeaders);
   const canonicalRequest = [
-    (method || 'POST').toUpperCase(),
+    normalizedMethod,
     path || '/',
     canonicalQueryString(query),
     canonical,

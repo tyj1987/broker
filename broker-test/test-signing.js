@@ -25,6 +25,9 @@ section('Aliyun v3');
     path: '/',
     query: { Action: 'DescribeInstances', RegionId: 'cn-hangzhou' },
     body: '{}',
+    action: 'DescribeInstances',
+    version: '2014-05-26',
+    nonce: '3156853299f313e23d1673dc12e1703d',
     secret: { access_key_id: 'LTAI_TEST', access_key_secret: 'fake-secret-for-shape-test' },
     now: new Date('2026-08-26T09:12:34Z'),
   });
@@ -32,8 +35,37 @@ section('Aliyun v3');
   ok('has SignedHeaders', /SignedHeaders=[^,]+,/.test(h.Authorization));
   ok('has Signature=64hex', /Signature=[0-9a-f]{64}$/.test(h.Authorization));
   ok('has x-acs-date', !!h['x-acs-date']);
+  ok('x-acs-date is ISO 8601', h['x-acs-date'] === '2026-08-26T09:12:34Z');
+  ok('has action/version/nonce', h['x-acs-action'] === 'DescribeInstances' && h['x-acs-version'] === '2014-05-26' && !!h['x-acs-signature-nonce']);
   ok('has x-acs-content-sha256', /^[0-9a-f]{64}$/.test(h['x-acs-content-sha256']));
   ok('host header included', h.host === 'ecs.aliyuncs.com');
+}
+{
+  let missingRejected = 0;
+  try { signAliyunV3({ host: 'ecs.aliyuncs.com', secret: { access_key_id: 'x', access_key_secret: 'y' } }); } catch { missingRejected++; }
+  try { signAliyunV3({ host: 'ecs.aliyuncs.com', action: 'A', secret: { access_key_id: 'x', access_key_secret: 'y' } }); } catch { missingRejected++; }
+  ok('action and version are mandatory', missingRejected === 2);
+
+  const h = signAliyunV3({
+    host: 'ecs.aliyuncs.com',
+    action: 'DescribeInstances',
+    version: '2014-05-26',
+    query: { z: null, b: 2, a: 1, omitted: undefined },
+    headers: { 'X-Custom': ' value ', empty: '', nil: null },
+    body: { Limit: 1 },
+    nonce: 'fixed',
+    now: new Date('2026-08-26T09:12:34Z'),
+    secret: { access_key_id: 'LTAI_STS', access_key_secret: 'secret', security_token: 'sts-token' },
+  });
+  ok('STS token included and signed', h['x-acs-security-token'] === 'sts-token' && h.Authorization.includes('x-acs-security-token'));
+  ok('default method and path accepted', h.Authorization.startsWith('ACS3-HMAC-SHA256'));
+  ok('caller header preserved', h['X-Custom'] === ' value ');
+
+  const generated = signAliyunV3({
+    method: 'GET', host: 'ecs.aliyuncs.com', path: '/', action: 'A', version: 'V',
+    secret: { access_key_id: 'id', access_key_secret: 'secret' },
+  });
+  ok('nonce generated when absent', /^[0-9a-f]{32}$/.test(generated['x-acs-signature-nonce']));
 }
 
 // === Tencent v3 ===
@@ -58,6 +90,17 @@ section('Tencent v3');
   ok('has X-TC-Timestamp', h['X-TC-Timestamp'] === '1723456789');
   ok('has X-TC-Version', h['X-TC-Version'] === '2017-03-12');
   ok('Signature 64hex', /Signature=[0-9a-f]{64}$/.test(h.Authorization));
+  let rejected = 0;
+  for (const args of [
+    { host: 'https://evil.example', path: '/', service: 'cvm', action: 'A', version: '1', region: 'r', secret: { secret_id: 'i', secret_key: 'k' } },
+    { host: 'cvm.tencentcloudapi.com', path: '//evil', service: 'cvm', action: 'A', version: '1', region: 'r', secret: { secret_id: 'i', secret_key: 'k' } },
+    { method: 'CONNECT', host: 'cvm.tencentcloudapi.com', path: '/', service: 'cvm', action: 'A', version: '1', region: 'r', secret: { secret_id: 'i', secret_key: 'k' } },
+    { host: 'cvm.tencentcloudapi.com', path: '/', service: 'cvm', action: '', version: '1', region: 'r', secret: { secret_id: 'i', secret_key: 'k' } },
+    { host: 'cvm.tencentcloudapi.com', path: '/', service: 'cvm', action: 'A', version: '1', region: 'r', secret: {} },
+  ]) {
+    try { signTencentV3(args); } catch { rejected++; }
+  }
+  ok('invalid Tencent signing inputs fail closed', rejected === 5);
 }
 
 // === AWS SigV4 ===
@@ -198,16 +241,93 @@ section('Docker Registry');
     }
     return new Response('', { status: 404 });
   };
-  const tok = await getDockerRegistryToken({ registry: 'https://registry-1.docker.io', fetchImpl: mockFetch });
+  const dockerArgs = { registry: 'https://registry-1.docker.io', allowedAuthHosts: ['auth.docker.io'], fetchImpl: mockFetch };
+  const tok = await getDockerRegistryToken(dockerArgs);
   ok('returns mock token', tok.token === 'mock-docker-token');
-  const h = await signDockerRegistry({ registry: 'https://registry-1.docker.io', fetchImpl: mockFetch });
+  const h = await signDockerRegistry(dockerArgs);
   ok('Authorization Bearer', h.Authorization === 'Bearer mock-docker-token');
 }
 {
   // no auth needed (probe returns 200)
   const noAuthFetch = async () => new Response('{}', { status: 200 });
-  const tok = await getDockerRegistryToken({ registry: 'http://localhost:5000', fetchImpl: noAuthFetch });
+  const tok = await getDockerRegistryToken({ registry: 'https://registry.example.com', allowedAuthHosts: ['auth.example.com'], fetchImpl: noAuthFetch });
   ok('no-auth returns empty token', tok.token === '');
+}
+{
+  const evilChallenge = async () => new Response('', {
+    status: 401,
+    headers: { 'www-authenticate': 'Bearer realm="https://evil.example/token",service="registry.docker.io"' },
+  });
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry-1.docker.io', allowedAuthHosts: ['auth.docker.io'], fetchImpl: evilChallenge });
+  } catch (error) { rejected = /not allowlisted/.test(error.message); }
+  ok('challenge cannot exfiltrate credentials to an untrusted realm', rejected);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'http://registry.example.com', allowedAuthHosts: ['auth.example.com'], fetchImpl: async () => ({ status: 200 }) });
+  } catch (error) { rejected = /HTTPS endpoint/.test(error.message); }
+  ok('plaintext registry endpoint rejected', rejected);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry.example.com', realm: 'https://auth.example.com/token', service: 'registry.example.com', scope: 'repository:org/repo:pull;push', allowedAuthHosts: ['auth.example.com'], fetchImpl: async () => ({ status: 200 }) });
+  } catch (error) { rejected = /invalid repository scope/.test(error.message); }
+  ok('malformed registry scope rejected', rejected);
+}
+{
+  const calls = [];
+  const fixed = await getDockerRegistryToken({
+    registry: 'https://registry.example.com',
+    realm: 'https://auth.example.com/token',
+    service: 'registry.example.com',
+    scope: 'repository:org/repo:pull,push',
+    username: 'robot', password: 'pat-value',
+    allowedAuthHosts: ['auth.example.com'],
+    fetchImpl: async (url, opts) => { calls.push({ url, opts }); return new Response(JSON.stringify({ access_token: 'access-token-value', expires_in: 60 }), { status: 200 }); },
+  });
+  ok('fixed realm skips registry probe', calls.length === 1 && fixed.token === 'access-token-value');
+  ok('fixed scope and service are sent to token endpoint', calls[0].url.includes('service=registry.example.com') && calls[0].url.includes('scope=repository%3Aorg%2Frepo%3Apull%2Cpush'));
+  ok('PAT uses Basic auth only at token endpoint', calls[0].opts.headers.Authorization.startsWith('Basic '));
+  ok('expires_in is retained', fixed.expires_in === 60);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry.example.com', realm: 'https://auth.example.com/token', allowedAuthHosts: ['other.example.com'], fetchImpl: async () => ({ status: 200 }) });
+  } catch (error) { rejected = /not allowlisted/.test(error.message); }
+  ok('configured realm host must be allowlisted', rejected);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry.example.com', realm: 'https://auth.example.com/token', allowedAuthHosts: ['auth.example.com'], username: 'robot', fetchImpl: async () => ({ status: 200 }) });
+  } catch (error) { rejected = /PAT required/.test(error.message); }
+  ok('username without PAT fails closed', rejected);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry.example.com', allowedAuthHosts: ['auth.example.com'], fetchImpl: async () => new Response('', { status: 500 }) });
+  } catch (error) { rejected = /probe failed/.test(error.message); }
+  ok('unexpected registry probe status fails closed', rejected);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry.example.com', allowedAuthHosts: ['auth.example.com'], fetchImpl: async () => new Response('', { status: 401, headers: { 'www-authenticate': 'Basic realm="x"' } }) });
+  } catch (error) { rejected = /Bearer challenge/.test(error.message); }
+  ok('non-Bearer challenge rejected', rejected);
+}
+{
+  let rejected = false;
+  try {
+    await getDockerRegistryToken({ registry: 'https://registry.example.com', realm: 'https://auth.example.com/token', allowedAuthHosts: ['auth.example.com'], fetchImpl: async () => new Response(JSON.stringify({ token: 'short' }), { status: 200 }) });
+  } catch (error) { rejected = /no usable token/.test(error.message); }
+  ok('short token response rejected', rejected);
 }
 
 // === WeChat Pay V3 ===

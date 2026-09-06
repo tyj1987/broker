@@ -14,6 +14,7 @@
   let services = [];         // [{ name, type, description, upstream, dashboard_actions, allowed_clients, ... }]
   let editingName = null;
   let loadedTemplatesAt = 0;
+  let safeTemplateExtras = {};
 
   // ---- Bootstrap ----
   function init() {
@@ -142,17 +143,35 @@
     if (!templateId) return;
     const t = templates[templateId];
     if (!t || t.disabled) return;
-    // Fetch the full template (with skeleton) from a server endpoint? We don't
-    // have one yet — but we can pull from a known map embedded in admin app.
-    // Easiest: hit a public-ish endpoint that returns the full template. For
-    // now, just type a hint; the actual fields are filled by the user (or by
-    // a fetch of GET /api/v1/admin/service-templates which is sanitized).
-    // TODO: expose full template skeletons from server if user wants zero-typing.
+    $('#svc-name').value = templateId;
+    $('#svc-type').value = t.type || t.auth_type || 'bearer';
+    $('#svc-description').value = t.description || '';
+    $('#svc-upstream').value = t.upstream || '';
+    $('#svc-region').value = t.region || '';
+    $('#svc-service-code').value = t.service_code || '';
+    $('#svc-api-version').value = t.api_version || '';
+    $('#svc-operations').value = JSON.stringify(t.operations || {}, null, 2);
+    safeTemplateExtras = {
+      inject_headers: t.inject_headers || {},
+      ...(t.header_name ? { header_name: t.header_name } : {}),
+      ...(t.header_value_template ? { header_value_template: t.header_value_template } : {}),
+      ...(t.registry_auth_realm ? { registry_auth_realm: t.registry_auth_realm } : {}),
+      ...(t.registry_service ? { registry_service: t.registry_service } : {}),
+      ...(t.registry_scope ? { registry_scope: t.registry_scope } : {}),
+      ...(t.registry_auth_hosts?.length ? { registry_auth_hosts: t.registry_auth_hosts } : {}),
+    };
+    $('#svc-actions').value = (t.dashboard_actions || []).map(a =>
+      `${a.method || 'GET'} ${a.path}${a.query ? '  query=' + JSON.stringify(a.query) : ''}  -- ${a.label || a.path}`
+    ).join('\n');
+    const readiness = t.production_ready ? '' : `\n\n⚠ ${t.readiness_reason || '尚无生产契约证据'}`;
+    $('#service-error').textContent = readiness.trim();
+    $('#service-error').hidden = !readiness;
   }
 
   // ---- Modal: create / edit ----
   function openCreateModal() {
     editingName = null;
+    safeTemplateExtras = {};
     $('#service-modal-title').textContent = '新增服务 / New Service';
     $('#svc-name').value = '';
     $('#svc-name').disabled = false;
@@ -160,8 +179,12 @@
     $('#svc-description').value = '';
     $('#svc-upstream').value = '';
     $('#svc-region').value = '';
+    $('#svc-service-code').value = '';
+    $('#svc-api-version').value = '';
+    $('#svc-environment').value = 'production';
     $('#svc-token-secret').value = '';
     $('#svc-actions').value = '';
+    $('#svc-operations').value = '';
     $('#svc-tpl').value = '';
     $('#service-error').hidden = true;
     $('#service-modal').hidden = false;
@@ -180,10 +203,19 @@
       $('#svc-description').value = s.description || '';
       $('#svc-upstream').value = s.upstream || '';
       $('#svc-region').value = s.region || '';
-      $('#svc-token-secret').value = s.token_secret || '';
+      $('#svc-service-code').value = s.service_code || '';
+      $('#svc-api-version').value = s.api_version || '';
+      $('#svc-environment').value = s.environment || 'default';
+      $('#svc-token-secret').value = s.token_secret || s.ak_secret || '';
+      safeTemplateExtras = {
+        inject_headers: s.inject_headers || {},
+        ...(s.header_name ? { header_name: s.header_name } : {}),
+        ...(s.header_value_template ? { header_value_template: s.header_value_template } : {}),
+      };
       $('#svc-actions').value = (s.dashboard_actions || []).map(a =>
         `${a.method || 'GET'} ${a.path}${a.query ? '  query=' + JSON.stringify(a.query) : ''}  -- ${a.label}`
       ).join('\n');
+      $('#svc-operations').value = JSON.stringify(s.operations || {}, null, 2);
       $('#svc-tpl').value = '';  // editing never re-applies template
       $('#service-error').hidden = true;
       $('#service-modal').hidden = false;
@@ -204,13 +236,23 @@
   // ---- Save ----
   async function onSave() {
     const name = $('#svc-name').value.trim();
+    let operations;
+    try { operations = JSON.parse($('#svc-operations').value || '{}'); }
+    catch { return showServiceError('类型化操作必须是有效 JSON / Typed operations must be valid JSON'); }
+    const type = $('#svc-type').value.trim();
+    const credentialName = $('#svc-token-secret').value.trim() || undefined;
     const cfg = {
       name,
-      type: $('#svc-type').value.trim(),
+      type,
       description: $('#svc-description').value.trim(),
       upstream: $('#svc-upstream').value.trim(),
       region: $('#svc-region').value.trim() || undefined,
-      token_secret: $('#svc-token-secret').value.trim() || undefined,
+      service_code: $('#svc-service-code').value.trim() || undefined,
+      api_version: $('#svc-api-version').value.trim() || undefined,
+      environment: $('#svc-environment').value.trim() || 'default',
+      ...(type === 'aliyun_v3' || type === 'tencent_v3' ? { ak_secret: credentialName } : { token_secret: credentialName }),
+      operations,
+      ...safeTemplateExtras,
       dashboard_actions: parseActions($('#svc-actions').value),
     };
     if (!name) return showServiceError('请填写服务名 / Name required');
@@ -272,8 +314,22 @@
     if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
     const out = $('#service-test-result');
     if (out) { out.hidden = true; out.textContent = ''; }
+    const svc = services.find(s => s.name === name) || {};
+    const operation = Object.entries(svc.operations || {}).find(([, op]) =>
+      String(op.method || 'GET').toUpperCase() === 'GET' && op.allow_body !== true
+      && (!Array.isArray(op.required_parameters) || op.required_parameters.length === 0)
+    );
+    if (!operation) {
+      if (out) {
+        out.hidden = false;
+        out.className = 'status-error';
+        out.textContent = '没有可用于连通性测试的只读类型化操作。';
+      }
+      if (btn) { btn.disabled = false; btn.textContent = '测试'; }
+      return;
+    }
     try {
-      const r = await testService(name, {});
+      const r = await testService(name, { operation_id: operation[0], parameters: {} });
       const text = formatTestResult(r);
       if (out) { out.textContent = text; out.hidden = false; out.className = r.ok ? 'status-ok' : 'status-error'; }
     } catch (e) {

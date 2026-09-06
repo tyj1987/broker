@@ -5,7 +5,7 @@
   "main": "server.js",
   "type": "module",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "node server.js",
@@ -19,23 +19,33 @@
     "test:ops": "node ../broker-test/test-phase-e-ops.js",
     "test:backup": "node ../broker-test/test-phase-f-backup-probes.js",
     "test:redact": "node ../broker-test/test-redact.js",
-    "test:mfa": "node ../broker-test/test-mfa-policy.js",
+    "test:mfa": "node ../broker-test/test-mfa-policy.js && node ../broker-test/test-webauthn-service.js && node ../broker-test/test-sensitive-approval.js",
     "test:sms": "node ../broker-test/test-sms-provider.js",
     "test:apikeys-v4": "node ../broker-test/test-api-keys-rate.js",
-    "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4",
+    "test:acl": "node ../broker-test/test-can-proxy.js && node ../broker-test/test-outbound-policy.js && node ../broker-test/test-security-profile.js && node ../broker-test/test-secret-view.js",
+    "test:signing": "node ../broker-test/test-signing.js",
+    "test:v4": "npm run test:redact && npm run test:mfa && node ../broker-test/test-auth-flow-security.js && npm run test:sms && npm run test:apikeys-v4 && node ../broker-test/test-master-key.js",
     "test:workload": "node ../broker-test/test-workload-identity.js",
     "test:v4-modules": "node ../broker-test/test-v4-modules.js",
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",
     "test:ws": "node ../broker-test/test-ws.js",
+    "test:security-core": "npm run test:acl && node ../broker-test/test-runtime-config.js && node ../broker-test/test-local-health.js && node ../broker-test/test-trusted-proxy.js && node ../broker-test/test-proxy-guard.js && node ../broker-test/test-service-test-policy.js && node ../broker-test/test-typed-operation-executor.js && node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-auth-flow-security.js && npm run test:apikeys-v4 && npm run test:v4-modules && node ../broker-test/test-master-key.js && npm run test:mfa && npm run test:signing",
+    "coverage:security": "c8 --clean --all --check-coverage --lines=90 --branches=85 --functions=90 --statements=90 --include=api-keys.js --include=auth-flow.js --include=service-secret-guard.js --include=lib/session.js --include=lib/outbound-policy.js --include=lib/security-profile.js --include=lib/service-test-policy.js --include=lib/typed-operation-executor.js --include=lib/secret-view.js --include=lib/sensitive-approval.js --include=lib/webauthn-service.js --include=lib/local-health.js --include=lib/trusted-proxy.js --include=can-proxy.js --include=signing/aliyun-v3.js --include=signing/tencent-v3.js --include=signing/docker-registry.js --reporter=text --reporter=json-summary npm run test:security-core",
+    "supply-chain:verify": "node ../scripts/verify-actions-pinned.mjs && node ../scripts/verify-infra-policy.mjs && npm audit --omit=dev --audit-level=high",
+    "production:smoke": "node ../scripts/production-smoke.mjs",
     "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:python-sdk": "cd ../sdk/python && python -m pip install --quiet pytest pytest-asyncio cryptography && python -m pytest tests/ -q && cd ../../broker",
+    "test:verify": "npm run test:modular && npm run test:acl && npm run test:signing && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws",
+    "test:python-sdk": "cd ../sdk/python && python -m pip install --quiet -r requirements-dev.txt && python -m pytest tests/ -q -p no:cacheprovider --basetemp .pytest-tmp && cd ../../broker",
     "test:verify-all": "npm run test:verify && npm run test:python-sdk",
     "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
   },
   "dependencies": {
+    "@simplewebauthn/server": "14.0.0",
     "ws": "^8.21.3",
     "yaml": "^2.9.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "c8": "12.0.0"
+  }
 }

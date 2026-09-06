@@ -1,5 +1,7 @@
 # Secret Broker V4.1.0 — General Availability
 
+> **GA designation withdrawn pending security acceptance.** This is a historical release note, not evidence that the current system is safe for production. The authoritative status is **NOT APPROVED FOR PRODUCTION** in [`docs/SECURITY-AUDIT-2026-09-05.md`](docs/SECURITY-AUDIT-2026-09-05.md).
+
 **Released: 2026-09-01**
 
 After 6 months of design + implementation (W1-W24, 23 tasks), Secret Broker V4

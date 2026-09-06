@@ -7,8 +7,9 @@
 //
 // Rules are pluggable; new providers can add a `rotate` function.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { join, relative } from 'node:path';
 import { redact } from './redact.js';
 import { alert } from './alerting.js';
 import { sopsEncryptAtomic } from './sops.js';
@@ -179,10 +180,12 @@ export async function tryRotate(secret, brokerConfig, opts = {}) {
   }
   // Persist new value
   try {
-    await persistRotatedSecret(secret.name, result.value, brokerConfig, opts);
+    const persist = opts.persistRotatedSecret || persistRotatedSecret;
+    await persist(secret.name, result.value, brokerConfig, opts);
   } catch (e) {
-    // 测试场景: 没有 secrets 文件 → 不算失败,仍视为 rotate 成功
-    log.warn?.(`[rotate] ${secret.name} rotate 完成但 persist 跳过: ${e.message}`);
+    log.error?.(`[rotate] ${secret.name} persistence failed: ${redact(e.message)}`);
+    await alert(brokerConfig, { severity: 'critical', title: 'secret.rotate_persist_failed', detail: `Secret ${secret.name} persistence failed` });
+    return false;
   }
   await alert(brokerConfig, {
     severity: 'info',
@@ -220,7 +223,7 @@ async function runRotateCommand(cmd, secret) {
  */
 async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
   const secretsPath = opts.secretsPath || process.env.SECRETS_DETAIL_PATH
-    || require('node:path').join(process.cwd(), 'secrets', 'secrets-detail.json');
+    || join(process.cwd(), 'secrets', 'secrets-detail.json');
   if (!existsSync(secretsPath)) {
     throw new Error(`secrets file not found: ${secretsPath}`);
   }
@@ -233,17 +236,11 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
   if (!target) throw new Error(`secret ${name} not found in ${secretsPath}`);
   target.value = typeof newValue === 'string' ? newValue : JSON.stringify(newValue);
   target.last_rotated_at = new Date().toISOString();
-  // Re-encrypt with SOPS in place (atomic). Falls back to plain JSON if sops unavailable.
+  // Re-encrypt with SOPS atomically. Encryption failure must never create plaintext at rest.
   const plaintext = JSON.stringify(data, null, 2);
-  try {
-    await sopsEncryptAtomic(secretsPath, plaintext, {
-      ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
-    });
-  } catch (e) {
-    // Fall back to plain JSON write if sops binary missing or encryption failed.
-    // This is best-effort; the operator should run `sops -e -i` manually in CI.
-    writeFileSync(secretsPath, plaintext, 'utf8');
-  }
+  await sopsEncryptAtomic(secretsPath, plaintext, {
+    ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
+  });
 }
 
 /**
@@ -254,9 +251,9 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
  */
 export async function rollbackRotation(name, ref, opts = {}) {
   const secretsPath = opts.secretsPath
-    || require('node:path').join(process.cwd(), 'secrets', 'secrets-detail.json');
+    || join(process.cwd(), 'secrets', 'secrets-detail.json');
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['show', `${ref}:${secretsPath.replace(process.cwd() + '/', '')}`], {
+    const child = spawn('git', ['show', `${ref}:${relative(process.cwd(), secretsPath).replaceAll('\\', '/')}`], {
       cwd: opts.workdir || process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,

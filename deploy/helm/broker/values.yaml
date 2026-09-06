@@ -10,8 +10,9 @@ image:
   repository: ghcr.io/tyj1987/broker
   # -- Image pull policy
   pullPolicy: IfNotPresent
-  # -- Image tag (defaults to chart appVersion when empty)
-  tag: ""
+  # -- Immutable sha256 digest produced and signed by the release workflow.
+  # Tags are intentionally unsupported for production deployment.
+  digest: ""
 
 # -- Image pull secrets (e.g. for ghcr.io private repos)
 imagePullSecrets: []

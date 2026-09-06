@@ -7,14 +7,28 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "keywords": ["secret-broker", "credentials", "ai", "mtls", "security"],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "secret-broker",
+    "credentials",
+    "ai",
+    "mtls",
+    "security"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/tyj1987/broker.git"
   },
   "main": "./out/extension.js",
+  "files": [
+    "out/client.js",
+    "out/extension.js",
+    "LICENSE",
+    "README.md"
+  ],
   "activationEvents": [
     "workspaceContains:**/secrets-detail.json",
     "onCommand:secretBroker.health",
@@ -106,8 +120,9 @@
     "test": "node ./out/test/run.js"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.85.0",
-    "typescript": "^5.4.0"
+    "@types/node": "24.3.1",
+    "@types/vscode": "1.85.0",
+    "@vscode/vsce": "3.9.2",
+    "typescript": "5.9.2"
   }
 }

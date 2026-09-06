@@ -6,26 +6,23 @@
 # ============================================================
 # Stage 1: install production dependencies
 # ============================================================
-FROM node:20-alpine AS deps
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS deps
 WORKDIR /build
 
 # Copy ONLY the manifest first for better Docker layer cache
-COPY broker/package.json broker/package-lock.json* ./
-# Use `npm ci` for reproducible installs; allow either lockfile or none
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; \
-    else npm install --omit=dev --no-audit --no-fund; fi
+COPY broker/package.json broker/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # ============================================================
 # Stage 2: dev (hot reload)
 # ============================================================
-FROM node:20-alpine AS dev
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS dev
 WORKDIR /app
 RUN apk add --no-cache curl openssl
 
 # Install all deps (including dev for test:verify, lint, etc.)
-COPY broker/package.json broker/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
-    else npm install --no-audit --no-fund; fi
+COPY broker/package.json broker/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 # Copy source
 COPY broker/ ./
@@ -40,7 +37,7 @@ RUN mkdir -p pki/server pki/ca pki/clients audit secrets && \
     touch pki/ca/crl.pem && \
     rm /tmp/server.csr pki/ca/ca.key pki/ca/ca.srl
 
-EXOSE 8443
+EXPOSE 8443
 ENV BROKER_BIND=0.0.0.0 \
     BROKER_PORT=8443 \
     NODE_ENV=development \
@@ -56,12 +53,15 @@ CMD ["node", "server.js"]
 # ============================================================
 # Stage 3: production (distroless, non-root)
 # ============================================================
-FROM gcr.io/distroless/nodejs20-debian12:nonroot AS production
+FROM ghcr.io/getsops/sops:v3.13.3@sha256:857f5a151ac0b2bfc55c1e4e5581d66fb8e268e4d106b38e74191f3bac9d58ea AS sops
+
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:774b7d020b24214835769e24c3544835526cd0288f0b094eae48e8b2c2429a79 AS production
 
 WORKDIR /app
 
 # Copy production node_modules from deps stage
 COPY --from=deps /build/node_modules ./node_modules
+COPY --from=sops /usr/local/bin/sops /usr/local/bin/sops
 
 # Copy broker source
 COPY broker/ ./
@@ -72,7 +72,8 @@ COPY --chown=nonroot:nonroot pki/ ./pki-template/
 ENV NODE_ENV=production \
     PKI_DIR=/run/secrets/broker/pki \
     AUDIT_DIR=/var/lib/broker/audit \
-    SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json
+    SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json \
+    HEALTH_SOCKET_PATH=/tmp/broker-health.sock
 
 EXPOSE 8443
 
@@ -80,7 +81,7 @@ EXPOSE 8443
 # or use a separate probe. The helm chart uses startup + readiness probes.
 
 # nonroot is the default user in distroless nonroot variant
-ENTRYPOINT ["node", "server.js"]
+CMD ["server.js"]
 
 # ============================================================
 # Image metadata

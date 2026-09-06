@@ -4,11 +4,97 @@
 
 | Version | Supported          | EOL             |
 |---------|--------------------|-----------------|
-| 4.x     | :white_check_mark: | Active (GA Q3 2026) |
+| 4.1.1   | :white_check_mark: | Active (security & correctness patch, 2026-09-06) |
+| 4.1.0   | :white_check_mark: | Active (superseded by 4.1.1) |
+| 4.0.x   | :white_check_mark: | Critical fixes only |
 | 3.8.x   | :white_check_mark: | Critical fixes only (2027-01-01) |
 | 3.7.x   | :x:                | EOL 2026-06-01 |
 | 3.6.x   | :x:                | EOL 2026-01-01 |
 | < 3.6   | :x:                | EOL             |
+
+## V4.1.1 Security Notes (2026-09-06)
+
+V4.1.1 is a **backward-compatible security & correctness patch** over V4.1.0.
+No CVE-class vulnerabilities were found in V4.1.0; V4.1.1 ships 1 functional
+fix + 1 startup clean + SDK V4.1.1 unified error contract + 0 new known
+vulnerabilities.
+
+### What V4.1.1 changes (security-relevant)
+
+1. **mTLS cert-as-session fix** (`broker/server.js`, cherry-pick from
+   `f3a7cc7`):
+   - The `/api/v1/login` mTLS path now treats the client cert as the
+     credential (bypassing the password check) instead of returning
+     403 "No password configured for this client".
+   - **Security implication**: this is a **feature enablement, not a
+     new attack surface**. The mTLS cert was already the identity in
+     every other endpoint; this just extends the same model to session
+     bootstrap. Mavis / Claude / Codex / Cursor AI agents that use only
+     a client cert (no password) can now log in via the mTLS path.
+   - **Audit trail**: every cert-as-session login writes an audit entry
+     with `mfa_method: cert-bypass` for SOC 2 / compliance.
+   - **Risk before fix**: cert-only client could not create a session
+     via `/api/v1/login` → had to call protected endpoints with mTLS
+     directly (no `Set-Cookie` → no session token in browser).
+   - **Risk after fix**: same as before (mTLS cert is already the
+     identity); just a more flexible session bootstrap.
+
+2. **DEP0187 DeprecationWarning fix** (`broker/server.js`):
+   - `if (AGE_KEY_FILE && existsSync(AGE_KEY_FILE))` instead of
+     `if (existsSync(AGE_KEY_FILE))` (which passed `undefined` to
+     `fs.existsSync`).
+   - No security impact; just cleaner Node 22+ stderr.
+
+3. **0 vulnerabilities**:
+   - `npm audit --omit=dev` = 0 (Node 20 / 22 cross-version).
+   - Python SDK has 0 hard dependencies (stdlib only); `pip-audit` N/A.
+   - Go SDK has 0 hard dependencies (stdlib only); `govulncheck` clean.
+
+4. **SDK V4.1.1 unified error contract** (Python, Go, Node CLI, VSCode):
+   - All 4 SDKs now **auto-redact** response body at `BrokerError`
+     construction time. Defense in depth — secrets never leak into
+     logs / audit even if caller forgot to redact.
+   - Pattern coverage: GitHub PAT, OpenAI `sk-`, Anthropic `sk-ant-`,
+     AWS `AKIA` / `ASIA`, JWT, private keys, etc. (12+ patterns per
+     SDK; cross-checked in `docs/ERROR-CODES.md` and per-SDK test
+     suites).
+
+### What V4.1.1 does NOT change
+
+- No new endpoints.
+- No schema change (`secrets/secrets-detail.json` format identical).
+- No mTLS / TLS / SOPS / audit behavior change.
+- No new attack surface introduced.
+- No third-party dependency added.
+- Backward compatible: V4.1.0 SDK code continues to work.
+
+### Audit log additions (V4.1.1)
+
+Every `cert-as-session` login writes a new audit entry:
+
+```json
+{
+  "ts": "2026-09-06T12:34:56.789Z",
+  "event": "login",
+  "client": "mavis",
+  "ip": "127.0.0.1",
+  "user_agent": "secret-broker-cli/4.1.1",
+  "auth_method": "mtls",
+  "mfa_method": "cert-bypass",
+  "session_id": "...",
+  "session_duration_s": 604800
+}
+```
+
+The `mfa_method: cert-bypass` field is the new V4.1.1 marker. SOC 2 /
+ISO 27001 audits can filter audit log by this field to identify all
+cert-only logins.
+
+### Reporting a V4.1.1-specific issue
+
+If you find a security issue in V4.1.1, follow the standard
+[Reporting a Vulnerability](#reporting-a-vulnerability) process below.
+V4.1.1 falls under the active 4.x bug bounty (up to $5000).
 
 ## Reporting a Vulnerability
 

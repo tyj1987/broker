@@ -1,0 +1,165 @@
+╔══════════════════════════════════════════════════════════╗
+║  V4.1.1 Release Verify-All Runner                        ║
+║  Broker + 4 SDK parity + docs + tooling                 ║
+╚══════════════════════════════════════════════════════════╝
+Version: 4.1.1
+Strict: YES (warnings fail)
+Mode: both
+
+━━━ 1/2 Preflight: broker + versions + docs ━━━
+Running: node preflight-v4.1.1.mjs --version=4.1.1 --strict
+
+V4.1.1 release pre-flight check
+Repo: E:\broker
+Version: 4.1.1, tag: v4.1.1
+Strict mode: YES (warnings fail)
+
+═══ Git state ═══
+  ⚠ git tag: v4.1.1 not yet created (working tree has changes — commit first)
+  ⚠ git branch: currently on feat/v4.1.1-verify-all-runner (recommended: master)
+  ⚠ git working tree: has uncommitted changes (commit or stash before tagging)
+
+═══ Broker version ═══
+  ✗ broker/package.json: version: 4.1.0 (expected 4.1.1)
+  ✗ broker/version.js: not matching
+
+═══ SDK versions ═══
+  ✗ Python pyproject.toml: not at 4.1.1
+  ✗ Python __init__.py: not at 4.1.1
+  ✗ Go client.go: not at 4.1.1
+  ✗ VSCode package.json: not at 4.1.1
+  ✗ VSCode client.ts (User-Agent): not at 4.1.1
+
+═══ CHANGELOG.md ═══
+  ✗ V4.1.1 entry: ## [4.1.1] section MISSING
+  ⚠ SDK parity subsection: SDK V4.1.1 unified error contract section MISSING
+
+═══ RELEASE-NOTES ═══
+  ✗ RELEASE-NOTES-v4.1.1.md: file not found
+
+═══ Plan + status ═══
+  ✓ ROADMAP-post-1.0.md: mentions V4.1.1
+  ⚠ STATUS.md: does not mention V4.1.1
+
+═══ AWAITING-USER ═══
+  ⚠ AWAITING-USER.md: does not mention 4.1.1
+
+═══ Origin state (informational) ═══
+  ✓ origin branches: 18 V4.1.1-related branches in origin
+  ⚠ release/v4.1.1 ahead of master: 0 commits ahead
+
+═══ Local broker (optional) ═══
+  ⚠ broker/pki/ca.crt: not found (needed for local smoke)
+  ⚠ secrets/secrets-detail.json: not found (needed for local smoke)
+
+═══ Summary ═══
+  PASS: 2
+  WARN: 9 (strict mode → would fail)
+  FAIL: 9
+
+✗ 18 issue(s) need attention.
+
+Next steps:
+  1. Fix any FAIL items above.
+  2. Review any WARN items (non-blocking but worth checking).
+  3. After all PASS:
+     git checkout master && git pull
+     git tag -a v4.1.1 -m "4.1.1 GA — see RELEASE-NOTES-4.1.1.md"
+     git push origin v4.1.1
+     bash scripts/release/4.1.1.sh --upload --publish
+  4. Smoke: curl -k --cert pki/clients/admin.crt --key pki/clients/admin.key https://broker:8443/health
+
+━━━ 2/2 4-SDK parity: BrokerError contract + retry ━━━
+Running: node verify-sdk-v4.1.1-parity.mjs --version=4.1.1 --strict
+
+
+═══ Python SDK (sdk/python/) ═══
+  ✗ version: not at 4.1.1
+  ✗ __init__.py __version__: not at 4.1.1
+  ✓ BrokerError class: present
+  ✓ BrokerConnectionError class: present
+  ✗ parse_broker_error factory: MISSING
+  ⚠ is_retryable (method or property): MISSING (Python uses is_retryable property in V4.1.1)
+  ✗ request_id field: MISSING
+  ✗ retry_after field: MISSING
+  ✗ to_dict() method: MISSING
+  ⚠ redact integration: no redact import (body may not be auto-redacted)
+
+═══ Go SDK (sdk/go/) ═══
+  ✗ Version constant: not at 4.1.1
+  ✓ BrokerError struct: present
+  ✗ BrokerConnectionError struct: MISSING
+  ✗ ParseBrokerError factory: MISSING
+  ✗ IsRetryable() method: MISSING
+  ✗ RequestID field: MISSING
+  ✗ RetryAfter field: MISSING
+  ✗ ToMap() method: MISSING
+
+═══ Node CLI (cli/) ═══
+  ✗ BrokerError class: MISSING
+  ✗ BrokerConnectionError class: MISSING
+  ✗ parseBrokerError factory: MISSING
+  ✗ isRetryable getter: MISSING
+  ✗ requestId field: MISSING
+  ✗ retryAfter field: MISSING
+  ✗ toString() method: MISSING
+  ✗ toJSON() method: MISSING
+  ✓ mTLSRequest (built-in retry): present
+  ⚠ redact() integration: no redact() call (body may not be auto-redacted)
+
+═══ VSCode extension (sdk/vscode/) ═══
+  ✗ package.json version: 4.1.0 (expected 4.1.1)
+  ✓ BrokerError class: present
+  ✓ BrokerConnectionError class: present
+  ✗ parseBrokerError factory: MISSING
+  ✗ isRetryable getter: MISSING
+  ✗ requestId field: MISSING
+  ✗ retryAfter field: MISSING
+  ✗ toString() method: MISSING
+  ✗ toJSON() method: MISSING
+  ✗ mtlsRequest (built-in retry): MISSING
+  ✓ redact() integration: redact() called
+  ✗ User-Agent = secret-broker-vscode/4.1.1: MISSING or wrong version
+
+═══ Cross-SDK contract parity ═══
+  ✗ Python fields complete: missing some
+  ✗ Go fields complete: missing some
+  ✗ Node CLI fields complete: missing some
+  ✗ VSCode fields complete: missing some
+
+═══ Docs cross-references ═══
+  ⚠ SDK-REFERENCE.md V4.1.1 section: MISSING
+  ⚠ SDK-UPGRADE-GUIDE.md V4.1.1 section: MISSING
+  ⚠ ERROR-CODES.md V4.1.1 reference: MISSING
+
+═══ Summary ═══
+  PASS: 7
+  WARN: 6 (strict mode → would fail)
+  FAIL: 34
+
+✗ 40 issue(s) need attention.
+
+Cross-SDK parity contract (V4.1.1):
+  - Single BrokerError class with fields: status, code, requestId/request_id, retryAfter/retry_after, body
+  - Single BrokerConnectionError class (network failures, always retryable)
+  - parseBrokerError factory (typed error from raw response)
+  - isRetryable / is_retryable (5xx / 429 / connection → true)
+  - toString() / toJSON() / to_map() / to_dict() (body omitted)
+  - Built-in retry: 5xx / 429 / connection with exponential backoff + Retry-After override
+  - Auto-redact body on construction (defense in depth)
+  - All 4 SDKs at version 4.1.1
+
+╔══════════════════════════════════════════════════════════╗
+║  Summary                                                ║
+╚══════════════════════════════════════════════════════════╝
+  ✗ preflight-v4.1.1.mjs: FAIL (exit 1)
+  ✗ verify-sdk-v4.1.1-parity.mjs: FAIL (exit 1)
+
+✗ V4.1.1 release is NOT ready. Fix issues above.
+
+Troubleshooting:
+  - Broker / version FAIL → check release/v4.1.1 branch merge
+  - Docs FAIL → merge SDK-REFERENCE / SDK-UPGRADE-GUIDE / ERROR-CODES / ROADMAP PRs
+  - 4 SDK parity FAIL → merge 4 feat/sdk-*-errors-v4.1.1 PRs
+  - See AWAITING-USER.md V13 for recommended merge order
+

@@ -71,6 +71,14 @@
    - `url` 改到新 tag
    - `sha256` 改到新 tarball 的 sha256 (从 GitHub Release assets 拿)
 
+   Or run the helper script (auto-downloads + computes SHA256 + sed):
+
+   ```bash
+   ./deploy/homebrew/bump.sh 4.1.2
+   # Computes SHA256 from GitHub Release tarball + updates url + sha256 in-place
+   # Review the diff, then commit
+   ```
+
 3. **更新 `deploy/homebrew/broker.rb` in broker repo** (同步):
 
    ```bash

@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { redactDeep } from './redact.js';
 
 /**
  * Create an audit subsystem bound to a directory.
@@ -24,11 +25,11 @@ export function createAudit(auditDir) {
   }
 
   function audit(event) {
-    const e = {
+    const e = redactDeep({
       ts: new Date().toISOString(),
       id: randomUUID(),
       ...event,
-    };
+    });
     const line = JSON.stringify(e) + '\n';
     try {
       appendFileSync(auditFilePath(), line, { encoding: 'utf8' });

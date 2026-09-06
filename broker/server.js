@@ -92,6 +92,7 @@ import {
   runProbes,
   probesFromConfig,
   buildBackupManifest,
+  redactDeep,
 } from './lib/index.js';
 // v3.0: schema migration (in start())
 import { EventEmitter } from 'node:events';
@@ -648,11 +649,11 @@ function auditFilePath() {
 
 let auditBytes = 0;
 function audit(event) {
-  const e = {
+  const e = redactDeep({
     ts: new Date().toISOString(),
     id: randomUUID(),
     ...event,
-  };
+  });
   const line = JSON.stringify(e) + '\n';
   try {
     appendFileSync(auditFilePath(), line, { encoding: 'utf8' });

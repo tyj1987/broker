@@ -20,15 +20,26 @@ let cachedCerts: MockCerts | null = null;
 
 function generateSelfSigned(): MockCerts {
   if (cachedCerts) return cachedCerts;
-  // Use `openssl` if available; else throw.
+  // Try PATH first, then common fallbacks (Git for Windows ships its own openssl.exe).
+  const candidates: string[] = [];
   const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['openssl'], { encoding: 'utf8' });
-  if ((which.status ?? 1) !== 0) {
-    throw new Error('openssl not found on PATH; cannot generate self-signed test cert');
+  if ((which.status ?? 1) === 0) candidates.push('openssl');
+  if (process.platform === 'win32') {
+    const fallbacks = [
+      'C:\\Program Files\\Git\\mingw64\\bin\\openssl.exe',
+      'C:\\Program Files (x86)\\Git\\mingw64\\bin\\openssl.exe',
+      'C:\\Program Files\\OpenSSL-Win64\\bin\\openssl.exe',
+    ];
+    for (const fb of fallbacks) if (fs.existsSync(fb)) candidates.push(fb);
   }
+  if (candidates.length === 0) {
+    throw new Error('openssl not found on PATH and no fallback found; cannot generate self-signed test cert');
+  }
+  const opensslBin = candidates[0];
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'broker-vscode-test-'));
   const certPath = path.join(tmp, 'cert.pem');
   const keyPath = path.join(tmp, 'key.pem');
-  const out = spawnSync('openssl', [
+  const out = spawnSync(opensslBin, [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
     '-keyout', keyPath, '-out', certPath,
     '-days', '1', '-subj', '/CN=127.0.0.1',

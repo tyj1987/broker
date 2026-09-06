@@ -44,8 +44,8 @@ Plus: status bar item shows broker health, refreshes every 60s.
 cd sdk/vscode
 npm install
 npm run build
-npx vsce package    # produces secret-broker-4.1.0.vsix
-code --install-extension secret-broker-4.1.0.vsix
+npx vsce package    # produces secret-broker-4.1.1.vsix
+code --install-extension secret-broker-4.1.1.vsix
 ```
 
 Or for development:

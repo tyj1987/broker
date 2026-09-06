@@ -116,7 +116,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Config & env
 // ============================================================
 const PORT           = parseInt(process.env.PORT || '8443', 10);
-const HOST           = process.env.HOST || '0.0.0.0';
+const HOST           = process.env.HOST || process.env.BROKER_BIND || '127.0.0.1';
 const CONFIG_PATH    = process.env.CONFIG_PATH || resolvePath(__dirname, '../secrets/broker.yaml');
 const SECRETS_PATH   = process.env.SECRETS_PATH || resolvePath(__dirname, '../secrets/common.env');
 // Phase 1.1.1: structured secrets (multi-field support). If this file doesn't
@@ -3253,7 +3253,7 @@ function start() {
 
   server.listen(PORT, HOST, () => {
     console.log(`[broker] mTLS HTTPS listening on https://${HOST}:${PORT}`);
-    console.log(`[broker] reload token: ${RELOAD_TOKEN}`);
+    console.log('[broker] reload token loaded (not printed)');
 
     // v3.0 M4: 启动 cron 循环 (04:00 daily healthcheck)
     // v3.0 M5: 跟 /api/v1/healthcheck/run 一样支持 upstream: 'local' | 'mcp_server'

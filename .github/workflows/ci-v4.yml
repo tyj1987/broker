@@ -70,6 +70,7 @@ jobs:
           npm run test:trace
           npm run test:ops
           npm run test:backup
+          npm run test:ssh
 
   # ============================================================
   # 3. NPM 依赖审计

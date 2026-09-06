@@ -74,12 +74,12 @@ Listed in priority order. Each item has a target quarter and a clear
 ### P2 — Quality of life
 
 #### 6. Tauri desktop client (W37-W42)
-- [ ] Cross-platform (Linux / macOS / Windows) desktop app
-- [ ] System tray icon with broker health
-- [ ] Native notifications for alerts (WebSocket)
-- [ ] Built-in mTLS client cert management
-- [ ] Auto-update via Tauri updater
-- **Target**: 2026-12-15
+- [x] Cross-platform (Linux / macOS / Windows) desktop app ✅ 2026-09-06 — Phase 1 scaffold shipped (Tauri 2.x + Solid.js + Rust workspace)
+- [ ] System tray icon with broker health (Phase 4, +2 weeks)
+- [ ] Native notifications for alerts (WebSocket) (Phase 4, +2 weeks)
+- [ ] Built-in mTLS client cert management (Phase 2, +4 weeks)
+- [ ] Auto-update via Tauri updater (Phase 5, +4 weeks)
+- **Target**: 2026-12-15 — **PARTIAL 2026-09-06** (Phase 1 spec + scaffold shipped; Phases 2-6 需 14 weeks 全职)
 
 #### 7. Homebrew tap (W37)
 - [ ] `brew install tyj1987/broker/broker` (CLI)

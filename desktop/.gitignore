@@ -1,0 +1,18 @@
+# broker-desktop/.gitignore
+# Build artifacts
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Local dev secrets
+.env
+.env.local
+src-tauri/.env
+
+# Tauri build cache
+.tauri/
+
+# OS junk
+.DS_Store
+Thumbs.db

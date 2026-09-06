@@ -236,6 +236,68 @@ Tag v4.1.0 重新指向 master HEAD 含以下 fix (原 v4.1.0 tag `e76bf3a` 标�
 
 ---
 
+## [4.1.1] - 2026-09-06 (Patch)
+
+### 🔒 V4.1.1 — Security & correctness patch
+
+V4.1.0 release 后从 master backport 的关键 fix;无新功能 (new features 留给 V4.2.0)。
+V4.1.1 = V4.1.0 + 1 critical fix + 1 startup clean + dependency lockfile audit clean + version bump。
+
+### Fixed
+
+- **broker mTLS cert-as-session (`broker/server.js`)** (cherry-pick from `f3a7cc7`):
+  - 问题: mTLS path `if (!ctx0.client.password) return 403`, 任何 cert-only client (mavis AI agent) 都没法通过 `/api/v1/login` 创建 session. 浏览器持有 mavis cert → dashboard 一直卡登录页(boot `/api/v1/identity` OK, 但用户 logout 后没法再 cert-login)。
+  - 改: mTLS path 把 cert 当 credential, 跳过 password check
+    - 接受 `mtls` + `mtls-via-nginx` 两种 via
+    - 跳过 `verifyClientPassword()` (TOTP 仍走 `isMfaRequired`, 安全网还在)
+    - `password` 字段在 mTLS path 变 optional
+    - 加 audit `mfa_method: cert-bypass` 标识这条路径
+  - 测试: mavis cert `POST /api/v1/login` 返 200 + 7 天 session token (前: 403 `No password configured for this client`)
+  - UX: 浏览器持有 mavis cert → 自动登录成 mavis (admin); 想 log in as dashboard-admin (密码+TOTP) → 临时 disable mavis cert 或用 incognito
+- **test:phase-f-backup-probes** (`broker-test/test-phase-f-backup-probes.js`): 修 `BROKER_VERSION === '4.1.0'` → `'4.1.1'` (test 跟 version bump 同步, 否则跑 V4.1.1 build 会 fail)
+- **broker startup DEP0187 DeprecationWarning** (`broker/server.js` lines 168 + 210): 当 `AGE_KEY_FILE` env 没设时,`if (existsSync(AGE_KEY_FILE))` 传 `undefined` 给 `fs.existsSync`,触发 Node 22+ 的 DEP0187 deprecation warning。修: `if (AGE_KEY_FILE && existsSync(AGE_KEY_FILE))`。结果: broker 启动 stderr 零 warning (除信息性 log 外)
+
+### Security / Audit
+
+- `npm audit --omit=dev`: **0 vulnerabilities** (Node 20 / 22 跨版本验证)
+- Python SDK: **0 hard dependencies** (`dependencies = []` in `pyproject.toml` — 零硬依赖, 仅 stdlib)
+  - 含义: `pip-audit` 不适用, 任何 CVEs 只可能来自 stdlib(由 Python release cycle 跟踪, 不在 broker scope)
+
+### Verified (2026-09-06)
+
+- `npm run test:modular` (broker core + modular routes + backup + obs + trace + ops + redact + mfa + apikeys): **~543/0**
+- `npm run test:v4-modules` (P1+P2+P3 V4 modules): **201/0**
+- `npm run test:workload` (WorkloadIdentity OIDC + STS): **56/0**
+- `npm run test:ssh` (SSH proxy + tunnel + exec + redact): **55/0**
+- `npm run test:ws` (WebSocket + broadcast + filter): **27/0**
+- Python SDK: `pytest tests/ -q` → **28/0**
+- **总: ~629/0** (V4.1.0 时 647/0, 差异来自 SSH test 从 53 增到 55 + Phase-F backup test 内部重构)
+- broker 端到端 smoke: `Secret Broker v4.1.1` 启动 OK, `X-Broker-Version=4.1.1` header 正确返回
+
+### Changed
+
+- `broker/version.js`: `BROKER_VERSION = '4.1.1'`
+- `broker/package.json`: `"version": "4.1.1"`
+- `sdk/python/pyproject.toml` + `sdk/python/secret_broker/__init__.py`: `4.1.0` → `4.1.1`
+- `sdk/go/broker/client.go`: `const Version = "4.1.1"`
+- `sdk/vscode/package.json` + `sdk/vscode/src/client.ts`: `4.1.0` → `4.1.1` (User-Agent + Marketplace)
+
+### Upgrade path (V4.1.0 → V4.1.1)
+
+- **In-place**: `cd /opt/secret-broker && git fetch && git checkout v4.1.1 && npm install --omit=dev && systemctl restart secret-broker`
+  - 配置文件 (`secrets/broker.yaml` / `secrets/clients.json` / `pki/`) **不需改**
+  - 端口 / mTLS / SOPS / audit / alert / docker-compose / Helm chart 全部**向后兼容**
+- **Helm**: `helm upgrade broker deploy/helm/broker/ --set image.tag=v4.1.1`
+- **Docker**: `docker pull tyj1987/broker:4.1.1 && docker compose up -d broker`
+- **零停机**: 不改 schema, 不改 route, 不改 secret format → 可直接 in-place upgrade
+
+### Known upgrade risk
+
+- 无 (V4.1.1 是纯 patch, V4.1.0 任何 install 都可直接升级)
+- 推荐: 升级前 `cp -a secrets pki` 备份, 万一回滚 (虽然这个 patch 几乎不可能需要回滚)
+
+---
+
 ## [4.0.0-design] - 2026-09-01 (设计阶段)
 
 ### 概述

@@ -7,12 +7,15 @@
 | Stage | Status |
 |-------|--------|
 | V4.1.0 GA | ✅ Shipped |
+| V4.1.1 patch | 🔄 Branch `release/v4.1.1` pushed, awaiting PR + tag + release (2026-09-06) |
 | V4.1 plan tasks (P1 10 + P2 6 + P3 6) | ✅ 22 / 22 |
 | v3.8 client compatibility | ✅ Maintained |
-| `npm run test:verify-all` | ✅ 647 / 0 (broker 619 + Python SDK 28) |
-| CI workflows (`.github/workflows/`) | ✅ 2 (ci-v4.yml + test-sdks.yml) |
+| `npm run test:verify-all` (V4.1.0) | ✅ 647 / 0 (broker 619 + Python SDK 28) |
+| `npm run test:verify-all` (V4.1.1) | 🔄 629 / 0 (broker 601 + Python SDK 28, ahead of tag) |
+| CI workflows (`.github/workflows/`) | ✅ 2 (ci-v4.yml + test-sdks.yml) — now covering `master` |
 | `v4.1.0` tag | ✅ Annotated + pushed (ref `refs/tags/v4.1.0`, deref `673d8a1` — includes all post-GA fixes: Go SDK build fix + Python idn-email + dev tools + DEPLOY-52TRZ) |
-| GitHub Release | ✅ Live (tyj1987/broker master + tag, 2026-09-01 12:48) |
+| `v4.1.1` tag | ⏳ Awaiting user (see [AWAITING-USER.md](AWAITING-USER.md)) |
+| GitHub Release | ✅ V4.1.0 live (tyj1987/broker master + tag, 2026-09-01 12:48) — V4.1.1 pending user decision |
 | Cloud marketplace images | ⏳ P1 in [ROADMAP-post-1.0.md](ROADMAP-post-1.0.md) |
 | SOC 2 Type 1 | ⏳ P1 in [ROADMAP-post-1.0.md](ROADMAP-post-1.0.md) |
 

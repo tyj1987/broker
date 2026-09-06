@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "secret-broker"
-version = "4.1.0"
+version = "4.1.1"
 description = "Official Python SDK for Secret Broker V4 (mTLS, zero hard deps)"
 readme = "README.md"
 requires-python = ">=3.9"

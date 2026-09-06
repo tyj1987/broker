@@ -93,10 +93,10 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2026-11-15
 
 #### 9. V4.1.1 patch (Q4 2026)
-- [ ] Backport fixes from master
-- [ ] Update `dependencies` lockfile (`npm audit fix`, `pip-audit`)
-- [ ] Bump `BROKER_VERSION` to 4.1.1
-- **Target**: 2026-10-31
+- [x] Backport fixes from master ✅ 2026-09-06 — mTLS cert-as-session (`f3a7cc7`) + test:phase-f fix
+- [x] Update `dependencies` lockfile (`npm audit fix`, `pip-audit`) ✅ 2026-09-06 — npm 0 vulns; Python SDK 零硬依赖, pip-audit 不适用
+- [x] Bump `BROKER_VERSION` to 4.1.1 ✅ 2026-09-06 — 7 files (broker + 4 SDKs)
+- **Target**: 2026-10-31 — **DONE 2026-09-06 (ahead of schedule)** [branch: `release/v4.1.1`, awaiting PR + tag + release]
 
 #### 10. V4.1.2 patch (Q1 2027)
 - [ ] Community-reported bug fixes

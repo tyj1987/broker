@@ -165,7 +165,7 @@ function sopsDecrypt(filePath) {
     // Always pass --age public key for resilience. SOPS will use whichever
     // private key in SOPS_AGE_KEY_FILE matches. This avoids depending on
     // .sops.yaml path_regex matching broker.yaml.
-    if (existsSync(AGE_KEY_FILE)) {
+    if (AGE_KEY_FILE && existsSync(AGE_KEY_FILE)) {
       const pub = readFileSync(AGE_KEY_FILE, 'utf8').match(/public key: (\S+)/)?.[1];
       if (pub) args.push('--age', pub);
     }
@@ -207,7 +207,7 @@ function sopsEncryptAtomic(targetPath, plaintext) {
       return reject(new Error(`write tmp failed: ${e.message}`));
     }
     const args = ['--encrypt', '--in-place', tmpPath];
-    if (existsSync(AGE_KEY_FILE)) {
+    if (AGE_KEY_FILE && existsSync(AGE_KEY_FILE)) {
       const pub = readFileSync(AGE_KEY_FILE, 'utf8').match(/public key: (\S+)/)?.[1];
       if (pub) args.unshift('--age', pub);
     }

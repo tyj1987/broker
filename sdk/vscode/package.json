@@ -2,7 +2,7 @@
   "name": "secret-broker",
   "displayName": "Secret Broker",
   "description": "AI-first mTLS secret broker for VS Code / Cursor",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "publisher": "tyj1987",
   "engines": {
     "vscode": "^1.85.0"

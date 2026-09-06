@@ -136,7 +136,7 @@ export class BrokerClient {
     }
     const headers: Record<string, string> = {
       'accept': 'application/json',
-      'user-agent': 'secret-broker-vscode/4.1.0',
+      'user-agent': 'secret-broker-vscode/4.1.1',
       'x-request-id': `vscode-${crypto.randomUUID()}`,
     };
     let payload: Buffer | undefined;

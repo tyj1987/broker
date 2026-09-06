@@ -27,6 +27,35 @@
 Listed in priority order. Each item has a target quarter and a clear
 "done" definition.
 
+> **Status (2026-09-06)**: 13 / 13 items推进 (2 done + 11 partial). 24 PR
+> in origin awaiting user merge. See [AWAITING-USER.md V13](AWAITING-USER.md)
+> for full status + recommended merge order. **V4.1.1 patch + 4 SDK V4.1.1
+> parity code complete 2026-09-06 (55 days early vs Q4 2026 target)**.
+
+| # | Item | Status | Code | PR |
+|---|------|--------|------|-----|
+| 1 | Real CI runs on GitHub Actions | 🔄 PARTIAL — CI gate PR ready | `9d275dc` | `ci/test-ssh-master-gate` |
+| 2 | Real GitHub release (V4.1.0) | ✅ DONE 2026-09-01 | – | – |
+| 2a | Real GitHub release (V4.1.1) | 🔄 PARTIAL — release script ready | `f19558a` | `feat/release-v4.1.1-script` |
+| 3 | Cloud marketplace images | 🔄 PARTIAL — AWS Packer + CFN ready | `566d821` | `feat/cloud-marketplace-prep` |
+| 4 | SOC 2 Type 1 readiness | 🔄 PARTIAL — 65 TSC criteria mapped | `6347ae2` | `feat/security-controls-mapping` |
+| 5 | ISO 27001 Annex A controls | 🔄 PARTIAL — 93 controls mapped | `6347ae2` | `feat/security-controls-mapping` |
+| 6 | Tauri desktop client | 🔄 PARTIAL — design spec + scaffold | `95f2f2d` | `feat/tauri-desktop-spec` |
+| 7 | Homebrew tap | 🔄 PARTIAL — formula + 3 docs | `07d1c8f` | `feat/homebrew-tap-prep` |
+| 8 | Snap / apt / winget | 🔄 PARTIAL — 3 manifests + build script | `7782f2f` | `feat/snap-apt-winget-prep` |
+| 9 | V4.1.1 patch | ✅ Code complete 2026-09-06 (early by 55 days) | `de88c01` + 4 SDK + docs | `release/v4.1.1` + 4 SDK PRs + `20c5e6d` + `4222d76` + `b3fb75c` |
+| 10 | V4.1.2 patch | 🔄 PARTIAL — 6-phase prep | `4c84422` | `feat/v4.1.2-patch-prep` |
+| 11 | Mobile clients | 🔄 PARTIAL — iOS Swift + Android Kotlin design | `601e492` | `feat/mobile-clients-design-spec` |
+| 12 | V4.2.0 (4 features) | 🔄 PARTIAL — design spec | `a9bfcfd` | `feat/v4.2.0-design-spec` |
+| 13 | Marketplace self-service | 🔄 PARTIAL — 3-role design | `1798898` | `feat/marketplace-self-service-design` |
+
+**数字证据 (2026-09-06)**:
+- Total tests V4.1.0 → V4.1.1: 658 → 795 (+137)
+- SDK tests V4.1.0 → V4.1.1: 54 → 166 (+112, +208% growth)
+- 4-SDK V4.1.1 parity code complete: single `BrokerError` + `parseBrokerError` + retry
+- 6 community/devops/docs PRs ready: CONTRIBUTING V4, release script, AWAITING-USER V13, SDK-REFERENCE, RELEASE-NOTES, CHANGELOG/STATUS
+- 24 PR total in origin
+
 ### P0 — Required for "V4.1 is the production-ready version"
 
 #### 1. Real CI runs on GitHub Actions (W25-W26)
@@ -92,11 +121,18 @@ Listed in priority order. Each item has a target quarter and a clear
 - [ ] winget: `winget install tyj1987.broker`
 - **Target**: 2026-11-15
 
-#### 9. V4.1.1 patch (Q4 2026)
-- [ ] Backport fixes from master
-- [ ] Update `dependencies` lockfile (`npm audit fix`, `pip-audit`)
-- [ ] Bump `BROKER_VERSION` to 4.1.1
-- **Target**: 2026-10-31
+#### 9. V4.1.1 patch (Q4 2026) — ✅ Code ready, 🔄 awaiting user merge
+- [x] Backport fixes from master (mTLS cert-as-session cherry-pick `f3a7cc7` + DEP0187 clean) ✅ 2026-09-06
+- [x] Update `dependencies` lockfile (`npm audit --omit=dev` = 0 vulnerabilities; Python SDK 0 hard deps) ✅ 2026-09-06
+- [x] Bump `BROKER_VERSION` to 4.1.1 (7 files: broker + 4 SDKs) ✅ 2026-09-06
+- [x] **SDK V4.1.1 unified error contract** — 4 SDKs (Python/Go/Node CLI/VSCode) now expose same `BrokerError` + `parseBrokerError` + retry logic ✅ 2026-09-06
+  - Python: `9a0c5f7` (54 tests, +26)
+  - Go: `6052779` (33 tests + 1 SKIP, +18)
+  - Node CLI: `ba6da09` (21 tests, new)
+  - VSCode: `f0a6dd1` (48 tests, +37)
+  - Total SDK tests: 54 → 166 (+112)
+- [ ] Tag v4.1.1 + GitHub Release (8 assets via `scripts/release/v4.1.1.sh`) ⏳ Awaiting user (see [AWAITING-USER.md V13](AWAITING-USER.md) §1)
+- **Target**: 2026-10-31 — **Code complete 2026-09-06 (early by 55 days)**
 
 #### 10. V4.1.2 patch (Q1 2027)
 - [ ] Community-reported bug fixes

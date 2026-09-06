@@ -12,10 +12,11 @@
 //   node scripts/verify-v4.1.1-release.mjs --strict       # warnings = fail
 //   node scripts/verify-v4.1.1-release.mjs --preflight    # only preflight
 //   node scripts/verify-v4.1.1-release.mjs --sdk          # only 4-SDK parity
+//   node scripts/verify-v4.1.1-release.mjs --self-test   # run child self-tests, then exit
 //
 // Exit code:
-//   0  all checks PASS (broker + 4 SDK parity)
-//   1  one or more FAIL
+//   0  all checks PASS (broker + 4 SDK parity) (or self-test passed)
+//   1  one or more FAIL (or self-test failed)
 //   2  one or more WARNING (only with --strict)
 //
 // This is the single command to run before tagging v4.1.1.
@@ -36,6 +37,7 @@ let VERSION = '4.1.1';
 let STRICT = false;
 let ONLY_PREFLIGHT = false;
 let ONLY_SDK = false;
+let SELF_TEST = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--version' && args[i + 1]) {
     VERSION = args[i + 1];
@@ -46,8 +48,10 @@ for (let i = 0; i < args.length; i++) {
     ONLY_PREFLIGHT = true;
   } else if (args[i] === '--sdk') {
     ONLY_SDK = true;
+  } else if (args[i] === '--self-test') {
+    SELF_TEST = true;
   } else if (args[i] === '-h' || args[i] === '--help') {
-    console.log(readFileSync(__filename, 'utf8').split('\n').slice(1, 24).join('\n'));
+    console.log(readFileSync(__filename, 'utf8').split('\n').slice(1, 25).join('\n'));
     process.exit(0);
   }
 }
@@ -57,10 +61,71 @@ if (ONLY_PREFLIGHT && ONLY_SDK) {
   process.exit(1);
 }
 
+// === Self-test (deferred to after helpers are defined) ===
+// Set SELF_TEST in args parser above; actual self-test runs after color() is defined.
+
 // === Output helpers ===
 const RED = '\x1b[0;31m', GREEN = '\x1b[0;32m', YELLOW = '\x1b[1;33m', CYAN = '\x1b[0;36m', MAGENTA = '\x1b[1;35m', NC = '\x1b[0m';
 const useColor = process.stdout.isTTY;
 const color = (c, s) => useColor ? `${c}${s}${NC}` : s;
+
+// === Self-test (deferred from args parser; runs after helpers are defined) ===
+if (SELF_TEST) {
+  console.log(`${color(CYAN, 'verify-v4.1.1-release self-test')}\n`);
+  let pass = 0, fail = 0;
+
+  function expect(name, actual, expected) {
+    const ok = actual === expected;
+    if (ok) { pass++; console.log(`  ${color(GREEN, '✓')} ${name}`); }
+    else    { fail++; console.log(`  ${color(RED, '✗')} ${name}: expected ${expected}, got ${actual}`); }
+  }
+
+  // Test 1: preflight --self-test passes (validates preflight self-test still works)
+  const preflightScript = join(SCRIPT_DIR, 'preflight-v4.1.1.mjs');
+  if (existsSync(preflightScript)) {
+    const r = spawnSync(process.execPath, [preflightScript, '--self-test'], {
+      cwd: SCRIPT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+    });
+    expect('preflight-v4.1.1.mjs --self-test exits 0', r.status, 0);
+  } else {
+    console.log(`  ${color(YELLOW, '⚠')} preflight-v4.1.1.mjs not on this branch (skip)`);
+  }
+
+  // Test 2: parity --self-test passes (validates parity self-test still works)
+  const parityScript = join(SCRIPT_DIR, 'verify-sdk-v4.1.1-parity.mjs');
+  if (existsSync(parityScript)) {
+    const r = spawnSync(process.execPath, [parityScript, '--self-test'], {
+      cwd: SCRIPT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+    });
+    expect('verify-sdk-v4.1.1-parity.mjs --self-test exits 0', r.status, 0);
+  } else {
+    console.log(`  ${color(YELLOW, '⚠')} verify-sdk-v4.1.1-parity.mjs not on this branch (skip)`);
+  }
+
+  // Test 3: --preflight + --sdk conflict detection (re-invoke with both flags, expect exit 1)
+  // Use a temp file in repo root (path is same as import.meta.url resolved)
+  const thisScript = fileURLToPath(import.meta.url);
+  const conflictR = spawnSync(process.execPath, [thisScript, '--preflight', '--sdk'], {
+    cwd: SCRIPT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+  });
+  expect('--preflight + --sdk exits 1 (conflict detected)', conflictR.status, 1);
+
+  // Test 4: preflight --self-test is version-independent (smoke check with bogus --version)
+  if (existsSync(preflightScript)) {
+    const versionR = spawnSync(process.execPath, [preflightScript, '--version=9.9.9', '--self-test'], {
+      cwd: SCRIPT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+    });
+    expect('preflight --self-test ignores --version override', versionR.status, 0);
+  }
+
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  if (fail > 0) {
+    console.log(`\n${color(RED, '✗ self-test FAILED')}`);
+    process.exit(1);
+  }
+  console.log(`\n${color(GREEN, '✓ self-test OK')}`);
+  process.exit(0);
+}
 
 console.log(`${color(MAGENTA, '╔══════════════════════════════════════════════════════════╗')}`);
 console.log(`${color(MAGENTA, '║')}  ${color(CYAN, 'V4.1.1 Release Verify-All Runner')}                        ${color(MAGENTA, '║')}`);

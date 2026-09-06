@@ -56,16 +56,21 @@ export function parseSshTarget(target) {
 }
 
 /**
- * Validate a shell command. Conservative: reject shell metacharacters that
- * are common in injection attacks. Users should pass the actual command as
- * a single argument to the ssh client, NOT shell-string-concatenated.
+ * Validate a remote command string before passing it as a single argv to `ssh`.
+ *
+ * Policy (intentionally narrow):
+ * - Reject newline / CR / NUL so the command cannot split into multiple remote
+ *   lines or smuggle argv boundaries when logged/handled as text.
+ * - Allow `$`, backticks, and backslash: the string is executed by the *remote*
+ *   shell after `ssh --`, so those characters are normal for remote scripts.
+ *   Local injection is avoided by never interpolating this string into a local shell.
  */
 export function validateCommand(command) {
   if (!command || typeof command !== 'string') {
     throw new Error('command required');
   }
   if (command.length > 4096) throw new Error('command too long (>4KB)');
-  // Disallow: newline, NUL, $ (for variable expansion), ` (backticks), backslash
+  // Disallow newline / CR / NUL only (see docstring).
   if (/[\n\r\0]/.test(command)) {
     throw new Error('command contains newline/null');
   }

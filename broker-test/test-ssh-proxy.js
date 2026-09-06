@@ -102,6 +102,11 @@ section('validateCommand');
   try { validateCommand(''); } catch (e) { threw = /required/.test(e.message); }
   ok('rejects empty command', threw);
 }
+{
+  // Remote shell metacharacters are allowed; argv is not locally interpolated.
+  ok('allows $ for remote shell', validateCommand('echo $HOME') === 'echo $HOME');
+  ok('allows backticks for remote shell', validateCommand('echo `date`') === 'echo `date`');
+}
 
 // ============================================================
 // sshExec: 注入 executor

@@ -1,8 +1,10 @@
 // broker-test/test-routes-auth-me.js
 // Run: node broker-test/test-routes-auth-me.js
 
-import { handleAuth } from '../broker/routes/auth.js';
-import { handleMe } from '../broker/routes/me.js';
+// chore/oss-modular-security: handler implementations moved to
+// broker/experimental/modular-routes/ (UNSUPPORTED reference). Tests follow.
+import { handleAuth } from '../broker/experimental/modular-routes/auth.js';
+import { handleMe } from '../broker/experimental/modular-routes/me.js';
 import { createMfaPending, getMfaPending, consumeMfaPending, isMfaRequired, MFA_TOKEN_TTL_MS } from '../broker/auth-flow.js';
 
 let passed = 0, failed = 0;

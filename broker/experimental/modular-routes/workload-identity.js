@@ -7,7 +7,7 @@
 // 安全: assume 端点要求 mTLS client 已认证(任何 client 都能用,broker 内置
 // 限流在 deps.rateLimit); cache/invalidate 要求 admin client.
 
-import { getCredentials, listCache, invalidateCache, validateConfig, _resetForTests } from '../lib/workload-identity.js';
+import { getCredentials, listCache, invalidateCache, validateConfig, _resetForTests } from '../../lib/workload-identity.js';
 
 /**
  * @returns {Promise<boolean>}

@@ -68,6 +68,7 @@ import {
   handleOps,
   dispatch,
   API_HANDLERS,
+  handleSshProxy,
 } from './routes/index.js';
 import {
   buildRouteDeps,
@@ -3054,6 +3055,38 @@ async function handle(req, res) {
       // 凭据零接触: 不返 value, 只返 metadata
       note: 'Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or rotate-secret-ecs.sh).',
     });
+  }
+
+  // ----- SSH proxy (was in API_HANDLERS but never dispatched) -----
+  if (p.startsWith('/api/v1/ssh')) {
+    const sshDeps = {
+      send,
+      jsonError,
+      readBody,
+      audit,
+      ctx,
+      config: CONFIG,
+      rateLimit: (c, _bucket) => rateLimit(c),
+      getSecret: async (name, c) => {
+        if (!canResolve(c, name)) {
+          throw new Error('secret not accessible');
+        }
+        const entry = getSecret(name);
+        if (!entry) throw new Error('secret not loaded');
+        const fields = entry.fields || {};
+        return {
+          ...fields,
+          private_key: fields.private_key || fields.key || '',
+          type: entry.type,
+          name: entry.name || name,
+        };
+      },
+    };
+    if (await handleSshProxy(req, res, route, sshDeps)) {
+      observeMs('broker_http_request_duration_ms', Date.now() - t0);
+      inc('broker_http_requests_total', 1, { route: p });
+      return;
+    }
   }
 
   // 404

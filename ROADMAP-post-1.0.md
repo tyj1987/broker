@@ -113,11 +113,12 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2027-03-31
 
 #### 12. V4.2.0 (Q2 2027)
-- [ ] Per-tenant rate limiting
-- [ ] Attribute-based access control (ABAC) for secret access
-- [ ] Secret versioning with diff UI
-- [ ] Approval workflow for high-risk secret access
-- **Target**: 2027-06-30
+- [x] Design spec ✅ 2026-09-06 — `docs/DESIGN-V4.2.0.md` (18 KB, 4 features detailed design)
+- [ ] Per-tenant rate limiting (Phase 7.1, 2027-04-15)
+- [ ] Attribute-based access control (ABAC) for secret access (Phase 7.2, 2027-05-15)
+- [ ] Secret versioning with diff UI (Phase 7.3 + 7.5, 2027-06-01 + 2027-06-25)
+- [ ] Approval workflow for high-risk secret access (Phase 7.4, 2027-06-15)
+- **Target**: 2027-06-30 — **PARTIAL 2026-09-06** (design done; implementation 12-15 weeks full-time)
 
 #### 13. Marketplace self-service (Q2 2027)
 - [ ] Third-party providers can publish templates via `secret-broker marketplace publish`

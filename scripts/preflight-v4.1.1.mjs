@@ -10,10 +10,11 @@
 //   node scripts/preflight-v4.1.1.mjs
 //   node scripts/preflight-v4.1.1.mjs --version 4.1.2   # check a different version
 //   node scripts/preflight-v4.1.1.mjs --strict         # exit non-zero on any WARNING (default: only on FAIL)
+//   node scripts/preflight-v4.1.1.mjs --self-test      # run internal unit tests for branch regex + helpers, then exit
 //
 // Exit code:
-//   0  all checks PASS
-//   1  one or more FAIL
+//   0  all checks PASS (or self-test passed)
+//   1  one or more FAIL (or self-test failed)
 //   2  one or more WARNING (only with --strict)
 //
 // Output: human-readable; line-by-line status; summary at the end.
@@ -31,12 +32,15 @@ const REPO_ROOT = resolve(__dirname, '..');
 const args = process.argv.slice(2);
 let VERSION = '4.1.1';
 let STRICT = false;
+let SELF_TEST = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--version' && args[i + 1]) {
     VERSION = args[i + 1];
     i++;
   } else if (args[i] === '--strict') {
     STRICT = true;
+  } else if (args[i] === '--self-test') {
+    SELF_TEST = true;
   } else if (args[i] === '-h' || args[i] === '--help') {
     console.log(readFileSync(__filename, 'utf8').split('\n').slice(1, 25).join('\n'));
     process.exit(0);
@@ -75,6 +79,106 @@ function tryGit(cmd) {
   try {
     return execSync(`git ${cmd}`, { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { return null; }
+}
+
+// === Self-test (regression test for branch regex + helpers) ===
+// Run with `node scripts/preflight-v4.1.1.mjs --self-test` to validate
+// internal helpers without needing network or full repo state.
+function runSelfTest() {
+  console.log(`${color(CYAN, 'preflight-v4.1.1 self-test')}\n`);
+  let pass = 0, fail = 0;
+
+  function expect(name, actual, expected) {
+    const ok = JSON.stringify(actual) === JSON.stringify(expected);
+    if (ok) {
+      pass++;
+      console.log(`  ${color(GREEN, '✓')} ${name}`);
+    } else {
+      fail++;
+      console.log(`  ${color(RED, '✗')} ${name}`);
+      console.log(`      expected: ${JSON.stringify(expected)}`);
+      console.log(`      actual:   ${JSON.stringify(actual)}`);
+    }
+  }
+
+  // Branch regex — exact version token v4.1.1, not v4.1.10+
+  // (Same logic as origin state check; tested against representative branches)
+  const V411_RE = /(?:^|[^.\d])v?4\.1\.1(?:[^.\d]|$)/;
+  const shouldMatch = [
+    'chore/codeowners-v4.1.1',
+    'chore/editorconfig-v4.1.1',
+    'docs/sdk-v4.1.1-parity-reference',
+    'feat/sdk-cli-errors-v4.1.1',
+    'feat/v4.1.1-verify-all-runner',
+    'release/v4.1.1',
+    'release/v4.1.1-sdk-parity-notes',
+  ];
+  const shouldNotMatch = [
+    'feat/v4.1.2-patch-prep',     // different minor
+    'feat/v4.1.10-future',         // v4.1.10 NOT v4.1.1
+    'feat/v4.1.11-other',          // v4.1.11 NOT v4.1.1 (digit after)
+    'feat/v4.2.0-design-spec',     // different major.minor
+    'main',                        // no v4.1.1
+    'docs/sdk-v4.1.10-typo',       // false positive guard
+    'docs/v4.1.100-future',        // v4.1.100 NOT v4.1.1
+  ];
+  for (const name of shouldMatch) {
+    expect(`regex matches ${name}`, V411_RE.test(name), true);
+  }
+  for (const name of shouldNotMatch) {
+    expect(`regex excludes ${name}`, V411_RE.test(name), false);
+  }
+
+  // Origin parsing — extract branch name from `git ls-remote` line
+  expect('parse line sha+branch',
+    'abc123def\trefs/heads/chore/codeowners-v4.1.1'.match(/refs\/heads\/(.+)$/)?.[1],
+    'chore/codeowners-v4.1.1'
+  );
+  expect('parse line empty', ''.match(/refs\/heads\/(.+)$/)?.[1], undefined);
+
+  // countV411Branches end-to-end (uses same regex)
+  function countV411Branches(lsOutput) {
+    return lsOutput.split('\n').filter(l => {
+      const m = l.match(/refs\/heads\/(.+)$/);
+      if (!m) return false;
+      return V411_RE.test(m[1]);
+    }).length;
+  }
+  // Simulated 34-branch V4.1.1 state
+  const fakeLs = [
+    'aaa\trefs/heads/chore/codeowners-v4.1.1',
+    'bbb\trefs/heads/feat/sdk-cli-errors-v4.1.1',
+    'ccc\trefs/heads/feat/v4.1.1-verify-all-runner',
+    'ddd\trefs/heads/release/v4.1.1',
+    'eee\trefs/heads/feat/v4.1.2-patch-prep',  // should NOT match
+    'fff\trefs/heads/feat/v4.1.10-future',      // should NOT match
+  ].join('\n');
+  expect('countV411Branches: 4 of 6 match (rest are v4.1.2+ or v4.1.10+)',
+    countV411Branches(fakeLs), 4);
+
+  // Record helper semantics
+  const before = { pass: passCount, warn: warnCount, fail: failCount };
+  record('PASS', 'self-test-extra', 'sanity');
+  expect('record PASS increments passCount',
+    passCount - before.pass, 1);
+  // Roll back so summary isn't disturbed if --self-test falls through
+  // (it doesn't, but defensive)
+  passCount = before.pass; warnCount = before.warn; failCount = before.fail;
+  results.length = 0;
+
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  if (fail > 0) {
+    console.log(`\n${color(RED, '✗ self-test FAILED')}`);
+    process.exit(1);
+  }
+  console.log(`\n${color(GREEN, '✓ self-test OK')}`);
+}
+
+// === Run self-test if requested ===
+// (Defined as a function above; called here so all const helpers are initialized)
+if (SELF_TEST) {
+  runSelfTest();
+  process.exit(0);
 }
 
 // === Checks ===

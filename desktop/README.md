@@ -91,6 +91,25 @@ npx tauri build
 - **Windows**: Squirrel.Windows + EV code signing cert
 - **Linux**: Tauri updater + zsync (AppImage) + apt PPA + yum repo
 
+### Build-time config (`.env`)
+
+`tauri.conf.json` uses `${VAR}` substitution for release-time secrets
+(updater pubkey, Windows cert thumbprint, macOS signing identity, etc.).
+Copy `.env.example` to `.env` and fill in the vars you need:
+
+```bash
+cp .env.example .env
+# Edit .env — leave Phase 5 vars blank for dev / V0.1.0 alpha builds
+npx tauri build
+```
+
+Phase 1-4 (dev / V0.1.0 alpha): leave auto-update + signing vars blank.
+The build will succeed but unsigned, with no auto-update channel.
+Phase 5 (V1.0.0 GA): fill in `TAURI_UPDATER_PUBKEY`,
+`WINDOWS_CERTIFICATE_THUMBPRINT`, `MACOS_SIGNING_IDENTITY`,
+`MACOS_TEAM_ID`, `LINUX_GPG_FINGERPRINT` for signed + auto-updateable
+artifacts.
+
 ## Phase roadmap (see `docs/DESIGN-TAURI-DESKTOP.md` §6 for full)
 
 | Phase | What | When | Status |

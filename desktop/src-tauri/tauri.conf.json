@@ -60,16 +60,16 @@
     "licenseFile": "../LICENSE",
     "createUpdaterArtifacts": true,
     "windows": {
-      "certificateThumbprint": null,
+      "certificateThumbprint": "${WINDOWS_CERTIFICATE_THUMBPRINT}",
       "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
+      "timestampUrl": "${WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}"
     },
     "macOS": {
       "minimumSystemVersion": "10.15",
       "exceptionDomain": "broker.52trz.com",
       "frameworks": [],
-      "providerShortName": null,
-      "signingIdentity": null,
+      "providerShortName": "${MACOS_TEAM_ID}",
+      "signingIdentity": "${MACOS_SIGNING_IDENTITY}",
       "entitlements": null
     },
     "linux": {
@@ -91,7 +91,7 @@
       "endpoints": [
         "https://broker.52trz.com/desktop/updates/{{target}}/{{arch}}/{{current_version}}"
       ],
-      "pubkey": "REPLACE_WITH_MAINTAINER_ED25519_PUBKEY_AT_RELEASE_TIME",
+      "pubkey": "${TAURI_UPDATER_PUBKEY}",
       "windows": {
         "installMode": "passive"
       }

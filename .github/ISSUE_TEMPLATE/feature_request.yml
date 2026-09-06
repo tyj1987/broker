@@ -17,12 +17,27 @@ body:
       label: Targeted milestone
       description: Which release is this targeting? (best guess is fine)
       options:
-        - "v4.1.1 (next patch)"
-        - "v4.2.0 (next minor)"
-        - "v5.0.0 (next major)"
+        - "v4.1.1 (next patch — already code complete, awaiting release)"
+        - "v4.1.2 (Q1 2027 — community bug fixes + auto-rotate cache)"
+        - "v4.2.0 (Q2 2027 — per-tenant rate limit + ABAC + secret versioning + approval)"
         - "backlog (no target)"
     validations:
       required: false
+
+  - type: dropdown
+    id: affected_sdks
+    attributes:
+      label: Affected 4-SDKs
+      description: V4.1.1+ SDKs must stay in parity. If your feature affects 1 SDK, plan to update all 4.
+      options:
+        - All 4 SDKs (Python / Go / Node CLI / VSCode)
+        - Python only (`sdk/python/`)
+        - Go only (`sdk/go/`)
+        - Node CLI only (`cli/`)
+        - VSCode only (`sdk/vscode/`)
+        - Broker only (no SDK impact)
+    validations:
+      required: true
 
   - type: textarea
     id: problem
@@ -56,11 +71,12 @@ body:
       label: Impact assessment
       description: |
         Does this change any of the four non-negotiable architecture principles?
-        (See [CONTRIBUTING.md §Architecture principles](../CONTRIBUTING.md))
+        (See [CONTRIBUTING.md §Architecture principles](../../../CONTRIBUTING.md))
         1. Zero credential leakage
         2. mTLS-only
         3. No new hard dependencies for SDKs
         4. Backward compatibility
+        5. 4-SDK parity (V4.1.1+ — if you change one SDK, change all 4)
     validations:
       required: false
 
@@ -72,3 +88,4 @@ body:
         - label: I have opened a GitHub Discussion for this and linked it
         - label: This is a small enough change to skip the discussion
         - label: I am willing to submit a PR for this
+        - label: I have reviewed ROADMAP-post-1.0.md to confirm this is in scope

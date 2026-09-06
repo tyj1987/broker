@@ -8,16 +8,30 @@ body:
     attributes:
       value: |
         Thanks for filing a bug! Please complete the sections below.
-        **For security vulnerabilities, see [SECURITY.md](../SECURITY.md) — do not file public issues.**
+        **For security vulnerabilities, see [SECURITY.md](../../../SECURITY.md) — do not file public issues.**
 
   - type: input
     id: version
     attributes:
       label: broker version
-      description: Output of `curl -k --cert client.crt --key client.key --cacert ca.crt https://broker:8443/health` or `npm run --silent -p version`
-      placeholder: "4.1.0"
+      description: Output of `curl -k --cert client.crt --key client.key --cacert ca.crt https://broker:8443/health` or `npm run --silent -p broker/version.js`
+      placeholder: "4.1.1"
     validations:
       required: true
+
+  - type: input
+    id: sdk_version
+    attributes:
+      label: 4-SDK version (if SDK bug)
+      description: |
+        V4.1.1+ SDKs expose `__version__` / `Version` / `version` / `package.json#version`.
+        Run `python -c "import secret_broker; print(secret_broker.__version__)"` or
+        `go list -m github.com/tyj1987/broker-sdk-go` or
+        `node -e "console.log(require('./cli/package.json').version)"` or
+        check VSCode Marketplace for the extension version.
+      placeholder: "Python 4.1.1 / Go 4.1.1 / Node CLI 4.1.1 / VSCode 4.1.1"
+    validations:
+      required: false
 
   - type: dropdown
     id: component
@@ -27,13 +41,14 @@ body:
       options:
         - broker core (`broker/`)
         - broker library (`broker/lib/`)
-        - broker routes (`broker/routes/`)
-        - SDK — Python
-        - SDK — Go
-        - SDK — Node
-        - SDK — VS Code extension
+        - broker routes
+        - SDK — Python (`sdk/python/`)
+        - SDK — Go (`sdk/go/`)
+        - SDK — Node CLI (`cli/`)
+        - SDK — VSCode extension (`sdk/vscode/`)
         - Helm chart
         - Terraform module
+        - Homebrew / Snap / apt / winget
         - Grafana dashboard
         - documentation
         - other (describe in description)
@@ -73,7 +88,10 @@ body:
     id: actual
     attributes:
       label: Actual behavior
-      description: What actually happened? Include the full error message.
+      description: |
+        What actually happened? Include the full error message.
+        If V4.1.1 SDK bug, include the full `BrokerError` (status, code, requestId, is_retryable, toString).
+        See docs/ERROR-CODES.md for the 25 broker error codes.
     validations:
       required: true
 
@@ -84,6 +102,7 @@ body:
       description: |
         Paste broker stdout/stderr or audit log excerpts. **Redact any secret values before pasting.**
         The broker auto-redacts known patterns (ghp_, sk-, AKIA, JWTs), but please double-check.
+        V4.1.1 SDKs auto-redact body on BrokerError construction.
     validations:
       required: false
 
@@ -96,3 +115,5 @@ body:
         - label: I have reproduced the bug against the latest `main` branch
         - label: I have redacted all secret values in logs and screenshots
         - label: This is NOT a security vulnerability (security issues go to security@broker.example.com)
+        - label: I have run `node scripts/verify-v4.1.1-release.mjs --strict` and it passes (V4.1.1 PRs only)
+        - label: I have updated all 4 SDKs in parity (V4.1.1 SDK changes only)

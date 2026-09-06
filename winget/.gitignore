@@ -1,0 +1,6 @@
+# winget build artifacts (output of wingetcreate / makemsix)
+*.msix
+*.msixbundle
+Output/
+Generated/
+*.wxs

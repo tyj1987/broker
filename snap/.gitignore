@@ -1,0 +1,6 @@
+# snap build artifacts (output of `snapcraft build` / `snapcraft pack`)
+*.snap
+parts/
+stage/
+prime/
+.snapcraft/

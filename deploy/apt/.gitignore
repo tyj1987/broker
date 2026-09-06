@@ -1,0 +1,9 @@
+# apt / dpkg-buildpackage build artifacts
+*.deb
+*.buildinfo
+*.changes
+*.dsc
+*.debian.tar.*
+debian/secret-broker/
+debian/files
+debian/*.substvars

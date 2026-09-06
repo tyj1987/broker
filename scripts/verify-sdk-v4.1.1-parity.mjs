@@ -12,10 +12,11 @@
 //   node scripts/verify-sdk-v4.1.1-parity.mjs           # default V4.1.1
 //   node scripts/verify-sdk-v4.1.1-parity.mjs --version 4.1.2
 //   node scripts/verify-sdk-v4.1.1-parity.mjs --strict  # warnings = fail
+//   node scripts/verify-sdk-v4.1.1-parity.mjs --self-test  # internal regex regression tests, then exit
 //
 // Exit code:
-//   0  all checks PASS
-//   1  one or more FAIL
+//   0  all checks PASS (or self-test passed)
+//   1  one or more FAIL (or self-test failed)
 //   2  one or more WARNING (only with --strict)
 //
 // Complements scripts/preflight-v4.1.1.mjs:
@@ -34,14 +35,17 @@ const REPO_ROOT = resolve(__dirname, '..');
 const args = process.argv.slice(2);
 let VERSION = '4.1.1';
 let STRICT = false;
+let SELF_TEST = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--version' && args[i + 1]) {
     VERSION = args[i + 1];
     i++;
   } else if (args[i] === '--strict') {
     STRICT = true;
+  } else if (args[i] === '--self-test') {
+    SELF_TEST = true;
   } else if (args[i] === '-h' || args[i] === '--help') {
-    console.log(readFileSync(__filename, 'utf8').split('\n').slice(1, 24).join('\n'));
+    console.log(readFileSync(__filename, 'utf8').split('\n').slice(1, 25).join('\n'));
     process.exit(0);
   }
 }
@@ -66,6 +70,229 @@ function header(label) {
 }
 function safeRead(p) {
   try { return readFileSync(p, 'utf8'); } catch { return null; }
+}
+
+// === Self-test (regression test for 4-SDK regex patterns) ===
+// Run with `node scripts/verify-sdk-v4.1.1-parity.mjs --self-test` to validate
+// the regex against fixture code without needing actual SDK source.
+function runSelfTest() {
+  console.log(`${color(CYAN, 'verify-sdk-v4.1.1-parity self-test')}\n`);
+  let pass = 0, fail = 0;
+  function expect(name, actual, expected) {
+    const ok = JSON.stringify(actual) === JSON.stringify(expected);
+    if (ok) {
+      pass++;
+      console.log(`  ${color(GREEN, '✓')} ${name}`);
+    } else {
+      fail++;
+      console.log(`  ${color(RED, '✗')} ${name}`);
+      console.log(`      expected: ${JSON.stringify(expected)}`);
+      console.log(`      actual:   ${JSON.stringify(actual)}`);
+    }
+  }
+
+  // ===== Python SDK regex =====
+  // Match a real V4.1.1 Python exceptions.py fixture
+  const pyFixture = `
+class BrokerError(Exception):
+    def __init__(self, op, status, code, request_id, retry_after, body):
+        self.op = op
+        self.status = status
+        self.code = code
+        self.request_id = request_id
+        self.retry_after = retry_after
+        self.body = body
+
+    @property
+    def is_retryable(self):
+        return self.status >= 500 or self.status == 429
+
+    def to_dict(self):
+        return {"op": self.op, "status": self.status, "code": self.code, "request_id": self.request_id, "retry_after": self.retry_after}
+
+
+class BrokerConnectionError(Exception):
+    pass
+
+
+def parse_broker_error(response):
+    return BrokerError(...)
+`;
+  expect('Python: BrokerError class present', /class\s+BrokerError\s*\(/.test(pyFixture), true);
+  expect('Python: BrokerConnectionError class present', /class\s+BrokerConnectionError\s*\(/.test(pyFixture), true);
+  expect('Python: parse_broker_error factory present', /def\s+parse_broker_error\s*\(/.test(pyFixture), true);
+  expect('Python: is_retryable @property present', /@property[\s\S]*?is_retryable/.test(pyFixture), true);
+  expect('Python: is_retryable as method (alt pattern)', /def\s+is_retryable\s*\(/.test(pyFixture), true);  // @property + def is_retryable both present
+  expect('Python: request_id field present', /request_id/.test(pyFixture), true);
+  expect('Python: retry_after field present', /retry_after/.test(pyFixture), true);
+  expect('Python: to_dict() method present', /def\s+to_dict\s*\(/.test(pyFixture), true);
+
+  // Pre-V4.1.0 fixture (lacks parse_broker_error + request_id/retry_after/to_dict) should fail
+  const pyOld = `
+class BrokerError(Exception):
+    def __init__(self, op, status, code):
+        pass
+class BrokerConnectionError(Exception):
+    pass
+`;
+  expect('Python: parse_broker_error MISSING in old', /def\s+parse_broker_error\s*\(/.test(pyOld), false);
+  expect('Python: request_id MISSING in old', /request_id/.test(pyOld), false);
+  expect('Python: to_dict MISSING in old', /def\s+to_dict\s*\(/.test(pyOld), false);
+
+  // ===== Go SDK regex =====
+  const goFixture = `
+type BrokerError struct {
+    Op         string
+    Status     int
+    Code       string
+    RequestID  string
+    RetryAfter int
+    Body       []byte
+}
+
+func (e *BrokerError) IsRetryable() bool {
+    return e.Status >= 500 || e.Status == 429
+}
+
+type BrokerConnectionError struct {
+    Err error
+}
+
+func ParseBrokerError(resp *http.Response) *BrokerError {
+    return &BrokerError{Op: "test", Status: resp.StatusCode}
+}
+
+func (e *BrokerError) ToMap() map[string]interface{} {
+    return map[string]interface{}{"op": e.Op, "status": e.Status}
+}
+`;
+  expect('Go: BrokerError struct present', /type\s+BrokerError\s+struct/.test(goFixture), true);
+  expect('Go: BrokerConnectionError struct present', /type\s+BrokerConnectionError\s+struct/.test(goFixture), true);
+  expect('Go: ParseBrokerError factory present', /func\s+ParseBrokerError\s*\(/.test(goFixture), true);
+  expect('Go: IsRetryable() method present',
+    /func\s+\(\w+\s+\*?BrokerError\)\s+IsRetryable\s*\(\s*\)\s+bool/.test(goFixture), true);
+  expect('Go: RequestID field present', /RequestID/.test(goFixture), true);
+  expect('Go: RetryAfter field present', /RetryAfter/.test(goFixture), true);
+  expect('Go: ToMap() method present', /func\s+\(\w+\s+\*?BrokerError\)\s+ToMap\s*\(/.test(goFixture), true);
+
+  const goOld = `
+type BrokerError struct {
+    Op     string
+    Status int
+    Code   string
+}
+`;
+  expect('Go: ParseBrokerError MISSING in old', /func\s+ParseBrokerError\s*\(/.test(goOld), false);
+  expect('Go: IsRetryable MISSING in old',
+    /func\s+\(\w+\s+\*?BrokerError\)\s+IsRetryable\s*\(\s*\)\s+bool/.test(goOld), false);
+  expect('Go: ToMap MISSING in old', /func\s+\(\w+\s+\*?BrokerError\)\s+ToMap\s*\(/.test(goOld), false);
+
+  // ===== Node CLI SDK regex =====
+  const cliFixture = `
+export class BrokerError extends Error {
+  constructor(op, status, code, requestId, retryAfter, body) {
+    super(\`\${status} \${code}\`);
+    this.op = op;
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+    this.retryAfter = retryAfter;
+    this.body = body;
+  }
+
+  get isRetryable() {
+    return this.status >= 500 || this.status === 429;
+  }
+
+  toJSON() {
+    return { op: this.op, status: this.status, code: this.code, requestId: this.requestId, retryAfter: this.retryAfter };
+  }
+
+  toString() {
+    return \`BrokerError(\${this.status} \${this.code})\`;
+  }
+}
+
+export class BrokerConnectionError extends Error {}
+
+export function parseBrokerError(response) {
+  return new BrokerError(...);
+}
+
+export async function mTLSRequest(opts) {
+  return await fetchWithRetry(opts);
+}
+`;
+  expect('CLI: BrokerError class present', /export\s+class\s+BrokerError\s+extends\s+Error/.test(cliFixture), true);
+  expect('CLI: BrokerConnectionError class present', /class\s+BrokerConnectionError\s+extends\s+Error/.test(cliFixture), true);
+  expect('CLI: parseBrokerError factory present', /export\s+function\s+parseBrokerError\s*\(/.test(cliFixture), true);
+  expect('CLI: isRetryable getter present', /get\s+isRetryable\s*\([^)]*\)\s*[:{]/.test(cliFixture), true);
+  expect('CLI: requestId field present', /requestId/.test(cliFixture), true);
+  expect('CLI: retryAfter field present', /retryAfter/.test(cliFixture), true);
+  expect('CLI: toJSON() method present', /toJSON\s*\(\s*\)\s*{/.test(cliFixture), true);
+  expect('CLI: mTLSRequest present', /(mTLSRequest|async\s+function\s+mTLSRequest|mtlsRequest)/.test(cliFixture), true);
+  expect('CLI: redact() called', /redact\s*\(/.test(cliFixture), false);  // fixture doesn't call redact; tests the pattern works
+
+  // ===== VSCode SDK regex =====
+  const vscodeFixture = `
+export class BrokerError extends Error {
+  constructor(public op: string, public status: number, public code: string,
+              public requestId: string, public retryAfter: number, public body: unknown) {
+    super(\`\${status} \${code}\`);
+  }
+
+  get isRetryable(): boolean {
+    return this.status >= 500 || this.status === 429;
+  }
+
+  toJSON(): Record<string, unknown> {
+    return { op: this.op, status: this.status, code: this.code, requestId: this.requestId, retryAfter: this.retryAfter };
+  }
+}
+
+export class BrokerConnectionError extends Error {}
+
+export function parseBrokerError(response: unknown): BrokerError {
+  return new BrokerError(...);
+}
+
+private async mtlsRequest<T>(opts: RequestOptions): Promise<T> {
+  return this.fetchWithRetry<T>(opts);
+}
+
+const userAgent = 'secret-broker-vscode/4.1.1';
+`;
+  expect('VSCode: BrokerError class present', /class\s+BrokerError\s+extends\s+Error/.test(vscodeFixture), true);
+  expect('VSCode: BrokerConnectionError class present', /class\s+BrokerConnectionError\s+extends\s+Error/.test(vscodeFixture), true);
+  expect('VSCode: parseBrokerError factory present', /export\s+function\s+parseBrokerError\s*\(/.test(vscodeFixture), true);
+  expect('VSCode: isRetryable getter present', /get\s+isRetryable\s*\([^)]*\)\s*[:{]/.test(vscodeFixture), true);
+  expect('VSCode: requestId field present', /requestId/.test(vscodeFixture), true);
+  expect('VSCode: retryAfter field present', /retryAfter/.test(vscodeFixture), true);
+  expect('VSCode: toJSON() method present', /toJSON\s*\(\s*\)\s*:\s*Record/.test(vscodeFixture), true);
+  expect('VSCode: mtlsRequest present', /private\s+async\s+mtlsRequest|mtlsRequest\s*</.test(vscodeFixture), true);
+  expect('VSCode: User-Agent secret-broker-vscode/4.1.1',
+    new RegExp(`secret-broker-vscode/${VERSION.replace(/\./g, '\\.')}`).test(vscodeFixture), true);
+
+  // ===== Cross-SDK contract =====
+  // All 4 SDKs must have status >= 500 or === 429 retryable semantic (substring)
+  const allRetryable = pyFixture.includes('status >= 500 or self.status == 429')
+    && goFixture.includes('Status >= 500 || e.Status == 429')
+    && cliFixture.includes('status >= 500 || this.status === 429')
+    && vscodeFixture.includes('status >= 500 || this.status === 429');
+  expect('Cross-SDK: all 4 implement 5xx/429 retryable semantic', allRetryable, true);
+
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  if (fail > 0) {
+    console.log(`\n${color(RED, '✗ self-test FAILED')}`);
+    process.exit(1);
+  }
+  console.log(`\n${color(GREEN, '✓ self-test OK')}`);
+}
+
+// === Run self-test if requested ===
+if (SELF_TEST) {
+  runSelfTest();
+  process.exit(0);
 }
 
 // === 1. Python SDK ===
@@ -148,7 +375,7 @@ header('Node CLI (cli/)');
     const hasBrokerError = /export\s+class\s+BrokerError\s+extends\s+Error/.test(cli);
     const hasParseFactory = /export\s+function\s+parseBrokerError\s*\(/.test(cli);
     const hasConnection = /class\s+BrokerConnectionError\s+extends\s+Error/.test(cli);
-    const hasIsRetryable = /get\s+isRetryable\s*\(\s*\)\s*{/.test(cli);
+    const hasIsRetryable = /get\s+isRetryable\s*\([^)]*\)\s*[:{]/.test(cli);
     const hasRequestId = /requestId/.test(cli);
     const hasRetryAfter = /retryAfter/.test(cli);
     const hasToString = /toString\s*\(\s*\)\s*{/.test(cli);
@@ -191,7 +418,7 @@ header('VSCode extension (sdk/vscode/)');
     const hasBrokerError = /class\s+BrokerError\s+extends\s+Error/.test(client);
     const hasParseFactory = /export\s+function\s+parseBrokerError\s*\(/.test(client);
     const hasConnection = /class\s+BrokerConnectionError\s+extends\s+Error/.test(client);
-    const hasIsRetryable = /get\s+isRetryable\s*\(\s*\)\s*{/.test(client);
+    const hasIsRetryable = /get\s+isRetryable\s*\([^)]*\)\s*[:{]/.test(client);
     const hasRequestId = /requestId/.test(client);
     const hasRetryAfter = /retryAfter/.test(client);
     const hasToString = /toString\s*\(\s*\)\s*:\s*string/.test(client);

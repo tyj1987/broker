@@ -14,10 +14,22 @@ export async function handleSshProxy(req, res, route, deps) {
   const { method, pathname: p } = route;
   const { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret } = deps;
 
-  if (p === '/api/v1/ssh/exec' && method === 'POST') return handleExec(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret });
-  if (p === '/api/v1/ssh/tunnel' && method === 'POST') return handleTunnel(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret });
-  if (p === '/api/v1/ssh/tunnel/stop' && method === 'POST') return handleTunnelStop(req, res, { send, jsonError, readBody, audit, ctx });
-  if (p === '/api/v1/ssh/tunnels' && method === 'GET') return handleTunnelList(res, { send, jsonError, ctx, config });
+  if (p === '/api/v1/ssh/exec' && method === 'POST') {
+    await handleExec(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret });
+    return true;
+  }
+  if (p === '/api/v1/ssh/tunnel' && method === 'POST') {
+    await handleTunnel(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret });
+    return true;
+  }
+  if (p === '/api/v1/ssh/tunnel/stop' && method === 'POST') {
+    await handleTunnelStop(req, res, { send, jsonError, readBody, audit, ctx });
+    return true;
+  }
+  if (p === '/api/v1/ssh/tunnels' && method === 'GET') {
+    handleTunnelList(res, { send, jsonError, ctx, config });
+    return true;
+  }
   return false;
 }
 

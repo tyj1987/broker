@@ -853,6 +853,7 @@ function rateLimit(ctx) {
 // HTTP helpers
 // ============================================================
 function send(res, status, body, extraHeaders = {}) {
+  if (res.headersSent || res.writableEnded) return;
   const isJson = typeof body === 'object';
   const payload = isJson ? JSON.stringify(body) : body;
   res.writeHead(status, {
@@ -889,6 +890,7 @@ function readBody(req) {
 }
 
 function jsonError(res, status, msg) {
+  if (res.headersSent || res.writableEnded) return;
   return send(res, status, { error: msg, status });
 }
 
@@ -3082,7 +3084,9 @@ async function handle(req, res) {
         };
       },
     };
-    if (await handleSshProxy(req, res, route, sshDeps)) {
+    const sshHandled = await handleSshProxy(req, res, route, sshDeps);
+    // handleSshProxy historically returned undefined after send(); treat headersSent as handled
+    if (sshHandled || res.headersSent) {
       observeMs('broker_http_request_duration_ms', Date.now() - t0);
       inc('broker_http_requests_total', 1, { route: p });
       return;

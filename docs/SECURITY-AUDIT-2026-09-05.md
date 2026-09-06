@@ -4,6 +4,11 @@
 
 **NOT APPROVED FOR PRODUCTION.** Local controls were hardened and regression tests pass, but release gates remain open: production identity evidence, credential rotation, physical-key WebAuthn E2E, Go security-core migration, full route coverage, signed-build execution, provider contract tests and disaster-recovery evidence are unavailable or incomplete.
 
+
+## Scope note (2026-09-06)
+
+This document is a **desensitized historical snapshot** of the local audit at baseline `f3a7cc7` (plus then-uncommitted working-tree changes). It is **not** a claim that current `master` (including merged #16 / #17 and later) matches this baseline. Gaps vs current trunk—especially production identity P0 and SSH/audit-redact landings—should be tracked separately; do not treat this file as an up-to-date approval of today's deployed behavior.
+
 ## Evidence baseline
 
 - Audited local commit: `f3a7cc7af4eef1425382f0fa63dd2c7e267c8565` plus working-tree changes.

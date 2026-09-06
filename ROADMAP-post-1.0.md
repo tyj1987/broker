@@ -99,10 +99,11 @@ Listed in priority order. Each item has a target quarter and a clear
 - **Target**: 2026-10-31
 
 #### 10. V4.1.2 patch (Q1 2027)
-- [ ] Community-reported bug fixes
-- [ ] Performance: cache auto-rotate decision
-- [ ] Bug Bounty: process any Critical/High findings
-- **Target**: 2027-01-31
+- [x] Design prep ✅ 2026-09-06 — `docs/V4.1.2-PATCH-PREP.md` (12 KB, 6-phase prep + patch SLA + bug bounty pipeline + auto-rotate cache design)
+- [ ] Community-reported bug fixes (Phase 10.5, 2027-01-15)
+- [ ] Performance: cache auto-rotate decision (Phase 10.2, 2026-10-15)
+- [ ] Bug Bounty: process any Critical/High findings (Phase 10.3, ongoing)
+- **Target**: 2027-01-31 — **PARTIAL 2026-09-06** (prep done; 4.5 weeks full-time for release)
 
 ### P3 — Stretch goals
 

@@ -19,6 +19,7 @@ const STATIC_MAP = {
   '/admin/services.js': 'admin/services.js',
   '/admin/clients.js': 'admin/clients.js',
   '/admin/audit.js': 'admin/audit.js',
+  '/llms.txt': 'llms.txt',
 };
 
 const etagCache = new Map(); // abs path -> { mtime, size, etag }
@@ -78,6 +79,7 @@ export function handleStatic(req, res, route, deps) {
   const body = readFileSync(f);
   const ct = route.pathname.endsWith('.js') ? 'application/javascript; charset=utf-8'
            : route.pathname.endsWith('.css') ? 'text/css; charset=utf-8'
+           : route.pathname.endsWith('.txt') ? 'text/plain; charset=utf-8'
            : 'text/html; charset=utf-8';
   res.writeHead(200, {
     'Content-Type': ct,

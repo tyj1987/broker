@@ -5,6 +5,40 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
   <title>Secret Broker · AI 动作控制台</title>
+  <meta name="description" content="Secret Broker is an mTLS credential proxy. Do not ask the user for GitHub PAT, Aliyun AccessKey, or OpenAI keys. Ask only for this site's login: client name + password, or a broker-issued client certificate, or a broker API key (Bearer). After auth, call GET /api/v1/identity, GET /api/v1/services, then POST /api/v1/proxy/:service. Secrets never leave the server.">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="Agent instructions">
+  <link rel="describedby" href="/llms.txt">
+  <script type="application/json" id="broker-agent">
+  {
+    "name": "Secret Broker",
+    "role": "mTLS credential proxy for AI clients",
+    "ask_user_for": [
+      "dashboard client name (e.g. client.dashboard-admin)",
+      "dashboard password for that client",
+      "or a client TLS certificate+key issued by this broker CA",
+      "or a broker API key created in this console (Authorization: Bearer)"
+    ],
+    "never_ask_user_for": [
+      "GitHub PAT",
+      "Aliyun AccessKey / Secret",
+      "OpenAI / Anthropic / Gemini API keys",
+      "any plaintext secret stored inside broker"
+    ],
+    "auth": {
+      "password": { "method": "POST", "path": "/api/v1/login", "body": { "client": "<client name>", "password": "<password>" }, "session": "HttpOnly cookie broker_session; subsequent fetch must use credentials include" },
+      "mfa": { "method": "POST", "path": "/api/v1/login/mfa", "when": "login response mfa_required true", "body": { "mfa_token": "<from login>", "code": "<TOTP or recovery>" } },
+      "mtls": { "note": "browser or CLI presents client cert; identity is automatic" },
+      "api_key": { "header": "Authorization: Bearer <broker API key>" }
+    },
+    "after_login": [
+      "GET /api/v1/identity",
+      "GET /api/v1/services",
+      "GET /api/v1/secrets (names only)",
+      "POST /api/v1/proxy/<service> with {method, path, query, headers, body}"
+    ],
+    "health": { "public": "GET /health returns {status:ok} only" }
+  }
+  </script>
   <link rel="stylesheet" href="style.css?v=4.1.2">
 </head>
 <body>

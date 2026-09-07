@@ -118,6 +118,7 @@ console.log('=== handleStatic missing file is 500 not fall-through ===');
   handleStatic({ headers: { 'if-none-match': res2.headers.ETag } }, res3, { method: 'GET', pathname: '/' }, { dashboardDir: dir });
   assert(res3.status === 304, '304 on etag hit');
   assert(Object.keys(STATIC_MAP).length >= 10, 'STATIC_MAP size');
+  assert(STATIC_MAP['/llms.txt'] === 'llms.txt', 'llms.txt is public');
   rmSync(dir, { recursive: true, force: true });
 }
 

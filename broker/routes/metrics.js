@@ -11,13 +11,19 @@ export function handleMetrics(req, res, route, deps) {
   if (method !== 'GET') return false;
   if (p !== '/metrics' && p !== '/metrics.json') return false;
 
-  const requireAuth = process.env.METRICS_REQUIRE_AUTH === '1'
-    || process.env.METRICS_REQUIRE_AUTH === 'true';
-  if (requireAuth) {
-    if (!deps.ctx?.client || deps.ctx.client.role !== 'admin') {
-      deps.jsonError?.(res, 401, 'Metrics require admin auth');
-      return true;
+  // Default: local scrape or admin. METRICS_PUBLIC=1 restores the old anonymous scrape.
+  const publicOk = process.env.METRICS_PUBLIC === '1'
+    || process.env.METRICS_REQUIRE_AUTH === '0'
+    || process.env.METRICS_REQUIRE_AUTH === 'false';
+  const fromLocal = deps.isLocal === true;
+  const isAdmin = deps.ctx?.client?.role === 'admin';
+  if (!publicOk && !fromLocal && !isAdmin) {
+    if (typeof deps.jsonError === 'function') {
+      deps.jsonError(res, 401, 'Metrics require admin auth or local scrape');
+    } else {
+      deps.send(res, 401, { error: 'Metrics require admin auth or local scrape', status: 401 });
     }
+    return true;
   }
 
   if (p === '/metrics.json') {

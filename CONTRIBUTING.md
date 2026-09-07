@@ -62,7 +62,9 @@ These are not negotiable:
    [redact engine tests](broker-test/test-redact.js) for the 12 patterns
    currently supported.
 2. **mTLS-only**: no anonymous endpoints. The single exception is
-   `GET /health`, which returns only `{ok, version}`.
+   `GET /health`, which returns only `{ "status": "ok" }`. Do not put
+   `version`, `sops_loaded`, service names or `uptime_seconds` on the
+   public health body.
 3. **No new hard dependencies for SDKs**: Python and Go SDKs must remain
    stdlib-only. Node SDK may add `ws` (already there). New deps require
    maintainer approval.

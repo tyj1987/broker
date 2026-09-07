@@ -1,6 +1,6 @@
 # Project Status
 
-> **V4.1.0 — General Availability** (tag `v4.1.0`, 2026-09-01)
+> **V4.1.1 — security/UX patch** (public `/health` fingerprint removed; dashboard admin tabs no longer wait for a refresh). Built on V4.1.0 GA (`v4.1.0`, 2026-09-01).
 
 ## Current state
 

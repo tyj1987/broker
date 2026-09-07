@@ -108,7 +108,7 @@ scp broker:~/pki/ca/ca.crt C:\Users\User\.broker\
 
 # 健康检查
 node C:\path\to\cli\secret-broker.js health
-# { "status": "ok", "sops_loaded": true, ... }
+# { "status": "ok" }
 
 # AI 调用 GitHub（AI 看不到 PAT）
 node secret-broker.js proxy github GET /repos/tyj1987/sops-age-template

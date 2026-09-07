@@ -30,8 +30,8 @@ full assessment, **30 days** for a fix (or coordinated disclosure timeline).
 |----------|-------------|----------|
 | **Critical** | $5,000 | Remote unauthenticated RCE, mTLS bypass, plaintext secret leak in audit log |
 | **High**     | $2,000 | Authenticated RCE, SQLi in audit DB, privilege escalation across clients |
-| **Medium**   | $500   | Stored XSS in admin UI, CSRF on rotate endpoints, DOS via WebSocket flood |
-| **Low**      | $100   | Information disclosure of broker version, missing rate limit on /health |
+| **Medium**   | $500   | Stored XSS in admin UI, CSRF on rotate endpoints, DOS via WebSocket flood, unauthenticated `/health` leaking SOPS/service inventory |
+| **Low**      | $100   | Information disclosure of broker version on authenticated responses, missing rate limit on /health |
 
 ### Eligibility
 

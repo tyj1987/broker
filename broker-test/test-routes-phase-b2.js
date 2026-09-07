@@ -47,10 +47,39 @@ console.log('=== handleHealth ===');
   });
   assert(handled === true, 'handles /health');
   assert(payload?.status === 'ok', 'status ok');
-  assert(payload?.version === BROKER_VERSION, 'version');
-  assert(payload?.sops_loaded === true, 'sops_loaded');
-  assert(Array.isArray(payload?.services) && payload.services.includes('github'), 'services');
+  assert(payload?.version === undefined, 'public /health has no version');
+  assert(payload?.sops_loaded === undefined, 'public /health has no sops_loaded');
+  assert(payload?.services === undefined, 'public /health has no services');
+  assert(payload?.uptime_seconds === undefined, 'public /health has no uptime');
   assert(await handleHealth({}, res, { method: 'POST', pathname: '/health' }, { send }) === false, 'POST not handled');
+}
+{
+  const res = mockRes();
+  let payload = null;
+  const send = (_res, status, body) => {
+    _res.status = status;
+    payload = body;
+    _res.end(JSON.stringify(body));
+  };
+  await handleHealth({}, res, { method: 'GET', pathname: '/health' }, {
+    send,
+    version: BROKER_VERSION,
+    secretCache: new Map([['X', {}]]),
+    config: { services: { github: {} } },
+    surface: 'local',
+  });
+  assert(payload?.version === BROKER_VERSION, 'local /health version');
+  assert(payload?.sops_loaded === true, 'local /health sops_loaded');
+  assert(payload?.services_count === 1, 'local /health services_count');
+  assert(payload?.services === undefined, 'local /health does not list service names');
+}
+{
+  const res = mockRes();
+  const send = (_res, status, body) => { _res.status = status; _res.body = body; };
+  const hidden = await handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
+    send, secretCache: new Map([['X', {}]]), config: {}, surface: 'public',
+  });
+  assert(hidden === false, 'public /ready is not handled');
 }
 
 console.log('=== handleStatic ===');

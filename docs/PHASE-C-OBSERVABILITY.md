@@ -7,16 +7,18 @@
 
 | Path | Purpose |
 |------|---------|
-| `GET /health` | Status + version + services + uptime |
-| `GET /live` / `/healthz` | Liveness (process up) |
-| `GET /ready` / `/readyz` | Readiness (config; optional SOPS) |
-| `GET /metrics` | Prometheus text |
+| `GET /health` (public HTTPS) | `{ "status": "ok" }` only — probes and load balancers |
+| `GET /api/v1/health` (auth) | version, sops_loaded, services_count, uptime |
+| Local socket `/health` `/ready` `/live` | Full ops / readiness (loopback or unix, mode 0600) |
+| `GET /live` / `/healthz` | Liveness (process up). Public body is `{status:live}` |
+| `GET /ready` / `/readyz` | Readiness — **local socket only** (config + optional SOPS + probes) |
+| `GET /metrics` | Prometheus text — **local or admin** by default |
 | `GET /metrics.json` | JSON snapshot (counters, histograms, memory) |
 
-Lock metrics behind admin:
+Anonymous metrics scrape (old default):
 
 ```bash
-METRICS_REQUIRE_AUTH=1
+METRICS_PUBLIC=1
 ```
 
 ## Library

@@ -22,13 +22,16 @@ function jsonOKList(schemaName) {
 
 const p = {
   '/health': {
-    get: { tags: ['health'], summary: 'Liveness', security: [], responses: { 200: jsonOK('Health') } },
+    get: { tags: ['health'], summary: 'Public liveness (fingerprint-free)', security: [], responses: { 200: desc('{ status: ok }') } },
+  },
+  '/api/v1/health': {
+    get: { tags: ['health'], summary: 'Authenticated ops health', responses: { 200: jsonOK('Health'), 401: respRef('Unauthorized') } },
   },
   '/ready': {
-    get: { tags: ['health'], summary: 'Readiness (deps probed)', security: [], responses: { 200: desc('Ready'), 503: desc('Not ready') } },
+    get: { tags: ['health'], summary: 'Readiness (local health socket only)', security: [], responses: { 200: desc('Ready'), 503: desc('Not ready') } },
   },
   '/metrics': {
-    get: { tags: ['health'], summary: 'Prometheus metrics', security: [], responses: { 200: { description: 'Text exposition' } } },
+    get: { tags: ['health'], summary: 'Prometheus metrics (local scrape or admin)', responses: { 200: { description: 'Text exposition' }, 401: respRef('Unauthorized') } },
   },
   '/api/v1/login': {
     post: {
@@ -316,8 +319,9 @@ const s = {
     properties: {
       status: { type: 'string', enum: ['ok', 'degraded', 'down'] },
       version: { type: 'string' },
-      uptime: { type: 'number' },
-      checks: { type: 'object' },
+      sops_loaded: { type: 'boolean' },
+      services_count: { type: 'number' },
+      uptime_seconds: { type: 'number' },
     },
   },
 };

@@ -135,7 +135,8 @@ Risk score (5 dimensions) decides which factors are required per action.
    returning to the caller. See the [redact engine](broker/lib/redact.js) and
    the [45 unit tests](broker-test/test-redact.js).
 2. **mTLS-only** — no anonymous endpoints (except `GET /health` which returns
-   only `{ok, version}`).
+   only `{ "status": "ok" }`). Version, SOPS state, service names and uptime
+   belong on authenticated `GET /api/v1/health` or the loopback health socket.
 3. **No new hard dependencies** for Python/Go SDKs (stdlib only). New deps
    require maintainer approval.
 4. **Backward compatibility** with v3.8 clients. Breaking changes bump

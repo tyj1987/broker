@@ -7,6 +7,35 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.1] - 2026-09-07
+
+### Security
+
+- **Public `GET /health` no longer fingerprints the deployment.** It now returns only `{ "status": "ok" }`. `version`, `sops_loaded`, service names and `uptime_seconds` were previously reachable without mTLS (a production recon of `broker.52trz.com` recovered GitHub / Cloudflare / Aliyun ECS / AliDNS plus SOPS state). Authenticated `GET /api/v1/health` and the loopback/unix health socket still return ops fields, but **do not list service names**.
+- **Public `GET /ready` / `/readyz` no longer served on the HTTPS listener.** Ready details (SOPS, probes) are local-socket only.
+- **`GET /metrics` defaults to local scrape or admin.** Set `METRICS_PUBLIC=1` to restore anonymous scrape.
+- **Unauthenticated responses no longer send `X-Broker-Version`.**
+- **Session cookies now include `Secure`.**
+- **Public `/health` is rate-limited** (60/min/IP on the process; nginx sample adds `limit_req`).
+- **Missing dashboard files return HTTP 500** instead of falling through to `401 mTLS client certificate required`.
+
+### Fixed
+
+- **Admin tabs (密钥管理 / 服务管理 / 设备管理) appeared only after a refresh.** Five dashboard modules polled `#identity` text for 30 seconds; password/MFA login usually finished after that window. Login now emits `broker:identity` and unhides admin chrome immediately.
+- **Login fan-out:** `boot()` no longer prefetches services/audit/secrets (home + those tabs were hitting the same APIs twice). Actions/Secrets/Audit load when the tab is opened.
+- Dashboard no longer prompts for Notification permission on every page load.
+
+### Performance
+
+- JS/CSS static assets send `ETag` and `Cache-Control: public, max-age=300`. HTML stays `no-cache`.
+- nginx sample enables gzip and documents **Cloudflare DNS-only (grey cloud)** for `broker.52trz.com` — orange-cloud HTTP proxy via LAX was the main reason the console felt frozen from China.
+
+### Added
+
+- Loopback / unix-socket health listener (`BROKER_HEALTH_SOCKET` or `BROKER_HEALTH_BIND`, default `/tmp/broker-health.sock` / `127.0.0.1:9080` on Windows). Disable with `BROKER_HEALTH_DISABLE=1`.
+
+---
+
 ## [4.1.0] - 2026-09-01 (GA)
 
 ### 🎉 General Availability — V4.1.0

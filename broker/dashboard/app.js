@@ -50,6 +50,29 @@ function escapeHtml(s) {
 let identity = null;
 let currentServices = [];
 
+function applyAdminVisibility(isAdmin) {
+  document.querySelectorAll('.admin-only').forEach(el => { el.hidden = !isAdmin; });
+}
+
+function emitBrokerIdentity(ident) {
+  identity = ident || null;
+  window.__brokerIdentity = identity;
+  window.__brokerIdentityReady = true;
+  const el = $('#identity');
+  if (el) {
+    el.textContent = identity
+      ? `CN=${identity.cn} · role=${identity.role}${identity.via === 'session' ? ' · session' : ''}`
+      : '';
+  }
+  applyAdminVisibility(!!(identity && identity.role === 'admin'));
+  document.dispatchEvent(new CustomEvent('broker:identity', { detail: identity }));
+}
+
+function subscribeBrokerIdentity(handler) {
+  document.addEventListener('broker:identity', (e) => handler(e.detail));
+  if (window.__brokerIdentityReady) handler(window.__brokerIdentity);
+}
+
 function showApp() {
   $('#login-view').hidden = true;
   $('#app-view').hidden = false;
@@ -123,13 +146,14 @@ $('#btn-logout').addEventListener('click', async () => {
   if (mfaWrap) mfaWrap.hidden = true;
   const mfaCode = $('#login-mfa-code');
   if (mfaCode) mfaCode.value = '';
+  emitBrokerIdentity(null);
   showLogin();
 });
 
 // ---------- 身份 ----------
 async function loadIdentity() {
-  identity = await api('/api/v1/identity');
-  $('#identity').textContent = `CN=${identity.cn} · role=${identity.role}${identity.via === 'session' ? ' · session' : ''}`;
+  const ident = await api('/api/v1/identity');
+  emitBrokerIdentity(ident);
 }
 
 // ---------- Tab 切换 ----------
@@ -147,7 +171,9 @@ $$('.tab-btn').forEach(btn => {
     const tabId = `tab-${btn.dataset.tab}`;
     const tabEl = document.getElementById(tabId);
     if (tabEl) tabEl.classList.add('active');
-    // Refresh data for tabs that need it (avoid stale data after admin write)
+    // Refresh data for tabs that need it (avoid stale data after admin write).
+    // Actions / secrets / audit load lazily so login does not fan out 8 API calls.
+    if (btn.dataset.tab === 'actions') loadServices();
     if (btn.dataset.tab === 'secrets') loadSecrets();
     if (btn.dataset.tab === 'audit') loadAudit();
     if (btn.dataset.tab === 'me') {
@@ -686,19 +712,13 @@ async function boot() {
     ident = await api('/api/v1/identity');
   } catch (e) {
     // 无有效会话 → 留在登录页
+    emitBrokerIdentity(null);
     showLogin();
     return;
   }
-  identity = ident;
-  $('#identity').textContent = `CN=${identity.cn} · role=${identity.role}${identity.via === 'session' ? ' · session' : ''}`;
-  // 身份有效：立即进入主视图。后续数据加载失败只显示错误，不把用户踢回登录页。
+  // 身份事件立刻显示 admin Tab；不要再轮询 #identity 文本（30s 窗口会漏掉登录）。
+  emitBrokerIdentity(ident);
   showApp();
-  loadServices().catch(e => {
-    const wrap = $('#services');
-    if (wrap) wrap.innerHTML = `<div class="card"><p class="status-error">服务列表加载失败：${escapeHtml(e.message)}</p></div>`;
-  });
-  loadAudit().catch(() => {});
-  loadSecrets().catch(() => {});
 }
 
 boot();

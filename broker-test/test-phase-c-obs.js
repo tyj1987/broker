@@ -48,14 +48,14 @@ console.log('=== /ready /live ===');
 {
   const res = { status: 0, body: null };
   const send = (r, s, b) => { r.status = s; r.body = b; };
-  handleHealth({}, res, { method: 'GET', pathname: '/live' }, { send, secretCache: new Map(), config: {} });
+  handleHealth({}, res, { method: 'GET', pathname: '/live' }, { send, secretCache: new Map(), config: {}, surface: 'local' });
   assert(res.body?.status === 'live', 'live');
   handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
-    send, secretCache: new Map([['a', 1]]), config: { services: {} }, requireSops: true,
+    send, secretCache: new Map([['a', 1]]), config: { services: {} }, requireSops: true, surface: 'local',
   });
   assert(res.status === 200 && res.body?.status === 'ready', 'ready');
   handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
-    send, secretCache: new Map(), config: {}, requireSops: true,
+    send, secretCache: new Map(), config: {}, requireSops: true, surface: 'local',
   });
   assert(res.status === 503, 'not ready');
 }
@@ -69,14 +69,30 @@ console.log('=== /metrics ===');
   };
   handleMetrics({}, res, { method: 'GET', pathname: '/metrics' }, {
     send: (r, s, b) => { r.status = s; r.body = b; },
+    jsonError: (r, s, m) => { r.status = s; r.body = { error: m, status: s }; },
     version: BROKER_VERSION,
+    isLocal: true,
   });
   assert(res.status === 200 && String(res.body).includes('broker_up'), 'metrics text');
   handleMetrics({}, res, { method: 'GET', pathname: '/metrics.json' }, {
     send: (r, s, b) => { r.status = s; r.body = b; },
+    jsonError: (r, s, m) => { r.status = s; r.body = { error: m, status: s }; },
     version: BROKER_VERSION,
+    isLocal: true,
   });
   assert(res.body?.counters !== undefined, 'metrics json');
+  const denied = {
+    status: 0, body: null, headers: {},
+    writeHead(s, h) { this.status = s; this.headers = h; },
+    end(b) { this.body = b; },
+  };
+  handleMetrics({}, denied, { method: 'GET', pathname: '/metrics' }, {
+    send: (r, s, b) => { r.status = s; r.body = b; },
+    jsonError: (r, s, m) => { r.status = s; r.body = { error: m, status: s }; },
+    version: BROKER_VERSION,
+    isLocal: false,
+  });
+  assert(denied.status === 401, 'metrics denied without local/admin');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

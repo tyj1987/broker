@@ -368,15 +368,17 @@ Add another hostname / 增加新的域名入口：
 `systemctl restart cloudflared-secret-broker`。
 
 Local-machine note (China network) / 本机注意（国内网络）：
-Some Cloudflare anycast IP ranges (`104.21.x` / `172.67.x`) are
-interfered with on this machine — requests got hijacked to a wrong
-certificate. Fix: pin a working IP in `C:\Windows\System32\drivers\etc\hosts`:
-`104.16.132.229 broker.52trz.com`. Re-verify the IP with
-`curl -sk --resolve broker.52trz.com:443:<ip> https://broker.52trz.com/health`
-before relying on it (CF IPs can change).
-本机访问 broker.52trz.com 时，部分 Cloudflare anycast 段（`104.21.x`/`172.67.x`）
-会被中间层劫持（返回错误证书）。已在 hosts 固定可用 IP：
-`104.16.132.229 broker.52trz.com`。换 IP 前先按上面命令验证。
+`broker.52trz.com` **must be Cloudflare DNS-only (grey cloud)** in front of
+the origin nginx. Orange-cloud HTTP proxy via LAX made the dashboard take
+many seconds to open and broke client-certificate passthrough. Do not pin
+random CF anycast IPs in `hosts` as a workaround.
+
+公开 `GET /health` 只应返回 `{"status":"ok"}`。运维指纹走已认证
+`GET /api/v1/health` 或本机 health socket（默认 `127.0.0.1:9080` /
+`/tmp/broker-health.sock`）。
+
+无证书打开首页必须是 200 HTML：
+`curl -sk -o /dev/null -w "%{http_code}" https://broker.52trz.com/`
 
 Security notes / 安全提示：
 - Password login is protected by a 5-fail → 15-min lockout; sessions are

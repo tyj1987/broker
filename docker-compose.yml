@@ -25,7 +25,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    image: ghcr.io/tyj1987/broker:4.1.0
+    image: ghcr.io/tyj1987/broker:4.1.1
     container_name: secret-broker
     restart: unless-stopped
     ports:

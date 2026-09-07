@@ -285,15 +285,14 @@ function mcpRpc(method, params) {
     const r = await mcpRpc('tools/call', { name: 'get_health', arguments: {} });
     const data = JSON.parse(r.result.content[0].text);
     ok('health 200', data.status === 200);
-    // 兼容 mock (broker='mock') 和 真 broker (status='ok'). 真 broker 还返
-    // sops_loaded + services + uptime_seconds (公网验证).
+    // Public /health is fingerprint-free: { status: "ok" }. Mock still uses broker='mock'.
     const br = data.broker_response || {};
     const isMock = br.broker === 'mock';
-    const isReal = br.status === 'ok' && Array.isArray(br.services);
+    const isReal = br.status === 'ok';
     ok('broker_response 字段识别 (mock 或 real)', isMock || isReal);
-    if (isReal) {
-      ok('real broker 含 services', br.services.length > 0);
-      ok('real broker 含 uptime_seconds', typeof br.uptime_seconds === 'number');
+    if (isReal && !isMock) {
+      ok('public health has no services list', br.services === undefined);
+      ok('public health has no sops_loaded', br.sops_loaded === undefined);
     }
   }
 

@@ -21,23 +21,21 @@
 
   // ---- Init ----
   function init() {
-    // Watch for identity so we know whether to show admin TODO
-    const id = setInterval(() => {
-      const text = ($('#identity')?.textContent || '').trim();
-      if (text && text !== currentIdentity) {
-        currentIdentity = text;
-        isAdmin = /role=admin/.test(text);
-        applyAdminVisibility();
-        loadAll();
-      }
-    }, 500);
-    setTimeout(() => clearInterval(id), 30000);
     wireButtons();
     setGreet();
-  }
-
-  function applyAdminVisibility() {
-    document.querySelectorAll('.admin-only').forEach(el => { el.hidden = !isAdmin; });
+    const subscribe = typeof subscribeBrokerIdentity === 'function'
+      ? subscribeBrokerIdentity
+      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    subscribe((ident) => {
+      currentIdentity = ident ? `CN=${ident.cn} · role=${ident.role}` : '';
+      isAdmin = !!(ident && ident.role === 'admin');
+      if (ident) {
+        loadAll();
+        if (isAdmin) startAlertStream();
+      } else {
+        stopAlertStream();
+      }
+    });
   }
 
   function setGreet() {
@@ -359,13 +357,6 @@
     });
   }
 
-  // ---- Boot ----
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-
   // Reload when home tab is shown (so recent activity refreshes)
   document.addEventListener('tabchange', (e) => {
     if (e.detail?.tab === 'home') loadAll();
@@ -451,12 +442,14 @@
     loadAll();
   }
 
-  // 启动 SSE (admin 才连)
-  setTimeout(() => {
-    if (isAdmin) startAlertStream();
-  }, 2000);
-  // 申请通知权限 (best-effort)
-  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    try { Notification.requestPermission(); } catch {}
+  // SSE starts from the identity event (admin only). Do not prompt for
+  // Notification permission on page load — wait until a status_change
+  // actually needs it (flashStatusChange already no-ops if permission is default).
+
+  // ---- Boot (after SSE helpers so identity callback can startAlertStream) ----
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
   }
 })();

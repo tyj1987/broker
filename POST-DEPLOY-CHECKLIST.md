@@ -5,22 +5,28 @@
 
 ---
 
-## Step 1: /health 返回 V4.1.0
+## Step 1: 公开 /health 只有 status；版本走已认证接口
 
 ```bash
-curl -sk https://broker.52trz.com:8443/health
+# 无证书 — 不得出现 version / sops_loaded / services / uptime
+curl -sk https://broker.52trz.com/health
+# 期望: {"status":"ok"}
+
+# 无证书 — 仪表盘 HTML，不得 401
+curl -sk -o /dev/null -w "%{http_code}" https://broker.52trz.com/
+# 期望: 200
+
+# 有 session 或 mTLS — 运维字段
+curl -sk --cert client.crt --key client.key --cacert ca.crt \
+  https://broker.52trz.com:8443/api/v1/health
+# 期望: status=ok, version=4.1.1, sops_loaded, services_count, uptime_seconds
+# 不得包含 services 名称数组
 ```
 
-期望:
-```json
-{"status":"ok","version":"4.1.0","sops_loaded":true,"services":[],"uptime_seconds":<low>}
-```
+- 公开 `/health` 只有 `{status:ok}` ✓
+- `version: "4.1.1"` 只出现在 `/api/v1/health` ✓
 
-- `version: "4.1.0"` ✓ (不是 3.8.0)
-- `uptime_seconds` 应该 < 300 (刚 restart)
-- `sops_loaded: true` ✓
-
-**失败**: 看到 3.8.0 → migrate 失败, 检查 `journalctl -u secret-broker -n 100`.
+**失败**: 公开 `/health` 仍带 `services` / `sops_loaded` → 还在跑 4.1.0。公开 `GET /` 返回 401 → dashboard 文件没部署到运行目录.
 
 ---
 

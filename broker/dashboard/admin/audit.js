@@ -20,28 +20,16 @@
 
   // ---- Bootstrap ----
   function init() {
-    const id = setInterval(() => {
-      const text = ($('#identity')?.textContent || '').trim();
-      if (text && text !== currentIdentity) {
-        currentIdentity = text;
-        isAdmin = /role=admin/.test(text);
-        applyAdminVisibility();
-      }
-    }, 500);
-    setTimeout(() => clearInterval(id), 30000);
+    const subscribe = typeof subscribeBrokerIdentity === 'function'
+      ? subscribeBrokerIdentity
+      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    subscribe((ident) => {
+      currentIdentity = ident;
+      isAdmin = !!(ident && ident.role === 'admin');
+      if (isAdmin) ensureSse();
+      else teardownSse();
+    });
     wireButtons();
-  }
-
-  function applyAdminVisibility() {
-    // Use raw document.querySelectorAll (not local $) because this may be
-    // called before $ is bound if the first identity tick happens before
-    // DOMContentLoaded finishes wiring us.
-    document.querySelectorAll('.admin-only').forEach(el => { el.hidden = !isAdmin; });
-    if (isAdmin) {
-      ensureSse();
-    } else {
-      teardownSse();
-    }
   }
 
   // ---- Filters ----

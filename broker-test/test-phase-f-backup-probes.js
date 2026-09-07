@@ -20,7 +20,7 @@ function assert(c, m) {
 }
 
 console.log('=== version ===');
-assert(BROKER_VERSION === '4.1.0', '4.1.0');
+assert(BROKER_VERSION === '4.1.1', '4.1.1');
 
 console.log('=== redactConfigForExport ===');
 {
@@ -97,6 +97,7 @@ console.log('=== ready with probes hook ===');
     secretCache: new Map([['k', 1]]),
     config: {},
     requireSops: true,
+    surface: 'local',
     runReadyProbes: async () => ({ ok: true, probes: [{ name: 't', ok: true }] }),
   });
   assert(res.status === 200 && res.body.probes?.[0]?.ok === true, 'ready probes');

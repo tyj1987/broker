@@ -17,24 +17,18 @@
 
   // ---- Bootstrap ----
   function init() {
-    const id = setInterval(() => {
-      const text = ($('#identity')?.textContent || '').trim();
-      if (text && text !== currentIdentity) {
-        currentIdentity = text;
-        isAdmin = /role=admin/.test(text);
-        applyAdminVisibility();
-        if (isAdmin) {
-          loadTemplates();
-          loadServices();
-        }
+    const subscribe = typeof subscribeBrokerIdentity === 'function'
+      ? subscribeBrokerIdentity
+      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    subscribe((ident) => {
+      currentIdentity = ident;
+      isAdmin = !!(ident && ident.role === 'admin');
+      if (isAdmin) {
+        loadTemplates();
+        loadServices();
       }
-    }, 500);
-    setTimeout(() => clearInterval(id), 30000);
+    });
     wireModal();
-  }
-
-  function applyAdminVisibility() {
-    $$('.admin-only').forEach(el => { el.hidden = !isAdmin; });
   }
 
   // ---- API ----

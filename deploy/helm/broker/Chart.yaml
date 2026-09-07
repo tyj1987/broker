@@ -6,10 +6,10 @@ description: |
 type: application
 
 # Chart version
-version: 4.1.0
+version: 4.1.1
 
 # Application version
-appVersion: "4.1.0"
+appVersion: "4.1.1"
 
 home: https://github.com/tyj1987/broker
 sources:

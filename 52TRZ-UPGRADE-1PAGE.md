@@ -14,8 +14,8 @@ git fetch origin --tags
 git log -1 --oneline v4.1.0   # 期望看到 a626cb8 附近的 commit
 
 # 验 52trz.com 当前版本
-curl.exe -sk https://broker.52trz.com:8443/health
-# 期望: {"version":"3.8.0",...,"uptime_seconds":<10.3 days>}
+curl.exe -sk https://broker.52trz.com/health
+# 期望公开体: {"status":"ok"}  （4.1.1 起不再带 version/sops/services）
 ```
 
 ---
@@ -78,9 +78,9 @@ ssh user@broker.52trz.com "sudo bash /tmp/upgrade-v3-to-v4.sh --local"
 ## 4. 验证 (从本地 Windows, 30s)
 
 ```powershell
-# 1. /health 返 V4.1.0
-curl.exe -sk https://broker.52trz.com:8443/health
-# 期望: {"version":"4.1.0",...,"uptime_seconds":<100}
+# 1. 公开 /health 只有 status；版本走已认证 /api/v1/health
+curl.exe -sk https://broker.52trz.com/health
+# 期望: {"status":"ok"}
 
 # 2. (optional) mTLS smoke
 # 拿 V3 backup 的 client cert, 跟 V4 broker 验

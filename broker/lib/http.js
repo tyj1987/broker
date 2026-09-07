@@ -13,12 +13,18 @@ import { BROKER_VERSION } from '../version.js';
 export function send(res, status, body, extraHeaders = {}) {
   const isJson = typeof body === 'object';
   const payload = isJson ? JSON.stringify(body) : body;
-  res.writeHead(status, {
+  // Do not fingerprint unauthenticated responses with X-Broker-Version.
+  // Callers that want it pass the header explicitly (authenticated send()).
+  const headers = {
     'Content-Type': isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload, 'utf8'),
-    'X-Broker-Version': BROKER_VERSION,
     ...extraHeaders,
-  });
+  };
+  delete headers.exposeVersion;
+  if (extraHeaders.exposeVersion === true && headers['X-Broker-Version'] == null) {
+    headers['X-Broker-Version'] = BROKER_VERSION;
+  }
+  res.writeHead(status, headers);
   res.end(payload);
 }
 

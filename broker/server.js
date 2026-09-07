@@ -61,9 +61,10 @@ import {
   isClientIpAllowed,
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
-import { handleHealth } from './routes/health.js';
+import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
+import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js';
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import {
   installGracefulShutdown,
@@ -846,16 +847,38 @@ function rateLimit(ctx) {
 // ============================================================
 // HTTP helpers
 // ============================================================
+function isLoopbackAddress(addr) {
+  if (!addr) return false;
+  const a = String(addr).replace(/^::ffff:/, '');
+  return a === '127.0.0.1' || a === '::1' || a === 'localhost';
+}
+
+/** True only for a direct loopback client (prometheus / unix). Nginx sets X-Forwarded-For. */
+function isDirectLocalRequest(req) {
+  if (!isLoopbackAddress(req?.socket?.remoteAddress)) return false;
+  if (req.headers?.['x-forwarded-for'] || req.headers?.['x-real-ip']) return false;
+  return true;
+}
+
+function sessionCookieHeader(token, { clear = false } = {}) {
+  const value = clear ? '' : token;
+  const maxAge = clear ? 0 : SESSION_TTL_MS / 1000;
+  return `broker_session=${value}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+}
+
 function send(res, status, body, extraHeaders = {}) {
   if (res.headersSent || res.writableEnded) return;
   const isJson = typeof body === 'object';
   const payload = isJson ? JSON.stringify(body) : body;
-  res.writeHead(status, {
+  const headers = {
     'Content-Type': isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload, 'utf8'),
-    'X-Broker-Version': BROKER_VERSION,
     ...extraHeaders,
-  });
+  };
+  if (res.__exposeBrokerVersion && headers['X-Broker-Version'] === undefined) {
+    headers['X-Broker-Version'] = BROKER_VERSION;
+  }
+  res.writeHead(status, headers);
   res.end(payload);
 }
 
@@ -1315,6 +1338,9 @@ async function handle(req, res) {
       dashboardDir: join(__dirname, 'dashboard'),
       requireSops: true,
       runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
+      surface: 'public',
+      isLocal: isDirectLocalRequest(req),
+      ctx: getIdentity(req),
     };
     if (await handleHealth(req, res, route, publicDeps)) {
       observeMs('broker_http_request_duration_ms', Date.now() - t0);
@@ -1332,55 +1358,7 @@ async function handle(req, res) {
     }
   }
 
-  // ----- Public: /health -----
-  if (m === 'GET' && p === '/health') {
-    return send(res, 200, {
-      status: 'ok',
-      version: BROKER_VERSION,
-      sops_loaded: SECRET_CACHE.size > 0,
-      services: Object.keys(CONFIG.services),
-      uptime_seconds: Math.floor(process.uptime()),
-    });
-  }
-
-  // ----- Public: static dashboard assets (the login page must load without a client cert) -----
-  // Whitelist explicit files; do NOT serve arbitrary paths to keep the attack surface tight.
-  if (m === 'GET' && (
-    p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' || p === '/home.js' ||
-    p === '/me.html' || p === '/me.js' ||
-    p === '/api-keys.html' || p === '/api-keys.js' ||
-    p === '/admin/secrets.js' || p === '/admin/services.js' || p === '/admin/clients.js' ||
-    p === '/admin/audit.js'
-  )) {
-    const map = {
-      '/': 'index.html',
-      '/index.html': 'index.html',
-      '/app.js': 'app.js',
-      '/style.css': 'style.css',
-      '/home.js': 'home.js',
-      '/me.html': 'me.html',
-      '/me.js': 'me.js',
-      '/api-keys.html': 'api-keys.html',
-      '/api-keys.js': 'api-keys.js',
-      '/admin/secrets.js': 'admin/secrets.js',
-      '/admin/services.js': 'admin/services.js',
-      '/admin/clients.js': 'admin/clients.js',
-      '/admin/audit.js': 'admin/audit.js',
-    };
-    const f = join(__dirname, 'dashboard', map[p]);
-    if (existsSync(f)) {
-      const body = readFileSync(f);
-      const ct = p.endsWith('.js') ? 'application/javascript; charset=utf-8'
-               : p.endsWith('.css') ? 'text/css; charset=utf-8'
-               : 'text/html; charset=utf-8';
-      res.writeHead(200, {
-        'Content-Type': ct,
-        // dashboard 是动态产物，禁止 CDN/浏览器缓存，避免更新后拿到旧版
-        'Cache-Control': 'no-cache, must-revalidate',
-      });
-      return res.end(body);
-    }
-  }
+  // Public /health + dashboard static are handled by the modular pipeline above.
 
   // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
   // Login must work from a browser that may not have a client cert installed.
@@ -1440,7 +1418,7 @@ async function handle(req, res) {
     const cn = ctx0 ? ctx0.cn : `${targetName}@web`;
     const token = makeSession({ cn, fp, role: targetClient.role, clientName: targetName, cert: { subject: { CN: cn } }, client: targetClient });
     audit({ action: 'login', status: 'ok', cn, client: targetName, via });
-    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    res.setHeader('Set-Cookie', sessionCookieHeader(token));
     return send(res, 200, {
       token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
@@ -1475,7 +1453,7 @@ async function handle(req, res) {
     const cn = pending.fp ? `${pending.clientName}@mtls` : `${pending.clientName}@web`;
     const token = makeSession({ cn, fp: pending.fp, role: targetClient.role, clientName: pending.clientName, cert: { subject: { CN: cn } }, client: targetClient });
     audit({ action: 'login', status: 'ok', cn, client: pending.clientName, via: 'mfa', mfa_method: mfaResult.method });
-    res.setHeader('Set-Cookie', `broker_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    res.setHeader('Set-Cookie', sessionCookieHeader(token));
     return send(res, 200, {
       token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
@@ -1494,7 +1472,7 @@ async function handle(req, res) {
       if (s) audit({ action: 'logout', cn: s.cn, fp: s.fp, status: 'ok' });
       deleteSession(token);
     }
-    res.setHeader('Set-Cookie', 'broker_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+    res.setHeader('Set-Cookie', sessionCookieHeader('', { clear: true }));
     return send(res, 200, { logged_out: true });
   }
 
@@ -1511,6 +1489,16 @@ async function handle(req, res) {
   if (!rateLimit(ctx)) {
     audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });
     return jsonError(res, 429, 'Rate limit exceeded');
+  }
+  res.__exposeBrokerVersion = true;
+
+  // Authenticated ops health (version / sops / counts). Public GET /health is {status:ok} only.
+  if (m === 'GET' && p === '/api/v1/health') {
+    return send(res, 200, buildOpsHealth({
+      version: BROKER_VERSION,
+      secretCache: SECRET_CACHE,
+      config: CONFIG,
+    }));
   }
 
   // ============================================================
@@ -3279,6 +3267,31 @@ function start() {
   server.listen(PORT, HOST, () => {
     console.log(`[broker] mTLS HTTPS listening on https://${HOST}:${PORT}`);
     console.log('[broker] reload token loaded (not printed)');
+    if (process.env.BROKER_HEALTH_DISABLE !== '1') {
+      startLocalHealthServer({
+        listen: defaultHealthBind(),
+        log: (m) => console.log(m),
+        onRequest: async (req, res) => {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const route = { method: req.method || 'GET', pathname: url.pathname };
+          const handled = await handleHealth(req, res, route, {
+            send,
+            jsonError,
+            version: BROKER_VERSION,
+            secretCache: SECRET_CACHE,
+            config: CONFIG,
+            requireSops: true,
+            surface: 'local',
+            runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
+          });
+          if (!handled && !res.headersSent) {
+            jsonError(res, 404, `Not found: ${route.method} ${route.pathname}`);
+          }
+        },
+      }).catch((e) => {
+        console.warn('[broker] local health listener failed:', e.message);
+      });
+    }
 
     // v3.0 M4: 启动 cron 循环 (04:00 daily healthcheck)
     // v3.0 M5: 跟 /api/v1/healthcheck/run 一样支持 upstream: 'local' | 'mcp_server'

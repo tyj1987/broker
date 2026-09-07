@@ -2,6 +2,8 @@
 
 export { sopsDecrypt, sopsEncryptAtomic } from './sops.js';
 export { send, readBody, jsonError } from './http.js';
+export { defaultHealthBind, startLocalHealthServer, describeHealthBind } from './local-health.js';
+export { applyAdminVisibility, isAdminIdentity } from './admin-visibility.js';
 export { buildZip, computeCrc32 } from './zip.js';
 export { createAudit } from './audit.js';
 export { parseRateLimit, createRateLimiter } from './rate-limit.js';

@@ -85,10 +85,14 @@ sudo bash scripts/broker/update-from-github.sh
 
 ## 4. DNS / TLS / 端口
 
-- **域名**: `broker.52trz.com` 继续用 (Cloudflare 代理或直连)
+- **域名**: `broker.52trz.com`，**Cloudflare DNS-only（灰云）+ 本机 nginx 终结 TLS**。
+  - **不要开橙云 HTTP 反代。** 橙云会把大陆访问绕到 LAX 再回阿里云源站，仪表盘 8+ 个无缓存 JS 会显得「打不开」；CF 也不会把浏览器 mTLS 证书传到源站。
+  - 需要 CF 防护时用 Spectrum 或 Authenticated Origin Pulls，不要用普通橙色云朵。
+  - 部署后验证：`curl -sk -o /dev/null -w "%{http_code}" https://broker.52trz.com/` 必须是 **200**（登录 HTML），不能是 401。
+  - 公开 `GET /health` 必须是 `{"status":"ok"}`，不得含 `services` / `sops_loaded` / `version`。
 - **端口**:
   - `8443` mTLS (生产端口, 客户端必须用 cert 验签)
-  - `443` 若用 Cloudflare Tunnel 走 HTTPS (但仍是 mTLS, 不是 public)
+  - `443` nginx TLS 终结 → `127.0.0.1:8443`（见 `scripts/broker/nginx-broker.52trz.com.conf`）
   - 永远不要开放 80/8080 public — broker 是私有凭据服务
 - **TLS cert**:
   - 自签 CA: `pki/ca/ca.crt` (deploy 时生成, 已入库的是 dev CA)

@@ -65,7 +65,7 @@ console.log('=== createAudit ===');
   }
 }
 
-console.log('=== http send uses BROKER_VERSION ===');
+console.log('=== http send omits version unless requested ===');
 {
   const headers = {};
   const res = {
@@ -73,7 +73,9 @@ console.log('=== http send uses BROKER_VERSION ===');
     end() {},
   };
   send(res, 200, { ok: true });
-  assert(headers['X-Broker-Version'] === BROKER_VERSION, `X-Broker-Version=${BROKER_VERSION}`);
+  assert(headers['X-Broker-Version'] === undefined, 'no version on public send');
+  send(res, 200, { ok: true }, { exposeVersion: true });
+  assert(headers['X-Broker-Version'] === BROKER_VERSION, `exposeVersion sets ${BROKER_VERSION}`);
   jsonError(res, 400, 'bad');
   assert(res.status === 400, 'jsonError status');
 }

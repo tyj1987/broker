@@ -34,7 +34,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { createHmac, createHash } from 'node:crypto';
-import { dohConnect } from './lib/doh.js';
+import { dohConnect, resolveHostnameDoH, shouldSkipDoH, isIpLiteral } from './lib/doh.js';
+import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -304,7 +305,7 @@ export async function checkSecret(secretName, fields, secretType) {
       case 'mistral_key':
       case 'cohere_key':
       case 'deepseek_key':
-        return await checkOpenAI(cred.primary, t0);
+        return await checkAiProvider(secretType, cred.primary, t0);
       case 'ssh_connection':
         return await checkSsh(cred.meta, t0);
       case 'cloudflare_token':
@@ -383,44 +384,73 @@ function checkGithubLike(token, type, t0) {
   });
 }
 
-function checkOpenAI(apiKey, t0) {
-  const host = process.env.OPENAI_HEALTHCHECK_HOST || 'api.openai.com';
-  const port = Number(process.env.OPENAI_HEALTHCHECK_PORT) || 443;
+export const AI_HEALTHCHECK = {
+  openai_key: { host: 'api.openai.com', path: '/v1/models' },
+  deepseek_key: { host: 'api.deepseek.com', path: '/v1/models' },
+  anthropic_key: { host: 'api.anthropic.com', path: '/v1/models' },
+  google_ai_key: { host: 'generativelanguage.googleapis.com', path: '/v1beta/models' },
+  mistral_key: { host: 'api.mistral.ai', path: '/v1/models' },
+  cohere_key: { host: 'api.cohere.com', path: '/v1/models' },
+};
+
+function aiAuthHeaders(type, apiKey) {
+  if (type === 'anthropic_key') {
+    return { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+  }
+  if (type === 'google_ai_key') {
+    return { 'x-goog-api-key': apiKey };
+  }
+  return { Authorization: `Bearer ${apiKey}` };
+}
+
+function checkAiProvider(type, apiKey, t0) {
+  const spec = AI_HEALTHCHECK[type] || AI_HEALTHCHECK.openai_key;
+  const prefix = String(type).replace(/_key$/, '').toUpperCase();
+  const host = process.env[`${prefix}_HEALTHCHECK_HOST`] || spec.host;
+  const port = Number(process.env[`${prefix}_HEALTHCHECK_PORT`]) || 443;
   return outboundRequest({
-    host, port, path: '/v1/models', method: 'GET',
-    headers: { 'Authorization': `Bearer ${apiKey}` },
+    host, port, path: spec.path, method: 'GET',
+    headers: aiAuthHeaders(type, apiKey),
     t0,
     onResponse(res, d, latency) {
       if (res.statusCode === 200) return { status: 'ok', detail: 'models accessible', latency_ms: latency };
       if (res.statusCode === 401) return { status: 'expired', detail: '401 invalid_api_key', latency_ms: latency };
+      if (res.statusCode === 403) return { status: 'expired', detail: '403 forbidden (key may be expired or scope insufficient)', latency_ms: latency };
       return { status: 'fail', detail: `HTTP ${res.statusCode}`, latency_ms: latency };
     },
   });
 }
 
-function checkSsh(meta, t0) {
+async function checkSsh(meta, t0) {
   // meta: { host, port, user, auth }
   // 缺 host 字段: 是配置错 (用户配了 ssh_connection 但没填 host), 不是 skipped
   if (!meta || !meta.host) {
-    return Promise.resolve({ status: 'misconfigured', detail: 'ssh_connection missing host field', latency_ms: 0 });
+    return { status: 'misconfigured', detail: 'ssh_connection missing host field', latency_ms: 0 };
   }
+  const port = Number(meta.port) || 22;
+  const host = meta.host;
+  let dest = host;
+  if (!isIpLiteral(host) && !shouldSkipDoH(host)) {
+    try {
+      dest = await resolveHostnameDoH(host);
+    } catch (e) {
+      return { ...classifyError(e), latency_ms: Date.now() - t0 };
+    }
+  }
+  const where = dest !== host ? `${host}:${port} via ${dest}` : `${host}:${port}`;
   return new Promise((resolve) => {
-    const sock = netConnect(meta.port || 22, meta.host);
+    const sock = netConnect(port, dest);
     const timer = setTimeout(() => {
       sock.destroy();
-      // 10s timeout: 远端不响应, 通常是 ssh target 错 (防火墙 drop / 内网不可达)
-      resolve({ status: 'misconfigured', detail: `connect timeout ${meta.host}:${meta.port || 22} — target may be unreachable or behind firewall`, latency_ms: Date.now() - t0 });
+      resolve({ status: 'misconfigured', detail: `connect timeout ${where} — target may be unreachable or behind firewall`, latency_ms: Date.now() - t0 });
     }, TIMEOUT_MS);
     sock.on('connect', () => {
       clearTimeout(timer);
       sock.end();
-      resolve({ status: 'ok', detail: `tcp ${meta.host}:${meta.port || 22} reachable (auth=${meta.auth || '?'})`, latency_ms: Date.now() - t0 });
+      resolve({ status: 'ok', detail: `tcp ${where} reachable (auth=${meta.auth || '?'})`, latency_ms: Date.now() - t0 });
     });
-    sock.on('error', e => {
+    sock.on('error', (e) => {
       clearTimeout(timer);
-      // ECONNREFUSED → misconfigured (端口不开或目标错)
-      // ECONNRESET / ENOTFOUND → unreachable (网络层)
-      // 其它 → 走 classifyError 分类
       resolve({ ...classifyError(e), latency_ms: Date.now() - t0 });
     });
   });
@@ -429,11 +459,26 @@ function checkSsh(meta, t0) {
 function checkCloudflare(apiToken, t0) {
   // GET /client/v4/user/tokens/verify — works with any API token.
   // /user requires User.Details and 403s limited tokens (looks like expiry).
-  const host = process.env.CLOUDFLARE_HEALTHCHECK_HOST || 'api.cloudflare.com';
-  const port = Number(process.env.CLOUDFLARE_HEALTHCHECK_PORT) || 443;
+  const path = '/client/v4/user/tokens/verify';
+  const headers = { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' };
+  const overrideHost = process.env.CLOUDFLARE_HEALTHCHECK_HOST;
+  let host = overrideHost || 'api.cloudflare.com';
+  let port = Number(process.env.CLOUDFLARE_HEALTHCHECK_PORT) || 443;
+  let reqPath = path;
+  let reqHeaders = headers;
+  if (!overrideHost) {
+    const cfg = relayConfig();
+    if (shouldRelay('api.cloudflare.com', cfg)) {
+      const applied = applyRelay(new URL(path, 'https://api.cloudflare.com'), headers, cfg);
+      host = applied.url.hostname;
+      port = Number(applied.url.port) || 443;
+      reqPath = applied.url.pathname + applied.url.search;
+      reqHeaders = applied.headers;
+    }
+  }
   return outboundRequest({
-    host, port, path: '/client/v4/user/tokens/verify', method: 'GET',
-    headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+    host, port, path: reqPath, method: 'GET',
+    headers: reqHeaders,
     t0,
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {

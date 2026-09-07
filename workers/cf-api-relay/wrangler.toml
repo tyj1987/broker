@@ -1,0 +1,6 @@
+name = "secret-broker-cf-relay"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# RELAY_SECRET is a Wrangler secret (wrangler secret put RELAY_SECRET), not a var.

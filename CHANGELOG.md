@@ -7,6 +7,19 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.6] - 2026-09-08
+
+### Fixed
+
+- `deepseek_key` healthcheck calls `api.deepseek.com` (not `api.openai.com`). Anthropic / Gemini / Mistral / Cohere use their own hosts too.
+- SSH healthcheck resolves hostnames via DoH so `ENOTFOUND` on UDP/53-blocked ECS is not reported as a dead credential. Timeout text includes the resolved IP (Cloudflare-proxied names like `pve.52trz.com` will still fail on port 22 until the origin IP is used).
+
+### Added
+
+- Optional Cloudflare API relay (`CF_RELAY_URL` + `CF_RELAY_SECRET`): broker and healthcheck send `api.cloudflare.com` calls through a Worker at `workers/cf-api-relay` so Aliyun ECS can verify tokens when the CF API origin stalls.
+
+---
+
 ## [4.1.5] - 2026-09-08
 
 ### Fixed

@@ -169,6 +169,32 @@ let lastHttpReq = null;
   }
   if (mockHttp) { mockHttp.close(); mockHttp = null; }
 
+  section('healthcheck.checkAiProvider deepseek');
+  {
+    let lastDs = null;
+    mockHttp = createMockServer((req, res) => {
+      lastDs = { url: req.url, host: req.headers.host };
+      if (req.headers.authorization?.includes('sk-good-ds')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ data: [{ id: 'deepseek-chat' }] }));
+      }
+      res.writeHead(401);
+      return res.end('{}');
+    });
+    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    const port = mockHttp.address().port;
+    process.env.DEEPSEEK_HEALTHCHECK_HOST = '127.0.0.1';
+    process.env.DEEPSEEK_HEALTHCHECK_PORT = String(port);
+    const good = await hc.checkSecret('DS', { api_key: 'sk-good-ds' }, 'deepseek_key');
+    ok('deepseek good → ok', good.status === 'ok');
+    ok('deepseek hits /v1/models not openai', lastDs?.url === '/v1/models');
+    const bad = await hc.checkSecret('DS', { api_key: 'sk-bad-ds' }, 'deepseek_key');
+    ok('deepseek bad → expired', bad.status === 'expired');
+    delete process.env.DEEPSEEK_HEALTHCHECK_HOST;
+    delete process.env.DEEPSEEK_HEALTHCHECK_PORT;
+  }
+  if (mockHttp) { mockHttp.close(); mockHttp = null; }
+
   // ======== 4. aliyun_ak v2 验签 (signAliyun 纯函数 + checkAliyun HTTP mock) — M5.1 =====
   section('aliyun_ak v2 验签 — signAliyun 纯函数');
   {

@@ -1,0 +1,111 @@
+# Publish the Cloudflare API relay Worker, then point ECS at it.
+# GitHub secrets:
+#   CLOUDFLARE_API_TOKEN   token with Workers Scripts Edit
+#   CLOUDFLARE_ACCOUNT_ID  CF account id
+#   CF_RELAY_SECRET        shared secret (X-Broker-Relay-Secret)
+#   ECS_*                  same as deploy-ecs.yml
+
+name: Deploy CF relay
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'workers/cf-api-relay/**'
+      - 'broker/lib/outbound-relay.js'
+      - '.github/workflows/deploy-cf-relay.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cf-relay
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Relay unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node broker-test/test-outbound-relay.js
+
+  deploy:
+    name: Wrangler deploy + ECS env
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && vars.SKIP_CF_RELAY != '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Require Cloudflare secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_RELAY_SECRET: ${{ secrets.CF_RELAY_SECRET }}
+        run: |
+          : "${CLOUDFLARE_API_TOKEN:?Set repository secret CLOUDFLARE_API_TOKEN}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Set repository secret CLOUDFLARE_ACCOUNT_ID}"
+          : "${CF_RELAY_SECRET:?Set repository secret CF_RELAY_SECRET}"
+
+      - name: Put Worker secret and deploy
+        id: wrangler
+        working-directory: workers/cf-api-relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_RELAY_SECRET: ${{ secrets.CF_RELAY_SECRET }}
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4 deploy | tee /tmp/wrangler-deploy.log
+          URL=$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' /tmp/wrangler-deploy.log | head -1)
+          test -n "$URL"
+          printf '%s' "$CF_RELAY_SECRET" | npx --yes wrangler@4 secret put RELAY_SECRET
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Worker URL: $URL"
+
+      - name: Point ECS broker.env at the Worker
+        env:
+          ECS_HOST: ${{ secrets.ECS_HOST }}
+          ECS_SSH_USER: ${{ secrets.ECS_SSH_USER }}
+          ECS_SSH_KEY: ${{ secrets.ECS_SSH_KEY }}
+          ECS_SSH_KNOWN_HOSTS: ${{ secrets.ECS_SSH_KNOWN_HOSTS }}
+          CF_RELAY_URL: ${{ steps.wrangler.outputs.url }}
+          CF_RELAY_SECRET: ${{ secrets.CF_RELAY_SECRET }}
+        run: |
+          set -euo pipefail
+          : "${ECS_HOST:?Set repository secret ECS_HOST}"
+          : "${ECS_SSH_KEY:?Set repository secret ECS_SSH_KEY}"
+          : "${CF_RELAY_URL:?missing worker URL}"
+          USER="${ECS_SSH_USER:-root}"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$ECS_SSH_KEY" > "$HOME/.ssh/deploy"
+          chmod 600 "$HOME/.ssh/deploy"
+          if [ -n "${ECS_SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$ECS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -H -t ed25519,rsa "$ECS_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 644 "$HOME/.ssh/known_hosts"
+          SSH=(ssh -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          "${SSH[@]}" "$USER@$ECS_HOST" env \
+            CF_RELAY_URL="$CF_RELAY_URL" \
+            CF_RELAY_SECRET="$CF_RELAY_SECRET" \
+            bash -s <<'REMOTE'
+          set -euo pipefail
+          ENV=/opt/secret-broker/broker.env
+          test -f "$ENV"
+          umask 077
+          tmp=$(mktemp)
+          grep -vE '^(CF_RELAY_URL|CF_RELAY_SECRET)=' "$ENV" > "$tmp"
+          printf 'CF_RELAY_URL=%s\nCF_RELAY_SECRET=%s\n' "$CF_RELAY_URL" "$CF_RELAY_SECRET" >> "$tmp"
+          chmod 600 "$tmp"
+          mv "$tmp" "$ENV"
+          systemctl restart secret-broker
+          sleep 3
+          systemctl is-active secret-broker
+          REMOTE

@@ -64,6 +64,7 @@ import { BROKER_VERSION } from './version.js';
 import { aliyunRpcVersion, mergeAliyunQuery } from './lib/aliyun-rpc.js';
 import { dohConnect } from './lib/doh.js';
 import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
+import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
@@ -1250,6 +1251,14 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   // Host header 必须用 upstream 的 host，否则 upstream 验签会失败
   outHeaders['Host'] = url.host;
 
+  const relayCfg = relayConfig();
+  let connectUrl = url;
+  if (shouldRelay(url.hostname, relayCfg)) {
+    const applied = applyRelay(url, outHeaders, relayCfg);
+    connectUrl = applied.url;
+    Object.assign(outHeaders, applied.headers);
+  }
+
   const fetchOpts = {
     method: method || 'GET',
     headers: outHeaders,
@@ -1268,28 +1277,31 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   // Workaround for ECS environments where outbound UDP/53 to public DNS
   // is blocked (c-ares fails with ENOTFOUND). Pre-resolve via DNS-over-HTTPS
   // (TCP 443) and connect to the IP with SNI = original hostname.
-  const isHttps = url.protocol === 'https:';
+  const isHttps = connectUrl.protocol === 'https:';
   const requestLib = isHttps ? httpsRequest : httpRequest;
   let conn;
   try {
-    conn = await dohConnect(url.hostname, { skip: !isHttps });
+    conn = await dohConnect(connectUrl.hostname, { skip: !isHttps });
   } catch (e) {
     throw new Error(`${e.message} (UDP/53 blocked on this host; DoH over TCP/443 also failed)`);
   }
+  const timeoutHost = connectUrl.hostname === url.hostname
+    ? url.hostname
+    : `${url.hostname} via ${connectUrl.hostname}`;
   const upstreamResp = await new Promise((resolve, reject) => {
     const req = requestLib({
-      protocol: url.protocol,
+      protocol: connectUrl.protocol,
       hostname: conn.hostname,
-      port: url.port || (isHttps ? 443 : 80),
+      port: connectUrl.port || (isHttps ? 443 : 80),
       method: method || 'GET',
-      path: url.pathname + url.search,
-      headers: outHeaders,  // Host: url.host set above
+      path: connectUrl.pathname + connectUrl.search,
+      headers: outHeaders,
       timeout: 15000,
       ...(isHttps ? { servername: conn.servername } : {}),
     }, resolve);
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error(
-      `Upstream timeout after 15s connecting to ${url.hostname} (TCP/TLS idle — not a DNS failure)`,
+      `Upstream timeout after 15s connecting to ${timeoutHost} (TCP/TLS idle — not a DNS failure)`,
     )));
     if (fetchOpts.body) req.write(fetchOpts.body);
     req.end();

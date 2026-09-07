@@ -7,6 +7,14 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.3] - 2026-09-08
+
+### Fixed
+
+- Client cert enrollment on a systemd `ProtectSystem=strict` host no longer tries to write `pki/ca/ca.srl` (read-only). OpenSSL serial is kept under writable `pki/clients/ca.srl`, seeded from the CA copy when present.
+
+---
+
 ## [4.1.2] - 2026-09-07
 
 ### Added

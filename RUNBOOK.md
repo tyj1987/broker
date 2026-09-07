@@ -95,9 +95,11 @@ issue / rotate / revoke client certs. **However, on production ECS
 the PKI directory is read-only by design** (systemd hardening):
 dashboard UI enrollment returns HTTP 503 + a yellow banner pointing
 to the script. Use the script for production client certs:
-管理 UI 有"💻 设备管理"tab 可以签发/轮换/撤销客户端证书。**但生产 ECS
-的 PKI 目录默认只读**（systemd 加固），dashboard 签发会返 503 + 黄色
-banner 提示走脚本。生产用脚本签发：
+管理 UI 有「💻 设备管理」tab 可以签发/轮换/撤销客户端证书。
+生产 unit 把 `pki/ca`（含 CA 私钥）保持只读；签发序号写在可写的
+`pki/clients/ca.srl`（v4.1.3+）。若 UI 仍报 Read-only file system，
+确认 `ReadWritePaths` 含 `/opt/secret-broker/pki/clients`。
+离线签发仍可用脚本：
 
 ```bash
 ssh 52trz

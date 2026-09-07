@@ -82,6 +82,31 @@ function clientPaths(cn) {
   };
 }
 
+/**
+ * OpenSSL -CAcreateserial writes ca.srl next to ca.crt. Production systemd
+ * marks pki/ca read-only (ProtectSystem=strict) while pki/clients is writable.
+ * Keep the serial in CLIENTS_DIR so enrollment can bump it without opening
+ * the CA private-key directory for writes.
+ */
+function writableSerialPath() {
+  if (process.env.CA_SERIAL_PATH) return process.env.CA_SERIAL_PATH;
+  return join(CLIENTS_DIR, 'ca.srl');
+}
+
+function ensureWritableSerial() {
+  const dest = writableSerialPath();
+  if (!existsSync(CLIENTS_DIR)) mkdirSync(CLIENTS_DIR, { recursive: true });
+  if (existsSync(dest)) return dest;
+  const besideCa = CA_CRT ? CA_CRT.replace(/ca\.crt$/i, 'ca.srl') : null;
+  if (besideCa && existsSync(besideCa)) {
+    writeFileSync(dest, readFileSync(besideCa));
+  } else {
+    writeFileSync(dest, '01\n');
+  }
+  try { chmodSync(dest, 0o644); } catch {}
+  return dest;
+}
+
 // Issue a fresh client cert: generate 2048-bit key, build CSR, sign with CA.
 // Returns { fingerprint_sha256, cert_pem, key_pem } — key_pem is the secret
 // to bundle into the install zip; cert_pem is also bundled; fingerprint
@@ -104,9 +129,10 @@ export async function issueClientCert(cn, { days = DEFAULT_CERT_DAYS } = {}) {
     'extendedKeyUsage = clientAuth',
   ].join('\n') + '\n';
   writeFileSync(p.ext, ext);
-  // 4. Sign
+  // 4. Sign — serial file must be writable (not pki/ca/ca.srl on a RO mount).
+  const serial = ensureWritableSerial();
   await run('openssl', ['x509', '-req', '-in', p.csr,
-    '-CA', CA_CRT, '-CAkey', CA_KEY, '-CAcreateserial',
+    '-CA', CA_CRT, '-CAkey', CA_KEY, '-CAserial', serial,
     '-out', p.crt, '-days', String(days), '-sha256',
     '-extfile', p.ext]);
   // 5. Cleanup

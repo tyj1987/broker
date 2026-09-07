@@ -83,6 +83,21 @@ sudo bash scripts/broker/update-from-github.sh
 3. `node --check broker/server.js` 语法验证
 4. `systemctl restart secret-broker` + 验证 `/health`
 
+## 3.1 CI/CD（GitHub Actions → ECS）
+
+`master` 上改 `broker/**` 会跑 `.github/workflows/deploy-ecs.yml`：先 `npm run test:modular`，通过后把 `broker/` 打 tar 用 SSH 拷到 ECS，`systemctl restart secret-broker`。ECS **不需要**能访问 GitHub。
+
+仓库 Secrets（Settings → Secrets and variables → Actions）：
+
+| Secret | 值 |
+|--------|-----|
+| `ECS_HOST` | `52trz.com` |
+| `ECS_SSH_USER` | `root` |
+| `ECS_SSH_KEY` | CI 专用 ed25519 私钥（无口令） |
+| `ECS_SSH_KNOWN_HOSTS` | `ssh-keyscan -t ed25519 52trz.com` 的输出 |
+
+公钥必须在 ECS `/root/.ssh/authorized_keys`，注释 `github-actions-broker-deploy`。手动触发：Actions → **Deploy ECS** → Run workflow。
+
 ## 4. DNS / TLS / 端口
 
 - **域名**: `broker.52trz.com`，**Cloudflare DNS-only（灰云）+ 本机 nginx 终结 TLS**。

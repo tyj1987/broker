@@ -1,10 +1,11 @@
-# Deploy broker code to the Aliyun ECS systemd host (52trz.com).
-# Does not require the ECS to fetch GitHub — the runner copies files over SSH.
+# Deploy broker to the Aliyun ECS systemd host.
+# The runner copies a tarball over SSH so the ECS does not need to fetch GitHub.
 #
-# Required repository secrets:
-#   ECS_HOST       e.g. 47.94.225.76
-#   ECS_SSH_KEY    private key that can ssh as root
-#   ECS_SSH_USER   optional, default root
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   ECS_HOST              hostname, e.g. 52trz.com
+#   ECS_SSH_KEY           OpenSSH private key (ed25519, no passphrase)
+#   ECS_SSH_USER          optional, default root
+#   ECS_SSH_KNOWN_HOSTS   optional ssh-keyscan line; if empty, keyscan at runtime
 
 name: Deploy ECS
 
@@ -17,42 +18,82 @@ on:
       - '.github/workflows/deploy-ecs.yml'
   workflow_dispatch:
 
+concurrency:
+  group: deploy-ecs
+  cancel-in-progress: false
+
 jobs:
-  deploy:
+  test:
+    name: Test before deploy
     runs-on: ubuntu-latest
-    if: github.repository == 'tyj1987/broker'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: npm install + modular tests
+        working-directory: broker
+        run: |
+          npm install --omit=dev --no-audit --no-fund
+          npm run test:modular
+          node ../broker-test/test-v4-modules.js
+
+  deploy:
+    name: SSH deploy to ECS
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy broker files over SSH
-        uses: appleboy/scp-action@v0.1.27
-        with:
-          host: ${{ secrets.ECS_HOST }}
-          username: ${{ secrets.ECS_SSH_USER || 'root' }}
-          key: ${{ secrets.ECS_SSH_KEY }}
-          source: "broker/server.js,broker/version.js,broker/package.json,broker/routes/*,broker/lib/*,broker/dashboard/**,broker/service-templates.js,broker/type-schemas.js,scripts/broker/nginx-broker.52trz.com.conf"
-          target: /tmp/broker-deploy
-          strip_components: 0
+      - name: Pack broker tree
+        run: |
+          tar czf /tmp/broker-payload.tgz \
+            --exclude=node_modules \
+            --exclude=coverage \
+            --exclude='*.bak*' \
+            -C broker .
 
-      - name: Restart secret-broker
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.ECS_HOST }}
-          username: ${{ secrets.ECS_SSH_USER || 'root' }}
-          key: ${{ secrets.ECS_SSH_KEY }}
-          script: |
-            set -euo pipefail
-            SRC=/tmp/broker-deploy
-            DST=/opt/secret-broker
-            test -f "$SRC/broker/server.js"
-            cp -a "$SRC/broker/." "$DST/broker/"
-            if [ -f "$SRC/scripts/broker/nginx-broker.52trz.com.conf" ]; then
-              cp "$SRC/scripts/broker/nginx-broker.52trz.com.conf" /etc/nginx/vhost/broker.52trz.com.conf
-              nginx -t && nginx -s reload
-            fi
-            node --check "$DST/broker/server.js"
-            systemctl restart secret-broker
-            sleep 2
-            systemctl is-active secret-broker
-            curl -sk https://127.0.0.1:8443/health
-            echo
+      - name: Copy tarball and restart service
+        env:
+          ECS_HOST: ${{ secrets.ECS_HOST }}
+          ECS_SSH_USER: ${{ secrets.ECS_SSH_USER }}
+          ECS_SSH_KEY: ${{ secrets.ECS_SSH_KEY }}
+          ECS_SSH_KNOWN_HOSTS: ${{ secrets.ECS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${ECS_HOST:?Set repository secret ECS_HOST}"
+          : "${ECS_SSH_KEY:?Set repository secret ECS_SSH_KEY}"
+          USER="${ECS_SSH_USER:-root}"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$ECS_SSH_KEY" > "$HOME/.ssh/deploy"
+          chmod 600 "$HOME/.ssh/deploy"
+          if [ -n "${ECS_SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$ECS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -H -t ed25519,rsa "$ECS_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 644 "$HOME/.ssh/known_hosts"
+          SSH=(ssh -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          SCP=(scp -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          "${SCP[@]}" /tmp/broker-payload.tgz "$USER@$ECS_HOST:/tmp/broker-payload.tgz"
+          "${SSH[@]}" "$USER@$ECS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          DST=/opt/secret-broker/broker
+          test -d "$DST"
+          rm -rf /tmp/broker-new
+          mkdir -p /tmp/broker-new
+          tar xzf /tmp/broker-payload.tgz -C /tmp/broker-new
+          test -f /tmp/broker-new/server.js
+          node --check /tmp/broker-new/server.js
+          cp -a /tmp/broker-new/. "$DST/"
+          if [ -f "$DST/package.json" ]; then
+            (cd "$DST" && npm install --omit=dev --no-audit --no-fund)
+          fi
+          systemctl restart secret-broker
+          sleep 3
+          systemctl is-active secret-broker
+          curl -sk https://127.0.0.1:8443/health
+          echo
+          rm -rf /tmp/broker-new /tmp/broker-payload.tgz
+          REMOTE

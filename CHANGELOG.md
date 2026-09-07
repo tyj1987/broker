@@ -7,6 +7,15 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.5] - 2026-09-08
+
+### Fixed
+
+- Healthchecks (Cloudflare, GitHub, OpenAI, Aliyun, Tencent, AWS) resolve hostnames via DNS-over-HTTPS and set TLS SNI to the original name. ECS hosts that block UDP/53 no longer report `ENOTFOUND` as a generic network failure.
+- Admin service test no longer defaults to `GET /`. Cloudflare (and other templated APIs) use the first useful dashboard action (`GET /user/tokens/verify` for CF). HTTP 3xx is reported as a redirect, not success or "network problem". Upstream idle timeout is labelled TCP/TLS, not DNS.
+
+---
+
 ## [4.1.4] - 2026-09-08
 
 ### Fixed

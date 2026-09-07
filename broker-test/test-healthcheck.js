@@ -27,8 +27,8 @@ function ok(name, cond, detail) {
 }
 function section(s) { console.log(`\n--- ${s} ---`); }
 
-const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
-const cron = await import('file:///C:/home/my-first-app/broker/cron-tasks.js');
+const hc = await import(new URL('../broker/healthcheck.js', import.meta.url).href);
+const cron = await import(new URL('../broker/cron-tasks.js', import.meta.url).href);
 
 let mockHttp = null;
 let mockTcp = null;
@@ -141,11 +141,12 @@ let lastHttpReq = null;
   // ======== 3.5 checkCloudflare (mock https) — M4.5.1 =====
   section('healthcheck.checkCloudflare');
   {
+    let lastCfReq = null;
     mockHttp = createMockServer((req, res) => {
+      lastCfReq = { url: req.url, method: req.method };
       if (req.headers.authorization?.includes('good-cf-token')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        // 用不常见的占位符避免被某些编辑器/工具的 email anti-spam 模板替换
-        return res.end(JSON.stringify({ success: true, result: { email: 'e2e-cf-good-token-user' } }));
+        return res.end(JSON.stringify({ success: true, result: { id: 'tok', status: 'active' } }));
       }
       if (req.headers.authorization?.includes('expired-cf-token')) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -156,28 +157,15 @@ let lastHttpReq = null;
     });
     await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
-    // 用 mock 端口替换 api.cloudflare.com (动态 import checkCloudflare 不可行, 用 inline)
-    // 注: mock 是 http (不是 https), 跟生产 HTTPS 不同但测试逻辑覆盖
-    const http = await import('node:http');
-    const _checkCloudflare = (apiToken) => new Promise((resolve) => {
-      const req = http.request({
-        host: '127.0.0.1', port, path: '/client/v4/user', method: 'GET',
-        headers: { 'Authorization': `Bearer ${apiToken}` }, timeout: 5000,
-      }, res => {
-        let d = ''; res.on('data', c => d += c);
-        res.on('end', () => {
-          if (res.statusCode === 200) resolve({ status: 'ok', detail: 'user=' + (JSON.parse(d).result?.email || '?') });
-          else if (res.statusCode === 401 || res.statusCode === 403) resolve({ status: 'expired', detail: `${res.statusCode} unauthorized` });
-          else resolve({ status: 'fail', detail: `HTTP ${res.statusCode}` });
-        });
-      });
-      req.on('error', e => resolve({ status: 'fail', detail: e.message }));
-      req.end();
-    });
-    const good = await _checkCloudflare('good-cf-token');
-    ok('good token → ok', good.status === 'ok' && good.detail.includes('e2e-cf-good-token-user'));
-    const expired = await _checkCloudflare('expired-cf-token');
+    process.env.CLOUDFLARE_HEALTHCHECK_HOST = '127.0.0.1';
+    process.env.CLOUDFLARE_HEALTHCHECK_PORT = String(port);
+    const good = await hc.checkSecret('CF', { api_token: 'good-cf-token' }, 'cloudflare_token');
+    ok('good token → ok', good.status === 'ok' && good.detail.includes('token=active'));
+    ok('cloudflare hits /user/tokens/verify', lastCfReq?.url === '/client/v4/user/tokens/verify');
+    const expired = await hc.checkSecret('CF', { api_token: 'expired-cf-token' }, 'cloudflare_token');
     ok('expired token → expired', expired.status === 'expired');
+    delete process.env.CLOUDFLARE_HEALTHCHECK_HOST;
+    delete process.env.CLOUDFLARE_HEALTHCHECK_PORT;
   }
   if (mockHttp) { mockHttp.close(); mockHttp = null; }
 
@@ -492,6 +480,12 @@ let lastHttpReq = null;
     // 8) "timeout after Xms" msg → misconfigured
     ok('"timeout after 10000ms" → misconfigured',
        hc.classifyError({ message: 'timeout after 10000ms' }).status === 'misconfigured');
+    ok('DoH resolve failed → unreachable',
+       hc.classifyError({ message: 'DoH resolve failed for api.cloudflare.com' }).status === 'unreachable'
+       && hc.classifyError({ message: 'DoH resolve failed for api.cloudflare.com' }).detail.includes('DNS fail (DoH)'));
+    ok('Upstream timeout → misconfigured (not DNS)',
+       hc.classifyError({ message: 'Upstream timeout after 15s connecting to api.cloudflare.com (TCP/TLS idle — not a DNS failure)' }).status === 'misconfigured'
+       && hc.classifyError({ message: 'Upstream timeout after 15s connecting to api.cloudflare.com' }).detail.includes('not a DNS failure'));
     // 9) 未知错误 → fail 兜底
     ok('未知错误 → fail',
        hc.classifyError({ code: 'WEIRD', message: 'something weird' }).status === 'fail');

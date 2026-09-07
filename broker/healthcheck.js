@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { createHmac, createHash } from 'node:crypto';
+import { dohConnect } from './lib/doh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -244,6 +245,9 @@ export function classifyError(e) {
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_FAIL') {
     return { status: 'unreachable', detail: `DNS fail (${code}): ${msg.slice(0, 80)}` };
   }
+  if (/DoH resolve failed/i.test(msg)) {
+    return { status: 'unreachable', detail: `DNS fail (DoH): ${msg.slice(0, 80)}` };
+  }
   if (code === 'ECONNRESET') {
     return { status: 'unreachable', detail: `connection reset by peer (${code}) — service may block this IP range` };
   }
@@ -254,15 +258,15 @@ export function classifyError(e) {
     return { status: 'unreachable', detail: msg.slice(0, 100) };
   }
 
-  // misconfigured: 配置错
+  // misconfigured: 配置错 / 空闲超时 (不是 DNS)
   if (code === 'ECONNREFUSED') {
     return { status: 'misconfigured', detail: `connection refused (port may be closed or target wrong): ${msg.slice(0, 80)}` };
   }
   if (code === 'ETIMEDOUT') {
     return { status: 'misconfigured', detail: `connect timeout — target may be unreachable or behind firewall: ${msg.slice(0, 80)}` };
   }
-  if (/timeout after \d+ms/i.test(msg)) {
-    return { status: 'misconfigured', detail: msg.slice(0, 100) };
+  if (/timeout after \d+ms/i.test(msg) || /Upstream timeout/i.test(msg) || /^timeout$/i.test(msg) || /DoH timeout/i.test(msg)) {
+    return { status: 'misconfigured', detail: `upstream timeout (TCP/TLS idle — not a DNS failure): ${msg.slice(0, 80)}` };
   }
 
   // 兜底
@@ -318,6 +322,39 @@ export async function checkSecret(secretName, fields, secretType) {
   }
 }
 
+// HTTPS (and HTTP mock) GET with DoH + SNI. Port != 443 skips DoH (unit-test mocks).
+async function outboundRequest({ host, port, path, method = 'GET', headers = {}, t0, onResponse }) {
+  const useTls = Number(port) === 443;
+  const httpLib = useTls ? httpsRequest : (await import('node:http')).request;
+  let conn;
+  try {
+    conn = await dohConnect(host, { skip: !useTls });
+  } catch (e) {
+    return { ...classifyError(e), latency_ms: Date.now() - t0 };
+  }
+  return new Promise((resolve) => {
+    const req = httpLib({
+      hostname: conn.hostname,
+      port,
+      path,
+      method,
+      ...(useTls ? { servername: conn.servername } : {}),
+      headers: { ...headers, Host: host },
+      timeout: TIMEOUT_MS,
+    }, (res) => {
+      let d = '';
+      res.on('data', (c) => { d += c; });
+      res.on('end', () => {
+        try { resolve(onResponse(res, d, Date.now() - t0)); }
+        catch (e) { resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
+    req.on('error', (e) => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
+    req.end();
+  });
+}
+
 function checkGithubLike(token, type, t0) {
   // github / gitlab.com / gitee 都接受 token 鉴权的 /user 端点
   const hostMap = { github_pat: 'api.github.com', gitlab_pat: 'gitlab.com', gitee_pat: 'gitee.com' };
@@ -327,51 +364,37 @@ function checkGithubLike(token, type, t0) {
     gitlab_pat: { 'PRIVATE-TOKEN': token },
     gitee_pat:  { 'Authorization': `token ${token}` },
   };
-  const host = hostMap[type] || 'api.github.com';
+  const host = process.env.GITHUB_HEALTHCHECK_HOST || hostMap[type] || 'api.github.com';
+  const port = Number(process.env.GITHUB_HEALTHCHECK_PORT) || 443;
   const path = pathMap[type] || '/user';
   const headers = headerMap[type] || { 'Authorization': `token ${token}` };
-  return new Promise((resolve) => {
-    const req = httpsRequest({ host, port: 443, path, method: 'GET', headers, timeout: TIMEOUT_MS }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        const latency = Date.now() - t0;
-        if (res.statusCode === 200) {
-          let id = null;
-          try { id = JSON.parse(d).login || JSON.parse(d).username || JSON.parse(d).name; } catch { /* ignore */ }
-          resolve({ status: 'ok', detail: `user=${id || '?'}`, latency_ms: latency });
-        } else if (res.statusCode === 401) {
-          resolve({ status: 'expired', detail: '401 Bad credentials', latency_ms: latency });
-        } else if (res.statusCode === 403) {
-          resolve({ status: 'expired', detail: '403 Forbidden (token may be expired or scope insufficient)', latency_ms: latency });
-        } else {
-          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
-        }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
-    req.end();
+  return outboundRequest({
+    host, port, path, method: 'GET', headers, t0,
+    onResponse(res, d, latency) {
+      if (res.statusCode === 200) {
+        let id = null;
+        try { id = JSON.parse(d).login || JSON.parse(d).username || JSON.parse(d).name; } catch { /* ignore */ }
+        return { status: 'ok', detail: `user=${id || '?'}`, latency_ms: latency };
+      }
+      if (res.statusCode === 401) return { status: 'expired', detail: '401 Bad credentials', latency_ms: latency };
+      if (res.statusCode === 403) return { status: 'expired', detail: '403 Forbidden (token may be expired or scope insufficient)', latency_ms: latency };
+      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+    },
   });
 }
 
 function checkOpenAI(apiKey, t0) {
-  return new Promise((resolve) => {
-    const req = httpsRequest({
-      host: 'api.openai.com', port: 443, path: '/v1/models', method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      timeout: TIMEOUT_MS,
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        const latency = Date.now() - t0;
-        if (res.statusCode === 200) resolve({ status: 'ok', detail: 'models accessible', latency_ms: latency });
-        else if (res.statusCode === 401) resolve({ status: 'expired', detail: '401 invalid_api_key', latency_ms: latency });
-        else resolve({ status: 'fail', detail: `HTTP ${res.statusCode}`, latency_ms: latency });
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
-    req.end();
+  const host = process.env.OPENAI_HEALTHCHECK_HOST || 'api.openai.com';
+  const port = Number(process.env.OPENAI_HEALTHCHECK_PORT) || 443;
+  return outboundRequest({
+    host, port, path: '/v1/models', method: 'GET',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    t0,
+    onResponse(res, d, latency) {
+      if (res.statusCode === 200) return { status: 'ok', detail: 'models accessible', latency_ms: latency };
+      if (res.statusCode === 401) return { status: 'expired', detail: '401 invalid_api_key', latency_ms: latency };
+      return { status: 'fail', detail: `HTTP ${res.statusCode}`, latency_ms: latency };
+    },
   });
 }
 
@@ -404,31 +427,28 @@ function checkSsh(meta, t0) {
 }
 
 function checkCloudflare(apiToken, t0) {
-  // 调 GET /client/v4/user 验证 token 鉴权 (no-side-effect, 只读自己 user info)
-  return new Promise((resolve) => {
-    const req = httpsRequest({
-      host: 'api.cloudflare.com', port: 443, path: '/client/v4/user', method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-      timeout: TIMEOUT_MS,
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        const latency = Date.now() - t0;
-        if (res.statusCode === 200) {
-          let email = null;
-          try { email = JSON.parse(d).result?.email; } catch { /* ignore */ }
-          resolve({ status: 'ok', detail: `user=${email || '?'}`, latency_ms: latency });
-        } else if (res.statusCode === 401 || res.statusCode === 403) {
-          // 403 也可能是 token 失效或 scope 不足
-          resolve({ status: 'expired', detail: `${res.statusCode} ${res.statusCode === 401 ? 'unauthorized' : 'forbidden'} (token may be expired or scope insufficient)`, latency_ms: latency });
-        } else {
-          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
-        }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
-    req.end();
+  // GET /client/v4/user/tokens/verify — works with any API token.
+  // /user requires User.Details and 403s limited tokens (looks like expiry).
+  const host = process.env.CLOUDFLARE_HEALTHCHECK_HOST || 'api.cloudflare.com';
+  const port = Number(process.env.CLOUDFLARE_HEALTHCHECK_PORT) || 443;
+  return outboundRequest({
+    host, port, path: '/client/v4/user/tokens/verify', method: 'GET',
+    headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+    t0,
+    onResponse(res, d, latency) {
+      if (res.statusCode === 200) {
+        let tokenStatus = null;
+        try { tokenStatus = JSON.parse(d).result?.status; } catch { /* ignore */ }
+        return { status: 'ok', detail: `token=${tokenStatus || 'ok'}`, latency_ms: latency };
+      }
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        return { status: 'expired', detail: `${res.statusCode} ${res.statusCode === 401 ? 'unauthorized' : 'forbidden'} (token may be expired or scope insufficient)`, latency_ms: latency };
+      }
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        return { status: 'fail', detail: `upstream redirected (${res.statusCode}) — expected /client/v4/user/tokens/verify`, latency_ms: latency };
+      }
+      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+    },
   });
 }
 
@@ -500,33 +520,21 @@ async function checkAliyun(accessKeyId, meta, t0) {
   // 允许测试用 env 切 host/port (默认 ecs.aliyuncs.com:443)
   const host = process.env.ALIYUN_HEALTHCHECK_HOST || 'ecs.aliyuncs.com';
   const port = Number(process.env.ALIYUN_HEALTHCHECK_PORT) || 443;
-  // port=443 走 https, 其它 (test mock) 走 http
-  const httpLib = port === 443 ? httpsRequest : (await import('node:http')).request;
-  return new Promise((resolve) => {
-    const req = httpLib({
-      host, port, path, method: 'GET',
-      headers: { 'Host': host, 'User-Agent': 'secret-broker-healthcheck' },
-      timeout: TIMEOUT_MS,
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        const latency = Date.now() - t0;
-        if (res.statusCode === 200) {
-          // DescribeRegions 返 JSON, 列出 region 数量
-          let regionCount = 0;
-          try { regionCount = JSON.parse(d).Regions?.Region?.length || 0; } catch { /* ignore */ }
-          resolve({ status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency });
-        } else if (res.statusCode === 401 || res.statusCode === 403) {
-          // aliyun 用 403 InvalidAccessKeyId / SignatureDoesNotMatch
-          resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
-        } else {
-          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
-        }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
-    req.end();
+  return outboundRequest({
+    host, port, path, method: 'GET',
+    headers: { 'User-Agent': 'secret-broker-healthcheck' },
+    t0,
+    onResponse(res, d, latency) {
+      if (res.statusCode === 200) {
+        let regionCount = 0;
+        try { regionCount = JSON.parse(d).Regions?.Region?.length || 0; } catch { /* ignore */ }
+        return { status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency };
+      }
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        return { status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency };
+      }
+      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+    },
   });
 }
 
@@ -590,40 +598,29 @@ async function checkTencent(secretId, meta, t0) {
   const path = '/?Action=DescribeRegions&Version=2017-03-12';
   const host = process.env.TENCENT_HEALTHCHECK_HOST || 'cvm.tencentcloudapi.com';
   const port = Number(process.env.TENCENT_HEALTHCHECK_PORT) || 443;
-  const httpLib = port === 443 ? httpsRequest : (await import('node:http')).request;
-  return new Promise((resolve) => {
-    const req = httpLib({
-      host, port, path, method: 'GET',
-      headers: {
-        'Host': host,
-        'Content-Type': contentType,
-        'Authorization': authorization,
-        'X-TC-Action': 'DescribeRegions',
-        'X-TC-Version': '2017-03-12',
-        'X-TC-Timestamp': new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-        'X-TC-Region': meta.region || 'ap-guangzhou',
-        'User-Agent': 'secret-broker-healthcheck',
-      },
-      timeout: TIMEOUT_MS,
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        const latency = Date.now() - t0;
-        if (res.statusCode === 200) {
-          let regionCount = 0;
-          try { regionCount = JSON.parse(d).Response?.TotalCount || 0; } catch { /* ignore */ }
-          resolve({ status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency });
-        } else if (res.statusCode === 401 || res.statusCode === 403) {
-          // tencent 用 401 SignatureFailure / 403 auth failure
-          resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
-        } else {
-          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
-        }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
-    req.end();
+  return outboundRequest({
+    host, port, path, method: 'GET',
+    headers: {
+      'Content-Type': contentType,
+      'Authorization': authorization,
+      'X-TC-Action': 'DescribeRegions',
+      'X-TC-Version': '2017-03-12',
+      'X-TC-Timestamp': new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      'X-TC-Region': meta.region || 'ap-guangzhou',
+      'User-Agent': 'secret-broker-healthcheck',
+    },
+    t0,
+    onResponse(res, d, latency) {
+      if (res.statusCode === 200) {
+        let regionCount = 0;
+        try { regionCount = JSON.parse(d).Response?.TotalCount || 0; } catch { /* ignore */ }
+        return { status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency };
+      }
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        return { status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency };
+      }
+      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+    },
   });
 }
 
@@ -678,37 +675,25 @@ async function checkAws(accessKeyId, meta, t0) {
   const path = '/?Action=GetCallerIdentity&Version=2011-06-15';
   const _host = process.env.AWS_HEALTHCHECK_HOST || host;
   const port = Number(process.env.AWS_HEALTHCHECK_PORT) || 443;
-  const httpLib = port === 443 ? httpsRequest : (await import('node:http')).request;
-  return new Promise((resolve) => {
-    const req = httpLib({
-      host: _host, port, path, method: 'GET',
-      headers: {
-        'Host': _host,
-        'Authorization': authorization,
-        'X-Amz-Date': amzDate,
-        'User-Agent': 'secret-broker-healthcheck',
-      },
-      timeout: TIMEOUT_MS,
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        const latency = Date.now() - t0;
-        if (res.statusCode === 200) {
-          // GetCallerIdentity 返 XML, 含 <Arn>
-          let arn = null;
-          try { arn = d.match(/<Arn>(.*?)<\/Arn>/)?.[1]; } catch { /* ignore */ }
-          resolve({ status: 'ok', detail: `GetCallerIdentity ok (arn=${arn || '?'})`, latency_ms: latency });
-        } else if (res.statusCode === 401 || res.statusCode === 403) {
-          // aws 用 403 InvalidClientTokenId / SignatureDoesNotMatch
-          resolve({ status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency });
-        } else {
-          resolve({ status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency });
-        }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
-    req.on('error', e => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
-    req.end();
+  return outboundRequest({
+    host: _host, port, path, method: 'GET',
+    headers: {
+      'Authorization': authorization,
+      'X-Amz-Date': amzDate,
+      'User-Agent': 'secret-broker-healthcheck',
+    },
+    t0,
+    onResponse(res, d, latency) {
+      if (res.statusCode === 200) {
+        let arn = null;
+        try { arn = d.match(/<Arn>(.*?)<\/Arn>/)?.[1]; } catch { /* ignore */ }
+        return { status: 'ok', detail: `GetCallerIdentity ok (arn=${arn || '?'})`, latency_ms: latency };
+      }
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        return { status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency };
+      }
+      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+    },
   });
 }
 

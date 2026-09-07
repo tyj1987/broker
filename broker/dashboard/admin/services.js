@@ -67,9 +67,11 @@
     return api(`/api/v1/admin/services/${encodeURIComponent(name)}`, { method: 'DELETE' });
   }
   async function testService(name, opts = {}) {
+    // Upstream itself waits 15s; keep the browser wait longer so a server
+    // timeout/redirect message is shown instead of a generic "network" abort.
     return api(`/api/v1/admin/services/${encodeURIComponent(name)}/test`, {
       method: 'POST', body: JSON.stringify(opts || {}),
-    });
+    }, 25000);
   }
 
   // ---- Render table ----
@@ -330,11 +332,18 @@
   }
 
   function formatTestResult(r) {
-    if (r.ok === false && r.error) {
-      return `[ERROR] ${r.error}\n（latency ${r.latency_ms || 0}ms）`;
+    const where = [r.method, r.path].filter(Boolean).join(' ');
+    if (!r.ok) {
+      const err = r.error || `upstream_status=${r.upstream_status}`;
+      const lines = [`[ERROR] ${err}`];
+      if (where) lines.push(where);
+      lines.push(`（latency ${r.latency_ms || 0}ms）`);
+      if (r.body_preview) lines.push('--- preview ---', r.body_preview);
+      return lines.join('\n');
     }
     const lines = [];
     lines.push(`[OK] upstream_status=${r.upstream_status} latency=${r.latency_ms}ms`);
+    if (where) lines.push(where);
     if (r.body_preview) lines.push('--- preview ---', r.body_preview);
     return lines.join('\n');
   }

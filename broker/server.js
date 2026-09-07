@@ -62,6 +62,8 @@ import {
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
 import { aliyunRpcVersion, mergeAliyunQuery } from './lib/aliyun-rpc.js';
+import { dohConnect } from './lib/doh.js';
+import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
@@ -1159,61 +1161,6 @@ function buildAliyunSignedUrl(upstream, action, query, region, creds, apiVersion
   return url;
 }
 
-// DNS-over-HTTPS pre-resolver. ECS outbound UDP/53 to public DNS is
-// blocked; c-ares fails with ENOTFOUND. We use alidns DoH (TCP 443) to
-// resolve and cache the result. Falls back to Cloudflare DoH if alidns
-// itself is unreachable.
-const _dohCache = new Map();  // hostname -> { ip, expiresAt }
-const _dohInFlight = new Map();  // hostname -> Promise (de-dup concurrent)
-const DOH_TTL_MS = 5 * 60 * 1000;
-
-async function resolveHostnameDoH(hostname) {
-  // If already an IP literal, return as-is.
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return hostname;
-  const cached = _dohCache.get(hostname);
-  if (cached && cached.expiresAt > Date.now()) return cached.ip;
-  if (_dohInFlight.has(hostname)) return _dohInFlight.get(hostname);
-  const p = (async () => {
-    // Use HTTPS DoH endpoints whose hostnames are already known IPs so we
-    // don't recurse the DoH-via-DoH problem. alidns public IP + Cloudflare.
-    const dohEndpoints = [
-      { url: `https://dns.alidns.com/resolve?name=${encodeURIComponent(hostname)}&type=A`, ip: '223.5.5.5' },
-      { url: `https://1.1.1.1/dns-query?name=${encodeURIComponent(hostname)}&type=A`, ip: '1.1.1.1' },
-    ];
-    for (const { url, ip } of dohEndpoints) {
-      try {
-        const u = new URL(url);
-        // Connect to the literal IP, but use the original hostname for SNI/Host.
-        const r = await new Promise((resolve, reject) => {
-          const req = httpsRequest({
-            hostname: ip,
-            port: 443,
-            path: u.pathname + u.search,
-            method: 'GET',
-            headers: { 'Host': u.host, 'Accept': 'application/dns-json' },
-            timeout: 5000,
-          }, resolve);
-          req.on('error', reject);
-          req.on('timeout', () => req.destroy(new Error('DoH timeout')));
-          req.end();
-        });
-        if (r.statusCode !== 200) { r.resume(); continue; }
-        const chunks = [];
-        for await (const c of r) chunks.push(c);
-        const j = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        const answer = j?.Answer?.find(a => a.type === 1)?.data;
-        if (answer) {
-          _dohCache.set(hostname, { ip: answer, expiresAt: Date.now() + DOH_TTL_MS });
-          return answer;
-        }
-      } catch {}
-    }
-    throw new Error(`DoH resolve failed for ${hostname}`);
-  })();
-  _dohInFlight.set(hostname, p);
-  try { return await p; } finally { _dohInFlight.delete(hostname); }
-}
-
 // Extract Aliyun Action from a path like "/?Action=DescribeInstances"
 // or "/DescribeInstances" (for ECS-style), or from the request query.
 // The broker.yaml maps service→Action via `action` field; if not set,
@@ -1320,22 +1267,30 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   const start = Date.now();
   // Workaround for ECS environments where outbound UDP/53 to public DNS
   // is blocked (c-ares fails with ENOTFOUND). Pre-resolve via DNS-over-HTTPS
-  // (which goes over TCP 443) and connect to the IP directly.
-  const ip = url.protocol === 'https:' ? await resolveHostnameDoH(url.hostname) : url.hostname;
+  // (TCP 443) and connect to the IP with SNI = original hostname.
   const isHttps = url.protocol === 'https:';
   const requestLib = isHttps ? httpsRequest : httpRequest;
+  let conn;
+  try {
+    conn = await dohConnect(url.hostname, { skip: !isHttps });
+  } catch (e) {
+    throw new Error(`${e.message} (UDP/53 blocked on this host; DoH over TCP/443 also failed)`);
+  }
   const upstreamResp = await new Promise((resolve, reject) => {
     const req = requestLib({
       protocol: url.protocol,
-      hostname: ip,
+      hostname: conn.hostname,
       port: url.port || (isHttps ? 443 : 80),
       method: method || 'GET',
       path: url.pathname + url.search,
       headers: outHeaders,  // Host: url.host set above
       timeout: 15000,
+      ...(isHttps ? { servername: conn.servername } : {}),
     }, resolve);
     req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('Upstream timeout')));
+    req.on('timeout', () => req.destroy(new Error(
+      `Upstream timeout after 15s connecting to ${url.hostname} (TCP/TLS idle — not a DNS failure)`,
+    )));
     if (fetchOpts.body) req.write(fetchOpts.body);
     req.end();
   });
@@ -2497,22 +2452,29 @@ async function handle(req, res) {
     const svc = CONFIG.services[name];
     if (!svc) return jsonError(res, 404, `Service ${name} not found`);
     const body = await readBody(req) || {};
-    const method = (body.method || (svc.dashboard_actions && svc.dashboard_actions[0] && svc.dashboard_actions[0].method) || 'GET');
-    const path = (body.path || (svc.dashboard_actions && svc.dashboard_actions[0] && svc.dashboard_actions[0].path) || '/');
+    const picked = defaultServiceTest({ ...svc, name });
+    const method = (body.method || picked.method || 'GET');
+    const path = (body.path || picked.path || '/');
+    const query = body.query !== undefined ? body.query : picked.query;
     const start = Date.now();
     try {
       // Pass the service name so callUpstream's error messages are useful.
-      const r = await callUpstream({ ...svc, name }, method, path, body.query, body.headers, body.body, { serviceName: name });
-      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, upstream_status: r.status, latency_ms: r.latency, status: r.status >= 200 && r.status < 400 ? 'ok' : 'error' });
+      const r = await callUpstream({ ...svc, name }, method, path, query, body.headers, body.body, { serviceName: name });
+      const classified = describeUpstreamStatus(r.status, { path, hostname: (() => { try { return new URL(svc.upstream).hostname; } catch { return ''; } })() });
+      const ok = classified.ok === true;
+      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, upstream_status: r.status, latency_ms: r.latency, status: ok ? 'ok' : 'error' });
       return send(res, 200, {
-        ok: r.status >= 200 && r.status < 400,
+        ok,
+        method,
+        path,
         upstream_status: r.status,
         latency_ms: r.latency,
         body_preview: r.body ? r.body.toString('utf8').slice(0, 500) : '',
+        ...(classified.error ? { error: classified.error } : {}),
       });
     } catch (err) {
       audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error: err.message });
-      return send(res, 502, { ok: false, error: err.message, latency_ms: Date.now() - start });
+      return send(res, 502, { ok: false, error: err.message, method, path, latency_ms: Date.now() - start });
     }
   }
 

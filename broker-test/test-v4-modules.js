@@ -251,6 +251,7 @@ section('service-templates (V4 additions)');
   ok('admin skeleton includes dashboard actions', Array.isArray(git.dashboard_actions) && git.dashboard_actions.length > 0);
   ok('github api version is current', git.inject_headers && git.inject_headers['X-GitHub-Api-Version'] === '2026-03-10');
   ok('cloudflare verify path', (list.cloudflare.dashboard_actions || []).some(a => a.path === '/user/tokens/verify'));
+  ok('cloudflare first useful action is verify', (list.cloudflare.dashboard_actions || [])[0]?.path === '/user/tokens/verify');
   ok('gemini uses 2.5 flash', (list.gemini.dashboard_actions || []).some(a => String(a.path).includes('gemini-2.5-flash')));
   ok('ssh_proxy is enabled', list.ssh_proxy && !list.ssh_proxy.disabled);
 }

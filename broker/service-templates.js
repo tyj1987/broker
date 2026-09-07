@@ -16,9 +16,12 @@ export const SERVICE_TEMPLATES = {
     upstream: 'https://api.github.com',
     inject_headers: {
       'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'secret-broker/2.0 (proxy)',
+      'X-GitHub-Api-Version': '2026-03-10',
+      'User-Agent': 'secret-broker/4.1.2 (proxy)',
     },
+    official_docs_url: 'https://docs.github.com/en/rest',
+    default_secret_type: 'github_pat',
+    default_secret_field: 'token',
     secret_placeholder: '{{secret.<TOKEN_SECRET>.token}}',
     default_secret_field: 'token',
     secret_help: '使用 github_pat 类型的密钥 (含 token 字段)',
@@ -35,11 +38,13 @@ export const SERVICE_TEMPLATES = {
     type: 'bearer',
     upstream: 'https://api.openai.com',
     inject_headers: {
-      'User-Agent': 'secret-broker/2.0',
+      'User-Agent': 'secret-broker/4.1.2',
     },
-    secret_placeholder: '{{secret.<TOKEN_SECRET>.value}}',
-    default_secret_field: 'value',
-    secret_help: '使用 openai_key 类型的密钥 (含 value 字段)',
+    secret_placeholder: '{{secret.<TOKEN_SECRET>.api_key}}',
+    default_secret_type: 'openai_key',
+    default_secret_field: 'api_key',
+    secret_help: '使用 openai_key 类型的密钥（字段 api_key，sk- / sk-proj- / sk-svcacct-）',
+    official_docs_url: 'https://platform.openai.com/docs/api-reference',
     dashboard_actions: [
       { label: '列出模型', method: 'GET', path: '/v1/models' },
       { label: '简单对话', method: 'POST', path: '/v1/chat/completions' },
@@ -98,17 +103,17 @@ export const SERVICE_TEMPLATES = {
   },
 
   ssh_proxy: {
-    label: 'SSH 命令代理 (计划中)',
+    label: 'SSH 命令代理',
     icon: '🛠️',
-    description: 'broker 作为 SSH jump host，目前仅占位 (Phase 3 实现)',
+    description: 'broker 持私钥执行远程命令（sshExec / sshTunnel），AI 不接触私钥',
     type: 'ssh_proxy',
     upstream: '',
     inject_headers: {},
-    secret_placeholder: 'ssh_connection 类型 (含 host/port/user/private_key)',
-    secret_help: '需要 broker 二进制增加 SSH 服务器模式，Phase 3 才完整实现',
+    secret_placeholder: 'ssh_connection 类型 (host/port/username/private_key)',
+    secret_help: '密钥类型 ssh_connection，认证方式必须是 private_key',
+    default_secret_type: 'ssh_connection',
     dashboard_actions: [],
-    disabled: true,
-    disabled_reason: 'SSH 代理模式在 Phase 3 实现，Phase 1.2 暂不开放',
+    official_docs_url: 'https://github.com/tyj1987/broker/blob/master/docs/SSH-PROXY.md',
   },
 
   // M3.5 (2026-08-15): Cloudflare API Token 注入
@@ -128,10 +133,10 @@ export const SERVICE_TEMPLATES = {
     secret_placeholder: '{{secret.<CLOUDFLARE_SECRET>.api_token}}',
     default_secret_field: 'api_token',
     secret_help: '使用 cloudflare_token 类型的密钥 (含 api_token + account_id 字段)',
+    official_docs_url: 'https://developers.cloudflare.com/api/',
     dashboard_actions: [
-      { label: '验证 Token', method: 'GET', path: '/user' },
+      { label: '验证 Token', method: 'GET', path: '/user/tokens/verify' },
       { label: '列出 Zones', method: 'GET', path: '/zones', query: { per_page: '50' } },
-      { label: '列出 Tunnels', method: 'GET', path: '/accounts/{{account_id}}/tunnels?status=active' },
     ],
   },
 
@@ -217,7 +222,7 @@ export const SERVICE_TEMPLATES = {
     upstream: 'https://api.github.com',
     inject_headers: {
       'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
+      'X-GitHub-Api-Version': '2026-03-10',
     },
     healthcheck: { method: 'GET', path: '/installation/repositories', expect_status: 200 },
     default_actions: [
@@ -242,12 +247,14 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'api_key',
     upstream: 'https://generativelanguage.googleapis.com',
     healthcheck: { method: 'GET', path: '/v1beta/models', expect_status: 200 },
+    header_name: 'x-goog-api-key',
+    header_value_template: '{{secret}}',
     default_actions: [
       { label: '列出模型', method: 'GET', path: '/v1beta/models' },
-      { label: '生成文本', method: 'POST', path: '/v1beta/models/gemini-pro:generateContent' },
+      { label: '生成文本', method: 'POST', path: '/v1beta/models/gemini-2.5-flash:generateContent' },
     ],
-    official_docs_url: 'https://ai.google.dev/api',
-    template_version: '2025-Q3',
+    official_docs_url: 'https://ai.google.dev/gemini-api/docs',
+    template_version: '2026-Q3',
   },
   deepseek: {
     id: 'deepseek',
@@ -321,13 +328,13 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'cohere_key',
     default_secret_field: 'api_key',
     upstream: 'https://api.cohere.ai',
-    healthcheck: { method: 'GET', path: '/v1/models', expect_status: 200 },
+    healthcheck: { method: 'GET', path: '/v2/models', expect_status: 200 },
     default_actions: [
-      { label: '模型列表', method: 'GET', path: '/v1/models' },
-      { label: '生成', method: 'POST', path: '/v1/generate' },
+      { label: '模型列表', method: 'GET', path: '/v2/models' },
+      { label: '对话', method: 'POST', path: '/v2/chat' },
     ],
-    official_docs_url: 'https://docs.cohere.com/',
-    template_version: '2025-Q3',
+    official_docs_url: 'https://docs.cohere.com/reference/chat',
+    template_version: '2026-Q3',
   },
   moonshot: {
     id: 'moonshot',
@@ -926,17 +933,66 @@ export const SERVICE_TEMPLATES = {
   // ---- 通用 (已有 generic_https) ----
 };
 
-// Helper for /api/v1/admin/service-templates: return a sanitized view for UI.
+/**
+ * Map template auth_type / type onto the broker service types that
+ * validateServiceConfig currently accepts.
+ */
+export function mapTemplateServiceType(t) {
+  if (t?.type && ['github_token', 'bearer', 'header', 'aliyun_v2', 'ssh_proxy'].includes(t.type)) {
+    return t.type;
+  }
+  const a = t?.auth_type;
+  if (a === 'github_token') return 'github_token';
+  if (a === 'aliyun_v2' || a === 'aliyun_v3') return 'aliyun_v2';
+  if (a === 'ssh_proxy') return 'ssh_proxy';
+  if (a === 'header' || a === 'query' || a === 'basic') return 'header';
+  return 'bearer';
+}
+
+function headerDefaults(t, type) {
+  if (t.header_name || t.header_value_template) {
+    return {
+      header_name: t.header_name || 'Authorization',
+      header_value_template: t.header_value_template || 'Bearer {{secret}}',
+    };
+  }
+  if (type !== 'header') return {};
+  const field = t.default_secret_field || 'value';
+  if (t.auth_type === 'query' || t.id === 'gemini') {
+    return { header_name: 'x-goog-api-key', header_value_template: '{{secret}}' };
+  }
+  if (t.auth_type === 'basic') {
+    return { header_name: 'Authorization', header_value_template: 'Basic {{secret}}' };
+  }
+  return { header_name: 'Authorization', header_value_template: `Bearer {{secret}}` };
+}
+
+// Admin UI skeleton. Upstream / actions are public API shapes, not secrets.
 export function publicTemplateList() {
   const out = {};
   for (const [id, t] of Object.entries(SERVICE_TEMPLATES)) {
+    const type = mapTemplateServiceType({ ...t, id });
+    const hdr = headerDefaults({ ...t, id }, type);
+    const actions = t.dashboard_actions || t.default_actions || [];
     out[id] = {
+      id,
       label: t.label,
-      icon: t.icon,
-      description: t.description,
-      type: t.type,
+      icon: t.icon || '',
+      description: t.description || '',
+      category: t.category || '',
+      type,
       disabled: !!t.disabled,
       disabled_reason: t.disabled_reason || null,
+      upstream: t.upstream || '',
+      region: t.region || '',
+      inject_headers: t.inject_headers || {},
+      dashboard_actions: actions,
+      token_field: t.token_field || t.default_secret_field || '',
+      default_secret_type: t.default_secret_type || '',
+      secret_help: t.secret_help || '',
+      official_docs_url: t.official_docs_url || '',
+      suggested_name: id,
+      ...hdr,
     };
   }
   return out;

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
   <title>Secret Broker · AI 动作控制台</title>
-  <link rel="stylesheet" href="style.css?v=4.1.1">
+  <link rel="stylesheet" href="style.css?v=4.1.2">
 </head>
 <body>
 
@@ -79,6 +79,16 @@
         </div>
 
         <!-- v3.0 上线提示：引导用户到「我的资料」tab（v3.0 self-service release tip） -->
+        <div class="card" id="home-ai-prompt-card">
+          <h3>给 AI 的用法提示 / Prompt for AI clients</h3>
+          <p class="muted">复制下面这段给 Cursor / Claude / ChatGPT。密钥不要出现在对话里，一律走代理。</p>
+          <textarea id="home-ai-prompt" class="mono" readonly rows="16"></textarea>
+          <div class="filter-row" style="margin-top:8px">
+            <button type="button" class="btn btn-primary" id="btn-copy-ai-prompt">⧉ 复制提示词 / Copy prompt</button>
+            <span class="muted" id="ai-prompt-copy-status"></span>
+          </div>
+        </div>
+
         <div class="v3-banner" id="v3-banner" role="status" aria-live="polite">
           <div class="v3-banner-text">
             🎉 v3.0 上线！进入「<a href="#" data-switch-tab="me">👤 我的资料</a>」查看
@@ -428,10 +438,18 @@
           <h2>审计日志 / Audit Log</h2>
           <p class="hint">实时流 + 过滤 + 导出（仅 admin 完整功能；其他角色只读基础视图）。</p>
           <div class="filter-row admin-only" id="audit-admin-only" hidden>
-            <label>客户端 / Client <input id="af-client" type="text" placeholder="client.dashboard-admin"></label>
-            <label>服务 / Service <input id="af-service" type="text" placeholder="github"></label>
-            <label>动作 / Action <input id="af-action" type="text" placeholder="proxy"></label>
-            <label>状态 / Status <input id="af-status" type="text" placeholder="error"></label>
+            <label>客户端 / Client
+              <select id="af-client"><option value="">全部</option></select>
+            </label>
+            <label>服务 / Service
+              <select id="af-service"><option value="">全部</option></select>
+            </label>
+            <label>动作 / Action
+              <select id="af-action"><option value="">全部</option></select>
+            </label>
+            <label>状态 / Status
+              <select id="af-status"><option value="">全部</option></select>
+            </label>
             <label>起始 <input id="af-since" type="datetime-local"></label>
             <label>结束 <input id="af-until" type="datetime-local"></label>
             <label>Limit <input id="af-limit" type="number" value="200" min="1" max="5000"></label>
@@ -443,6 +461,7 @@
             <button id="btn-audit-refresh" class="btn">刷新 / Refresh</button>
             <button id="btn-audit-export-json" class="btn admin-only" hidden>⬇ 导出 JSON</button>
             <button id="btn-audit-export-csv" class="btn admin-only" hidden>⬇ 导出 CSV</button>
+            <button id="btn-audit-clear" class="btn btn-danger admin-only" hidden>🗑 清除日志 / Clear</button>
             <span class="muted" id="audit-count" style="margin-left:auto"></span>
           </div>
           <table id="audit-table">
@@ -646,7 +665,8 @@ secret-broker get github.pat</code></pre>
           <select id="svc-tpl">
             <option value="">— 自定义 (无模板) —</option>
           </select>
-          <span class="hint">模板会自动填好 upstream / 默认 actions / headers。但 <strong>不会</strong>预填 token_secret（避免误绑别人的密钥）。</span>
+          <span class="hint" id="svc-tpl-hint">选模板会填入官方 upstream、鉴权类型和预置动作。密钥名仍需你手动填写。</span>
+          <p class="muted" id="svc-tpl-docs" hidden></p>
         </label>
         <label>名称 / Name
           <input id="svc-name" type="text" required pattern="[a-z][a-z0-9_\-]*" maxlength="64" placeholder="github_cn">
@@ -741,13 +761,13 @@ secret-broker get github.pat</code></pre>
     </div>
   </div>
 
-  <script src="app.js?v=4.1.1"></script>
-  <script src="home.js?v=4.1.1"></script>
-  <script src="me.js?v=4.1.1"></script>
-  <script src="api-keys.js?v=4.1.1"></script>
-  <script src="admin/secrets.js?v=4.1.1"></script>
-  <script src="admin/services.js?v=4.1.1"></script>
-  <script src="admin/clients.js?v=4.1.1"></script>
-  <script src="admin/audit.js?v=4.1.1"></script>
+  <script src="app.js?v=4.1.2"></script>
+  <script src="home.js?v=4.1.2"></script>
+  <script src="me.js?v=4.1.2"></script>
+  <script src="api-keys.js?v=4.1.2"></script>
+  <script src="admin/secrets.js?v=4.1.2"></script>
+  <script src="admin/services.js?v=4.1.2"></script>
+  <script src="admin/clients.js?v=4.1.2"></script>
+  <script src="admin/audit.js?v=4.1.2"></script>
 </body>
 </html>

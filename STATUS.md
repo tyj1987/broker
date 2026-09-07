@@ -1,6 +1,6 @@
 # Project Status
 
-> **V4.1.1 — security/UX patch** (public `/health` fingerprint removed; dashboard admin tabs no longer wait for a refresh). Built on V4.1.0 GA (`v4.1.0`, 2026-09-01).
+> **V4.1.2** — audit dropdowns + clear logs, real service-template fill, homepage AI prompt, provider templates refreshed from current official APIs. Built on V4.1.1.
 
 ## Current state
 

@@ -22,6 +22,7 @@
   // ---- Init ----
   function init() {
     wireButtons();
+    wireAiPrompt();
     setGreet();
     const subscribe = typeof subscribeBrokerIdentity === 'function'
       ? subscribeBrokerIdentity
@@ -45,6 +46,46 @@
     $('#home-greet-line').textContent = `${greet}, ${cn}`;
     const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
     $('#home-subtitle').textContent = `${dateStr} · 仪表盘 · 快捷操作 · 最近活动`;
+  }
+
+  const AI_PROMPT = `你正在使用 Secret Broker（mTLS 凭据代理控制台）。密钥只存在 broker 内存，不要向用户索要 PAT / AccessKey / API Key 明文。
+
+基址：当前站点同源。已登录浏览器请求必须带 cookie（credentials: include）。
+
+先探路（登录后立刻调用）：
+1. GET /api/v1/identity
+2. GET /api/v1/services     —— 看有哪些服务、是否 allowed、预置 actions
+3. GET /api/v1/secrets      —— 只返回你能看见的密钥名，不含明文
+
+调外部 API 的唯一推荐方式（代理，密钥不离开 broker）：
+POST /api/v1/proxy/<service>
+Content-Type: application/json
+{ "method": "GET", "path": "/user", "query": {}, "headers": {}, "body": null }
+
+规则：
+- 不要 POST /api/v1/secrets/resolve，除非用户明确要求看明文。
+- 未授权的 service 会 403，改用 identity/services 里 allowed 的项。
+- 管理面（admin）：/api/v1/admin/secrets、/api/v1/admin/services、/api/v1/admin/clients、/api/v1/admin/audit。
+- 审计：GET /api/v1/admin/audit ；筛选项来自 GET /api/v1/admin/audit/facets。
+- 健康：公开 GET /health 只有 {"status":"ok"}。运维详情走 GET /api/v1/health（需登录）。
+
+如果缺少服务或密钥，请让用户在「服务管理 / 密钥管理」里用官方模板创建，不要编造凭据。`;
+
+  function wireAiPrompt() {
+    const ta = $('#home-ai-prompt');
+    if (ta && !ta.value) ta.value = AI_PROMPT;
+    const btn = $('#btn-copy-ai-prompt');
+    if (btn) btn.addEventListener('click', async () => {
+      const text = $('#home-ai-prompt')?.value || AI_PROMPT;
+      const status = $('#ai-prompt-copy-status');
+      try {
+        await navigator.clipboard.writeText(text);
+        if (status) status.textContent = '已复制';
+      } catch {
+        if (ta) { ta.focus(); ta.select(); }
+        if (status) status.textContent = '请手动复制';
+      }
+    });
   }
 
   function wireButtons() {

@@ -517,6 +517,7 @@ function normalizeServiceConfig(body) {
   if (body.action !== undefined) out.action = String(body.action);
   // Token reference: just the name of the secret; never the value
   if (body.token_secret !== undefined) out.token_secret = String(body.token_secret);
+  if (body.token_field !== undefined) out.token_field = String(body.token_field);
   // Aliyun OpenAPI v2: structured secret name (with access_key_id + access_key_secret fields)
   if (body.ak_secret !== undefined) out.ak_secret = String(body.ak_secret);
   // inject_headers: must be a flat string->string map
@@ -707,6 +708,45 @@ function readAuditFiltered({ client, service, action, status, since, until, limi
 // Kept for backwards compat: simple {since, limit} read (used by /api/v1/audit).
 function readAudit({ since, limit = 100 } = {}) {
   return readAuditFiltered({ since, limit });
+}
+
+function collectAuditFacets() {
+  const clients = new Set(Object.keys(CONFIG.clients || {}));
+  const services = new Set(Object.keys(CONFIG.services || {}));
+  const actions = new Set([
+    'login', 'logout', 'proxy', 'resolve', 'connect', 'healthcheck',
+    'admin_secrets_create', 'admin_services_create', 'admin_clients_create',
+    'audit_cleared',
+  ]);
+  const statuses = new Set(['ok', 'error', 'denied', 'not_found', 'mfa_required']);
+  for (const e of readAuditFiltered({ limit: 2000 })) {
+    if (e.cn) clients.add(e.cn);
+    if (e.client) clients.add(e.client);
+    if (e.service) services.add(e.service);
+    if (e.action) actions.add(e.action);
+    if (e.status) statuses.add(e.status);
+  }
+  const sort = (s) => [...s].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  return {
+    clients: sort(clients),
+    services: sort(services),
+    actions: sort(actions),
+    statuses: sort(statuses),
+  };
+}
+
+function clearAuditLogs() {
+  const deleted = [];
+  if (!existsSync(AUDIT_DIR)) return deleted;
+  for (const f of readdirSync(AUDIT_DIR)) {
+    if (!f.startsWith('audit-')) continue;
+    if (!(f.endsWith('.jsonl') || f.endsWith('.jsonl.1'))) continue;
+    try {
+      unlinkSync(join(AUDIT_DIR, f));
+      deleted.push(f);
+    } catch { /* keep going */ }
+  }
+  return deleted;
 }
 
 // ============================================================
@@ -2900,6 +2940,24 @@ async function handle(req, res) {
     };
     const events = readAuditFiltered(params);
     return send(res, 200, { events });
+  }
+
+  // ----- GET /api/v1/admin/audit/facets (dropdown options from live config + logs) -----
+  if (m === 'GET' && p === '/api/v1/admin/audit/facets') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    return send(res, 200, collectAuditFacets());
+  }
+
+  // ----- DELETE /api/v1/admin/audit (wipe jsonl files; writes one audit_cleared event) -----
+  if (m === 'DELETE' && p === '/api/v1/admin/audit') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+    const body = await readBody(req) || {};
+    if (body.confirm !== true && url.searchParams.get('confirm') !== 'true') {
+      return jsonError(res, 400, 'Pass {confirm:true} to clear audit logs');
+    }
+    const deleted = clearAuditLogs();
+    audit({ action: 'audit_cleared', cn: ctx.cn, fp: ctx.fp, status: 'ok', deleted: deleted.length });
+    return send(res, 200, { ok: true, deleted });
   }
 
   // ----- GET /api/v1/admin/audit/stream (SSE) -----

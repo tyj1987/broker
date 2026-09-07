@@ -26,10 +26,40 @@
     subscribe((ident) => {
       currentIdentity = ident;
       isAdmin = !!(ident && ident.role === 'admin');
-      if (isAdmin) ensureSse();
-      else teardownSse();
+      if (isAdmin) {
+        ensureSse();
+        loadFacets().then(loadAudit);
+      } else {
+        teardownSse();
+      }
     });
     wireButtons();
+  }
+
+  function fillSelect(sel, values, current) {
+    if (!sel) return;
+    const keep = current != null ? current : sel.value;
+    sel.innerHTML = '<option value="">全部 / All</option>';
+    for (const v of values || []) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      sel.appendChild(opt);
+    }
+    if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+  }
+
+  async function loadFacets() {
+    if (!isAdmin) return;
+    try {
+      const f = await api('/api/v1/admin/audit/facets');
+      fillSelect($('#af-client'), f.clients);
+      fillSelect($('#af-service'), f.services);
+      fillSelect($('#af-action'), f.actions);
+      fillSelect($('#af-status'), f.statuses);
+    } catch (e) {
+      console.warn('audit facets failed', e);
+    }
   }
 
   // ---- Filters ----
@@ -246,6 +276,22 @@
     if (exj) exj.addEventListener('click', () => downloadExport('json'));
     const exc = $('#btn-audit-export-csv');
     if (exc) exc.addEventListener('click', () => downloadExport('csv'));
+    const clearBtn = $('#btn-audit-clear');
+    if (clearBtn) clearBtn.addEventListener('click', clearAuditLogs);
+  }
+
+  async function clearAuditLogs() {
+    if (!isAdmin) return;
+    if (!confirm('确定清除全部审计日志？此操作不可恢复。\nClear ALL audit logs? This cannot be undone.')) return;
+    try {
+      await api('/api/v1/admin/audit', { method: 'DELETE', body: { confirm: true } });
+      events = [];
+      renderTable();
+      await loadFacets();
+      await loadAudit();
+    } catch (e) {
+      alert('清除失败 / Clear failed: ' + e.message);
+    }
   }
 
   function downloadExport(fmt) {
@@ -277,7 +323,10 @@
     if (btn) btn.addEventListener('click', loadAudit);
     // Also auto-refresh on tab change
     document.addEventListener('tabchange', (e) => {
-      if (e.detail?.tab === 'audit') loadAudit();
+      if (e.detail?.tab === 'audit') {
+        if (isAdmin) loadFacets();
+        loadAudit();
+      }
     });
   });
 

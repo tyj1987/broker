@@ -7,6 +7,26 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.2] - 2026-09-07
+
+### Added
+
+- Audit filters are dropdowns filled from live clients/services plus recent log values (`GET /api/v1/admin/audit/facets`).
+- Admin **clear audit logs** (`DELETE /api/v1/admin/audit` with `{confirm:true}`).
+- Homepage **AI prompt** card (copy-able) describing identity / services / proxy usage.
+- Service templates now return a full admin skeleton (upstream, type, headers, actions, docs URL). Picking a template fills the form.
+
+### Changed
+
+- GitHub REST header pinned to `X-GitHub-Api-Version: 2026-03-10` (2022-11-28 still supported until 2028).
+- GitHub PAT schema accepts `ghp_` and `github_pat_`.
+- OpenAI key help covers `sk-` / `sk-proj-` / `sk-svcacct-`; template binds `api_key`.
+- Cloudflare first action is `GET /user/tokens/verify`.
+- Gemini default model `gemini-2.5-flash`; Cohere chat is `/v2/chat`.
+- SSH proxy template is enabled (runtime already existed).
+
+---
+
 ## [4.1.1] - 2026-09-07
 
 ### Security

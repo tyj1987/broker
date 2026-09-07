@@ -247,7 +247,12 @@ section('service-templates (V4 additions)');
   ok('publicTemplateList has at least 40', Object.keys(list).length >= 40);
   const git = list.github;
   ok('public view has label/description', git.label && git.description);
-  ok('public view no upstream leak', !git.upstream);
+  ok('admin skeleton includes github upstream', git.upstream === 'https://api.github.com');
+  ok('admin skeleton includes dashboard actions', Array.isArray(git.dashboard_actions) && git.dashboard_actions.length > 0);
+  ok('github api version is current', git.inject_headers && git.inject_headers['X-GitHub-Api-Version'] === '2026-03-10');
+  ok('cloudflare verify path', (list.cloudflare.dashboard_actions || []).some(a => a.path === '/user/tokens/verify'));
+  ok('gemini uses 2.5 flash', (list.gemini.dashboard_actions || []).some(a => String(a.path).includes('gemini-2.5-flash')));
+  ok('ssh_proxy is enabled', list.ssh_proxy && !list.ssh_proxy.disabled);
 }
 
 // ============================================================

@@ -34,12 +34,13 @@ export const TYPE_SCHEMAS = {
   // ---- 代码平台 ----
   github_pat: {
     label: 'GitHub Personal Access Token',
-    description: 'https://github.com/settings/tokens — 选 classic, scope 按需',
+    description: 'https://github.com/settings/tokens — classic (ghp_) 或 fine-grained (github_pat_)',
     rotate_recommendation_days: 90,
     fields: [
       { name: 'token', label: 'Token', kind: 'textarea', required: true, sensitive: true,
-        placeholder: 'ghp_...',
-        validation_regex: '^ghp_[A-Za-z0-9]{36,}$' },
+        placeholder: 'ghp_... 或 github_pat_...',
+        help: 'Classic PAT 以 ghp_ 开头；fine-grained 以 github_pat_ 开头。Authorization 使用 token 方案。',
+        validation_regex: '^(ghp_|github_pat_)[A-Za-z0-9_]+' },
     ],
   },
   gitlab_pat: {
@@ -64,8 +65,8 @@ export const TYPE_SCHEMAS = {
     description: 'https://platform.openai.com/api-keys',
     fields: [
       { name: 'api_key', label: 'API Key', kind: 'textarea', required: true, sensitive: true,
-        placeholder: 'sk-...',
-        help: '格式：sk- 开头的 51 字符串' },
+        placeholder: 'sk-... 或 sk-proj-... 或 sk-svcacct-...',
+        help: '平台密钥以 sk- / sk-proj- / sk-svcacct- 开头，长度不固定' },
       { name: 'organization', label: 'Organization ID (可选)', kind: 'text',
         help: '如有多个 org 需指定，否则留空' },
     ],

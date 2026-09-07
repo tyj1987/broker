@@ -14,6 +14,7 @@
   let services = [];         // [{ name, type, description, upstream, dashboard_actions, allowed_clients, ... }]
   let editingName = null;
   let loadedTemplatesAt = 0;
+  let appliedTemplate = null;
 
   // ---- Bootstrap ----
   function init() {
@@ -130,18 +131,56 @@
     }
   }
 
-  // When user picks a template, pre-fill the form fields. We DO NOT touch
-  // existing data on edit — only when creating from scratch.
+  function formatActions(actions) {
+    return (actions || []).map(a => {
+      const q = a.query && Object.keys(a.query).length ? `  query=${JSON.stringify(a.query)}` : '';
+      return `${(a.method || 'GET').toUpperCase()} ${a.path || '/'}${q}  -- ${a.label || a.path || ''}`;
+    }).join('\n');
+  }
+
   function applyTemplate(templateId) {
-    if (!templateId) return;
+    const hint = $('#svc-tpl-hint');
+    const docs = $('#svc-tpl-docs');
+    if (!templateId) {
+      appliedTemplate = null;
+      if (hint) hint.textContent = '选模板会填入官方 upstream、鉴权类型和预置动作。密钥名仍需你手动填写。';
+      if (docs) { docs.hidden = true; docs.innerHTML = ''; }
+      return;
+    }
     const t = templates[templateId];
     if (!t || t.disabled) return;
-    // Fetch the full template (with skeleton) from a server endpoint? We don't
-    // have one yet — but we can pull from a known map embedded in admin app.
-    // Easiest: hit a public-ish endpoint that returns the full template. For
-    // now, just type a hint; the actual fields are filled by the user (or by
-    // a fetch of GET /api/v1/admin/service-templates which is sanitized).
-    // TODO: expose full template skeletons from server if user wants zero-typing.
+    appliedTemplate = t;
+    const typeSel = $('#svc-type');
+    if (typeSel && t.type) {
+      if (![...typeSel.options].some(o => o.value === t.type)) {
+        const opt = document.createElement('option');
+        opt.value = t.type;
+        opt.textContent = t.type;
+        typeSel.appendChild(opt);
+      }
+      typeSel.value = t.type;
+    }
+    if ($('#svc-upstream')) $('#svc-upstream').value = t.upstream || '';
+    if ($('#svc-region')) $('#svc-region').value = t.region || '';
+    if ($('#svc-description')) $('#svc-description').value = t.description || '';
+    if ($('#svc-actions')) $('#svc-actions').value = formatActions(t.dashboard_actions);
+    if (!editingName && $('#svc-name') && !$('#svc-name').value.trim()) {
+      $('#svc-name').value = t.suggested_name || templateId;
+    }
+    if (hint) {
+      hint.textContent = t.secret_help
+        ? `${t.secret_help}${t.token_field ? ` · token_field=${t.token_field}` : ''}`
+        : '已填入该服务的官方上游与预置动作。请填写密钥名后保存。';
+    }
+    if (docs) {
+      if (t.official_docs_url) {
+        docs.hidden = false;
+        docs.innerHTML = `官方文档: <a href="${esc(t.official_docs_url)}" target="_blank" rel="noopener">${esc(t.official_docs_url)}</a>`;
+      } else {
+        docs.hidden = true;
+        docs.innerHTML = '';
+      }
+    }
   }
 
   // ---- Modal: create / edit ----
@@ -157,6 +196,8 @@
     $('#svc-token-secret').value = '';
     $('#svc-actions').value = '';
     $('#svc-tpl').value = '';
+    appliedTemplate = null;
+    applyTemplate('');
     $('#service-error').hidden = true;
     $('#service-modal').hidden = false;
     setTimeout(() => $('#svc-name').focus(), 50);
@@ -179,6 +220,7 @@
         `${a.method || 'GET'} ${a.path}${a.query ? '  query=' + JSON.stringify(a.query) : ''}  -- ${a.label}`
       ).join('\n');
       $('#svc-tpl').value = '';  // editing never re-applies template
+      appliedTemplate = null;
       $('#service-error').hidden = true;
       $('#service-modal').hidden = false;
     } catch (e) {
@@ -207,6 +249,14 @@
       token_secret: $('#svc-token-secret').value.trim() || undefined,
       dashboard_actions: parseActions($('#svc-actions').value),
     };
+    if (appliedTemplate) {
+      if (appliedTemplate.inject_headers && Object.keys(appliedTemplate.inject_headers).length) {
+        cfg.inject_headers = appliedTemplate.inject_headers;
+      }
+      if (appliedTemplate.token_field) cfg.token_field = appliedTemplate.token_field;
+      if (appliedTemplate.header_name) cfg.header_name = appliedTemplate.header_name;
+      if (appliedTemplate.header_value_template) cfg.header_value_template = appliedTemplate.header_value_template;
+    }
     if (!name) return showServiceError('请填写服务名 / Name required');
     if (cfg.dashboard_actions && cfg.dashboard_actions.length === 0 && $('#svc-actions').value.trim() !== '') {
       return showServiceError('快捷操作格式错误。示例：GET /user  -- 我的信息');

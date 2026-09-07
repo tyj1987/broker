@@ -234,11 +234,22 @@ footer {
 }
 
 /* ---------- 表格 ---------- */
-.filter-row { display: flex; gap: 12px; align-items: center; margin: 10px 0; }
+.filter-row { display: flex; gap: 12px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
 .filter-row label { font-size: 0.85rem; color: var(--muted); }
-.filter-row input {
+.filter-row input, .filter-row select {
   background: var(--bg-input); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+  min-width: 140px;
+}
+#home-ai-prompt {
+  width: 100%;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
@@ -330,7 +341,7 @@ td code { font-size: 0.8rem; }
   color: var(--text-muted);
   gap: 2px;
 }
-.filter-row input {
+.filter-row input, .filter-row select {
   padding: 4px 8px;
   background: rgba(0,0,0,0.25);
   color: #e6edf3;

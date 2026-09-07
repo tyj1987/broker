@@ -146,7 +146,7 @@ let lastHttpReq = null;
       lastCfReq = { url: req.url, method: req.method };
       if (req.headers.authorization?.includes('good-cf-token')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: true, result: { id: 'tok', status: 'active' } }));
+        return res.end(JSON.stringify({ success: true, result: [{ id: 'zone1', name: 'example.com' }] }));
       }
       if (req.headers.authorization?.includes('expired-cf-token')) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -160,8 +160,8 @@ let lastHttpReq = null;
     process.env.CLOUDFLARE_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.CLOUDFLARE_HEALTHCHECK_PORT = String(port);
     const good = await hc.checkSecret('CF', { api_token: 'good-cf-token' }, 'cloudflare_token');
-    ok('good token → ok', good.status === 'ok' && good.detail.includes('token=active'));
-    ok('cloudflare hits /user/tokens/verify', lastCfReq?.url === '/client/v4/user/tokens/verify');
+    ok('good token → ok', good.status === 'ok' && (good.detail.includes('zones') || good.detail.includes('token=')));
+    ok('cloudflare hits /zones', String(lastCfReq?.url || '').startsWith('/client/v4/zones'));
     const expired = await hc.checkSecret('CF', { api_token: 'expired-cf-token' }, 'cloudflare_token');
     ok('expired token → expired', expired.status === 'expired');
     delete process.env.CLOUDFLARE_HEALTHCHECK_HOST;

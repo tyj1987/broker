@@ -29,14 +29,26 @@ export function applyRelay(upstreamUrl, headers = {}, cfg = relayConfig()) {
     return { url, headers: { ...headers }, relayed: false };
   }
   const base = cfg.url.endsWith('/') ? cfg.url : `${cfg.url}/`;
-  const relayed = new URL(url.pathname.replace(/^\//, '') + url.search, base);
+  let pathname = url.pathname || '/';
+  // Service templates use upstream https://api.cloudflare.com/client/v4 plus
+  // action path /user/tokens/verify. new URL('/user/...', that upstream) drops
+  // /client/v4; put it back so the relay hits a real CF API route.
+  if (url.hostname.toLowerCase() === 'api.cloudflare.com'
+      && pathname !== '/client/v4' && !pathname.startsWith('/client/v4/')) {
+    pathname = '/client/v4' + (pathname.startsWith('/') ? pathname : `/${pathname}`);
+  }
+  const relayed = new URL(pathname.replace(/^\//, '') + url.search, base);
+  const hdr = {
+    ...headers,
+    Host: relayed.host,
+    [RELAY_SECRET_HEADER]: cfg.secret,
+  };
+  // Some HTTP triggers (Aliyun FC) strip inbound Authorization. Duplicate it.
+  const auth = headers.Authorization || headers.authorization;
+  if (auth) hdr['X-Broker-Upstream-Authorization'] = auth;
   return {
     url: relayed,
-    headers: {
-      ...headers,
-      Host: relayed.host,
-      [RELAY_SECRET_HEADER]: cfg.secret,
-    },
+    headers: hdr,
     relayed: true,
     originalHost: url.hostname,
   };

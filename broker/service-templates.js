@@ -138,8 +138,8 @@ export const SERVICE_TEMPLATES = {
     secret_help: '使用 cloudflare_token 类型的密钥 (含 api_token + account_id 字段)',
     official_docs_url: 'https://developers.cloudflare.com/api/',
     dashboard_actions: [
-      { label: '验证 Token', method: 'GET', path: '/user/tokens/verify' },
       { label: '列出 Zones', method: 'GET', path: '/zones', query: { per_page: '50' } },
+      { label: '验证 Token', method: 'GET', path: '/user/tokens/verify' },
     ],
   },
 

@@ -61,11 +61,11 @@ console.log('=== resolveHostnameDoH (injected) ===');
 console.log('=== defaultServiceTest ===');
 {
   const cfTpl = defaultServiceTest({ name: 'cloudflare', upstream: 'https://api.cloudflare.com/client/v4' });
-  assert(cfTpl.path === '/user/tokens/verify', 'cf by name → verify');
+  assert(cfTpl.path === '/zones', 'cf by name → zones');
   assert(cfTpl.method === 'GET', 'cf method GET');
 
   const cfHost = defaultServiceTest({ name: 'prod_cf', upstream: 'https://api.cloudflare.com/client/v4' });
-  assert(cfHost.path === '/user/tokens/verify', 'cf by upstream host → verify');
+  assert(cfHost.path === '/zones', 'cf by upstream host → zones');
   assert(matchServiceTemplate({ upstream: 'https://api.cloudflare.com/client/v4' })?.id === 'cloudflare', 'match host');
 
   const explicit = defaultServiceTest({
@@ -80,7 +80,7 @@ console.log('=== defaultServiceTest ===');
     dashboard_actions: [{ method: 'GET', path: '/' }],
     upstream: 'https://api.cloudflare.com/client/v4',
   });
-  assert(slashOnly.path === '/user/tokens/verify', 'GET / is not useful → template');
+  assert(slashOnly.path === '/zones', 'GET / is not useful → template');
 
   const unknown = defaultServiceTest({ name: 'custom', upstream: 'https://example.invalid/api' });
   assert(unknown.path === '/' && unknown.method === 'GET', 'unknown → GET /');

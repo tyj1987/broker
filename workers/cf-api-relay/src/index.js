@@ -22,10 +22,14 @@ export default {
       return json({ success: false, error: 'unauthorized' }, 401);
     }
     const src = new URL(request.url);
-    if (src.pathname !== ALLOW_PREFIX && !src.pathname.startsWith(`${ALLOW_PREFIX}/`)) {
+    let pathname = src.pathname;
+    if (pathname !== ALLOW_PREFIX && !pathname.startsWith(`${ALLOW_PREFIX}/`)) {
+      pathname = ALLOW_PREFIX + (pathname.startsWith('/') ? pathname : `/${pathname}`);
+    }
+    if (pathname !== ALLOW_PREFIX && !pathname.startsWith(`${ALLOW_PREFIX}/`)) {
       return json({ success: false, error: 'path not allowed' }, 403);
     }
-    const dest = new URL(src.pathname + src.search, UPSTREAM);
+    const dest = new URL(pathname + src.search, UPSTREAM);
     const headers = new Headers(request.headers);
     headers.delete('X-Broker-Relay-Secret');
     headers.delete('Host');

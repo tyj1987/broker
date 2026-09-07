@@ -1,6 +1,6 @@
 {
   "name": "secret-broker",
-  "version": "4.1.6",
+  "version": "4.1.7",
   "description": "mTLS Secret Broker with SOPS-backed credentials, proxy-mode for AI clients",
   "main": "server.js",
   "type": "module",

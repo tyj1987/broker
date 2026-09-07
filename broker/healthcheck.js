@@ -459,7 +459,9 @@ async function checkSsh(meta, t0) {
 function checkCloudflare(apiToken, t0) {
   // GET /client/v4/user/tokens/verify — works with any API token.
   // /user requires User.Details and 403s limited tokens (looks like expiry).
-  const path = '/client/v4/user/tokens/verify';
+  // Account-scoped tokens 401 on /user/tokens/verify; GET /zones is a
+  // no-side-effect check that works with typical Zone tokens.
+  const path = '/client/v4/zones?per_page=1';
   const headers = { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' };
   const overrideHost = process.env.CLOUDFLARE_HEALTHCHECK_HOST;
   let host = overrideHost || 'api.cloudflare.com';
@@ -483,14 +485,19 @@ function checkCloudflare(apiToken, t0) {
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {
         let tokenStatus = null;
-        try { tokenStatus = JSON.parse(d).result?.status; } catch { /* ignore */ }
-        return { status: 'ok', detail: `token=${tokenStatus || 'ok'}`, latency_ms: latency };
+        let n = 0;
+        try {
+          const j = JSON.parse(d);
+          n = Array.isArray(j.result) ? j.result.length : 0;
+          if (j.result?.status) return { status: 'ok', detail: `token=${j.result.status}`, latency_ms: latency };
+        } catch { /* ignore */ }
+        return { status: 'ok', detail: `zones accessible (${n})`, latency_ms: latency };
       }
       if (res.statusCode === 401 || res.statusCode === 403) {
         return { status: 'expired', detail: `${res.statusCode} ${res.statusCode === 401 ? 'unauthorized' : 'forbidden'} (token may be expired or scope insufficient)`, latency_ms: latency };
       }
       if (res.statusCode >= 300 && res.statusCode < 400) {
-        return { status: 'fail', detail: `upstream redirected (${res.statusCode}) — expected /client/v4/user/tokens/verify`, latency_ms: latency };
+        return { status: 'fail', detail: `upstream redirected (${res.statusCode}) — expected /client/v4/zones`, latency_ms: latency };
       }
       return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
     },

@@ -36,9 +36,12 @@ console.log('=== relayConfig / applyRelay ===');
   assert(applied.relayed === true, 'relayed');
   assert(applied.url.hostname === 'relay.example.workers.dev', 'relay host');
   assert(applied.url.pathname === '/client/v4/user/tokens/verify', 'path kept');
+  const short = applyRelay(new URL('https://api.cloudflare.com/user/tokens/verify'), {}, on);
+  assert(short.url.pathname === '/client/v4/user/tokens/verify', 'prefix /client/v4 when action path is root-relative');
   assert(applied.headers.Host === 'relay.example.workers.dev', 'Host is relay');
   assert(applied.headers[RELAY_SECRET_HEADER] === 's3cret', 'secret header');
   assert(applied.headers.Authorization === 'Bearer tok', 'auth kept');
+  assert(applied.headers['X-Broker-Upstream-Authorization'] === 'Bearer tok', 'auth duplicated for FC');
   assert(applied.originalHost === 'api.cloudflare.com', 'originalHost');
 }
 
@@ -64,10 +67,12 @@ console.log('=== cf-api-relay worker ===');
     const unauth = await worker.fetch(new Request('https://relay/client/v4/user/tokens/verify'), env);
     assert(unauth.status === 401, 'missing secret → 401');
 
-    const badPath = await worker.fetch(new Request('https://relay/', {
+    const prefixed = await worker.fetch(new Request('https://relay/user/tokens/verify', {
       headers: { 'X-Broker-Relay-Secret': 's3cret' },
     }), env);
-    assert(badPath.status === 403, 'root path → 403');
+    assert(prefixed.status === 200, 'root-relative path accepted');
+    assert(calls[0].url === 'https://api.cloudflare.com/client/v4/user/tokens/verify', 'prefixed to /client/v4');
+    calls.length = 0;
 
     const ok = await worker.fetch(new Request('https://relay/client/v4/user/tokens/verify', {
       headers: {

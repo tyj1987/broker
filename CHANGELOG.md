@@ -7,6 +7,20 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.7] - 2026-09-08
+
+### Fixed
+
+- Cloudflare healthcheck and the default admin Test action use `GET /zones` (account tokens 401 on `/user/tokens/verify`).
+- Relay rewrites `/user/tokens/verify` to `/client/v4/user/tokens/verify` when the service upstream already includes `/client/v4`.
+- Aliyun FC HTTP trigger: duplicate `Authorization` on `X-Broker-Upstream-Authorization` because FC strips the inbound header.
+
+### Added
+
+- Aliyun Function Compute relay (`aliyun/fc-cf-relay`, Hong Kong) for Cloudflare API. ECS sets `CF_RELAY_URL` to the `fcapp.run` URL. Worker relay remains as a fallback for networks that can reach Cloudflare's edge.
+
+---
+
 ## [4.1.6] - 2026-09-08
 
 ### Fixed

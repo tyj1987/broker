@@ -7,6 +7,14 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.4] - 2026-09-08
+
+### Fixed
+
+- Aliyun RPC `Version` is no longer hardcoded to ECS `2014-05-26`. Alidns (`alidns.aliyuncs.com`) now uses `2015-01-09` (and other products by hostname). Existing `alidns` services work without re-saving.
+
+---
+
 ## [4.1.3] - 2026-09-08
 
 ### Fixed

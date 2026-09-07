@@ -61,6 +61,7 @@ import {
   isClientIpAllowed,
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
+import { aliyunRpcVersion, mergeAliyunQuery } from './lib/aliyun-rpc.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
@@ -514,6 +515,7 @@ function normalizeServiceConfig(body) {
   // Optional metadata
   if (body.description !== undefined) out.description = String(body.description);
   if (body.region !== undefined) out.region = String(body.region);
+  if (body.api_version !== undefined) out.api_version = String(body.api_version);
   if (body.action !== undefined) out.action = String(body.action);
   // Token reference: just the name of the secret; never the value
   if (body.token_secret !== undefined) out.token_secret = String(body.token_secret);
@@ -1124,10 +1126,13 @@ function aliyunV2Sign(method, params, accessKeySecret) {
 }
 
 // Build a signed aliyun_v2 URL (query params merged with Signature etc.)
-function buildAliyunSignedUrl(upstream, action, query, region, creds) {
+function buildAliyunSignedUrl(upstream, action, query, region, creds, apiVersion) {
+  const extra = { ...(query || {}) };
+  delete extra.Action;
+  delete extra.Signature;
   const params = {
     Format: 'JSON',
-    Version: '2014-05-26',
+    Version: apiVersion || extra.Version || '2014-05-26',
     AccessKeyId: creds.accessKeyId,
     SignatureMethod: 'HMAC-SHA1',
     Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
@@ -1135,8 +1140,9 @@ function buildAliyunSignedUrl(upstream, action, query, region, creds) {
     SignatureNonce: randomUUID(),
     Action: action,
     ...(region ? { RegionId: region } : {}),
-    ...(query || {}),
+    ...extra,
   };
+  if (apiVersion) params.Version = apiVersion;
   // Some OpenAPIs also want ServiceCode/Product. Caller can set Service param.
   // Aliyun requires "Signature" param without signing itself
   const sig = aliyunV2Sign('GET', params, creds.accessKeySecret);
@@ -1273,7 +1279,13 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
     }
     const action = getAliyunAction(path, serviceCfg, query);
     if (!action) throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
-    url = buildAliyunSignedUrl(serviceCfg.upstream, action, query, serviceCfg.region, creds);
+    const merged = mergeAliyunQuery(path, query);
+    delete merged.Action;
+    const apiVersion = aliyunRpcVersion({
+      serviceCfg, upstream: serviceCfg.upstream, path, query: merged,
+    });
+    delete merged.Version;
+    url = buildAliyunSignedUrl(serviceCfg.upstream, action, merged, serviceCfg.region, creds, apiVersion);
   } else {
     throw new Error(`Unsupported service type: ${serviceCfg.type}`);
   }

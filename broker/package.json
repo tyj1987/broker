@@ -1,6 +1,6 @@
 {
   "name": "secret-broker",
-  "version": "4.1.3",
+  "version": "4.1.4",
   "description": "mTLS Secret Broker with SOPS-backed credentials, proxy-mode for AI clients",
   "main": "server.js",
   "type": "module",
@@ -13,7 +13,7 @@
     "wire": "node ../scripts/broker/apply-phase-af-full-wire.mjs",
     "test:lib": "node ../broker-test/test-lib-phase-b.js",
     "test:ip": "node ../broker-test/test-ip-allowlist.js",
-    "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js",
+    "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js && node ../broker-test/test-aliyun-rpc.js",
     "test:obs": "node ../broker-test/test-phase-c-obs.js",
     "test:trace": "node ../broker-test/test-phase-d-trace-audit.js",
     "test:ops": "node ../broker-test/test-phase-e-ops.js",

@@ -256,6 +256,7 @@
       if (appliedTemplate.token_field) cfg.token_field = appliedTemplate.token_field;
       if (appliedTemplate.header_name) cfg.header_name = appliedTemplate.header_name;
       if (appliedTemplate.header_value_template) cfg.header_value_template = appliedTemplate.header_value_template;
+      if (appliedTemplate.api_version) cfg.api_version = appliedTemplate.api_version;
     }
     if (!name) return showServiceError('请填写服务名 / Name required');
     if (cfg.dashboard_actions && cfg.dashboard_actions.length === 0 && $('#svc-actions').value.trim() !== '') {

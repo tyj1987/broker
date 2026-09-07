@@ -57,6 +57,7 @@ export const SERVICE_TEMPLATES = {
     description: 'AccessKey + Aliyun v2 签名，调 DescribeInstances 等 ECS OpenAPI',
     type: 'aliyun_v2',
     upstream: 'https://ecs.aliyuncs.com',
+    api_version: '2014-05-26',
     region: 'cn-beijing',
     inject_headers: {},
     secret_placeholder: 'aliyun_ak (含 access_key_id + access_key_secret 字段)',
@@ -74,10 +75,12 @@ export const SERVICE_TEMPLATES = {
     description: 'AccessKey + Aliyun v2 签名，调 Alidns / Ram 等任意 OpenAPI',
     type: 'aliyun_v2',
     upstream: 'https://alidns.aliyuncs.com',
+    api_version: '2015-01-09',
     region: 'cn-beijing',
     inject_headers: {},
-    secret_placeholder: 'aliyun_ak (含 access_key_id + access_key_secret + region)',
-    secret_help: '必须用 aliyun_ak 类型 (含 access_key_id + access_key_secret + region)',
+    secret_placeholder: 'aliyun_ak (含 access_key_id + access_key_secret 字段)',
+    secret_help: '必须用 aliyun_ak 类型。Alidns OpenAPI Version=2015-01-09（不是 ECS 的 2014-05-26）',
+    official_docs_url: 'https://help.aliyun.com/document_detail/29739.html',
     dashboard_actions: [
       { label: '列域名', method: 'GET', path: '/?Action=DescribeDomains' },
       { label: '列解析记录', method: 'GET', path: '/?Action=DescribeDomainRecords&DomainName=example.com' },
@@ -507,6 +510,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'aliyun_ak',
     default_secret_field: 'access_key_secret',
     upstream: 'https://alidns.aliyuncs.com',
+    api_version: '2015-01-09',
     healthcheck: { method: 'GET', path: '/?Action=DescribeDomains', expect_status: 200 },
     default_actions: [
       { label: '列域名', method: 'GET', path: '/?Action=DescribeDomains' },
@@ -992,6 +996,7 @@ export function publicTemplateList() {
       secret_help: t.secret_help || '',
       official_docs_url: t.official_docs_url || '',
       suggested_name: id,
+      api_version: t.api_version || '',
       ...hdr,
     };
   }

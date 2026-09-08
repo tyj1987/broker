@@ -21,9 +21,9 @@ const (
 
 // WorkloadIdentity is a binding for K8s SA / ECS task / GKE SA.
 type WorkloadIdentity struct {
-	Provider   WorkloadIdentityProvider
-	RoleArn    string
-	Audience   string
+	Provider    WorkloadIdentityProvider
+	RoleArn     string
+	Audience    string
 	SessionName string
 	// TokenPath: optional override (defaults to standard projected path for K8s)
 	TokenPath string

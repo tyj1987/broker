@@ -11,13 +11,13 @@ import (
 
 // Typed errors. Wrap the underlying error.
 var (
-	ErrAuth        = errors.New("broker: authentication failed (401)")
-	ErrPermission  = errors.New("broker: permission denied (403)")
-	ErrNotFound    = errors.New("broker: resource not found (404)")
-	ErrRateLimit   = errors.New("broker: rate limited (429)")
-	ErrServer      = errors.New("broker: server error (5xx)")
-	ErrConnection  = errors.New("broker: connection error")
-	ErrInvalidArg  = errors.New("broker: invalid argument")
+	ErrAuth       = errors.New("broker: authentication failed (401)")
+	ErrPermission = errors.New("broker: permission denied (403)")
+	ErrNotFound   = errors.New("broker: resource not found (404)")
+	ErrRateLimit  = errors.New("broker: rate limited (429)")
+	ErrServer     = errors.New("broker: server error (5xx)")
+	ErrConnection = errors.New("broker: connection error")
+	ErrInvalidArg = errors.New("broker: invalid argument")
 )
 
 // BrokerError is a typed error that includes the HTTP status and response body.
@@ -25,8 +25,8 @@ type BrokerError struct {
 	Status int
 	Code   string
 	Body   string
-	Op     string  // logical operation, e.g. "get_secret"
-	Err    error   // wrapped error (typed)
+	Op     string // logical operation, e.g. "get_secret"
+	Err    error  // wrapped error (typed)
 }
 
 func (e *BrokerError) Error() string {

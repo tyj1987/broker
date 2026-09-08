@@ -1,4 +1,4 @@
-// broker-test/test-healthcheck.js — v3.0 M4 healthcheck + cron-tasks 单元测试
+// broker-test/test-healthcheck.js — V4.1.1 healthcheck + cron-tasks unit tests
 // 覆盖:
 // 1. healthcheck.checkGithub (mock https)
 // 2. healthcheck.checkOpenAI (mock https)

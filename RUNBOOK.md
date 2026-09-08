@@ -479,7 +479,7 @@ or email. / 配告警渠道：微信/钉钉/Telegram/Slack/邮件。
 - **SSE 实时推送** (admin only): `/api/v1/admin/healthcheck/stream` → dashboard 状态变化时红点 + 浏览器通知
 - **alert_history** 持久化: `/api/v1/admin/alerts/history` → 状态变化 timeline
 
-详见 `docs/PLAN-secret-broker-v3.md` (M4/M5.3/M5.6 节).
+详见 git history。
 
 ---
 

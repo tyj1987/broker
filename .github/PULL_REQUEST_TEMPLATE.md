@@ -1,8 +1,5 @@
 <!--
 Thanks for contributing to Secret Broker!
-
-Please complete the following checklist. For large changes, also update
-`CHANGELOG.md` and the matching section in `docs/DESIGN-V4-*.md`.
 -->
 
 ## Summary
@@ -25,12 +22,10 @@ Please complete the following checklist. For large changes, also update
 - [ ] `broker/lib/` helpers
 - [ ] `broker/routes/` endpoints
 - [ ] `broker/signing/` algorithms
-- [ ] `sdk/node/`
 - [ ] `sdk/python/`
 - [ ] `sdk/go/`
 - [ ] `sdk/vscode/`
 - [ ] `deploy/helm/`
-- [ ] `deploy/terraform/`
 - [ ] `deploy/grafana/`
 - [ ] `docs/`
 - [ ] CI / GitHub Actions
@@ -39,10 +34,10 @@ Please complete the following checklist. For large changes, also update
 ## Test plan
 
 - [ ] I added tests that prove my fix is effective or my feature works
-- [ ] New and existing unit tests pass locally with my changes
-  - `npm run test:verify-all` (or python-equivalent for SDK changes)
+- [ ] New and existing unit tests pass locally
+  - `cd broker && npm run test:verify-all`
 - [ ] I have manually verified the change against a running broker
-  (if applicable — `VERIFY.md §17` for PKI + curl recipe)
+  - See `RUNBOOK.md` for the standard verification recipe
 
 ## Zero-credential-leakage checklist (CRITICAL)
 
@@ -51,17 +46,16 @@ Please complete the following checklist. For large changes, also update
 
 - [ ] My change does NOT add new code paths that return secret values to AI
 - [ ] If my change adds a new log line, the value is passed through `redact()`
-      (`broker/lib/redact.js` — 12 patterns) or marked explicitly safe
+      (`broker/lib/redact.js`) or marked explicitly safe
 - [ ] If my change adds a new error message, the message is passed through
       `redact()` before returning to the client
-- [ ] No new pattern of "leaking by exception" (e.g. printing env on crash)
 - [ ] If I introduced a new credential format (e.g. a new cloud provider's
       API key), I added its pattern to `redact.js` AND a test case
 
 ## Security review
 
 - [ ] No new mTLS bypass
-- [ ] No new auth path that skips `clients[].is_admin` / scope check
+- [ ] No new auth path that skips `clients[].role` / scope check
 - [ ] No new use of `eval`, `Function()`, or `child_process` without
       explicit shell-metacharacter sanitization
 - [ ] No new hardcoded secret / key / token in source
@@ -70,22 +64,17 @@ Please complete the following checklist. For large changes, also update
 
 ## Backward compatibility
 
-- [ ] This PR does not break v3.8 clients (REST API, secrets YAML schema)
+- [ ] This PR does not break the v4.x API contract
 - [ ] If it does, I bumped `broker/version.js` per semver
 - [ ] Migration notes added to `CHANGELOG.md` under "Breaking" section
 
 ## Documentation
 
 - [ ] I updated `CHANGELOG.md` under the next unreleased version
-- [ ] I updated the relevant `docs/DESIGN-V4-*.md` if the design changed
-- [ ] I updated `VERIFY.md` if the verification steps changed
+- [ ] I updated the relevant docs/ spec if the design changed
+      (THREAT-MODEL.md, SSH-PROXY.md, etc.)
+- [ ] I updated `RUNBOOK.md` if the verification steps changed
 - [ ] I updated `docs/QUICKSTART.md` if the user flow changed
-
-## Checklist for V4.x P1/P2/P3 milestones (if relevant)
-
-- [ ] P1 (V4.0 — WebAuthn, MFA, SDK Sync, Templates, Auto-Rotate, OpenAPI)
-- [ ] P2 (V4.1 — Workload Identity, SSH Proxy, WebSocket, Python/Go SDK, VS Code)
-- [ ] P3 (V4.1.0 — Helm, Terraform, Grafana, Docs, Bug Bounty, GA)
 
 ## Reviewer focus
 

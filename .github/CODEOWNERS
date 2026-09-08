@@ -1,0 +1,47 @@
+# CODEOWNERS — auto-request review on PRs that touch these paths.
+# https://docs.github.com/en/repositories/working-with-files/using-collab
+
+# Syntax: <path> <owner>
+# Owners are GitHub usernames or team names. When a PR changes a listed
+# path, GitHub auto-requests a review from the owner.
+
+# Default owner for everything not matched below.
+# (fall through to the bottom of the file; last match wins)
+*                         @tyj1987
+
+# Server core (Node.js) — the maintainer is the only owner
+/broker/server.js        @tyj1987
+/broker/lib/             @tyj1987
+/broker/routes/          @tyj1987
+/broker/signing/         @tyj1987
+/broker/auth-flow.js     @tyj1987
+/broker/api-keys.js       @tyj1987
+/broker/ssh-proxy.js      @tyj1987
+/broker/cert-issuer.js    @tyj1987
+/broker/totp.js           @tyj1987
+
+# SDKs — one owner per language
+/sdk/python/              @tyj1987
+/sdk/go/                  @tyj1987
+/sdk/vscode/              @tyj1987
+
+# Security / PKI
+/broker/healthcheck.js    @tyj1987
+/broker/service-secret-guard.js  @tyj1987
+/pki/                     @tyj1987
+/SECURITY.md              @tyj1987
+
+# Deployment / infra
+/deploy/                  @tyj1987
+/infra/                   @tyj1987
+/Dockerfile               @tyj1987
+/docker-compose.yml       @tyj1987
+
+# CI / GitHub config — review from maintainer
+/.github/                 @tyj1987
+
+# Docs — review from maintainer unless a doc-only change
+/docs/                    @tyj1987
+/CHANGELOG.md             @tyj1987
+/ARCHITECTURE.md          @tyj1987
+/RUNBOOK.md               @tyj1987

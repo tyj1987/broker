@@ -12,8 +12,9 @@
 // 累加语义: 任一 rule 命中即可 (之前是首个不匹配就 return false, 已修)
 
 export function checkPathAllowed(pattern, path) {
-  if (!pattern) return true;
+  if (pattern == null) return true;
   if (Array.isArray(pattern)) {
+    if (pattern.length === 0) return true; // empty allowlist = no restriction
     return pattern.some(p => checkPathAllowed(p, path));
   }
   try {

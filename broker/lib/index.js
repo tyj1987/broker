@@ -60,6 +60,25 @@ export {
   installGracefulShutdown,
   rejectIfShuttingDown,
 } from './shutdown.js';
+// V4.1.1: HTTP security headers (CSP, HSTS, X-Frame-Options, ...)
+export {
+  securityHeaders,
+  applySecurityHeaders,
+  snapshotHeaders,
+} from './security-headers.js';
+// V4.1.1: Identity resolver (mTLS / session / API key) — extracted from server.js
+export { createIdentityResolver } from './mtls.js';
+// V4.1.1: Async audit helpers (high-throughput deployments)
+export { createAuditAsync, AsyncAuditWriteError } from './audit-async.js';
+// V4.1.1: Audit hash chain for tamper-evidence
+export {
+  computeHash,
+  sealEvent,
+  verifyChain,
+  verifyAuditDir,
+  createChainWriter,
+  GENESIS_HASH,
+} from './audit-hash-chain.js';
 export {
   validateBrokerConfig,
   preflightPaths,

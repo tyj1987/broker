@@ -70,6 +70,7 @@ import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
 import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js';
 import { handleSshProxy } from './routes/ssh-proxy.js';
+import { createReadApiRoutes } from './routes/read-api.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -91,6 +92,8 @@ import {
   probesFromConfig,
   buildBackupManifest,
   redactDeep,
+  securityHeaders,
+  createIdentityResolver,
 } from './lib/index.js';
 // v3.0: schema migration (in start())
 import { EventEmitter } from 'node:events';
@@ -246,6 +249,26 @@ let CONFIG = null;
 // `type` is a key in type-schemas.js. `fields` is dynamic per type.
 // The legacy `common.env` is read-only on startup; writes go to secrets-detail.json.
 let SECRET_CACHE = new Map();
+
+// Lazy factory: build read-api routes on first dispatch. The factory closes
+// over the live module state (CONFIG, SECRET_CACHE) so a config reload is
+// picked up automatically.
+let _readApi = null;
+function readApiRoutes() {
+  if (_readApi) return _readApi;
+  _readApi = createReadApiRoutes({
+    config: CONFIG,
+    SECRET_CACHE,
+    audit,
+    canResolve,
+    checkPathAllowed,
+    getSecret,
+    isServiceAllowed,
+    healthcheckGetSecretStatus,
+    auditDir: process.env.AUDIT_DIR || resolvePath(__dirname, '../audit'),
+  });
+  return _readApi;
+}
 
 async function loadConfig() {
   // Dev mode: skip sops and read the file as-is (for local testing only).
@@ -1974,126 +1997,12 @@ async function handle(req, res) {
     });
   }
 
-  // ----- GET /api/v1/identity -----
-  if (m === 'GET' && p === '/api/v1/identity') {
-    return send(res, 200, {
-      cn: ctx.cn,
-      fingerprint_sha256: ctx.fp,
-      role: ctx.client.role,
-      client_name: ctx.clientName,
-      cert_subject: ctx.certSubject,
-      via: ctx.via,
-    });
-  }
-
-  // ----- GET /api/v1/services (dashboard "AI Actions" view; never leaks secrets) -----
-  if (m === 'GET' && p === '/api/v1/services') {
-    const services = [];
-    for (const [name, svc] of Object.entries(CONFIG.services)) {
-      // v3.1 M5.5: 每个 service 返回 secret_health 字段, dashboard 一眼看到 service 依赖的 secret 健康度
-      const secretHealth = svc.token_secret
-        ? (() => {
-            const s = healthcheckGetSecretStatus(svc.token_secret);
-            return s ? { name: svc.token_secret, status: s.status, detail: s.detail, latency_ms: s.latency_ms, ts: s.ts } : null;
-          })()
-        : null;
-      services.push({
-        name,
-        type: svc.type || 'unknown',
-        description: svc.description || '',
-        upstream: svc.upstream || '',
-        region: svc.region || '',
-        action: svc.action || '',
-        token_secret: svc.token_secret || null,
-        secret_health: secretHealth,
-        allowed: isServiceAllowed(ctx, name),
-        actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
-      });
-    }
-    audit({ action: 'list_services', cn: ctx.cn, fp: ctx.fp, count: services.length });
-    return send(res, 200, { services });
-  }
-
-  // ----- GET /api/v1/secrets -----
-  if (m === 'GET' && p === '/api/v1/secrets') {
-    const allow = ctx.client.allowed_resolve || [];
-    const all = Array.from(SECRET_CACHE.keys());
-    let visible;
-    if (ctx.client.role === 'admin') visible = all;
-    else if (allow.includes('.*') || allow.includes('*')) visible = all;
-    else visible = all.filter(n => checkPathAllowed(allow, n));
-    audit({ action: 'list', cn: ctx.cn, fp: ctx.fp, count: visible.length });
-    // For admin, return full secret metadata (type, description, rotation info).
-    // For non-admin, return only names (legacy behavior).
-    if (ctx.client.role === 'admin') {
-      const out = visible.map(name => {
-        const meta = SECRET_CACHE.get(name);
-        if (!meta) return { name };
-        return {
-          name,
-          type: meta.type,
-          description: meta.description,
-          created_at: meta.created_at,
-          updated_at: meta.updated_at,
-          last_rotated_at: meta.last_rotated_at || meta.updated_at,
-          rotation_policy_days: meta.rotation_policy_days,
-          updated_by: meta.updated_by,
-        };
-      });
-      return send(res, 200, { secrets: out });
-    }
-    // Non-admin 也能看到 last_rotated_at (M5.9)
-    const out = visible.map(name => {
-      const meta = SECRET_CACHE.get(name);
-      if (!meta) return { name };
-      return {
-        name,
-        type: meta.type,
-        description: meta.description,
-        last_rotated_at: meta.last_rotated_at || meta.updated_at,
-        rotation_policy_days: meta.rotation_policy_days,
-      };
-    });
-    return send(res, 200, { secrets: out });
-  }
-
-  // ----- POST /api/v1/secrets/resolve -----
-  if (m === 'POST' && p === '/api/v1/secrets/resolve') {
-    const body = await readBody(req);
-    if (!body || !body.name) return jsonError(res, 400, 'Missing {name}');
-    if (!canResolve(ctx, body.name)) {
-      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'denied' });
-      return jsonError(res, 403, 'Not allowed to resolve this secret');
-    }
-    const entry = getSecret(body.name);
-    if (!entry) {
-      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'not_found' });
-      return jsonError(res, 404, `Secret ${body.name} not loaded`);
-    }
-    const field = body.field;
-    if (field) {
-      const v = entry.fields?.[field];
-      if (v === undefined) {
-        return jsonError(res, 404, `Field ${field} not found in secret ${body.name}`);
-      }
-      audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, field, status: 'ok' });
-      return send(res, 200, { name: body.name, field, value: v, type: entry.type });
-    }
-    // No field specified: return a `value` that's always a non-empty string for backward compat.
-    // - single field (named "value" or any single field): return that value
-    // - multi-field: return JSON of all fields
-    // Plus always include `fields` for apps that want structured access.
-    const fieldNames = Object.keys(entry.fields || {});
-    let value = '';
-    if (fieldNames.length === 1) {
-      const v = entry.fields[fieldNames[0]];
-      value = v === null || v === undefined ? '' : String(v);
-    } else if (fieldNames.length > 1) {
-      // multi-field: serialize as JSON for the legacy `value` consumers (e.g. old CLI `get`)
-      value = JSON.stringify(entry.fields);
-    }
-    audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
-    return send(res, 200, { name: body.name, type: entry.type, value, fields: entry.fields });
+  // V4.1.1: Read-only API routes (identity, services, secrets, secrets/resolve)
+  // extracted to broker/routes/read-api.js for testability.
+  // The routes are constructed lazily on first use because they close over
+  // module-level state (CONFIG, SECRET_CACHE, audit, ...) that may be reloaded.
+  if (m === 'GET' || (m === 'POST' && p === '/api/v1/secrets/resolve')) {
+    if (await readApiRoutes().dispatch(req, res, { method: m, pathname: p }, ctx)) return;
   }
 
   // ============================================================
@@ -2890,6 +2799,7 @@ async function handle(req, res) {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Disposition': `attachment; filename="audit-${stamp}.json"`,
         'X-Broker-Version': BROKER_VERSION,
+        ...securityHeaders({ kind: 'json' }),
       });
       return res.end(body);
     } else { // csv
@@ -2907,6 +2817,7 @@ async function handle(req, res) {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="audit-${stamp}.csv"`,
         'X-Broker-Version': BROKER_VERSION,
+        ...securityHeaders({ kind: 'json' }),
       });
       return res.end(body);
     }
@@ -2959,6 +2870,7 @@ async function handle(req, res) {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',  // disable buffering under nginx
       'X-Broker-Version': BROKER_VERSION,
+      ...securityHeaders({ kind: 'sse' }),
     });
     res.write(': hello\n\n');
     res.write('event: ready\ndata: {"ok":true}\n\n');
@@ -2994,6 +2906,7 @@ async function handle(req, res) {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
       'X-Broker-Version': BROKER_VERSION,
+      ...securityHeaders({ kind: 'sse' }),
     });
     res.write(': hello\n\n');
     res.write('event: ready\ndata: {"ok":true}\n\n');
@@ -3130,125 +3043,27 @@ async function handle(req, res) {
 // ============================================================
 // Identity: try session token first (for dashboard / browser), then mTLS
 // ============================================================
-function getIdentity(req) {
-  // 0. v3.0 M2: API Key Bearer 鉴权 (无 mTLS, 给 Web 端 AI 用)
-  const apiKeyCtx = getApiKeyIdentity(req);
-  if (apiKeyCtx) {
-    if (apiKeyCtx.rate_limited) {
-      audit({ action: 'connect', status: 'denied', reason: 'api_key_rate_limit', cn: apiKeyCtx.clientName });
-      return null;  // 让外层返 429
-    }
-    return {
-      cn: `apikey:${apiKeyCtx.apiKey.id}`,
-      fp: apiKeyCtx.apiKey.id,
-      client: apiKeyCtx.client,
-      clientName: apiKeyCtx.clientName,
-      certSubject: { CN: `apikey:${apiKeyCtx.apiKey.id}`, O: 'api_key' },  // 占位让 ctx.certSubject truthy
-      via: 'api_key',
-      apiKey: apiKeyCtx.apiKey,
-    };
-  }
-  // 1. session token (from dashboard / browser)
-  const session = getSession(req);
-  if (session) {
-    return {
-      cn: session.cn,
-      fp: session.fp,
-      client: session.client,
-      clientName: session.clientName,
-      certSubject: session.cert?.subject || { CN: session.cn },
-      via: 'session',
-    };
-  }
-  // HOTFIX 2026-09-06: nginx proxy_ssl presents client.mavis — never trust peer from loopback.
-  // Require nginx-verified external client cert via X-SSL-Client-* headers.
-  const remote = req.socket?.remoteAddress || '';
-  const fromLocalProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-  // Only treat as nginx when it forwarded X-SSL-Client-Verify (always set by our vhost).
-  // Direct localhost mTLS to :8443 has no such header — keep peer-cert auth.
-  if (fromLocalProxy && req.headers['x-ssl-client-verify'] !== undefined) {
-    const verify = String(req.headers['x-ssl-client-verify'] || '');
-    const escaped = req.headers['x-ssl-client-cert'];
-    if (verify !== 'SUCCESS' || !escaped) return null;
-    try {
-      const pem = decodeURIComponent(String(escaped));
-      const { X509Certificate } = require('node:crypto');
-      const x509 = new X509Certificate(pem);
-      const fp = x509.fingerprint256;
-      const cnMatch = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '');
-      const cn = cnMatch ? cnMatch[1] : (x509.subject || '');
-      if (!fp) return null;
-      let matched = null, matchedBy = null;
-      for (const [name, c] of Object.entries(CONFIG.clients)) {
-        if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fp.toUpperCase()) {
-          matched = c; matchedBy = name; break;
-        }
-      }
-      if (!matched) return null;
-      recordClientSeen(matchedBy);
-      return { cn: cn || matchedBy, fp, client: matched, clientName: matchedBy, certSubject: { CN: cn || matchedBy }, via: 'mtls-header' };
-    } catch (e) {
-      return null;
-    }
-  }
-  // 2. mTLS client cert (from CLI / scripts)
-  const peer = req.socket.peerCertificate;
-  let cert = null;
-  if (typeof req.socket.getPeerCertificate === 'function') {
-    cert = req.socket.getPeerCertificate(true);
-  } else if (peer) {
-    cert = peer;
-  }
-  if (!cert || !cert.subject) return null;
-  const cn = cert.subject.CN;
-  const fp = cert.fingerprint256;
-  if (!cn || !fp) return null;
-  let matched = null, matchedBy = null;
-  for (const [name, c] of Object.entries(CONFIG.clients)) {
-    if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fp.toUpperCase()) {
-      matched = c; matchedBy = name; break;
-    }
-  }
-  if (!matched) return null;
-  recordClientSeen(matchedBy);
-  return {
-    cn, fp, client: matched, clientName: matchedBy,
-    certSubject: cert.subject,
-    via: 'mtls',
-  };
-}
+// V4.1.1: Identity resolution extracted to broker/lib/mtls.js for testability.
+// We keep the inline thin wrappers here so the rest of server.js doesn't change.
+// All actual logic now lives in createIdentityResolver() from lib/index.js.
 
-// v3.0 M2: API Key Bearer 鉴权 (无 mTLS, 给 Web 端 AI 用)
-// 独立函数, 走 ctx.apiKey 字段
+const identityResolver = createIdentityResolver({
+  config: CONFIG,
+  getSession,
+  parseBearer,
+  findApiKey,
+  isClientIpAllowed,
+  rateLimitApiKey,
+  recordUse,
+  recordClientSeen,
+  audit,
+});
+
+function getIdentity(req) {
+  return identityResolver.getIdentity(req);
+}
 function getApiKeyIdentity(req) {
-  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  const secret = parseBearer(authHeader);
-  if (!secret) return null;
-  const k = findApiKey(CONFIG.api_keys, secret);
-  if (!k) return null;
-  // v3.2: enforce ip_whitelist when set
-  const remoteIp = req.socket?.remoteAddress
-    || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()
-    || '';
-  if (!isClientIpAllowed(k, remoteIp)) {
-    audit({
-      action: 'connect',
-      status: 'denied',
-      reason: 'api_key_ip_denied',
-      cn: k.client,
-      remote: remoteIp,
-    });
-    return null;
-  }
-  // 找到归属 client
-  const owner = CONFIG.clients[k.client];
-  if (!owner) return null;
-  // 限速 (per api key)
-  if (!rateLimitApiKey(k)) {
-    return { apiKey: k, client: owner, clientName: k.client, via: 'api_key', rate_limited: true };
-  }
-  recordUse(k);
-  return { apiKey: k, client: owner, clientName: k.client, via: 'api_key' };
+  return identityResolver.getApiKeyIdentity(req);
 }
 
 // v3.0 M2: API Key 限速 (用 k.id 作 bucket key)

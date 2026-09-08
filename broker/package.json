@@ -11,6 +11,10 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "wire": "node ../scripts/broker/apply-phase-af-full-wire.mjs",
+    "lint": "cd .. && npx --no-install eslint --config eslint.config.js broker/ broker-test/ cli/ 2>&1 | tail -40",
+    "lint:fix": "cd .. && npx --no-install eslint --config eslint.config.js --fix broker/ broker-test/ cli/ 2>&1 | tail -40",
+    "format": "cd .. && npx --no-install prettier --write --log-level=warn 'broker/**/*.js' 'broker-test/**/*.js' 'cli/**/*.js' 'broker/lib/**/*.js' 'broker/routes/**/*.js' 2>&1 | tail -10",
+    "format:check": "cd .. && npx --no-install prettier --check 'broker/**/*.js' 'broker-test/**/*.js' 'cli/**/*.js' 2>&1 | tail -10",
     "test:lib": "node ../broker-test/test-lib-phase-b.js",
     "test:ip": "node ../broker-test/test-ip-allowlist.js",
     "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js && node ../broker-test/test-aliyun-rpc.js && node ../broker-test/test-doh.js && node ../broker-test/test-outbound-relay.js",
@@ -22,7 +26,18 @@
     "test:mfa": "node ../broker-test/test-mfa-policy.js",
     "test:sms": "node ../broker-test/test-sms-provider.js",
     "test:apikeys-v4": "node ../broker-test/test-api-keys-rate.js",
-    "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4",
+    "test:cert-issuer": "node ../broker-test/test-cert-issuer.js",
+    "test:security-headers": "node ../broker-test/test-security-headers.js",
+    "test:static": "node ../broker-test/test-static.js",
+    "test:mtls": "node ../broker-test/test-mtls.js",
+    "test:can-proxy-policy": "node ../broker-test/test-can-proxy-policy-engine.js",
+    "test:read-api": "node ../broker-test/test-read-api.js",
+    "test:audit-async": "node ../broker-test/test-audit-async.js",
+    "test:audit-hash-chain": "node ../broker-test/test-audit-hash-chain.js",
+    "test:fuzz-parsers": "node ../broker-test/test-fuzz-parsers.js",
+    "test:log": "node ../broker-test/test-log.js",
+    "test:webauthn": "node ../broker-test/test-webauthn.js",
+    "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4 && npm run test:cert-issuer && npm run test:security-headers && npm run test:static && npm run test:mtls && npm run test:can-proxy-policy && npm run test:read-api && npm run test:audit-async && npm run test:audit-hash-chain && npm run test:fuzz-parsers && npm run test:log && npm run test:webauthn",
     "test:workload": "node ../broker-test/test-workload-identity.js",
     "test:v4-modules": "node ../broker-test/test-v4-modules.js",
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",
@@ -36,6 +51,10 @@
   "dependencies": {
     "ws": "^8.21.3",
     "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.10.0",
+    "prettier": "^3.3.3"
   },
   "license": "MIT"
 }

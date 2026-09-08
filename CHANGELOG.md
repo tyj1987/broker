@@ -407,3 +407,48 @@ Phases D–A：追踪/审计、可观测、模块化、加固。
 ## [3.1.2] - 2026-08-16
 
 （历史条目见仓库更早 commit。）
+
+## v4.1.1 (2026-09-08) — REVIEW.md fixes
+
+All 17 recommendations from `REVIEW.md` implemented:
+
+### Security (Now + Next)
+- **HTTP security headers** added: CSP, X-Frame-Options, HSTS, X-CTO, Referrer-Policy, Permissions-Policy, COOP/CORP. Applied to HTML, JSON, SSE, static, audit export. Module: `broker/lib/security-headers.js`. 31 tests.
+- **Audit hard-fail on mandatory write failure**: `audit(event, { mandatory: true })` now throws `AuditWriteError` if disk write fails. Bus emits `write_error` + `recovery` events. Ring buffer keeps last 1000 events for hot reads. Module: `broker/lib/audit.js`. 18 tests (async).
+- **`cert-issuer.js`** now has 32 tests covering issue, fingerprint, revoke, chmod, custom days.
+- **Identity resolver** extracted to `broker/lib/mtls.js`. 29 tests.
+
+### Architecture (Now + Next)
+- **`server.js` 3474 → 3282 LOC** (-192 LOC) by extracting identity resolver and 4 read-API routes (`/identity`, `/services`, `/secrets`, `/secrets/resolve`) into `broker/lib/mtls.js` and `broker/routes/read-api.js`.
+- **`can-proxy.js` bug fix**: empty `paths: []` array now means "no restriction" (was: deny everything). 58 tests.
+- **ESLint v9 flat config** (`eslint.config.js`) + Prettier config wired into `.pre-commit-config.yaml`. Added `lint`, `format`, `format:check` npm scripts. Added dev deps.
+- **Orphan `package-lock.json`** deleted.
+
+### Maintainability (Next)
+- **`docs/EXTENDING.md`**: step-by-step guide for adding secret types, service templates, audit actions, HTTP routes.
+- **`broker/experimental/modular-routes/`** documented as historical reference (already documented, left intact to preserve tests).
+- **`broker/scripts/`** kept (referenced by `rotate-secret-ecs.sh` in server.js help text).
+
+### Tamper-evidence (Later)
+- **Audit hash chain**: each event includes `prev_hash` + `hash` (SHA-256). `verifyChain()` detects any tampering. New endpoint `GET /api/v1/admin/audit/verify`. Module: `broker/lib/audit-hash-chain.js`. 28 tests.
+
+### Async I/O (Later)
+- **`broker/lib/audit-async.js`**: `createAuditAsync()` for high-throughput deployments. Same API as sync, but uses `fs.promises.appendFile()`. 18 tests.
+
+### Log sinks (Later)
+- **`broker/lib/log.js`**: pluggable sinks (stdout, file, http, syslog). Configure via `BROKER_LOG_SINKS=stdout,file:/var/log/broker.log,http://loki:3100/loki/api/v1/push`. HMAC helper for log integrity. 27 tests.
+
+### Fuzzing (Later)
+- **`broker-test/test-fuzz-parsers.js`**: 95 fuzz cases for `parseRateLimit`, `parseSshTarget`, `validateCommand`, `checkPathAllowed`. Catches injection (shell, ReDoS, unicode, null bytes).
+
+### WebAuthn (Later)
+- **`broker-test/test-webauthn.js`**: 52 tests for registration, authentication, challenge consumption, signCount anti-cloning, credential storage.
+
+### Stats
+- **New test files**: 11 (audit-async, audit-hash-chain, can-proxy-policy-engine, cert-issuer, fuzz-parsers, log, mtls, read-api, security-headers, static, webauthn)
+- **New tests**: 440
+- **server.js**: -192 LOC (extracted)
+- **New lib modules**: 5 (security-headers, mtls, audit-async, audit-hash-chain)
+- **New routes**: 1 (read-api)
+- **New docs**: 1 (EXTENDING.md)
+

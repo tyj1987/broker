@@ -199,8 +199,7 @@ jobs:
       - name: Install pinned Android SDK packages
         run: >-
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --channel=3
-            'platforms;android-37.0'
-          'build-tools;36.0.0'
+          'platforms;android-37.0' 'build-tools;36.0.0'
       - run: chmod +x gradlew
       - run: ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

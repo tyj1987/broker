@@ -3,6 +3,8 @@
 Thanks for your interest in making Secret Broker better! This document
 covers how to file issues, submit code, and review changes.
 
+
+> **Languages**: [English](CONTRIBUTING.md) · [中文](CONTRIBUTING.zh-CN.md)
 ## Code of conduct
 
 This project follows the [Contributor Covenant](https://www.contributor-covenant.org/).

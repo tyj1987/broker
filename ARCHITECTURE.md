@@ -3,6 +3,8 @@
 > One-page overview of the V4.1.1 architecture. For deep dives, see
 > `docs/THREAT-MODEL.md` and the linked spec docs. For run-time operations, see `RUNBOOK.md`.
 
+
+> **Languages**: [English](ARCHITECTURE.md) · [中文](ARCHITECTURE.zh-CN.md)
 ## Bird's eye view
 
 ```

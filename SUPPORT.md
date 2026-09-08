@@ -2,6 +2,8 @@
 
 ## How to get help
 
+
+> **Languages**: [English](SUPPORT.md) · [中文](SUPPORT.zh-CN.md)
 There are several ways to get help, depending on what you need:
 
 ### Questions and how-to

@@ -2,6 +2,8 @@
 
 ## Supported Versions
 
+
+> **Languages**: [English](SECURITY.md) · [中文](SECURITY.zh-CN.md)
 | Version | Supported          | EOL             |
 |---------|--------------------|-----------------|
 | 4.x     | :white_check_mark: | Active (GA Q3 2026) |

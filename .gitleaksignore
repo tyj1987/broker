@@ -1,0 +1,27 @@
+# .gitleaksignore — whitelist known-safe synthetic patterns used in tests/docs.
+# Format: <commit_sha>:<file>:<rule>:<line>
+# Use gitleaks's `--baseline-path` flag to apply, or generate via:
+#   gitleaks detect --report-format json --report-path gitleaks.json
+#   jq -r '.[] | "\(.Commit):\(.File):\(.RuleID):\(.StartLine)"' gitleaks.json
+#
+# Each line is a fingerprint. To re-generate after changes:
+#   gitleaks detect --source . --no-banner -v --log-opts="<from-sha>..HEAD"
+
+# Old findings (already in master, not regressions):
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker/lib/redact.js:private-key:24
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker/type-schemas.js:private-key:649
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker-test/test-redact.js:slack-bot-token:42
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker-test/test-redact.js:jwt:67
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker-test/test-redact.js:generic-api-key:73
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker-test/test-redact.js:private-key:54
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:broker-test/test-redact.js:private-key:60
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:docs/DESIGN-V4-API-CALLING-STANDARDS.md:curl-auth-header:1373
+e40f396135688cdddd51c483b80a55c1937af048:sdk/vscode/src/test/client.test.ts:jwt:46
+e40f396135688cdddd51c483b80a55c1937af048:sdk/vscode/src/test/mock_broker_helper.ts:generic-api-key:9
+e40f396135688cdddd51c483b80a55c1937af048:sdk/vscode/src/test/mock_broker_helper.ts:private-key:40
+219398a8f56c6eb02a3e9f9c9765b45337efa9ad:broker-test/test-ws.js:generic-api-key:172
+653adf366c223d4beee0f84e4eb87acc845cd01d:sdk/python/tests/test_client.py:jwt:356
+b9eebbe559325ccd7b6628efe3598570f53a6284:broker/type-schemas.js:private-key:229
+
+# Synthetic patterns introduced in v4.1.1 — known safe, but flagged by gitleaks:
+48c8bb7023aedf4dfda496ed9728a7132731b53d:REVIEW.md:curl-auth-header:484

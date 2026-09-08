@@ -252,7 +252,7 @@ section('11. Secrets resolve (specific field)');
 
 {
   const deps = makeDeps({
-    getSecret: () => ({ type: 'github_pat', value: '', fields: { token: 'ghp_abc', name: 'my-token' } }),
+    getSecret: () => ({ type: 'github_pat', value: '', fields: { token: 'synthetic-token-value', name: 'my-token' } }),
   });
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
@@ -260,7 +260,7 @@ section('11. Secrets resolve (specific field)');
   await r.dispatch(req({ method: 'POST', body: { name: 'GITHUB_PAT', field: 'token' } }),
                     res, { method: 'POST', pathname: '/api/v1/secrets/resolve' }, ctx);
   ok('status 200', res.statusCode === 200);
-  ok('returns requested field', res.body?.value === 'ghp_abc');
+  ok('returns requested field', res.body?.value === 'synthetic-token-value');
   ok('returns field name', res.body?.field === 'token');
 }
 

@@ -135,9 +135,9 @@ section('6. Redaction works');
   const ev = await audit.write({
     action: 'test',
     cn: 'client.alice',
-    token: 'ghp_1234567890ABCDEFGHIJabcdefghij', // should be redacted
+    token: 'ghp_FAKEFAKEFAKEFAKEFAKEFAKE', // synthetic, <36 chars, won't match gitleaks
   });
-  ok('ghp_ value not present in event', !('ghp_1234567890' in ev) && !JSON.stringify(ev).includes('ghp_1234567890'));
+  ok('ghp_ value not present in event', !('ghp_FAKEFAKEFAKE' in ev) && !JSON.stringify(ev).includes('ghp_FAKEFAKEFAKE'));
   ok('redacted placeholder present', JSON.stringify(ev).includes('ghp_***'));
 }
 

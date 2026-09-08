@@ -485,7 +485,7 @@ $ curl https://broker.52trz.com/api/v1/identity
 <html>400 The SSL certificate error</html>  # nginx rejects because no client cert
 
 # 4. With Bearer API key, identity is admin
-$ curl -H "Authorization: Bearer mb_live_..." https://broker.52trz.com/api/v1/identity
+$ curl -H "Authorization: Bearer $YOUR_KEY" https://broker.52trz.com/api/v1/identity
 {"cn":"apikey:71ae980b441206d8","role":"admin","client_name":"client.dashboard-admin","via":"api_key"}
 
 # 5. 4 services registered, all "allowed", all secret_health=ok

@@ -66,10 +66,8 @@ export function createIdentityResolver(deps) {
   function getApiKeyIdentity(req) {
     const authHeader = req.headers['authorization'] || req.headers['Authorization'];
     const secret = parseBearer(authHeader);
-    console.log('[DEBUG-APIKEY] authHeader=' + (authHeader ? authHeader.slice(0, 30) : 'null') + ' secret=' + (secret ? secret.slice(0, 12) : 'null'));
     if (!secret) return null;
     const config = effectiveConfig();
-    console.log('[DEBUG-APIKEY] config.api_keys count: ' + (config && config.api_keys ? config.api_keys.length : 'NULL'));
     if (!config) return null;
     const k = findApiKey(config.api_keys, secret);
     if (!k) return null;

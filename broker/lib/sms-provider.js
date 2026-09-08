@@ -1,6 +1,6 @@
 // broker/lib/sms-provider.js — V4 pluggable SMS provider interface
 // Sends one-time codes for SMS-based second factor.
-// Provider implementations are pluggable; default is no-op stub.
+// Provider implementations are pluggable. Production never falls back to a stub.
 
 /**
  * @typedef {Object} SmsSendResult
@@ -17,14 +17,15 @@
  */
 
 /**
- * No-op stub used when no provider configured. Logs and returns fake id.
- * Tests and offline dev use this so broker boots without real SMS credentials.
+ * No-op stub for tests and local development. It deliberately does not log
+ * the phone number or code.
  */
 export const stubSmsProvider = {
   name: 'stub',
   async send(phone, code, opts = {}) {
-    // eslint-disable-next-line no-console
-    console.log(`[sms-stub] would send to ${phone}: code=${code} (set sms.providers in broker.yaml to enable real send)`);
+    if (process.env.NODE_ENV === 'production' && opts.allow_stub !== true) {
+      throw new Error('stub SMS provider is disabled in production');
+    }
     return { message_id: `stub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, provider: 'stub' };
   },
 };
@@ -108,7 +109,8 @@ export class SmsRegistry {
    */
   send(phone, code, opts) {
     const name = (opts && opts.provider) || this.defaultName;
-    const p = this.providers[name] || stubSmsProvider;
+    const p = this.providers[name];
+    if (!p) throw new Error(`SMS provider is not configured: ${name}`);
     return p.send(phone, code, opts || {});
   }
 }

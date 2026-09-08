@@ -43,11 +43,13 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
         if self.log_level >= 1:
             super().log_message(format, *args)
 
-    def _send_json(self, status, body):
+    def _send_json(self, status, body, headers=None):
         body_bytes = json.dumps(body).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body_bytes)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body_bytes)
 
@@ -71,14 +73,12 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
                 {"name": "github.pat", "type": "github_pat"},
                 {"name": "openai.key", "type": "openai_key"},
             ])
-        if self.path == "/api/v1/proxy/github/repos/owner/repo":
-            return self._send_json(200, {"ok": True, "data": []})
-        if self.path == "/api/v1/proxy/github/forbidden":
-            return self._send_json(403, {"error": "denied"})
-        if self.path == "/api/v1/proxy/github/ratelimit":
-            return self._send_json(429, {"error": "too many requests"})
-        if self.path == "/api/v1/proxy/github/oops":
-            return self._send_json(500, {"error": "internal"})
+        if self.path == "/api/v2/operations/op-123":
+            return self._send_json(200, {
+                "id": "op-123", "provider": "github", "operation_id": "repo.read", "status": "completed"
+            })
+        if self.path == "/api/v2/approvals":
+            return self._send_json(200, {"approvals": [{"id": "approval-123", "status": "approved"}]})
         return self._send_json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -89,9 +89,36 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
         if self.path == "/api/v1/secrets/resolve_bulk":
             return self._send_json(200, {"values": {n: f"V-{n}" for n in body.get("names", [])}})
         if self.path == "/api/v1/login":
-            if body.get("username") == "good" and body.get("password") == "ok":
-                return self._send_json(200, {"session_token": "sess-abc-123"})
+            if body.get("client") == "good" and body.get("password") == "ok":
+                return self._send_json(200, {"ok": True}, {
+                    "Set-Cookie": "broker_session=sess-abc-123; HttpOnly; Secure; SameSite=Strict; Path=/"
+                })
             return self._send_json(401, {"error": "bad credentials"})
+        if self.path == "/api/v1/proxy/github":
+            path = body.get("path")
+            if path == "/forbidden":
+                return self._send_json(403, {"error": "denied"})
+            if path == "/ratelimit":
+                return self._send_json(429, {"error": "too many requests"})
+            if path == "/oops":
+                return self._send_json(500, {"error": "internal"})
+            return self._send_json(200, {"ok": True, "data": [], "request": body})
+        if self.path == "/api/v2/operations":
+            return self._send_json(202, {
+                "id": "op-123", "provider": body.get("provider"),
+                "operation_id": body.get("operation_id"), "status": "waiting",
+                "request": body,
+            })
+        if self.path == "/api/v2/approvals":
+            return self._send_json(201, {
+                "id": "approval-123", "requester": "test-client", "provider": body.get("provider"),
+                "operation_id": body.get("operation_id"), "account_ref": body.get("account_ref"),
+                "environment": body.get("environment"), "resource_ref": body.get("typed_parameters", {}).get("resource_ref"),
+                "required_approvals": 2, "approvals": [], "status": "pending",
+                "created_at": "2026-09-09T00:00:00Z", "expires_at": "2026-09-09T00:05:00Z",
+            })
+        if self.path == "/api/v2/approvals/approval-123/decision":
+            return self._send_json(200, {"id": "approval-123", "status": body.get("decision", "approve") + "d"})
         if self.path == "/api/v1/ssh/exec":
             return self._send_json(200, {"ok": True, "exitCode": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 12})
         if self.path == "/api/v1/ssh/tunnel":
@@ -129,8 +156,8 @@ def _make_self_signed():
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.utcnow())
-        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(hours=1))
+        .not_valid_before(datetime.datetime.now(datetime.UTC))
+        .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1))
         .add_extension(
             x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(__import__("ipaddress").IPv4Address("127.0.0.1"))]),
             critical=False,
@@ -236,6 +263,33 @@ def test_proxy(mock_broker):
     assert body["ok"] is True
 
 
+def test_typed_operations_accept_202_and_preserve_contract(mock_broker):
+    port, cert_path, key_path = mock_broker
+    c = _client(f"https://127.0.0.1:{port}", cert_path, cert_path, key_path)
+    created = c.create_operation(
+        "github", "repo.read", "personal", "development", {"owner": "o", "repo": "r"},
+        approval_request_id="approval-123",
+    )
+    assert created["status"] == "waiting"
+    assert created["request"]["typed_parameters"] == {"owner": "o", "repo": "r"}
+    assert created["request"]["approval_request_id"] == "approval-123"
+    result = c.get_operation("op-123")
+    assert result["status"] == "completed"
+
+
+def test_bound_approval_workflow(mock_broker):
+    port, cert_path, key_path = mock_broker
+    c = _client(f"https://127.0.0.1:{port}", cert_path, cert_path, key_path)
+    approval = c.create_approval(
+        "github", "repo.read", "personal", "production", {"resource_ref": "repository"}
+    )
+    assert approval["status"] == "pending"
+    assert c.list_approvals()[0]["id"] == "approval-123"
+    assert c.decide_approval("approval-123", "approve")["status"] == "approved"
+    with pytest.raises(ValueError):
+        c.decide_approval("approval-123", "maybe")
+
+
 def test_proxy_403(mock_broker):
     port, cert_path, key_path = mock_broker
     c = _client(f"https://127.0.0.1:{port}", cert_path, cert_path, key_path)
@@ -261,7 +315,8 @@ def test_login(mock_broker):
     port, cert_path, key_path = mock_broker
     c = _client(f"https://127.0.0.1:{port}", cert_path, cert_path, key_path)
     r = c.login("good", "ok")
-    assert r["session_token"] == "sess-abc-123"
+    assert r["ok"] is True
+    assert c._session_cookie == "sess-abc-123"
     c.logout()
     assert c._session_cookie is None
 

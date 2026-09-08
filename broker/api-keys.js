@@ -96,6 +96,10 @@ export function generateApiKey(name, client, opts = {}) {
     scopes: opts.scopes || (opts.is_master ? MASTER_KEY_SCOPES : DEFAULT_CHILD_SCOPES),
     allowed_secrets: opts.allowed_secrets || [],
     allowed_services: opts.allowed_services || [],
+    allowed_operations: opts.allowed_operations || [],
+    allowed_accounts: opts.allowed_accounts || [],
+    allowed_resources: opts.allowed_resources || [],
+    allowed_environments: opts.allowed_environments || [],
     rate_limit: opts.rate_limit || '100/hour',
     ip_whitelist: opts.ip_whitelist || null,
     fingerprint_sha256: fingerprint,
@@ -174,23 +178,71 @@ export function createChildKey(cfgKeys, master, name, opts = {}) {
     return { ok: false, reason: 'no_valid_scopes' };
   }
 
-  let allowedSecrets = opts.allowed_secrets || master.allowed_secrets || [];
-  if (Array.isArray(allowedSecrets) && Array.isArray(master.allowed_secrets) && master.allowed_secrets.length > 0) {
-    allowedSecrets = allowedSecrets.filter(s => master.allowed_secrets.includes(s));
+  const requestedSecrets = opts.allowed_secrets || master.allowed_secrets || [];
+  const parentSecrets = Array.isArray(master.allowed_secrets) ? master.allowed_secrets : [];
+  const allowedSecrets = parentSecrets.length > 0
+    ? requestedSecrets.filter((value) => parentSecrets.includes(value)) : [];
+  const requestedServices = opts.allowed_services || master.allowed_services || [];
+  const parentServices = Array.isArray(master.allowed_services) ? master.allowed_services : [];
+  const allowedServices = parentServices.length > 0
+    ? requestedServices.filter((value) => parentServices.includes(value)) : [];
+  const childSubset = (field) => {
+    const requested = Array.isArray(opts[field]) ? opts[field] : (master[field] || []);
+    const parent = Array.isArray(master[field]) ? master[field] : [];
+    return parent.length > 0 ? requested.filter((value) => parent.includes(value)) : [];
+  };
+  const allowedOperations = childSubset('allowed_operations');
+  const allowedAccounts = childSubset('allowed_accounts');
+  const allowedResources = childSubset('allowed_resources');
+  const allowedEnvironments = childSubset('allowed_environments');
+  if (childScopes.includes('secrets:resolve') && allowedSecrets.length === 0) {
+    return { ok: false, reason: 'secret_constraints_required' };
   }
-  let allowedServices = opts.allowed_services || master.allowed_services || [];
-  if (Array.isArray(allowedServices) && Array.isArray(master.allowed_services) && master.allowed_services.length > 0) {
-    allowedServices = allowedServices.filter(a => master.allowed_services.includes(a));
+  if (childScopes.includes('services:proxy') && allowedServices.length === 0) {
+    return { ok: false, reason: 'service_constraints_required' };
+  }
+  if (childScopes.some((scope) => scope === 'operations:execute' || scope.startsWith('operations:'))
+      && [allowedServices, allowedOperations, allowedAccounts, allowedResources, allowedEnvironments]
+        .some((values) => values.length === 0)) {
+    return { ok: false, reason: 'operation_constraints_required' };
   }
 
-  const childTtlSec = opts.ttl_seconds || master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS;
+  const requestedIp = Array.isArray(opts.ip_whitelist) ? opts.ip_whitelist : master.ip_whitelist;
+  const parentIp = Array.isArray(master.ip_whitelist) ? master.ip_whitelist : null;
+  const childIp = parentIp && parentIp.length > 0
+    ? (Array.isArray(requestedIp) ? requestedIp.filter((value) => parentIp.includes(value)) : [...parentIp])
+    : (Array.isArray(requestedIp) ? requestedIp : null);
+  if (parentIp?.length > 0 && (!childIp || childIp.length === 0)) {
+    return { ok: false, reason: 'ip_constraints_required' };
+  }
+
+  const parentRate = normalizeRateLimit(master.rate_limit);
+  const requestedRate = normalizeRateLimit(opts.rate_limit ?? master.rate_limit);
+  const childRate = Object.fromEntries(['minute', 'hour', 'day'].map((dimension) => {
+    const parentValue = parentRate?.[dimension] ?? null;
+    const requestedValue = requestedRate?.[dimension] ?? null;
+    if (parentValue === null) return [dimension, requestedValue];
+    if (requestedValue === null) return [dimension, parentValue];
+    return [dimension, Math.min(parentValue, requestedValue)];
+  }));
+
+  const requestedTtl = Number(opts.ttl_seconds || master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS);
+  const parentRemaining = Math.floor((new Date(master.expires_at).getTime() - Date.now()) / 1000);
+  if (!Number.isSafeInteger(requestedTtl) || requestedTtl <= 0 || parentRemaining <= 0) {
+    return { ok: false, reason: 'invalid_child_ttl' };
+  }
+  const childTtlSec = Math.min(requestedTtl, parentRemaining);
 
   const { id, secret, key_obj } = generateApiKey(name, master.client, {
     scopes: childScopes,
     allowed_secrets: allowedSecrets,
     allowed_services: allowedServices,
-    rate_limit: opts.rate_limit || master.rate_limit || '100/hour',
-    ip_whitelist: opts.ip_whitelist || master.ip_whitelist || null,
+    allowed_operations: allowedOperations,
+    allowed_accounts: allowedAccounts,
+    allowed_resources: allowedResources,
+    allowed_environments: allowedEnvironments,
+    rate_limit: childRate,
+    ip_whitelist: childIp,
     ttl_ms: childTtlSec * 1000,
     parent_master_id: master.id,
     created_by: `master:${master.id}`,
@@ -277,6 +329,10 @@ export function publicView(k) {
     scopes: k.scopes || [],
     allowed_secrets: k.allowed_secrets || [],
     allowed_services: k.allowed_services || [],
+    allowed_operations: k.allowed_operations || [],
+    allowed_accounts: k.allowed_accounts || [],
+    allowed_resources: k.allowed_resources || [],
+    allowed_environments: k.allowed_environments || [],
     rate_limit: k.rate_limit || '100/hour',
     ip_whitelist: k.ip_whitelist || null,
     fingerprint_prefix: fp.slice(0, 8) + '...',

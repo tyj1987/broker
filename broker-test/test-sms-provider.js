@@ -123,10 +123,11 @@ section('SmsRegistry');
   ok('registry.send uses stub', r.provider === 'stub');
 }
 {
-  // unknown provider falls back
+  // unknown providers fail closed
   const reg = SmsRegistry.fromConfig(null);
-  const r = await reg.send('+8613800000000', '123', { provider: 'nonexistent' });
-  ok('unknown provider falls back to stub', r.provider === 'stub');
+  let err = null;
+  try { await reg.send('+8613800000000', '123', { provider: 'nonexistent' }); } catch (e) { err = e; }
+  ok('unknown provider throws', !!err && /not configured/.test(err.message));
 }
 {
   // direct construction

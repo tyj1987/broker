@@ -63,6 +63,14 @@ import {
 import { BROKER_VERSION } from './version.js';
 import { aliyunRpcVersion, mergeAliyunQuery } from './lib/aliyun-rpc.js';
 import { dohConnect } from './lib/doh.js';
+import {
+  assertPublicDestination,
+  assertPublicResolvedAddress,
+  buildPinnedUrl,
+  parsePinnedUpstream,
+  sanitizeCallerHeaders,
+  validateMethod,
+} from './lib/outbound-policy.js';
 import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
 import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
@@ -71,15 +79,18 @@ import { handleMetrics } from './routes/metrics.js';
 import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js';
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
+import { createV2Routes } from './routes/v2.js';
+import { OperationBroker } from './lib/operations-v2.js';
+import { ApprovalBroker } from './lib/approvals-v2.js';
+import { evaluateOperationPolicy } from './lib/operation-policy.js';
+import { createOperationAuthorizer } from './lib/go-policy-client.js';
+import { WebAuthnService } from './lib/webauthn-service.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
   formatValidationReport,
   preflightPaths,
-  withAuditSampling,
-  pruneAuditFiles,
-  auditPolicyFromEnv,
   runWithRequestContext,
   setResponseTraceHeaders,
   getRequestId,
@@ -132,6 +143,35 @@ const TLS_KEY        = process.env.TLS_KEY  || join(PKI_DIR, 'server/server.key'
 const TLS_CA         = process.env.TLS_CA   || join(PKI_DIR, 'ca/ca.crt');
 const TLS_CRL        = process.env.TLS_CRL  || join(PKI_DIR, 'ca/crl.pem');
 const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
+
+const coreOperationAuthorization = createOperationAuthorizer(() => CONFIG);
+async function operationAuthorization(request, options = {}) {
+  const preliminary = evaluateOperationPolicy(CONFIG, request, Date.now(), options);
+  return coreOperationAuthorization(request, preliminary, options);
+}
+
+async function approvalRequestAuthorization(request) {
+  return operationAuthorization(request, { ignoreApproval: true });
+}
+
+const approvalBroker = new ApprovalBroker({
+  getPolicy: (provider, operationId) => CONFIG?.operation_policies?.[provider]?.[operationId],
+});
+
+const operationBroker = new OperationBroker({
+  authorize: operationAuthorization,
+  persistDevices: async (records) => {
+    if (!CONFIG) throw new Error('configuration is not loaded');
+    CONFIG.device_registry = records;
+    await persistConfig();
+  },
+});
+const webAuthnService = new WebAuthnService({ getConfig: () => CONFIG, persist: () => persistConfig() });
+const v2Routes = createV2Routes({
+  operationBroker, approvalBroker, webAuthnService, getIdentity, readBody, send, audit,
+  makeSession, sessionCookieHeader, authorizeApprovalRequest: approvalRequestAuthorization,
+  consumeRateLimit: rateLimit,
+});
 
 console.log('============================================');
 console.log(`  Secret Broker v${BROKER_VERSION}`);
@@ -286,6 +326,7 @@ async function loadConfig() {
   cfg.services = cfg.services || {};
   cfg.clients = cfg.clients || {};
   CONFIG = cfg;
+  operationBroker.hydrateDevices(CONFIG.device_registry || []);
   console.log(`[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`);
 }
 
@@ -671,7 +712,7 @@ function auditFilePath() {
 }
 
 let auditBytes = 0;
-function audit(event) {
+function audit(event, options = {}) {
   const e = redactDeep({
     ts: new Date().toISOString(),
     id: randomUUID(),
@@ -684,13 +725,13 @@ function audit(event) {
     // rotate at 50MB
     if (auditBytes > 50 * 1024 * 1024) {
       const old = auditFilePath();
-      const rotated = old + '.1';
-      if (existsSync(rotated)) unlinkSync(rotated);
+      const rotated = old.replace(/\.jsonl$/, `-${Date.now()}-${randomUUID()}.jsonl`);
       renameSync(old, rotated);
       auditBytes = 0;
     }
   } catch (err) {
     console.error('[audit] write failed:', err.message);
+    if (options.mandatory === true) throw err;
   }
   // Broadcast to any live SSE subscribers. setImmediate keeps the audit
   // call non-blocking even if a subscriber is slow.
@@ -744,7 +785,7 @@ function collectAuditFacets() {
   const actions = new Set([
     'login', 'logout', 'proxy', 'resolve', 'connect', 'healthcheck',
     'admin_secrets_create', 'admin_services_create', 'admin_clients_create',
-    'audit_cleared',
+    'audit_delete_denied',
   ]);
   const statuses = new Set(['ok', 'error', 'denied', 'not_found', 'mfa_required']);
   for (const e of readAuditFiltered({ limit: 2000 })) {
@@ -763,25 +804,11 @@ function collectAuditFacets() {
   };
 }
 
-function clearAuditLogs() {
-  const deleted = [];
-  if (!existsSync(AUDIT_DIR)) return deleted;
-  for (const f of readdirSync(AUDIT_DIR)) {
-    if (!f.startsWith('audit-')) continue;
-    if (!(f.endsWith('.jsonl') || f.endsWith('.jsonl.1'))) continue;
-    try {
-      unlinkSync(join(AUDIT_DIR, f));
-      deleted.push(f);
-    } catch { /* keep going */ }
-  }
-  return deleted;
-}
-
 // ============================================================
 // Session tokens (for dashboard / browser usage; mTLS is still supported)
 // ============================================================
 const SESSIONS = new Map();  // token -> { cn, fp, role, clientName, expiresAt }
-const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 min
+const SESSION_TTL_MS = 10 * 60 * 1000;  // absolute lifetime; never extended on access
 const SESSION_HEADER = 'x-auth-token';
 
 function makeSession(ctx) {
@@ -795,6 +822,7 @@ function makeSession(ctx) {
     client: ctx.client,
     expiresAt: Date.now() + SESSION_TTL_MS,
     createdAt: Date.now(),
+    authFactors: Array.isArray(ctx.authFactors) ? [...new Set(ctx.authFactors)] : [],
   });
   return token;
 }
@@ -809,8 +837,6 @@ function getSession(req) {
     SESSIONS.delete(t);
     return null;
   }
-  // sliding expiration
-  s.expiresAt = Date.now() + SESSION_TTL_MS;
   return s;
 }
 
@@ -856,6 +882,7 @@ function getClientContext(socket) {
 
 function canResolve(ctx, secretName) {
   if (!ctx.client) return false;
+  if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_resolve || [];
   return checkPathAllowed(allow, secretName);
@@ -896,10 +923,11 @@ function rateLimit(ctx) {
   const limit = ctx.client.rate_limit || '100/hour';
   if (limit === 'unlimited') return true;
   const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return true;
+  if (!m) return false;
   const max = parseInt(m[1], 10);
   const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
-  const key = ctx.fp;
+  const key = ctx.fp || ctx.clientName;
+  if (!key) return false;
   const now = Date.now();
   const bucket = RATE_BUCKETS.get(key) || [];
   const fresh = bucket.filter(t => now - t < windowMs);
@@ -1201,6 +1229,9 @@ function getAliyunAction(path, serviceCfg, query) {
 
 
 async function callUpstream(serviceCfg, method, path, query, headers, body, opts = {}) {
+  const effectiveMethod = validateMethod(method, serviceCfg.allowed_methods || ['GET']);
+  const callerHeaders = sanitizeCallerHeaders(headers, serviceCfg.allowed_request_headers || []);
+  parsePinnedUpstream(serviceCfg.upstream);
   // Resolve all secrets used by this service
   const injectHeaders = { ...(serviceCfg.inject_headers || {}) };
   let url = null;
@@ -1222,12 +1253,7 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
       injectHeaders[serviceCfg.header_name || 'Authorization'] = tpl.replace('{{secret}}', token);
     }
     // Build URL: caller-provided path + query against upstream
-    url = new URL(path, serviceCfg.upstream);
-    if (query && typeof query === 'object') {
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
-      }
-    }
+    url = buildPinnedUrl(serviceCfg.upstream, path, query);
   } else if (serviceCfg.type === 'aliyun_v2') {
     // Aliyun OpenAPI v2: pull creds from IMDS (preferred) or SOPS, then sign
     let creds = null;
@@ -1257,6 +1283,7 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
     });
     delete merged.Version;
     url = buildAliyunSignedUrl(serviceCfg.upstream, action, merged, serviceCfg.region, creds, apiVersion);
+    assertPublicDestination(url.hostname);
   } else {
     throw new Error(`Unsupported service type: ${serviceCfg.type}`);
   }
@@ -1264,12 +1291,12 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   // Build outgoing request
   const outHeaders = {
     'User-Agent': `secret-broker/${BROKER_VERSION}`,
+    ...callerHeaders,
     ...outboundTraceHeaders({
       traceparent: typeof getTraceparent === 'function' ? getTraceparent() : undefined,
       requestId: typeof getRequestId === 'function' ? getRequestId() : undefined,
     }),
     ...injectHeaders,
-    ...(headers || {}),
   };
   // Host header 必须用 upstream 的 host，否则 upstream 验签会失败
   outHeaders['Host'] = url.host;
@@ -1277,17 +1304,18 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   const relayCfg = relayConfig();
   let connectUrl = url;
   if (shouldRelay(url.hostname, relayCfg)) {
+    parsePinnedUpstream(relayCfg.url);
     const applied = applyRelay(url, outHeaders, relayCfg);
     connectUrl = applied.url;
     Object.assign(outHeaders, applied.headers);
   }
 
   const fetchOpts = {
-    method: method || 'GET',
+    method: effectiveMethod,
     headers: outHeaders,
     redirect: 'manual',
   };
-  if (body !== null && body !== undefined && method !== 'GET' && method !== 'HEAD') {
+  if (body !== null && body !== undefined && effectiveMethod !== 'GET' && effectiveMethod !== 'HEAD') {
     if (typeof body === 'string' || Buffer.isBuffer(body)) {
       fetchOpts.body = body;
     } else {
@@ -1308,6 +1336,8 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   } catch (e) {
     throw new Error(`${e.message} (UDP/53 blocked on this host; DoH over TCP/443 also failed)`);
   }
+  if (conn.hostname !== connectUrl.hostname) assertPublicResolvedAddress(conn.hostname);
+  else assertPublicDestination(connectUrl.hostname);
   const timeoutHost = connectUrl.hostname === url.hostname
     ? url.hostname
     : `${url.hostname} via ${connectUrl.hostname}`;
@@ -1316,7 +1346,7 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
       protocol: connectUrl.protocol,
       hostname: conn.hostname,
       port: connectUrl.port || (isHttps ? 443 : 80),
-      method: method || 'GET',
+      method: effectiveMethod,
       path: connectUrl.pathname + connectUrl.search,
       headers: outHeaders,
       timeout: 15000,
@@ -1340,11 +1370,19 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   delete respHeaders['transfer-encoding'];
   delete respHeaders['connection'];
   delete respHeaders['keep-alive'];
-  delete respHeaders['content-encoding'];  // 避免 content-length mismatch
 
   // IncomingMessage has no .arrayBuffer(); collect from 'data' events.
   const chunks = [];
-  for await (const chunk of upstreamResp) chunks.push(chunk);
+  const maxResponseBytes = Math.min(Number(serviceCfg.max_response_bytes) || 10 * 1024 * 1024, 10 * 1024 * 1024);
+  let responseBytes = 0;
+  for await (const chunk of upstreamResp) {
+    responseBytes += chunk.length;
+    if (responseBytes > maxResponseBytes) {
+      upstreamResp.destroy();
+      throw new Error(`Upstream response exceeded ${maxResponseBytes} bytes`);
+    }
+    chunks.push(chunk);
+  }
   const respBuf = Buffer.concat(chunks);
   return {
     status: upstreamResp.statusCode,
@@ -1402,6 +1440,8 @@ async function handle(req, res) {
 
   // Public /health + dashboard static are handled by the modular pipeline above.
 
+  if (await v2Routes(req, res, route)) return;
+
   // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
   // Login must work from a browser that may not have a client cert installed.
   // Security: password-only login requires the client to be explicitly marked
@@ -1430,6 +1470,10 @@ async function handle(req, res) {
       targetName = clientName;
       lockKey = `${clientName}|pw`;
       via = 'password';
+    }
+    if (targetClient.security_profile === 'strict') {
+      audit({ action: 'login', status: 'denied', reason: 'strict_profile_requires_webauthn', client: targetName });
+      return jsonError(res, 403, 'Strict profile requires WebAuthn authentication');
     }
     if (!checkLoginLock(lockKey)) {
       audit({ action: 'login', status: 'denied', reason: 'lockout', client: lockKey });
@@ -1462,7 +1506,6 @@ async function handle(req, res) {
     audit({ action: 'login', status: 'ok', cn, client: targetName, via });
     res.setHeader('Set-Cookie', sessionCookieHeader(token));
     return send(res, 200, {
-      token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
       cn,
       role: targetClient.role,
@@ -1497,7 +1540,6 @@ async function handle(req, res) {
     audit({ action: 'login', status: 'ok', cn, client: pending.clientName, via: 'mfa', mfa_method: mfaResult.method });
     res.setHeader('Set-Cookie', sessionCookieHeader(token));
     return send(res, 200, {
-      token,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
       cn,
       role: targetClient.role,
@@ -1533,6 +1575,15 @@ async function handle(req, res) {
     return jsonError(res, 429, 'Rate limit exceeded');
   }
   res.__exposeBrokerVersion = true;
+
+  // Strict identities never mutate state through the compatibility API. New
+  // management actions must be modeled as typed v2 operations with step-up
+  // and approval evidence before they are enabled.
+  if (ctx.client.security_profile === 'strict'
+      && (m !== 'GET' || p.startsWith('/api/v1/ssh'))) {
+    audit({ action: 'legacy_api', status: 'denied', reason: 'strict_profile_v2_required', cn: ctx.cn, path: p });
+    return jsonError(res, 403, 'Strict profile requires a typed v2 operation');
+  }
 
   // Authenticated ops health (version / sops / counts). Public GET /health is {status:ok} only.
   if (m === 'GET' && p === '/api/v1/health') {
@@ -1815,6 +1866,10 @@ async function handle(req, res) {
       scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
       allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
       allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
+      allowed_accounts: Array.isArray(body.allowed_accounts) ? body.allowed_accounts : undefined,
+      allowed_resources: Array.isArray(body.allowed_resources) ? body.allowed_resources : undefined,
+      allowed_environments: Array.isArray(body.allowed_environments) ? body.allowed_environments : undefined,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
       ttl_ms: body.ttl_seconds ? body.ttl_seconds * 1000 : undefined,
@@ -1927,6 +1982,12 @@ async function handle(req, res) {
     const { id, secret, key_obj } = generateMasterKey(name, ctx.clientName, {
       default_child_ttl_seconds: body.default_child_ttl_seconds,
       child_scopes: Array.isArray(body.child_scopes) ? body.child_scopes : undefined,
+      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
+      allowed_accounts: Array.isArray(body.allowed_accounts) ? body.allowed_accounts : undefined,
+      allowed_resources: Array.isArray(body.allowed_resources) ? body.allowed_resources : undefined,
+      allowed_environments: Array.isArray(body.allowed_environments) ? body.allowed_environments : undefined,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
       ttl_ms: body.ttl_ms,
@@ -1973,6 +2034,10 @@ async function handle(req, res) {
       scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
       allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
       allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
+      allowed_accounts: Array.isArray(body.allowed_accounts) ? body.allowed_accounts : undefined,
+      allowed_resources: Array.isArray(body.allowed_resources) ? body.allowed_resources : undefined,
+      allowed_environments: Array.isArray(body.allowed_environments) ? body.allowed_environments : undefined,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : undefined,
       ttl_seconds: body.ttl_seconds ? parseInt(body.ttl_seconds, 10) : undefined,
@@ -2078,7 +2143,8 @@ async function handle(req, res) {
         name,
         type: entry.type || 'custom',
         description: entry.description || '',
-        fields: entry.fields || {},
+        field_names: Object.keys(entry.fields || {}),
+        has_value: Object.keys(entry.fields || {}).length > 0,
         created_at: entry.created_at || null,
         updated_at: entry.updated_at || null,
         updated_by: entry.updated_by || null,
@@ -2845,16 +2911,11 @@ async function handle(req, res) {
     return send(res, 200, collectAuditFacets());
   }
 
-  // ----- DELETE /api/v1/admin/audit (wipe jsonl files; writes one audit_cleared event) -----
+  // Audit deletion is never an application operation. Retention is performed
+  // only by the independently protected audit storage lifecycle.
   if (m === 'DELETE' && p === '/api/v1/admin/audit') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const body = await readBody(req) || {};
-    if (body.confirm !== true && url.searchParams.get('confirm') !== 'true') {
-      return jsonError(res, 400, 'Pass {confirm:true} to clear audit logs');
-    }
-    const deleted = clearAuditLogs();
-    audit({ action: 'audit_cleared', cn: ctx.cn, fp: ctx.fp, status: 'ok', deleted: deleted.length });
-    return send(res, 200, { ok: true, deleted });
+    audit({ action: 'audit_delete_denied', cn: ctx.cn, fp: ctx.fp, status: 'denied' });
+    return jsonError(res, 405, 'Audit records are immutable');
   }
 
   // ----- GET /api/v1/admin/audit/stream (SSE) -----
@@ -3060,7 +3121,15 @@ const identityResolver = createIdentityResolver({
 });
 
 function getIdentity(req) {
-  return identityResolver.getIdentity(req);
+  if (Object.hasOwn(req, '__brokerIdentity')) return req.__brokerIdentity;
+  const identity = identityResolver.getIdentity(req);
+  Object.defineProperty(req, '__brokerIdentity', {
+    value: identity,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return identity;
 }
 function getApiKeyIdentity(req) {
   return identityResolver.getApiKeyIdentity(req);
@@ -3073,7 +3142,7 @@ function rateLimitApiKey(k) {
   const limit = k.rate_limit || '100/hour';
   if (limit === 'unlimited') return true;
   const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return true;
+  if (!m) return false;
   const max = parseInt(m[1], 10);
   const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
   const key = 'apikey:' + k.id;
@@ -3097,11 +3166,10 @@ function start() {
     cert: readFileSync(TLS_CERT),
     key: readFileSync(TLS_KEY),
     ca: readFileSync(TLS_CA),
-    // requestCert: 客户端必须发证书 (TLS 握手时)
-    // rejectUnauthorized: false 因为 /health 允许无证书；其他路由在 handle() 里
-    // 检查 ctx.client 是否存在来决定 401
+    // The public TLS listener is mTLS-only. Public liveness is exposed by the
+    // trusted reverse proxy; local probes use the separate loopback listener.
     requestCert: true,
-    rejectUnauthorized: false,
+    rejectUnauthorized: true,
     minVersion: 'TLSv1.3',
   };
   if (existsSync(TLS_CRL)) {
@@ -3206,16 +3274,8 @@ function start() {
   });
   globalThis.__brokerShuttingDown = _shutdownCtl.shuttingDown;
 
-  // Phase D/F: audit prune
-  try {
-    const policy = auditPolicyFromEnv();
-    registerCron('03:30', () => {
-      const r = pruneAuditFiles(AUDIT_DIR, policy.retainDays);
-      console.log('[cron] audit prune deleted=', r.deleted?.length || 0);
-    });
-  } catch (e) {
-    console.warn('[cron] audit prune register failed:', e.message);
-  }
+  // Retention is owned by independently protected audit storage. The Broker
+  // never deletes audit records or schedules local retention jobs.
 }
 
 // ============================================================
@@ -3234,7 +3294,7 @@ function start() {
     await loadSecrets();
     // Phase E: config validation
     try {
-      const vr = validateBrokerConfig(CONFIG);
+      const vr = validateBrokerConfig(CONFIG, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
       if (!vr.ok) {
         console.error('[config] validation failed:\n' + formatValidationReport(vr));
         process.exit(1);

@@ -26,8 +26,8 @@ Use the **Bug Report** issue template. Include:
 
 **Do not file public GitHub issues for security vulnerabilities.**
 
-See [`SECURITY.md`](SECURITY.md) and the **Bug Bounty** section.
-Email: **security@broker.example.com** (PGP key in `.well-known/pgp-key.asc`).
+Use [GitHub private vulnerability reporting](https://github.com/tyj1987/broker/security/advisories/new)
+and follow [`SECURITY.md`](SECURITY.md). Do not include real credentials.
 
 ### Feature requests
 
@@ -37,10 +37,10 @@ template.
 
 ## Submitting code
 
-1. Fork the repo and create a feature branch from `main`.
+1. Fork the repo and create a feature branch from `master`.
 2. Make your changes.
-3. Verify with `npm run test:verify-all` (covers broker 619 tests + Python
-   SDK 28 tests). For Go SDK or VS Code, see [`VERIFY.md`](VERIFY.md) §5-6.
+3. Run the module checks documented in [`VERIFY.md`](VERIFY.md). Do not quote
+   a test count unless it comes from the current CI run.
 4. Update `CHANGELOG.md` under the next unreleased version.
 5. Submit a PR using the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
    Make sure all checklist items are checked.
@@ -63,7 +63,7 @@ These are not negotiable:
    logging, error-reporting, or returning to the caller. See the
    [redact engine tests](broker-test/test-redact.js) for the 12 patterns
    currently supported.
-2. **mTLS-only**: no anonymous endpoints. The single exception is
+2. **Authenticated operations**: no anonymous operation endpoints. The single exception is
    `GET /health`, which returns only `{ "status": "ok" }`. Do not put
    `version`, `sops_loaded`, service names or `uptime_seconds` on the
    public health body.
@@ -81,16 +81,19 @@ These are not negotiable:
 - Integration tests live in `broker-test/` and use stdlib mocks.
 - Performance-sensitive paths have benchmark tests (see `bench/` if
   present; PRs that regress by > 10% need justification).
-- All PRs must pass `npm run test:verify-all` before merge.
+- Node changes must pass `npm run test:coverage`; the full language, client,
+  infrastructure, supply-chain and artifact matrix must pass in CI before merge.
 
 ## Release process
 
-1. Maintainer cuts a release branch `release/vX.Y.Z`.
-2. CI runs full matrix (Linux / macOS / Windows × Node 20 / 22).
-3. Tag is `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
-4. GitHub Actions auto-builds Docker images (when configured) and
-   publishes to ghcr.io.
-5. Release notes generated from CHANGELOG.md.
+1. A maintainer selects an exact commit after all required checks pass.
+2. CI runs the repository's declared Node 24, Go, Python, Android, iOS, browser,
+   Windows desktop, Terraform and security jobs.
+3. CI builds the candidate image by immutable digest and retains SBOM and
+   provenance evidence.
+4. The protected production environment requires human approval and deploys
+   only the successful `master` commit. Tags and release notes are created only
+   after the corresponding release procedure is approved.
 
 ## Reviewing PRs
 

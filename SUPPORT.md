@@ -21,22 +21,15 @@ There are several ways to get help, depending on what you need:
 ### Bug reports
 
 * **GitHub Issues** — for reproducible bugs and feature requests. Use the
-  [Bug Report](../../issues/new?template=bug_report.yml) template.
-* **Before filing** — search [existing issues](../../issues) first; someone
+  [Bug Report](https://github.com/tyj1987/broker/issues/new?template=bug_report.yml) template.
+* **Before filing** — search [existing issues](https://github.com/tyj1987/broker/issues) first; someone
   may have already reported it.
 
 ### Security issues
 
 * **Do not file a public GitHub issue for security vulnerabilities.**
-* Email **security@broker.example.com** (PGP key in `.well-known/pgp-key.asc`)
-* See [`SECURITY.md`](SECURITY.md) for the full policy, scope, and the
-  $5,000 bug bounty program.
-
-## Commercial support
-
-This project is open-source under MIT. Commercial support, custom feature
-development, and production deployment assistance are available — contact
-**sales@broker.example.com**.
+* Use [GitHub private vulnerability reporting](https://github.com/tyj1987/broker/security/advisories/new).
+* See [`SECURITY.md`](SECURITY.md) for the current policy and scope.
 
 ## Community guidelines
 

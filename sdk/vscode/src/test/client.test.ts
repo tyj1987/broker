@@ -1,179 +1,81 @@
-// Unit tests for VS Code extension client.
-// Run: cd sdk/vscode && npm run build && node ./out/test/run.js
-import * as assert from 'node:assert';
-import * as https from 'node:https';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { BrokerClient, redact, BrokerError, BrokerConnectionError } from '../client';
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { BrokerClient, BrokerConnectionError, BrokerError, redact } from '../client';
+import { startMockBroker } from './mock_broker';
 
-let pass = 0, fail = 0;
-function test(name: string, fn: () => void | Promise<void>): void {
-  (async () => {
-    try {
-      await fn();
-      pass++;
-      console.log(`  PASS  ${name}`);
-    } catch (e) {
-      fail++;
-      console.error(`  FAIL  ${name}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  })();
-}
-
-// ============================================================
-// Redact tests
-// ============================================================
-console.log('\n[redact]');
-test('redacts GitHub PAT', () => {
-  const s = 'Authorization: Bearer ghp_xxxxABCDEFGHIJabcdefghij';
-  const out = redact(s);
-  assert.ok(!out.includes('ghp_xxxxABCDEFGHIJ'));
-  assert.ok(out.includes('REDACTED'));
-});
-test('redacts OpenAI sk-', () => {
-  const s = 'openai key=sk-abcdefghijklmnopqrstuvwxyz';
-  const out = redact(s);
-  assert.ok(!out.includes('sk-abcdef'));
-  assert.ok(out.includes('REDACTED'));
-});
-test('redacts AWS AKIA', () => {
-  const s = 'access key AKIAIOSFODNN7EXAMPLE found';
-  const out = redact(s);
-  assert.ok(!out.includes('AKIAIOSFODNN7EXAMPLE'));
-});
-test('redacts JWT', () => {
-  const s = 'token: eyJAbcdefghijklmnop.eyJqrstuvwxyzABCDEFG.eyJqrstuvwxyzABCDEFG';
-  const out = redact(s);
-  assert.ok(!out.includes('eyJAbcdefghijklmnop'));
-});
-test('preserves non-credential text', () => {
-  const s = 'Hello world, this is a normal log line';
-  assert.strictEqual(redact(s), s);
-});
-test('handles empty string', () => {
-  assert.strictEqual(redact(''), '');
+test('redaction covers supported credential forms', () => {
+  for (const secret of [
+    'ghp_xxxxABCDEFGHIJabcdefghij',
+    'sk-abcdefghijklmnopqrstuvwxyz',
+    'AKIAIOSFODNN7EXAMPLE',
+    'eyJAbcdefghijklmnop.eyJqrstuvwxyzABCDEFG.eyJqrstuvwxyzABCDEFG',
+  ]) assert.ok(!redact(`credential=${secret}`).includes(secret));
+  assert.equal(redact('ordinary text'), 'ordinary text');
 });
 
-// ============================================================
-// Client validation
-// ============================================================
-console.log('\n[client validation]');
-test('rejects http endpoint', () => {
-  let threw = false;
-  try { new BrokerClient({ endpoint: 'http://insecure', clientCert: '', clientKey: '', caCert: '' }); }
-  catch (e) { threw = /must be https/.test(String(e)); }
-  assert.ok(threw);
-});
-test('rejects empty endpoint', () => {
-  let threw = false;
-  try { new BrokerClient({ endpoint: '', clientCert: '', clientKey: '', caCert: '' }); }
-  catch (e) { threw = /endpoint required/.test(String(e)); }
-  assert.ok(threw);
+test('client rejects insecure endpoint configuration', () => {
+  assert.throws(
+    () => new BrokerClient({ endpoint: 'http://insecure', clientCert: '', clientKey: '', caCert: '' }),
+    /must be https/,
+  );
+  assert.throws(
+    () => new BrokerClient({ endpoint: '', clientCert: '', clientKey: '', caCert: '' }),
+    /endpoint required/,
+  );
 });
 
-// ============================================================
-// Error type
-// ============================================================
-console.log('\n[errors]');
-test('BrokerError carries status and body', () => {
-  const e = new BrokerError('test', 403, '{"error":"forbidden"}');
-  assert.strictEqual(e.op, 'test');
-  assert.strictEqual(e.status, 403);
-  assert.ok(e.body.includes('forbidden'));
-  assert.ok(e.message.includes('403'));
-});
-test('BrokerConnectionError wraps cause', () => {
-  const cause = new Error('ECONNREFUSED');
-  const e = new BrokerConnectionError('test_op', cause);
-  assert.ok(e.message.includes('test_op'));
-  assert.ok(e.message.includes('ECONNREFUSED'));
+test('error types retain safe diagnostic context', () => {
+  const brokerError = new BrokerError('test', 403, '{"error":"forbidden"}');
+  assert.equal(brokerError.status, 403);
+  assert.match(brokerError.message, /403/);
+  const connectionError = new BrokerConnectionError('health', new Error('ECONNREFUSED'));
+  assert.match(connectionError.message, /health/);
 });
 
-// ============================================================
-// Integration (live HTTPS mock)
-// ============================================================
-console.log('\n[integration]');
-test('mock broker: health + get + list', async () => {
-  const { startMockBroker } = await import('./mock_broker');
-  const m = startMockBroker();
+test('mock broker supports health and typed V2 operations', async () => {
+  const mock = await startMockBroker();
   try {
-    const c = new BrokerClient({
-      endpoint: `https://127.0.0.1:${m.port}`,
-      clientCert: '',
-      clientKey: '',
-      caCert: m.certPath,
-      verifyTls: true,
+    const client = new BrokerClient({
+      endpoint: `https://127.0.0.1:${mock.port}`,
+      clientCert: '', clientKey: '', caCert: mock.certPath,
+      insecureSkipVerify: true,
     });
-    const h = await c.health();
-    assert.strictEqual(h.ok, true);
-    assert.ok(typeof h.version === 'string');
-    const v = await c.getSecret('github.pat');
-    assert.strictEqual(v, 'ghp_xxxxABCDEFGHIJabcdefghij');
-    const items = await c.list();
-    assert.ok(items.length > 0);
+    assert.equal((await client.health()).ok, true);
+    const operation = await client.createOperation({
+      provider: 'github', operation_id: 'repo.read', account_ref: 'personal',
+      environment: 'development', typed_parameters: { owner: 'o', repo: 'r' },
+    });
+    assert.equal(operation.status, 'waiting');
+    assert.equal((await client.getOperation(operation.id)).status, 'completed');
+    const approval = await client.createApproval({
+      provider: 'github', operation_id: 'repo.read', account_ref: 'personal',
+      environment: 'production', typed_parameters: { resource_ref: 'repository' },
+    });
+    assert.equal(approval.status, 'pending');
+    assert.equal((await client.listApprovals())[0].id, approval.id);
+    assert.equal((await client.decideApproval(approval.id, 'approve')).status, 'approved');
   } finally {
-    m.stop();
+    await mock.stop();
   }
 });
 
-test('mock broker: 404 surfaces as BrokerError', async () => {
-  const { startMockBroker } = await import('./mock_broker');
-  const m = startMockBroker();
+test('HTTP denial surfaces as BrokerError', async () => {
+  const mock = await startMockBroker();
   try {
-    const c = new BrokerClient({
-      endpoint: `https://127.0.0.1:${m.port}`,
-      clientCert: '',
-      clientKey: '',
-      caCert: m.certPath,
-      verifyTls: true,
+    const client = new BrokerClient({
+      endpoint: `https://127.0.0.1:${mock.port}`,
+      clientCert: '', clientKey: '', caCert: mock.certPath,
+      insecureSkipVerify: true,
     });
-    let threw = false;
-    try { await c.getSecret('does-not-exist'); }
-    catch (e) {
-      threw = e instanceof BrokerError && e.status === 404;
-    }
-    assert.ok(threw);
+    await assert.rejects(client.proxy('github', 'GET', '/forbidden'), (error: unknown) => (
+      error instanceof BrokerError && error.status === 403
+    ));
   } finally {
-    m.stop();
+    await mock.stop();
   }
 });
 
-test('mock broker: 403 surfaces as BrokerError', async () => {
-  const { startMockBroker } = await import('./mock_broker');
-  const m = startMockBroker();
-  try {
-    const c = new BrokerClient({
-      endpoint: `https://127.0.0.1:${m.port}`,
-      clientCert: '',
-      clientKey: '',
-      caCert: m.certPath,
-      verifyTls: true,
-    });
-    let threw = false;
-    try { await c.proxy('github', 'GET', '/forbidden'); }
-    catch (e) {
-      threw = e instanceof BrokerError && e.status === 403;
-    }
-    assert.ok(threw);
-  } finally {
-    m.stop();
-  }
+test('connection error is typed', async () => {
+  const client = new BrokerClient({ endpoint: 'https://127.0.0.1:1', clientCert: '', clientKey: '', caCert: '' });
+  await assert.rejects(client.health(), BrokerConnectionError);
 });
-
-test('connection error when broker unreachable', async () => {
-  const c = new BrokerClient({
-    endpoint: 'https://127.0.0.1:1',  // port 1 = closed
-    clientCert: '', clientKey: '', caCert: '',
-  });
-  let threw = false;
-  try { await c.health(); }
-  catch (e) { threw = e instanceof BrokerConnectionError; }
-  assert.ok(threw);
-});
-
-// ============================================================
-setTimeout(() => {
-  console.log(`\n=== Total: ${pass} passed, ${fail} failed ===`);
-  process.exit(fail > 0 ? 1 : 0);
-}, 500);

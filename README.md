@@ -1,290 +1,108 @@
 # Secret Broker
 
-> **AI-first mTLS secret broker with zero credential leakage.**
+A policy-bound credential broker for automation, developer tools and cloud
+workloads. Strict-profile callers submit typed operations and receive only the
+allowed business result; they do not receive long-lived credentials.
 
-A self-hosted secret manager and credential proxy designed for AI agents,
-Kubernetes workloads, and developer workstations. Stores credentials
-encrypted with SOPS, serves them over mTLS, and never lets AI see raw
-secrets — only metadata or redacted placeholders.
+[![CI](https://github.com/tyj1987/broker/actions/workflows/ci.yml/badge.svg)](https://github.com/tyj1987/broker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[![Version](https://img.shields.io/badge/version-v4.1.1-blue)]()
-[![License](https://img.shields.io/badge/license-MIT-green)]()
-[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-1100%2B%20passing-brightgreen)]()
+**Languages:** [English](README.md) · [中文](README.zh-CN.md)
 
-> **Languages**: [English](README.md) · [中文](README.zh-CN.md)
+## Security model
 
----
+- `/api/v2` is the strict boundary for typed operations, bound approvals,
+  devices and short-lived OTP tasks.
+- Node performs identity, schema and policy checks; production also requires an
+  allow decision from the Go policy core over a local socket.
+- A production operation is denied until its exact provider contract is marked
+  verified after isolated-account testing.
+- Browser sessions expire absolutely after ten minutes. Approvals require a
+  WebAuthn-stepped-up session, separation of duties and one-time consumption.
+- Outbound requests pin scheme, host, port, method, path, headers and response
+  size. Private, loopback, metadata and redirect destinations are denied.
+- Strict identities cannot use plaintext secret resolution, arbitrary proxying
+  or free-form SSH from the v1 compatibility API.
+- v2 state changes write mandatory audit intent before mutation and fail closed
+  if audit storage is unavailable.
 
-## The problem
+SMS is an input to an already-authorized operation, not a Broker login factor.
+The Android client uploads only a matched code and task binding; it does not
+upload message history or unmatched messages. SMS cannot approve payments,
+account recovery or security-setting changes.
 
-AI agents (LLMs, IDEs, MCP clients) need API tokens, database passwords,
-and SSH keys to do their job — but you can't trust them not to leak
-credentials into logs, conversation history, or model training data.
+See [the threat model](docs/THREAT-MODEL.md) and
+[architecture](ARCHITECTURE.md) for the precise trust boundaries.
 
-## The solution
+## Current maturity
 
-**Secret Broker** is the answer:
+This repository contains the transition service, Go policy core, API contracts,
+provider manifests, SDKs, Windows/Linux desktop client, Android client, initial
+iOS client and browser helper. Existence of code is not production acceptance.
 
-* **mTLS-only** — every request is authenticated with a client certificate.
-  No anonymous access, ever.
-* **SOPS-encrypted at rest** — secrets live in `secrets/broker.yaml` encrypted
-  with age or PGP keys.
-* **Zero-credential-leakage** — the broker, SDK, and audit log all
-  auto-redact known secret patterns (GitHub PAT, OpenAI `sk-`, AWS `AKIA`,
-  JWTs, etc.). Tests assert this on every commit.
-* **Audit log** — append-only JSONL with tamper-evident hash chain. Every
-  resolve, proxy, and admin action is recorded.
-* **Three usage modes** — pick what fits:
-  - **Proxy mode** (recommended for AI) — broker injects secrets into the
-    upstream request; AI never sees the raw value.
-  - **API key** — short-lived Bearer tokens for AI clients; auto-revoked.
-  - **Resolve mode** — names only; values never leave the broker.
-* **Three official SDKs** — Python, Go, VSCode extension.
-* **Workload identity** — K8s / ECS / GKE pods exchange OIDC for short-lived
-  STS credentials; no long-lived keys on disk.
-
----
-
-## Quickstart
-
-5 minutes to your first broker.
-
-### 1. Install
-
-```bash
-# Clone
-git clone https://github.com/tyj1987/broker.git
-cd broker
-
-# One-time: init SOPS + age key + PKI
-iex (Get-Content .\bootstrap.ps1 -Raw)   # Windows
-# or
-./bootstrap.sh                            # Linux/macOS
-```
-
-### 2. Start
-
-```bash
-cd broker
-node server.js
-# Listening on https://127.0.0.1:8443
-```
-
-### 3. Issue a client cert
-
-```powershell
-# Windows
-.\scripts\broker\issue-client-cert.ps1 -CN client.mylaptop -Role developer
-```
-
-```bash
-# Linux/macOS
-./scripts/broker/issue-client-cert.sh client.mylaptop developer
-```
-
-The cert is signed by your local CA and printed to stdout (save it!).
-
-### 4. Make your first call
-
-```bash
-# mTLS direct (most secure)
-curl --cert client.mylaptop.crt --key client.mylaptop.key \
-     --cacert pki/ca/ca.crt \
-     https://127.0.0.1:8443/api/v1/identity
-```
-
-That's it. See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the full walkthrough.
-
----
-
-## Architecture
-
-```
-┌─────────────┐  mTLS   ┌─────────────┐  HTTPS   ┌─────────────┐
-│ AI / CLI /  │ ──────▶ │   Nginx     │ ───────▶ │   Broker    │
-│ K8s / ECS   │         │  (edge)     │          │ (Node.js)   │
-└─────────────┘         └─────────────┘          └──────┬──────┘
-                                                        │
-                                              ┌─────────┴──────────┐
-                                              ▼                    ▼
-                                       ┌─────────────┐    ┌────────────────┐
-                                       │ SOPS+age    │    │ Upstream APIs  │
-                                       │ secrets/    │    │ GitHub/Cloud/  │
-                                       │ broker.yaml │    │ SSH/etc        │
-                                       └─────────────┘    └────────────────┘
-```
-
-* **Broker** (Node.js, single binary) holds secrets in memory, never on disk
-  unencrypted. Listens on `127.0.0.1:8443` only; nginx fronts public TLS.
-* **Nginx** terminates public HTTPS, applies `ssl_verify_client optional`,
-  forwards the client cert (if any) to broker as `X-SSL-Client-*` headers.
-* **SOPS** encrypts `secrets/broker.yaml` at rest with age (or KMS).
-
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full deep-dive.
-
----
+The six initial provider manifests remain contract-gated. Android and iOS need
+physical-device validation, release artifacts need signing and provenance, and
+the production environment has unresolved release blockers. The current,
+evidence-based status is maintained in
+[Production acceptance](docs/PRODUCTION-ACCEPTANCE.md).
 
 ## Repository layout
 
-```
-.
-├── broker/                  # Server source (Node.js, ES modules)
-│   ├── server.js            # Entry point (~3300 LOC, 100+ routes)
-│   ├── lib/                 # Extracted helpers (sops, audit, mtls, …)
-│   ├── routes/              # Per-resource HTTP handlers
-│   ├── signing/             # Provider request signers (Aliyun, AWS, …)
-│   ├── dashboard/           # Static admin UI
-│   └── …
-├── sdk/                     # Official client SDKs
-│   ├── python/              # Python (zero-dep, stdlib only)
-│   ├── go/                  # Go (stdlib only)
-│   └── vscode/              # VSCode extension (TypeScript)
-├── broker-test/             # Server integration tests (43 files, 1100+ tests)
-├── docs/                    # Long-form documentation
-│   ├── index.md             # MkDocs landing page
-│   ├── QUICKSTART.md        # 5-minute walkthrough
-│   ├── EXTENDING.md         # Add new secret types / service templates
-│   ├── FAQ.md               # Common questions
-│   ├── SDK-REFERENCE.md     # All 3 SDKs quick reference
-│   ├── THREAT-MODEL.md      # Security model
-│   ├── SSH-PROXY.md         # SSH proxy feature
-│   ├── WEBSOCKET.md         # WebSocket events feature
-│   └── WORKLOAD-IDENTITY.md # K8s/ECS/GKE OIDC → STS
-├── scripts/                 # Setup / deploy / maintenance scripts
-│   └── broker/              # Core operations scripts
-├── deploy/                  # Deployment assets (helm, terraform, etc.)
-├── infra/                   # Terraform modules (Aliyun + Tencent)
-├── pki/                     # PKI root CA (public cert only; private keys gitignored)
-│   └── ca/ca.crt            # Local CA cert (committed for dev)
-├── audit/                   # Runtime audit log (JSONL, gitignored)
-├── secrets/                 # Runtime secrets (gitignored except broker.yaml)
-├── age/                     # age key (gitignored)
-├── .github/                 # GitHub config: workflows, issue/PR templates
-├── Dockerfile               # Container image
-└── docker-compose.yml       # Local dev stack
+```text
+broker/               Node transition service and dashboard
+core/                 Go policy core
+clients/
+  desktop/            Tauri Windows/Linux client
+  android/            Kotlin/Compose OTP device client
+  ios/                SwiftUI/Secure Enclave initial client
+  browser/            Chrome/Edge MV3 helper and native-host metadata
+sdk/                  Go, Python and VS Code clients
+contracts/            Generated OpenAPI contract
+providers/            Versioned provider manifests
+deploy/               Container, Helm, nginx, systemd and rollback assets
+infra/                Aliyun primary and Tencent DR Terraform baselines
+docs/                 Architecture, security, operations and acceptance docs
 ```
 
----
+Production configuration, credentials, PKI private material, audit logs,
+backups, device data, Terraform state and generated packages do not belong in
+Git.
 
-## API at a glance
+## Source verification
 
-All paths require mTLS (or Bearer API key for AI clients).
+Node 24 is the supported broker development runtime. Install from the lock file
+and run the security coverage gate:
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET    | `/health` | Liveness (no auth) |
-| GET    | `/api/v1/identity` | "Who am I, what role" |
-| GET    | `/api/v1/services` | Available upstream services |
-| GET    | `/api/v1/secrets` | Secret names only (never values) |
-| POST   | `/api/v1/secrets/resolve` | Get one secret value (admin/scoped) |
-| POST   | `/api/v1/proxy/<service>` | Make upstream API call as that service |
-| GET    | `/api/v1/admin/clients` | List clients (admin) |
-| POST   | `/api/v1/admin/secrets` | CRUD secrets (admin) |
-| GET    | `/api/v1/admin/audit/verify` | Verify audit log hash chain |
-| GET    | `/api/v1/healthcheck/status` | Last credential health check |
-| WS     | `/api/v1/ws` | Real-time event stream |
-
-Full reference: [`docs/SDK-REFERENCE.md`](docs/SDK-REFERENCE.md).
-
----
-
-## SDKs
-
-```python
-# Python (zero deps)
-from secret_broker import Client
-c = Client.from_env()
-me = c.identity()
-print(me.role, me.client_name)
+```sh
+cd broker
+npm ci --ignore-scripts --no-audit --no-fund
+npm audit --audit-level=high
+npm run lint
+npm run test:coverage
+npm run openapi:generate
+git diff --exit-code -- ../contracts/openapi.yaml
 ```
 
-```go
-// Go (zero deps)
-import "github.com/tyj1987/broker/sdk/go/broker"
-c, _ := broker.NewFromEnv()
-me, _ := c.Identity()
-fmt.Println(me.Role, me.ClientName)
-```
+Additional Go, Python, Rust, Android, Swift, Terraform, Helm and container gates
+run in [CI](.github/workflows/ci.yml). The complete local/CI distinction is in
+[VERIFY.md](VERIFY.md).
 
-```typescript
-// VSCode extension
-import { SecretBroker } from '@tyj1987/broker-vscode';
-const client = SecretBroker.fromEnv();
-const me = await client.identity();
-```
+## Configuration and deployment
 
-All three are **zero-dependency** (stdlib only) so they don't pull in
-vulnerable transitive dependencies.
+[`secrets/broker.yaml.example`](secrets/broker.yaml.example) is deliberately
+fail-closed and contains no credentials. It is suitable only as a structure
+reference. Do not set `contract_verified: true` without retained contract-test
+evidence, and do not perform a Terraform apply from the validation-only roots.
 
----
+- Local source validation: [Quickstart](docs/QUICKSTART.md)
+- Deployment and rollback: [deploy/README.md](deploy/README.md)
+- Operations: [RUNBOOK.md](RUNBOOK.md)
+- Production migration blockers: [deploy/PRODUCTION-MIGRATION.md](deploy/PRODUCTION-MIGRATION.md)
 
-## Security
+## Contributing and security reports
 
-* **mTLS only** — anonymous requests are 401 at the TLS layer.
-* **No raw secrets leave the broker** — proxy mode returns the upstream
-  response with credentials already injected.
-* **Audit hash chain** — every event is linked to the previous one via
-  SHA-256; tampering is detectable.
-* **Auto-redaction** — known token patterns (GitHub PAT, OpenAI `sk-`,
-  AWS `AKIA`, etc.) are replaced with `ghp_***` etc. before they reach
-  audit logs, error responses, or the dashboard.
-* **TOTP + recovery codes** for human admins.
-* **Bounty**: see [`SECURITY.md`](SECURITY.md) — $5,000 for critical vulns.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report
+security issues privately using [SECURITY.md](SECURITY.md); do not include real
+credentials, OTP values, private keys or production configuration in an issue.
 
-Threat model: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md).
-
----
-
-## Development
-
-```bash
-# Install
-cd broker && npm install
-
-# Run all tests (1100+ across server + 3 SDKs)
-cd broker && npm run test:verify-all
-
-# Format
-cd broker && npm run format
-cd broker && npm run format:check
-
-# Lint
-cd broker && npm run lint
-```
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
----
-
-## Deployment
-
-* **Docker** — `docker build -t secret-broker . && docker run -p 8443:8443 ...`
-* **Docker Compose** — `docker-compose up`
-* **Aliyun / Tencent** — see `infra/` (Terraform modules)
-* **Helm** — see `deploy/helm/broker/`
-* **Grafana** — see `deploy/grafana/`
-
-Full guide: [`RUNBOOK.md`](RUNBOOK.md) and the deployment assets under
-[`deploy/`](deploy/) (Helm, Terraform, Grafana).
-
----
-
-## License
-
-MIT. See repository root.
-
-## Support
-
-* **Issues** — bug reports, feature requests: [GitHub Issues](../../issues)
-* **Discussions** — questions, ideas: [GitHub Discussions](../../discussions)
-* **Security** — see [`SECURITY.md`](SECURITY.md)
-
----
-
-## Acknowledgements
-
-Built with care by the Secret Broker maintainers and contributors. The
-SOPS+age stack, nginx mTLS pattern, and zero-credential-leakage principle
-draw inspiration from HashiCorp Vault, BoringSSL, and the Mozilla SOPS
-project.
+Licensed under the [MIT License](LICENSE).

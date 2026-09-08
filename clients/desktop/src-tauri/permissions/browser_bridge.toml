@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-store-browser-bridge-key"
+description = "Allows the bundled desktop window to store the restricted browser bridge key."
+commands.allow = ["store_browser_bridge_key"]
+
+[[permission]]
+identifier = "allow-delete-browser-bridge-key"
+description = "Allows the bundled desktop window to remove the restricted browser bridge key."
+commands.allow = ["delete_browser_bridge_key"]

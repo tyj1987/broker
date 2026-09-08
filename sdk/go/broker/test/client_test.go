@@ -19,16 +19,16 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"runtime"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/tyj1987/broker-sdk-go/broker"
+	"github.com/tyj1987/broker/sdk/go/broker"
 )
 
 // ============================================================
@@ -138,6 +138,36 @@ func (m *mockBroker) handler() http.Handler {
 		m.record(r)
 		_ = json.NewEncoder(w).Encode(map[string]string{"cn": "test-cn", "role": "dev"})
 	})
+	mux.HandleFunc("/api/v2/operations", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "operation-123", "provider": "github", "operation_id": "repo.read", "status": "waiting",
+		})
+	})
+	mux.HandleFunc("/api/v2/operations/operation-123", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "operation-123", "provider": "github", "operation_id": "repo.read", "status": "completed",
+		})
+	})
+	mux.HandleFunc("/api/v2/approvals", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"approvals": []map[string]any{{"id": "approval-123", "status": "pending"}}})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "approval-123", "requester": "test", "provider": "github", "operation_id": "repo.read",
+			"account_ref": "personal", "environment": "production", "resource_ref": "repository",
+			"required_approvals": 2, "approvals": []any{}, "status": "pending",
+		})
+	})
+	mux.HandleFunc("/api/v2/approvals/approval-123/decision", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "approval-123", "status": "approved"})
+	})
 	mux.HandleFunc("/api/v1/ssh/exec", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -152,13 +182,17 @@ func (m *mockBroker) handler() http.Handler {
 			"security_token": "TOK", "expiration": "2099-01-01T00:00:00Z",
 		})
 	})
-	mux.HandleFunc("/api/v1/proxy/github/test", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/proxy/github", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "denied"})
-	})
-	mux.HandleFunc("/api/v1/proxy/github/ok", func(w http.ResponseWriter, r *http.Request) {
-		m.record(r)
+		var body struct {
+			Path string `json:"path"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Path == "/test" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "denied"})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
 	})
 	return mux
@@ -195,7 +229,7 @@ func setupTestServer(t *testing.T, secrets map[string]string) (string, string, f
 func TestHealth(t *testing.T) {
 	url, ca, stop := setupTestServer(t, nil)
 	defer stop()
-	c, err := broker.NewClient(broker.Config{Endpoint: url, CACert: ca, VerifyTLS: true})
+	c, err := broker.NewClient(broker.Config{Endpoint: url, CACert: ca})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -205,6 +239,43 @@ func TestHealth(t *testing.T) {
 	}
 	if !h.OK || h.Version != "4.1.0" {
 		t.Fatalf("health response wrong: %+v", h)
+	}
+}
+
+func TestTypedOperationAndApproval(t *testing.T) {
+	endpoint, ca, stop := setupTestServer(t, nil)
+	defer stop()
+	client, err := broker.NewClient(broker.Config{Endpoint: endpoint, CACert: ca})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	ctx := context.Background()
+	request := broker.OperationRequest{
+		Provider: "github", OperationID: "repo.read", AccountRef: "personal", Environment: "production",
+		TypedParameters: map[string]any{"resource_ref": "repository"}, ApprovalRequestID: "approval-123",
+	}
+	operation, err := client.CreateOperation(ctx, request)
+	if err != nil || operation.Status != "waiting" {
+		t.Fatalf("create operation: %#v %v", operation, err)
+	}
+	if current, err := client.GetOperation(ctx, operation.ID); err != nil || current.Status != "completed" {
+		t.Fatalf("get operation: %#v %v", current, err)
+	}
+	approval, err := client.CreateApproval(ctx, broker.ApprovalRequest{
+		Provider: "github", OperationID: "repo.read", AccountRef: "personal", Environment: "production",
+		TypedParameters: map[string]any{"resource_ref": "repository"},
+	})
+	if err != nil || approval.Status != "pending" {
+		t.Fatalf("create approval: %#v %v", approval, err)
+	}
+	if approvals, err := client.ListApprovals(ctx); err != nil || len(approvals) != 1 {
+		t.Fatalf("list approvals: %#v %v", approvals, err)
+	}
+	if decided, err := client.DecideApproval(ctx, approval.ID, "approve"); err != nil || decided.Status != "approved" {
+		t.Fatalf("decide approval: %#v %v", decided, err)
+	}
+	if _, err := client.DecideApproval(ctx, approval.ID, "invalid"); !errors.Is(err, broker.ErrInvalidArg) {
+		t.Fatalf("expected invalid decision error, got %v", err)
 	}
 }
 

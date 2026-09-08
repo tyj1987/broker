@@ -5,7 +5,6 @@
 //   health, list, get, resolve, proxy, sshExec, login
 
 import * as https from 'node:https';
-import * as tls from 'node:tls';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 
@@ -17,11 +16,8 @@ export interface BrokerConfig {
   clientCert: string;
   clientKey: string;
   caCert: string;
-  /**
-   * If true, skip TLS certificate verification. NOT recommended for production.
-   * Useful for local development with self-signed certs.
-   */
-  verifyTls?: boolean;
+  /** Test-only escape hatch. Production configurations must leave this false. */
+  insecureSkipVerify?: boolean;
 }
 
 export interface SecretListItem {
@@ -43,9 +39,42 @@ export interface SSHExecResult {
 }
 
 export interface LoginResponse {
-  session_token: string;
   mfa_required?: boolean;
   mfa_token?: string;
+}
+
+export interface OperationRequest {
+  provider: string;
+  operation_id: string;
+  account_ref: string;
+  environment: 'development' | 'staging' | 'production';
+  typed_parameters: Record<string, unknown>;
+  otp?: Record<string, unknown>;
+  approval_request_id?: string;
+}
+
+export interface ApprovalResponse {
+  id: string;
+  requester: string;
+  provider: string;
+  operation_id: string;
+  account_ref: string;
+  environment: string;
+  resource_ref: string;
+  required_approvals: number;
+  approvals: Array<{ approved_by: string; approved_at: string }>;
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed';
+  created_at: string;
+  expires_at: string;
+}
+
+export interface OperationResponse {
+  id: string;
+  provider: string;
+  operation_id: string;
+  status: 'waiting' | 'received' | 'consuming' | 'completed' | 'failed' | 'expired' | 'revoked';
+  result?: Record<string, unknown>;
+  error?: Record<string, unknown>;
 }
 
 // ============================================================
@@ -102,18 +131,8 @@ export class BrokerClient {
     }
   }
 
-  private buildContext(): tls.SecureContext {
-    const ctx = tls.createSecureContext({
-      ca: this.config.caCert ? fs.readFileSync(this.config.caCert) : undefined,
-      cert: this.config.clientCert ? fs.readFileSync(this.config.clientCert) : undefined,
-      key: this.config.clientKey ? fs.readFileSync(this.config.clientKey) : undefined,
-      minVersion: 'TLSv1.2' as tls.SecureVersion,
-    });
-    return ctx;
-  }
-
   private isVerifyDisabled(): boolean {
-    return this.config.verifyTls === true;
+    return this.config.insecureSkipVerify === true;
   }
 
   /**
@@ -136,7 +155,7 @@ export class BrokerClient {
     }
     const headers: Record<string, string> = {
       'accept': 'application/json',
-      'user-agent': 'secret-broker-vscode/4.1.0',
+      'user-agent': 'secret-broker-vscode/4.2.0',
       'x-request-id': `vscode-${crypto.randomUUID()}`,
     };
     let payload: Buffer | undefined;
@@ -149,18 +168,25 @@ export class BrokerClient {
       headers['cookie'] = `broker_session=${this.sessionCookie}`;
     }
     return new Promise((resolve, reject) => {
-      const ctx = this.buildContext();
       const req = https.request(
         {
           method,
           hostname: u.hostname,
-          port: u.port || 443,
+          port: u.port ? Number(u.port) : 443,
           path: u.pathname + u.search,
           headers,
-          secureContext: ctx,
+          ca: this.config.caCert ? fs.readFileSync(this.config.caCert) : undefined,
+          cert: this.config.clientCert ? fs.readFileSync(this.config.clientCert) : undefined,
+          key: this.config.clientKey ? fs.readFileSync(this.config.clientKey) : undefined,
+          minVersion: 'TLSv1.2',
           rejectUnauthorized: !this.isVerifyDisabled(),
         },
         (res) => {
+          const setCookies = res.headers['set-cookie'] || [];
+          for (const header of setCookies) {
+            const match = /^broker_session=([^;]*)/.exec(header);
+            if (match) this.sessionCookie = match[1] || null;
+          }
           const chunks: Buffer[] = [];
           res.on('data', (c) => chunks.push(c));
           res.on('end', () => {
@@ -222,7 +248,48 @@ export class BrokerClient {
     query?: Record<string, string>
   ): Promise<{ status: number; body: any }> {
     const p = subPath.startsWith('/') ? subPath : '/' + subPath;
-    return this.request<any>('proxy', method, `/api/v1/proxy/${encodeURIComponent(service)}${p}`, body, query);
+    const requestBody: Record<string, unknown> = { method: method.toUpperCase(), path: p };
+    if (body !== undefined) requestBody.body = body;
+    if (query) requestBody.query = query;
+    return this.request<any>('proxy', 'POST', `/api/v1/proxy/${encodeURIComponent(service)}`, requestBody);
+  }
+
+  async createOperation(operation: OperationRequest): Promise<OperationResponse> {
+    const r = await this.request<OperationResponse>(
+      'create_operation', 'POST', '/api/v2/operations', operation
+    );
+    return r.body as OperationResponse;
+  }
+
+  async getOperation(id: string): Promise<OperationResponse> {
+    const r = await this.request<OperationResponse>(
+      'get_operation', 'GET', `/api/v2/operations/${encodeURIComponent(id)}`
+    );
+    return r.body as OperationResponse;
+  }
+
+  async createApproval(operation: OperationRequest): Promise<ApprovalResponse> {
+    const request = {
+      provider: operation.provider,
+      operation_id: operation.operation_id,
+      account_ref: operation.account_ref,
+      environment: operation.environment,
+      typed_parameters: operation.typed_parameters,
+    };
+    const r = await this.request<ApprovalResponse>('create_approval', 'POST', '/api/v2/approvals', request);
+    return r.body as ApprovalResponse;
+  }
+
+  async listApprovals(): Promise<ApprovalResponse[]> {
+    const r = await this.request<{ approvals: ApprovalResponse[] }>('list_approvals', 'GET', '/api/v2/approvals');
+    return (r.body as { approvals: ApprovalResponse[] }).approvals;
+  }
+
+  async decideApproval(id: string, decision: 'approve' | 'reject'): Promise<ApprovalResponse> {
+    const r = await this.request<ApprovalResponse>(
+      'decide_approval', 'POST', `/api/v2/approvals/${encodeURIComponent(id)}/decision`, { decision }
+    );
+    return r.body as ApprovalResponse;
   }
 
   async sshExec(target: string, command: string, secretName = 'ssh.connection'): Promise<SSHExecResult> {
@@ -233,11 +300,13 @@ export class BrokerClient {
   }
 
   async login(username: string, password: string, mfaToken?: string, mfaCode?: string): Promise<LoginResponse> {
-    const r = await this.request<LoginResponse>('login', 'POST', '/api/v1/login', {
-      username, password, mfa_token: mfaToken, mfa_code: mfaCode,
-    });
+    if (!!mfaToken !== !!mfaCode) throw new Error('mfaToken and mfaCode must be provided together');
+    const r = mfaToken
+      ? await this.request<LoginResponse>('login_mfa', 'POST', '/api/v1/login/mfa', {
+          mfa_token: mfaToken, code: mfaCode,
+        })
+      : await this.request<LoginResponse>('login', 'POST', '/api/v1/login', { client: username, password });
     const b = r.body as LoginResponse;
-    if (b.session_token) this.sessionCookie = b.session_token;
     return b;
   }
 

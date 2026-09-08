@@ -13,7 +13,7 @@ import {
   clearSecretGuardCache,
   guardHint,
   SECRET_GUARD_TTL_MS,
-} from 'file:///C:/home/my-first-app/broker/service-secret-guard.js';
+} from '../broker/service-secret-guard.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {

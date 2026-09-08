@@ -8,7 +8,8 @@ import {
   installGracefulShutdown,
   rejectIfShuttingDown,
 } from '../broker/lib/shutdown.js';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import YAML from '../broker/node_modules/yaml/dist/index.js';
 import { BROKER_VERSION } from '../broker/version.js';
 
 let passed = 0, failed = 0;
@@ -55,6 +56,34 @@ console.log('=== validateBrokerConfig ===');
 
   const report = formatValidationReport(badUrl);
   assert(report.includes('ERROR'), 'report');
+
+  const strictWithoutKeys = validateBrokerConfig({
+    clients: { admin: { role: 'admin', security_profile: 'strict', factors: { webauthn: { credentials: [] } } } },
+  });
+  assert(strictWithoutKeys.ok === false, 'strict profile requires two hardware credentials');
+
+  const strictWithKeys = validateBrokerConfig({
+    clients: {
+      admin: {
+        role: 'admin', security_profile: 'strict',
+        factors: { webauthn: { credentials: [
+          { id: 'one', device_type: 'singleDevice', backed_up: false },
+          { id: 'two', device_type: 'singleDevice', backed_up: false },
+        ] } },
+      },
+    },
+  });
+  assert(strictWithKeys.ok === true, 'strict profile accepts two hardware credentials');
+
+  const strictLegacy = validateBrokerConfig({
+    clients: { admin: { role: 'admin', security_profile: 'strict', password: 'x', allowed_proxy: ['*'] } },
+  }, { allowWebAuthnBootstrap: true });
+  assert(strictLegacy.ok === false, 'strict profile rejects password and compatibility proxy');
+
+  const example = YAML.parse(readFileSync(new URL('../secrets/broker.yaml.example', import.meta.url), 'utf8'));
+  const exampleBootstrap = validateBrokerConfig(example, { allowWebAuthnBootstrap: true });
+  assert(exampleBootstrap.ok === true, 'strict example is valid only with non-production bootstrap');
+  assert(validateBrokerConfig(example).ok === false, 'strict example fails closed in production before two hardware keys');
 }
 
 console.log('=== preflightPaths ===');

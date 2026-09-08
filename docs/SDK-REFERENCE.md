@@ -1,211 +1,82 @@
-# SDK Reference (V4.1)
+# SDK reference
 
-> Quick reference for all 3 official Secret Broker SDKs.
+The Go, Python, and VS Code clients use the same `/api/v2` typed-operation
+contract. An automation supplies an allowlisted operation identifier and typed
+parameters; it never supplies an arbitrary URL, authentication header, command,
+or long-lived credential.
 
-## Common API surface
+## Preferred API
 
-All 3 SDKs implement the same 8 calling surfaces:
+| Capability | Python | Go | TypeScript |
+|---|---|---|---|
+| Create operation | `create_operation(...)` | `CreateOperation(...)` | `createOperation(...)` |
+| Read redacted state/result | `get_operation(id)` | `GetOperation(id)` | `getOperation(id)` |
+| Health check | `health()` | `Health()` | `health()` |
 
-| # | Surface | Method (all SDKs) |
-|---|---------|-------------------|
-| 1 | Single secret | `getSecret(name)` |
-| 1 | Bulk secrets | `resolveSecrets(names)` / `resolve_bulk(names)` |
-| 1 | List secrets | `listSecrets()` |
-| 2 | Proxy | `proxy(service, method, path, body, query)` |
-| 3 | Exec | `exec(env_names, command, args)` |
-| 4 | SSH exec | `sshExec(target, command, secretName, timeoutMs)` |
-| 4 | SSH tunnel | `sshTunnel(target, localPort, remoteHost, remotePort, secretName)` |
-| 5 | Workload identity | `assumeWorkloadIdentity(provider, oidcToken, roleArn, audience)` |
-| 6 | Login | `login(username, password, mfaToken, mfaCode)` |
-| 7 | Self / Health | `me()` / `health()` |
-| 8 | WebSocket | subscribe / unsubscribe / recv (async) |
+An operation request contains exactly:
+
+```json
+{
+  "provider": "github",
+  "operation_id": "repo.read",
+  "account_ref": "personal",
+  "environment": "production",
+  "typed_parameters": {
+    "resource_ref": "repository-name"
+  }
+}
+```
+
+The Broker evaluates the subject, provider, operation, account, environment,
+resource, approval state, rate, time and API-key constraints. Unknown fields
+are rejected by the operation schema. A completed response contains only the
+business result allowed by that operation; it must not contain injected
+credentials, cookies, signing material, internal paths, or browser state.
 
 ## Authentication
 
-| Mechanism | Config |
-|-----------|--------|
-| **mTLS client cert** (recommended) | `client_cert` / `client_cert` / `ClientCert` |
-| **mTLS client key** | `client_key` / `client_key` / `ClientKey` |
-| **CA cert (server verification)** | `ca_cert` / `ca_cert` / `CACert` |
-| **Verify TLS** (default true) | `verify_tls` / `verifyTls` / `VerifyTLS` |
-| **Password login + session cookie** | `login()` returns `session_token`, SDK auto-uses for subsequent calls |
-| **Workload identity** | `workload_identity` constructor arg |
+- Human control-plane access uses mTLS and WebAuthn. Strict profiles require
+  two non-synced hardware-bound credentials.
+- Browser sessions are delivered only as `Secure`, `HttpOnly`,
+  `SameSite=Strict` cookies with a ten-minute absolute lifetime. Login responses
+  do not repeat the session token in JSON.
+- Workloads use OIDC/SPIFFE-style short-lived identities where available.
+- An API key, when a compatibility integration still requires one, must be a
+  short-lived child key constrained by service, operation, account,
+  environment, resource, secret references, IP and rate. Empty constraint
+  lists deny typed operations.
+- TLS verification is enabled by default. Disabling it is not a supported
+  production configuration.
 
-## Common patterns
+## Legacy API surface
 
-### Bulk resolve for environment injection
+The SDKs retain v1 resolve, proxy, exec and SSH methods for isolated migration
+environments. Strict profiles deny these routes. New integrations must not use
+them, and examples must not export resolved secrets to environment variables or
+command arguments.
 
-=== "Node"
-    ```javascript
-    const env = await client.resolveSecrets(['github.pat', 'openai.key']);
-    const child = spawn('git', ['push'], { env: { ...process.env, ...env } });
-    ```
+The compatibility surface will be removed only after downstream users have
+migrated to versioned provider operations. Its presence is not evidence that a
+provider adapter is production-ready.
 
-=== "Python"
-    ```python
-    env = c.resolve_secrets(['github.pat', 'openai.key'])
-    subprocess.run(['git', 'push'], env={**os.environ, **env})
-    ```
+## Error and logging rules
 
-=== "Go"
-    ```go
-    env, _ := c.ResolveSecrets(ctx, []string{"github.pat", "openai.key"})
-    // Exec appends to os.Environ() automatically
-    rc, _ := c.Exec(ctx, []string{"github.pat", "openai.key"}, []string{"git", "push"})
-    ```
+SDK errors contain an operation name, HTTP status and stable redacted code.
+They never include request authorization, response bodies that may contain a
+credential, private key paths, OTP values or session cookies. Client logs must
+apply the shared canary-secret tests before release.
 
-### Workload identity (K8s Pod)
+## Release verification
 
-=== "Node"
-    ```javascript
-    import { BrokerClient, WorkloadIdentity } from '@tyj1987/broker-sdk';
-    const wi = new WorkloadIdentity({
-      provider: 'k8s',
-      roleArn: process.env.BROKER_ROLE_ARN,
-    });
-    const client = new BrokerClient({
-      endpoint: 'https://broker:8443',
-      cert: fs.readFileSync('/var/run/secrets/tls/client.crt'),
-      key: fs.readFileSync('/var/run/secrets/tls/client.key'),
-      ca: fs.readFileSync('/var/run/secrets/tls/ca.crt'),
-      workloadIdentity: wi,
-    });
-    const creds = await client.assumeWorkloadIdentity('aws');
-    ```
+Run each SDK's tests from a clean checkout:
 
-=== "Python"
-    ```python
-    from secret_broker import BrokerClient, WorkloadIdentity
-    wi = WorkloadIdentity("k8s", role_arn=os.environ["BROKER_ROLE_ARN"])
-    c = BrokerClient(
-        endpoint="https://broker:8443",
-        client_cert="/var/run/secrets/tls/client.crt",
-        client_key="/var/run/secrets/tls/client.key",
-        ca_cert="/var/run/secrets/tls/ca.crt",
-        workload_identity=wi,
-    )
-    creds = c.assume_workload_identity("aws")
-    ```
+```sh
+python -m pytest sdk/python/tests -q
+go test -race ./...
+npm --prefix sdk/vscode ci
+npm --prefix sdk/vscode test
+```
 
-=== "Go"
-    ```go
-    wi := broker.NewWorkloadIdentity(broker.ProviderK8S, os.Getenv("BROKER_ROLE_ARN"))
-    c, _ := broker.NewClient(broker.Config{
-        Endpoint: "https://broker:8443",
-        WorkloadIdentity: wi,
-        // ... certs
-    })
-    creds, _ := c.AssumeWorkloadIdentity(ctx, "aws", "", "", "")
-    ```
-
-### WebSocket event subscription
-
-=== "Node"
-    ```javascript
-    import { BrokerClient } from '@tyj1987/broker-sdk';
-    const client = new BrokerClient({ endpoint: 'wss://broker:8443', ... });
-    const ws = await client.connectWS('/ws');
-    await ws.subscribe(['alerts', 'secret_rotated']);
-    for await (const event of ws) {
-      console.log(event.event_type, event.data);
-    }
-    ```
-
-=== "Python"
-    ```python
-    import asyncio
-    from secret_broker import BrokerClient
-
-    async def watch():
-        c = BrokerClient(...)
-        async with await c.async_client().connect_ws() as ws:
-            await ws.subscribe(["alerts", "secret_rotated"])
-            async for event in ws:
-                print(event)
-
-    asyncio.run(watch())
-    ```
-
-=== "Go"
-    ```go
-    ws, _ := broker.WSConnect("https://broker:8443", "/ws", nil)
-    defer ws.Close()
-    ws.Subscribe([]string{"alerts", "secret_rotated"}, nil)
-    for {
-        msg, err := ws.Recv()
-        if err != nil { break }
-        fmt.Printf("[%s] %s\n", msg.EventType, msg.Data)
-    }
-    ```
-
-## Typed errors
-
-All SDKs raise typed errors that allow `errors.Is()` / `instanceof` checks.
-
-| HTTP | Node | Python | Go |
-|------|------|--------|-----|
-| 401  | `BrokerAuthError` | `BrokerAuthError` | `ErrAuth` |
-| 403  | `BrokerPermissionError` | `BrokerPermissionError` | `ErrPermission` |
-| 404  | `BrokerNotFoundError` | `BrokerNotFoundError` | `ErrNotFound` |
-| 429  | `BrokerRateLimitError` | `BrokerRateLimitError` | `ErrRateLimit` |
-| 5xx  | `BrokerServerError` | `BrokerServerError` | `ErrServer` |
-| Network | `BrokerConnectionError` | `BrokerConnectionError` | `ErrConnection` |
-
-## Zero credential leakage
-
-All SDKs run **incoming** error messages through a redaction engine before
-returning them. Patterns scrubbed:
-
-- `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` (GitHub PAT)
-- `github_pat_` (GitHub Container Registry)
-- `sk-` (OpenAI)
-- `sk-proj-` (OpenAI project-scoped)
-- `sk-ant-` (Anthropic)
-- `sk_(live|test)_` (Stripe)
-- `AKIA`, `ASIA` (AWS)
-- `STS.` (Aliyun STS)
-- `xoxb-`, `xoxp-`, `xapp-`, `xoxa-` (Slack)
-- `AIza` (Google API key)
-- `LTAI` (Aliyun AccessKey)
-- `eyJ*.eyJ*.eyJ*` (JWT)
-- UUID v4 in header context
-- `-----BEGIN .* PRIVATE KEY-----`
-- `Authorization: <value>`, `X-API-Key: <value>`, `token=<value>`, `password=<value>` in headers/queries
-
-This is enforced **on every code path**:
-- Python: `_redact()` in `secret_broker/client.py`
-- Go: `redact()` in `broker/errors.go`
-- Node: `redact()` in `sdk/node/src/redact.ts`
-- Plus server-side: `broker/lib/redact.js` scrubs **outgoing** audit log + alert payload
-
-## Hard dependencies
-
-| SDK | Runtime deps | Build/dev deps |
-|-----|--------------|-----------------|
-| Node | `ws` (WebSocket only) | TypeScript |
-| Python | **none** (stdlib only: ssl, urllib, asyncio, json) | pytest, cryptography (test only) |
-| Go | **none** (stdlib only: net/http, crypto/tls, encoding/json) | – |
-
-## Test counts
-
-| SDK | Tests | Status |
-|-----|-------|--------|
-| Python | 28 | ✅ 100% pass |
-| Go | 15 (test cases) | ✅ 100% (manual review; no Go toolchain in this env) |
-| Node | (covered by broker/tests) | – |
-| VS Code extension | 11 test cases | ✅ (uses Node https mock + openssl) |
-
-## Compatibility matrix
-
-| Python | Node | Go | Status |
-|--------|------|-----|--------|
-| 3.9+ | 20+ | 1.21+ | supported |
-| 3.8   | 18   | 1.20 | best-effort (no CI) |
-| 3.7-  | 16-  | 1.19- | EOL — please upgrade |
-
-## Where to get help
-
-- GitHub: https://github.com/tyj1987/broker/issues
-- Discord: #broker channel
-- Email: broker@local
-- Docs site: https://docs.broker.example.com
+The Python command assumes the pinned test requirements have been installed;
+the Go race test is a Linux CI gate. A package is released only from a signed
+release artifact whose commit, SBOM and provenance match the source tree.

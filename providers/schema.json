@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://broker.52trz.com/schemas/provider-manifest-v1.json",
+  "title": "Secret Broker provider manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_version", "id", "display_name", "checked_at", "status", "official_docs", "origins", "authentication", "operations", "redaction", "contract_test"],
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$" },
+    "display_name": { "type": "string", "minLength": 1 },
+    "checked_at": { "type": "string", "format": "date" },
+    "status": { "enum": ["draft", "contract_required", "production"] },
+    "official_docs": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://" } },
+    "origins": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://[^/]+/?$" } },
+    "authentication": {
+      "type": "object", "additionalProperties": false,
+      "required": ["priority", "inject"],
+      "properties": {
+        "priority": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "inject": { "type": "object", "additionalProperties": { "type": "string" } },
+        "maximum_ttl_seconds": { "type": "integer", "minimum": 60 },
+        "rotation": { "type": "string" },
+        "revocation": { "type": "string" }
+      }
+    },
+    "operations": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "method", "path_template", "permission", "mutating", "parameters"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,127}$" },
+          "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+          "path_template": { "type": "string", "pattern": "^/" },
+          "permission": { "type": "string" },
+          "mutating": { "type": "boolean" },
+          "approval": { "enum": ["none", "step_up", "two_person"] },
+          "parameters": { "type": "object" },
+          "fixed_headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "maximum_response_bytes": { "type": "integer", "minimum": 1, "maximum": 10485760 }
+        }
+      }
+    },
+    "redaction": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "contract_test": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account", "required", "last_result"],
+      "properties": {
+        "account": { "type": "string" }, "required": { "type": "boolean" },
+        "last_result": { "enum": ["not_run", "passed", "failed"] }
+      }
+    }
+  }
+}

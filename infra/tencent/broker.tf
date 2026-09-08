@@ -1,23 +1,18 @@
 # infra/tencent/broker.tf
 # 腾讯云部署 Secret Broker（CVM 镜像 + 数据盘 + EIP + 安全组）
-# 灾备使用：阿里云主，腾讯云备，平时空跑
-# 当主故障时切 DNS 指向这里（failover 脚本见 scripts/broker/failover.sh）
+# Disaster-recovery infrastructure only. Secrets and PKI are restored from an
+# encrypted, tested backup; they are never copied directly from the primary host.
 
 terraform {
-  required_version = ">= 1.5"
+  required_version = "= 1.16.1"
 
   required_providers {
     tencentcloud = {
       source  = "tencentcloudstack/tencentcloud"
-      version = "~> 1.81"
+      version = "= 1.83.26"
     }
   }
 
-  backend "cos" {
-    bucket = "my-tf-state-prod-1250000000"
-    key    = "secret-broker/tencent/terraform.tfstate"
-    region = "ap-shanghai"
-  }
 }
 
 provider "tencentcloud" {
@@ -37,7 +32,7 @@ resource "tencentcloud_subnet" "broker" {
   vpc_id            = tencentcloud_vpc.broker.id
   name              = "secret-broker-subnet"
   cidr_block        = "10.20.1.0/24"
-  availability_zone = "${var.region}1"
+  availability_zone = var.availability_zone
 }
 
 # 安全组
@@ -47,39 +42,72 @@ resource "tencentcloud_security_group" "broker" {
 }
 
 # SSH 仅 admin IP
-resource "tencentcloud_security_group_lite_rule" "ssh" {
+resource "tencentcloud_security_group_rule" "ssh" {
   security_group_id = tencentcloud_security_group.broker.id
   type              = "ingress"
-  protocol          = "TCP"
-  port              = "22"
+  ip_protocol       = "TCP"
+  port_range        = "22"
   cidr_ip           = var.admin_cidr
   policy            = "accept"
   description       = "SSH from admin"
 }
 
 # mTLS HTTPS 公网
-resource "tencentcloud_security_group_lite_rule" "mtls" {
+resource "tencentcloud_security_group_rule" "https" {
   security_group_id = tencentcloud_security_group.broker.id
   type              = "ingress"
-  protocol          = "TCP"
-  port              = "8443"
+  ip_protocol       = "TCP"
+  port_range        = "443"
   cidr_ip           = "0.0.0.0/0"
   policy            = "accept"
-  description       = "mTLS HTTPS (client cert auth)"
+  description       = "Trusted nginx TLS boundary"
 }
 
-# 出站
-resource "tencentcloud_security_group_lite_rule" "egress" {
+# Provider calls are HTTPS-only. Add reviewed private DNS/NTP rules for the selected VPC resolver.
+resource "tencentcloud_security_group_rule" "egress_https" {
   security_group_id = tencentcloud_security_group.broker.id
   type              = "egress"
-  protocol          = "ALL"
-  port              = "ALL"
+  ip_protocol       = "TCP"
+  port_range        = "443"
   cidr_ip           = "0.0.0.0/0"
   policy            = "accept"
+}
+
+resource "tencentcloud_security_group_rule" "egress_dns_udp" {
+  for_each          = toset(var.dns_resolver_cidrs)
+  security_group_id = tencentcloud_security_group.broker.id
+  type              = "egress"
+  ip_protocol       = "UDP"
+  port_range        = "53"
+  cidr_ip           = each.value
+  policy            = "accept"
+  description       = "DNS to an approved VPC resolver"
+}
+
+resource "tencentcloud_security_group_rule" "egress_dns_tcp" {
+  for_each          = toset(var.dns_resolver_cidrs)
+  security_group_id = tencentcloud_security_group.broker.id
+  type              = "egress"
+  ip_protocol       = "TCP"
+  port_range        = "53"
+  cidr_ip           = each.value
+  policy            = "accept"
+  description       = "DNS fallback to an approved VPC resolver"
+}
+
+resource "tencentcloud_security_group_rule" "egress_ntp" {
+  for_each          = toset(var.ntp_server_cidrs)
+  security_group_id = tencentcloud_security_group.broker.id
+  type              = "egress"
+  ip_protocol       = "UDP"
+  port_range        = "123"
+  cidr_ip           = each.value
+  policy            = "accept"
+  description       = "NTP to an approved time source"
 }
 
 # ============================
-# CVM - 单实例跑 broker
+# CVM standby instance
 # ============================
 
 # 选 2C2G 标准型
@@ -92,26 +120,28 @@ data "tencentcloud_instance_types" "broker" {
   }
 }
 
-# 选 Ubuntu 22.04 镜像
+# Select a current Ubuntu 24.04 LTS image from the provider catalog.
 data "tencentcloud_images" "ubuntu" {
-  image_type = ["PUBLIC_IMAGE"]
-  image_name_regex = ["^Ubuntu Server 22.04 LTS 64位$"]
+  image_type       = ["PUBLIC_IMAGE"]
+  image_name_regex = "^Ubuntu Server 24.04 LTS 64位$"
 }
 
 resource "tencentcloud_instance" "broker" {
   instance_name              = "secret-broker"
-  availability_zone          = "${var.region}1"
+  availability_zone          = var.availability_zone
   image_id                   = data.tencentcloud_images.ubuntu.images[0].image_id
   instance_type              = data.tencentcloud_instance_types.broker.instance_types[0].instance_type
   vpc_id                     = tencentcloud_vpc.broker.id
   subnet_id                  = tencentcloud_subnet.broker.id
   security_groups            = [tencentcloud_security_group.broker.id]
   internet_max_bandwidth_out = 10
-  allocate_public_ip         = false  # 用 EIP 关联
-  password                   = var.ssh_password
+  allocate_public_ip         = false # 用 EIP 关联
+  key_ids                    = var.ssh_key_ids
+  cam_role_name              = var.cam_role_name
   instance_charge_type       = "POSTPAID_BY_HOUR"
   system_disk_type           = "CLOUD_PREMIUM"
   system_disk_size           = 40
+  system_disk_encrypt        = true
 
   data_disks {
     data_disk_type = "CLOUD_PREMIUM"
@@ -122,11 +152,10 @@ resource "tencentcloud_instance" "broker" {
 
 # EIP
 resource "tencentcloud_eip" "broker" {
-  name                  = "secret-broker-eip"
+  name                       = "secret-broker-eip"
   internet_max_bandwidth_out = 10
-  internet_charge_type  = "TRAFFIC_POSTPAID_BY_HOUR"
-  instance_type         = "EIP"
-  type                  = "EIP"
+  internet_charge_type       = "TRAFFIC_POSTPAID_BY_HOUR"
+  type                       = "EIP"
 }
 
 resource "tencentcloud_eip_association" "broker" {
@@ -139,22 +168,15 @@ resource "tencentcloud_eip_association" "broker" {
 # ============================
 
 output "broker_public_ip" {
-  value       = tencentcloud_eip.broker.ip_address
+  value       = tencentcloud_eip.broker.public_ip
   description = "Secret Broker 公网 IP（灾备，平时不用）"
 }
 
 output "broker_ssh_cmd" {
-  value       = "ssh ubuntu@${tencentcloud_eip.broker.ip_address}"
+  value = "ssh ubuntu@${tencentcloud_eip.broker.public_ip}"
 }
 
-output "failover_note" {
-  value = <<-EOT
-  Failover 流程：
-  1. 阿里云 broker 故障时，把 broker.${var.broker_domain} 的 DNS A 记录指向 ${tencentcloud_eip.broker.ip_address}
-  2. 在腾讯云 ECS 上：
-     - rsync secrets/, pki/, age/  from 阿里云
-     - docker compose up -d broker
-  3. 反向 failover 同样
-  详细：scripts/broker/failover.sh
-  EOT
+output "recovery_endpoint" {
+  value       = "https://${var.broker_domain}"
+  description = "Enable only after an approved restore, certificate validation, and read-only smoke test"
 }

@@ -1,11 +1,13 @@
 // broker/lib/mtls.js — V4.1.1 extraction of identity resolution.
 //
-// Three auth sources, in priority order:
-//   1. API Key Bearer  (browser / web AI client; no mTLS)
-//   2. Session cookie  (dashboard login)
-//   3. mTLS client cert (CLI / scripts / direct TLS) — two flavors:
+// Three auth sources are resolved without allowing a weaker supplied identity
+// to replace a stronger one. When a bearer key accompanies mTLS or a session,
+// it is intersected with that same owner rather than becoming the principal:
+//   1. mTLS client cert (CLI / scripts / direct TLS) — two flavors:
 //        3a. nginx forward via X-SSL-Client-Verify (when request comes via loopback)
 //        3b. direct peer-cert via Node TLS API
+//   2. Session cookie (dashboard login)
+//   3. API Key Bearer (standalone workload, or a narrowing delegation)
 //
 // This module is a factory that returns { getIdentity, getApiKeyIdentity } and
 // takes all dependencies via a single `deps` object so it's trivially testable
@@ -72,9 +74,13 @@ export function createIdentityResolver(deps) {
     const k = findApiKey(config.api_keys, secret);
     if (!k) return null;
     // v3.2: enforce ip_whitelist when set
-    const remoteIp = req.socket?.remoteAddress
-      || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()
-      || '';
+    const socketIp = req.socket?.remoteAddress || '';
+    const forwarded = req.headers['x-forwarded-for'];
+    const remoteIp = trustedProxyConnection(req, config)
+      && typeof forwarded === 'string'
+      && !forwarded.includes(',')
+      ? forwarded.trim()
+      : socketIp;
     if (!isClientIpAllowed(k, remoteIp)) {
       audit({
         action: 'connect',
@@ -105,82 +111,121 @@ export function createIdentityResolver(deps) {
    * }}
    */
   function getIdentity(req) {
-    // 0. API Key Bearer (priority over session because browser may set both)
+    const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+    const bearerSupplied = typeof authHeader === 'string' && authHeader.trim() !== '';
     const apiKeyCtx = getApiKeyIdentity(req);
-    if (apiKeyCtx) {
-      if (apiKeyCtx.rate_limited) {
-        audit({ action: 'connect', status: 'denied', reason: 'api_key_rate_limit', cn: apiKeyCtx.clientName });
-        return null;
-      }
-      return {
-        cn: `apikey:${apiKeyCtx.apiKey.id}`,
-        fp: apiKeyCtx.apiKey.id,
-        client: apiKeyCtx.client,
-        clientName: apiKeyCtx.clientName,
-        certSubject: { CN: `apikey:${apiKeyCtx.apiKey.id}`, O: 'api_key' },
-        via: 'api_key',
-        apiKey: apiKeyCtx.apiKey,
-      };
+    if (bearerSupplied && !apiKeyCtx) return null;
+    if (apiKeyCtx?.rate_limited) {
+      audit({ action: 'connect', status: 'denied', reason: 'api_key_rate_limit', cn: apiKeyCtx.clientName });
+      return null;
     }
-    // 1. session token
-    const session = getSession(req);
-    if (session) {
-      return {
-        cn: session.cn,
-        fp: session.fp,
-        client: session.client,
-        clientName: session.clientName,
-        certSubject: session.cert?.subject || { CN: session.cn },
-        via: 'session',
-      };
-    }
-    // 2a. nginx-forwarded mTLS (X-SSL-Client-Verify header from loopback)
+
+    let primary = null;
+    // 1a. nginx-forwarded mTLS. A proxy marker on any other connection is a
+    // hard failure; it is never treated as ordinary caller metadata.
     const remote = req.socket?.remoteAddress || '';
     const fromLocalProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-    if (fromLocalProxy && req.headers['x-ssl-client-verify'] !== undefined) {
+    const proxyHeaderPresent = req.headers['x-ssl-client-verify'] !== undefined;
+    if (proxyHeaderPresent) {
+      const config = effectiveConfig();
+      if (!fromLocalProxy || !config || !trustedProxyConnection(req, config)) {
+        audit({ action: 'connect', status: 'denied', reason: 'untrusted_proxy_identity', remote });
+        return null;
+      }
       const verify = String(req.headers['x-ssl-client-verify'] || '');
       const escaped = req.headers['x-ssl-client-cert'];
-      if (verify !== 'SUCCESS' || !escaped) return null;
-      try {
-        const config = effectiveConfig();
-        if (!config) return null;
-        const pem = decodeURIComponent(String(escaped));
-        const X509 = requireNodeCrypto?.X509Certificate || X509Certificate;
-        const x509 = new X509(pem);
-        const fp = x509.fingerprint256;
-        const cnMatch = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '');
-        const cn = cnMatch ? cnMatch[1] : (x509.subject || '');
-        if (!fp) return null;
-        const matched = matchClientByFingerprint(config.clients, fp);
-        if (!matched) return null;
-        recordClientSeen(matched.name);
-        return { cn: cn || matched.name, fp, client: matched.cfg, clientName: matched.name, certSubject: { CN: cn || matched.name }, via: 'mtls-header' };
-      } catch (e) {
+      if (verify === 'SUCCESS') {
+        if (!escaped) return null;
+        try {
+          const pem = decodeURIComponent(String(escaped));
+          const X509 = requireNodeCrypto?.X509Certificate || X509Certificate;
+          const x509 = new X509(pem);
+          const fp = x509.fingerprint256;
+          const cnMatch = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '');
+          const cn = cnMatch ? cnMatch[1] : (x509.subject || '');
+          if (!fp) return null;
+          const matched = matchClientByFingerprint(config.clients, fp);
+          if (!matched) return null;
+          recordClientSeen(matched.name);
+          primary = { cn: cn || matched.name, fp, client: matched.cfg, clientName: matched.name, certSubject: { CN: cn || matched.name }, via: 'mtls-header' };
+        } catch {
+          return null;
+        }
+      } else if (verify !== 'NONE') {
         return null;
       }
     }
-    // 2b. Direct mTLS (peer-cert)
-    let cert = null;
-    if (typeof req.socket.getPeerCertificate === 'function') {
-      try { cert = req.socket.getPeerCertificate(true); } catch { cert = null; }
+
+    // 1b. Direct mTLS is never inferred through a marked reverse-proxy hop.
+    if (!proxyHeaderPresent && req.socket?.authorized === true) {
+      let cert = null;
+      if (typeof req.socket.getPeerCertificate === 'function') {
+        try { cert = req.socket.getPeerCertificate(true); } catch { cert = null; }
+      }
+      if (cert?.subject && cert.subject.CN && cert.fingerprint256) {
+        const config = effectiveConfig();
+        if (!config) return null;
+        const matched = matchClientByFingerprint(config.clients, cert.fingerprint256);
+        if (matched) {
+          recordClientSeen(matched.name);
+          primary = {
+            cn: cert.subject.CN, fp: cert.fingerprint256, client: matched.cfg,
+            clientName: matched.name, certSubject: cert.subject, via: 'mtls',
+          };
+        }
+      }
     }
-    if (!cert || !cert.subject) return null;
-    const cn = cert.subject.CN;
-    const fp = cert.fingerprint256;
-    if (!cn || !fp) return null;
-    const config = effectiveConfig();
-    if (!config) return null;
-    const matched = matchClientByFingerprint(config.clients, fp);
-    if (!matched) return null;
-    recordClientSeen(matched.name);
+
+    // 2. A session is considered only when no certificate identity exists.
+    if (!primary) {
+      const session = getSession(req);
+      if (session) {
+        primary = {
+          cn: session.cn,
+          fp: session.fp,
+          client: session.client,
+          clientName: session.clientName,
+          certSubject: session.cert?.subject || { CN: session.cn },
+          via: 'session',
+          authFactors: Array.isArray(session.authFactors) ? [...session.authFactors] : [],
+        };
+      }
+    }
+
+    // A supplied API key narrows an existing identity and must belong to the
+    // same subject. It cannot replace a certificate or session identity.
+    if (primary && apiKeyCtx) {
+      if (primary.clientName !== apiKeyCtx.clientName) {
+        audit({ action: 'connect', status: 'denied', reason: 'identity_binding_mismatch', cn: primary.clientName });
+        return null;
+      }
+      return { ...primary, apiKey: apiKeyCtx.apiKey };
+    }
+    if (primary) return primary;
+    if (!apiKeyCtx) return null;
     return {
-      cn, fp, client: matched.cfg, clientName: matched.name,
-      certSubject: cert.subject,
-      via: 'mtls',
+      cn: `apikey:${apiKeyCtx.apiKey.id}`,
+      fp: apiKeyCtx.apiKey.id,
+      client: apiKeyCtx.client,
+      clientName: apiKeyCtx.clientName,
+      certSubject: { CN: `apikey:${apiKeyCtx.apiKey.id}`, O: 'api_key' },
+      via: 'api_key',
+      apiKey: apiKeyCtx.apiKey,
     };
   }
 
   return { getIdentity, getApiKeyIdentity };
+}
+
+function trustedProxyConnection(req, config) {
+  const remote = req.socket?.remoteAddress || '';
+  const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+  if (!loopback || req.socket?.authorized !== true || typeof req.socket.getPeerCertificate !== 'function') return false;
+  let certificate;
+  try { certificate = req.socket.getPeerCertificate(true); } catch { return false; }
+  const fingerprint = String(certificate?.fingerprint256 || '').toUpperCase();
+  return fingerprint !== '' && (config.trusted_proxy_fingerprints || [])
+    .some((value) => String(value).toUpperCase() === fingerprint);
 }
 
 function matchClientByFingerprint(clients, fp) {

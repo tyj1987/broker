@@ -14,6 +14,9 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { createSocket } from 'node:dgram';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -75,8 +78,8 @@ class HttpSink {
       try {
         const u = new URL(url);
         const isHttps = u.protocol === 'https:';
-        const mod = isHttps ? require('node:https') : require('node:http');
-        const req = mod.request({
+        const request = isHttps ? httpsRequest : httpRequest;
+        const req = request({
           hostname: u.hostname,
           port: u.port || (isHttps ? 443 : 80),
           path: u.pathname + u.search,
@@ -109,8 +112,7 @@ class SyslogSink {
       const tag = 'secret-broker';
       // RFC 5424 format
       const syslogLine = `<${pri}>1 ${new Date().toISOString()} ${hostname} ${tag} - - - ${line}`;
-      const dgram = require('node:dgram');
-      const client = dgram.createSocket('udp4');
+      const client = createSocket('udp4');
       client.send(Buffer.from(syslogLine), this.port, this.host, (err) => {
         client.close();
       });

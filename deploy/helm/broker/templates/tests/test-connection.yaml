@@ -1,3 +1,4 @@
+{{- if .Values.tests.enabled }}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -10,19 +11,50 @@ metadata:
 spec:
   restartPolicy: Never
   containers:
-    - name: curl
-      image: curlimages/curl:8.7.1
+    - name: health
+      image: {{ include "broker.image" . }}
       command:
-        - /bin/sh
-        - -ec
+        - node
+        - -e
         - |
-          # /health is unauthenticated; verify broker is up
-          curl -ksS --max-time 5 https://{{ include "broker.fullname" . }}:{{ .Values.service.port }}/health || exit 1
-          echo "broker health ok"
+          const fs = require('node:fs');
+          const https = require('node:https');
+          const request = https.request({
+            host: '{{ include "broker.fullname" . }}',
+            port: {{ .Values.service.port }},
+            path: '/health', method: 'GET',
+            servername: '{{ .Values.tests.tlsServerName }}',
+            ca: fs.readFileSync('/etc/broker/ca/ca.crt'),
+            cert: fs.readFileSync('/etc/broker/client/tls.crt'),
+            key: fs.readFileSync('/etc/broker/client/tls.key'),
+            timeout: 5000, rejectUnauthorized: true,
+          }, (response) => process.exit(response.statusCode === 200 ? 0 : 1));
+          request.on('timeout', () => request.destroy());
+          request.on('error', () => process.exit(1));
+          request.end();
       securityContext:
         allowPrivilegeEscalation: false
         runAsNonRoot: true
-        runAsUser: 1000
+        runAsUser: 65532
         capabilities:
           drop:
             - ALL
+      volumeMounts:
+        - name: broker-ca
+          mountPath: /etc/broker/ca
+          readOnly: true
+        - name: broker-client
+          mountPath: /etc/broker/client
+          readOnly: true
+  volumes:
+    - name: broker-ca
+      secret:
+        secretName: {{ required "secrets.tlsSecretName is required" .Values.secrets.tlsSecretName }}
+        items:
+          - key: ca.crt
+            path: ca.crt
+    - name: broker-client
+      secret:
+        secretName: {{ required "tests.clientCertificateSecret is required when tests.enabled=true" .Values.tests.clientCertificateSecret }}
+        defaultMode: 0400
+{{- end }}

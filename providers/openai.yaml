@@ -1,0 +1,25 @@
+manifest_version: 1
+id: openai
+display_name: OpenAI API
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://developers.openai.com/api/reference/overview
+  - https://developers.openai.com/api/docs/guides/workload-identity-federation
+origins: [https://api.openai.com]
+authentication:
+  priority: [workload_identity_federation, project_service_account, project_api_key]
+  inject: { Authorization: "Bearer {{access_token}}" }
+  rotation: Prefer WIF; otherwise rotate a project-scoped service account key.
+  revocation: Remove the project service account key in the OpenAI platform.
+operations:
+  - id: models.list
+    method: GET
+    path_template: /v1/models
+    permission: api.models.read
+    mutating: false
+    approval: none
+    parameters: {}
+    maximum_response_bytes: 2097152
+redaction: [Authorization, api_key, access_token, organization_id, project_id]
+contract_test: { account: isolated_openai_project, required: true, last_result: not_run }

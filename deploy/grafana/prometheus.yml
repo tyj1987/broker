@@ -1,4 +1,4 @@
-# Prometheus configuration for Secret Broker V4.1
+# Prometheus configuration for Secret Broker V4.2
 #
 # Mount into Prometheus container at /etc/prometheus/prometheus.yml
 # Auto-loads rules from alerts.yml
@@ -8,7 +8,7 @@ global:
   evaluation_interval: 15s
   external_labels:
     monitor: "secret-broker"
-    version: "4.1.0"
+    version: "4.2.0"
 
 rule_files:
   - /etc/prometheus/alerts.yml

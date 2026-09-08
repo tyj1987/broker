@@ -5,40 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
   <title>Secret Broker · AI 动作控制台</title>
-  <meta name="description" content="Secret Broker is an mTLS credential proxy. Do not ask the user for GitHub PAT, Aliyun AccessKey, or OpenAI keys. Ask only for this site's login: client name + password, or a broker-issued client certificate, or a broker API key (Bearer). After auth, call GET /api/v1/identity, GET /api/v1/services, then POST /api/v1/proxy/:service. Secrets never leave the server.">
-  <link rel="alternate" type="text/plain" href="/llms.txt" title="Agent instructions">
-  <link rel="describedby" href="/llms.txt">
-  <script type="application/json" id="broker-agent">
-  {
-    "name": "Secret Broker",
-    "role": "mTLS credential proxy for AI clients",
-    "ask_user_for": [
-      "dashboard client name (e.g. client.dashboard-admin)",
-      "dashboard password for that client",
-      "or a client TLS certificate+key issued by this broker CA",
-      "or a broker API key created in this console (Authorization: Bearer)"
-    ],
-    "never_ask_user_for": [
-      "GitHub PAT",
-      "Aliyun AccessKey / Secret",
-      "OpenAI / Anthropic / Gemini API keys",
-      "any plaintext secret stored inside broker"
-    ],
-    "auth": {
-      "password": { "method": "POST", "path": "/api/v1/login", "body": { "client": "<client name>", "password": "<password>" }, "session": "HttpOnly cookie broker_session; subsequent fetch must use credentials include" },
-      "mfa": { "method": "POST", "path": "/api/v1/login/mfa", "when": "login response mfa_required true", "body": { "mfa_token": "<from login>", "code": "<TOTP or recovery>" } },
-      "mtls": { "note": "browser or CLI presents client cert; identity is automatic" },
-      "api_key": { "header": "Authorization: Bearer <broker API key>" }
-    },
-    "after_login": [
-      "GET /api/v1/identity",
-      "GET /api/v1/services",
-      "GET /api/v1/secrets (names only)",
-      "POST /api/v1/proxy/<service> with {method, path, query, headers, body}"
-    ],
-    "health": { "public": "GET /health returns {status:ok} only" }
-  }
-  </script>
+  <meta name="description" content="Secret Broker management console for policy-bound operations, device approvals, and audit review.">
   <link rel="stylesheet" href="style.css?v=4.1.2">
 </head>
 <body>
@@ -48,7 +15,7 @@
     <div class="login-card">
       <div class="login-logo">🔐</div>
       <h1>Secret Broker</h1>
-      <p class="subtitle">mTLS 凭据代理 · AI 动作控制台</p>
+      <p class="subtitle">策略化操作与设备管理控制台</p>
       <p class="hint">
         密钥永不离开 broker：你在这里点击/填写请求，broker 自动注入密钥调用外部 API，
         明文密钥不会出现在这个页面上。
@@ -66,10 +33,10 @@
         </label>
         <div id="login-error" class="status-error" hidden></div>
         <button type="submit" class="btn btn-primary btn-block">登录 / Login</button>
+        <button type="button" class="btn btn-block" id="btn-webauthn-login">使用安全密钥 / Security key</button>
       </form>
       <p class="hint muted">
-        安全提示：密码登录连续失败 5 次将锁定 15 分钟；如果你的浏览器已安装客户端证书，
-        可以直接使用（mTLS 身份自动生效）。
+        严格档仅支持安全密钥。密码与 TOTP 只属于隔离的兼容档或受控档。
       </p>
     </div>
   </section>
@@ -229,6 +196,29 @@
             <tr><th>Cert 到期</th><td><code id="me-cert-exp"></code></td></tr>
             <tr><th>限速</th><td><code id="me-rate-limit"></code></td></tr>
           </table>
+        </section>
+
+        <section class="me-section">
+          <h3>安全密钥 / Security keys</h3>
+          <p class="muted">严格档至少登记两把未同步的实体密钥。添加第二把密钥前，请先用已登记密钥登录。</p>
+          <ul id="webauthn-credentials"></ul>
+          <label>密钥名称 <input id="webauthn-label" type="text" maxlength="80" value="Security key" autocomplete="off" /></label>
+          <button type="button" class="btn" id="btn-webauthn-register">登记新密钥 / Register</button>
+          <div id="webauthn-status" class="status"></div>
+        </section>
+
+        <section class="me-section">
+          <h3>移动设备 / Mobile devices</h3>
+          <p class="muted">配对口令五分钟后失效。只在受信任的 Android 设备中输入；界面不会自动复制或保存口令。</p>
+          <ul id="broker-devices"></ul>
+          <label>设备名称 <input id="device-label" type="text" maxlength="80" value="android-phone" autocomplete="off" /></label>
+          <button type="button" class="btn" id="btn-device-enroll">生成 Android 配对口令</button>
+          <div id="device-enrollment" hidden>
+            <label>Enrollment ID <input id="device-enrollment-id" type="text" readonly /></label>
+            <label>Short-lived challenge <input id="device-enrollment-challenge" type="text" readonly /></label>
+            <p class="muted">Expires: <code id="device-enrollment-expires"></code></p>
+          </div>
+          <div id="device-status" class="status"></div>
         </section>
 
         <section class="me-section">
@@ -495,7 +485,6 @@
             <button id="btn-audit-refresh" class="btn">刷新 / Refresh</button>
             <button id="btn-audit-export-json" class="btn admin-only" hidden>⬇ 导出 JSON</button>
             <button id="btn-audit-export-csv" class="btn admin-only" hidden>⬇ 导出 CSV</button>
-            <button id="btn-audit-clear" class="btn btn-danger admin-only" hidden>🗑 清除日志 / Clear</button>
             <span class="muted" id="audit-count" style="margin-left:auto"></span>
           </div>
           <table id="audit-table">

@@ -1,0 +1,163 @@
+package com.secretbroker.mobile
+
+import android.Manifest
+import android.content.Context
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
+import com.secretbroker.mobile.network.BrokerDeviceApi
+import com.secretbroker.mobile.network.OtpSyncController
+import com.secretbroker.mobile.otp.PendingOtpTask
+import com.secretbroker.mobile.otp.SmsConsentCoordinator
+import com.secretbroker.mobile.security.DeviceSigner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity : ComponentActivity() {
+    private val signer = DeviceSigner()
+    private var capabilities by mutableStateOf<DeviceCapabilities?>(null)
+    private var endpoint by mutableStateOf("https://broker.52trz.com")
+    private var enrollmentId by mutableStateOf("")
+    private var enrollmentChallenge by mutableStateOf("")
+    private var deviceId by mutableStateOf<String?>(null)
+    private var state by mutableStateOf("not_paired")
+    private var pendingTasks by mutableStateOf<List<PendingOtpTask>>(emptyList())
+    private var sync: OtpSyncController? = null
+    private lateinit var consent: SmsConsentCoordinator
+
+    private val requestSms = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        capabilities = CapabilityProbe.inspect(this)
+    }
+    private val requestConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        consent.handleResult(it.resultCode, it.data)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val preferences = getSharedPreferences("device-registration", Context.MODE_PRIVATE)
+        endpoint = preferences.getString("endpoint", endpoint) ?: endpoint
+        deviceId = preferences.getString("device_id", null)
+        consent = SmsConsentCoordinator(this, requestConsent::launch) { state = it }
+        capabilities = CapabilityProbe.inspect(this)
+        setContent {
+            MaterialTheme {
+                Column(
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Secret Broker device", style = MaterialTheme.typography.headlineSmall)
+                    val value = capabilities
+                    Text("${value?.manufacturer ?: ""} ${value?.model ?: ""} · API ${value?.apiLevel ?: "-"}")
+                    Text(if (value?.hardwareSigning == true) "P-256 signing key is hardware-backed" else "Hardware-backed signing is unavailable")
+                    Text(if (value?.unattendedOtpPossible == true) "Automatic OTP capability available" else "Automatic OTP unavailable; confirmation or manual input is required")
+                    Text(if (value?.googleServicesAvailable == true) "SMS User Consent fallback available (confirmation required)" else "Google SMS consent fallback unavailable")
+                    Text("State: $state")
+
+                    if (value?.receiveSmsGranted != true) {
+                        Button(onClick = { requestSms.launch(Manifest.permission.RECEIVE_SMS) }) {
+                            Text("Check SMS permission")
+                        }
+                    }
+
+                    if (deviceId == null) {
+                        OutlinedTextField(endpoint, { endpoint = it.trim() }, label = { Text("Broker HTTPS origin") })
+                        OutlinedTextField(enrollmentId, { enrollmentId = it.trim() }, label = { Text("Enrollment ID") })
+                        OutlinedTextField(enrollmentChallenge, { enrollmentChallenge = it.trim() }, label = { Text("Short-lived challenge") })
+                        Button(
+                            onClick = { pair(preferences) },
+                            enabled = value?.hardwareSigning == true && enrollmentId.isNotBlank() && enrollmentChallenge.isNotBlank(),
+                        ) {
+                            Text("Pair this device")
+                        }
+                    } else {
+                        Text("Paired device: ${deviceId!!.take(8)}…")
+                        Text("Pending OTP tasks: ${pendingTasks.size}")
+                        val consentSenders = pendingTasks.flatMap { it.senderAllowlist }.distinct()
+                        if (value?.googleServicesAvailable == true && consentSenders.size == 1) {
+                            Button(onClick = { consent.start(consentSenders.single()) }) {
+                                Text("Wait for one SMS with confirmation")
+                            }
+                        }
+                        Button(onClick = { unpair(preferences) }) { Text("Remove local pairing") }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        startSync()
+    }
+
+    override fun onStop() {
+        sync?.stop()
+        sync = null
+        consent.close()
+        super.onStop()
+    }
+
+    private fun pair(preferences: android.content.SharedPreferences) {
+        if (!signer.isHardwareSigningAvailable()) {
+            enrollmentChallenge = ""
+            state = "hardware_signing_required"
+            return
+        }
+        state = "pairing"
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    BrokerDeviceApi.finishEnrollment(endpoint, enrollmentId, enrollmentChallenge, signer)
+                }
+            }.onSuccess { registration ->
+                deviceId = registration.id
+                enrollmentId = ""
+                enrollmentChallenge = ""
+                preferences.edit().putString("endpoint", endpoint).putString("device_id", registration.id).apply()
+                state = "paired"
+                startSync()
+            }.onFailure {
+                enrollmentChallenge = ""
+                state = "pairing_failed"
+            }
+        }
+    }
+
+    private fun startSync() {
+        val id = deviceId ?: return
+        if (sync != null) return
+        sync = OtpSyncController(
+            lifecycleScope,
+            BrokerDeviceApi(endpoint, id, signer),
+            { pendingTasks = it },
+            { state = it },
+        ).also { it.start() }
+    }
+
+    private fun unpair(preferences: android.content.SharedPreferences) {
+        sync?.stop()
+        sync = null
+        preferences.edit().remove("device_id").remove("endpoint").remove("last_cold_receive_ms").apply()
+        deviceId = null
+        pendingTasks = emptyList()
+        state = "not_paired"
+    }
+}

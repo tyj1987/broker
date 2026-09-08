@@ -25,3 +25,11 @@ b9eebbe559325ccd7b6628efe3598570f53a6284:broker/type-schemas.js:private-key:229
 
 # Synthetic patterns introduced in v4.1.1 — known safe, but flagged by gitleaks:
 48c8bb7023aedf4dfda496ed9728a7132731b53d:REVIEW.md:curl-auth-header:484
+48c8bb7023aedf4dfda496ed9728a7132731b53d:broker-test/test-audit-async.js:generic-api-key:138
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:docs/DESIGN-V4-API-CALLING-STANDARDS.md:curl-auth-header:1384
+63e540bf8da4c90b22a61bc76ecfa19fb55b7255:docs/DESIGN-V4-API-CALLING-STANDARDS.md:curl-auth-header:1390
+23539cca9b0a87fbe89429b3de9dcdb0bca67c21:docs/PLAN-secret-broker-v3.md:curl-auth-header:494
+
+# Public extension identity and deliberately malformed JWT fixture:
+clients/browser/manifest.json:generic-api-key:6
+sdk/vscode/src/test/client.test.ts:jwt:11

@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-main",
+  "description": "Bundled main window with invoke access only",
+  "local": true,
+  "windows": ["main"],
+  "platforms": ["windows", "linux"],
+  "permissions": [
+    "allow-broker-health",
+    "allow-store-api-key",
+    "allow-delete-api-key",
+    "allow-store-browser-bridge-key",
+    "allow-delete-browser-bridge-key",
+    "allow-create-operation",
+    "allow-get-operation"
+  ]
+}

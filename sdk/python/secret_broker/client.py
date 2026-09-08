@@ -26,6 +26,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.cookies import SimpleCookie
 import uuid
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -39,7 +40,7 @@ from .exceptions import (
     BrokerServerError,
 )
 
-__version__ = "4.1.0"
+__version__ = "4.2.0"
 
 # ============================================================
 # 凭据零接触: redact 任何错误消息
@@ -231,12 +232,26 @@ class BrokerClient:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ctx) as resp:
                 raw = resp.read()
                 status = resp.getcode()
+                self._capture_session_cookie(resp.headers)
         except urllib.error.HTTPError as e:
             raw = e.read() if e.fp else b""
             status = e.code
+            self._capture_session_cookie(e.headers)
         except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError) as e:
             raise BrokerConnectionError(f"connection failed: {_redact(str(e))}") from e
         return status, self._parse_body(raw, status)
+
+    def _capture_session_cookie(self, headers: Any) -> None:
+        if not headers:
+            return
+        value = headers.get("Set-Cookie")
+        if not value:
+            return
+        jar = SimpleCookie()
+        jar.load(value)
+        morsel = jar.get("broker_session")
+        if morsel is not None:
+            self._session_cookie = morsel.value or None
 
     @staticmethod
     def _parse_body(raw: bytes, status: int) -> Any:
@@ -248,7 +263,7 @@ class BrokerClient:
             return raw.decode("utf-8", errors="replace")
 
     def _check(self, status: int, body: Any, action: str) -> Any:
-        if status in (200, 201, 204):
+        if 200 <= status < 300:
             return body
         msg = ""
         code = None
@@ -320,16 +335,99 @@ class BrokerClient:
         raise_on_error: bool = True,
     ) -> Tuple[int, Any]:
         sub_path = path if path.startswith("/") else "/" + path
-        url_path = f"/api/v1/proxy/{urllib.parse.quote(service, safe='')}{sub_path}"
-        req_body = None
-        if body is not None and not isinstance(body, (bytes, str)):
-            req_body = {"body": body}
-        elif isinstance(body, (bytes, str)):
-            req_body = {"raw": body}
-        status, resp = self._request(method, url_path, body=req_body, query=query)
+        req_body: Dict[str, Any] = {"method": method.upper(), "path": sub_path}
+        if query:
+            req_body["query"] = dict(query)
+        if body is not None:
+            req_body["body"] = body
+        status, resp = self._request(
+            "POST", f"/api/v1/proxy/{urllib.parse.quote(service, safe='')}", body=req_body
+        )
         if raise_on_error:
             self._check(status, resp, "proxy")
         return status, resp
+
+    # ------------------------------------------------------------------
+    # V2 typed operations (preferred for automation)
+    # ------------------------------------------------------------------
+    def create_operation(
+        self,
+        provider: str,
+        operation_id: str,
+        account_ref: str,
+        environment: str,
+        typed_parameters: Mapping[str, Any],
+        otp: Optional[Mapping[str, Any]] = None,
+        approval_request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a policy-bound operation without exposing a credential."""
+        request_body: Dict[str, Any] = {
+            "provider": provider,
+            "operation_id": operation_id,
+            "account_ref": account_ref,
+            "environment": environment,
+            "typed_parameters": dict(typed_parameters),
+        }
+        if otp is not None:
+            request_body["otp"] = dict(otp)
+        if approval_request_id is not None:
+            request_body["approval_request_id"] = approval_request_id
+        status, body = self._request("POST", "/api/v2/operations", body=request_body)
+        self._check(status, body, "create_operation")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected operation response")
+        return body
+
+    def create_approval(
+        self,
+        provider: str,
+        operation_id: str,
+        account_ref: str,
+        environment: str,
+        typed_parameters: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Create an approval request bound to an exact typed operation."""
+        request_body = {
+            "provider": provider,
+            "operation_id": operation_id,
+            "account_ref": account_ref,
+            "environment": environment,
+            "typed_parameters": dict(typed_parameters),
+        }
+        status, body = self._request("POST", "/api/v2/approvals", body=request_body)
+        self._check(status, body, "create_approval")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected approval response")
+        return body
+
+    def list_approvals(self) -> Sequence[Mapping[str, Any]]:
+        """List requests visible to the current requester or approver."""
+        status, body = self._request("GET", "/api/v2/approvals")
+        self._check(status, body, "list_approvals")
+        if not isinstance(body, dict) or not isinstance(body.get("approvals"), list):
+            raise BrokerError("unexpected approval list response")
+        return body["approvals"]
+
+    def decide_approval(self, approval_id: str, decision: str) -> Dict[str, Any]:
+        """Approve or reject using an already WebAuthn-stepped-up session."""
+        if decision not in ("approve", "reject"):
+            raise ValueError("decision must be approve or reject")
+        path = f"/api/v2/approvals/{urllib.parse.quote(approval_id, safe='')}/decision"
+        status, body = self._request("POST", path, body={"decision": decision})
+        self._check(status, body, "decide_approval")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected approval response")
+        return body
+
+    def get_operation(self, operation_id: str) -> Dict[str, Any]:
+        """Read only the redacted result allowed by the operation policy."""
+        status, body = self._request(
+            "GET", f"/api/v2/operations/{urllib.parse.quote(operation_id, safe='')}"
+        )
+        self._check(status, body, "get_operation")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected operation response")
+        return body
 
     # ------------------------------------------------------------------
     # 3. exec — spawn subprocess with secrets in env
@@ -435,14 +533,16 @@ class BrokerClient:
         mfa_token: Optional[str] = None,
         mfa_code: Optional[str] = None,
     ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"username": username, "password": password}
-        if mfa_token:
-            body["mfa_token"] = mfa_token
-        if mfa_code:
-            body["mfa_code"] = mfa_code
-        status, resp = self._request("POST", "/api/v1/login", body=body)
-        if status == 200 and isinstance(resp, dict) and resp.get("session_token"):
-            self._session_cookie = resp["session_token"]
+        if mfa_token or mfa_code:
+            if not mfa_token or not mfa_code:
+                raise ValueError("mfa_token and mfa_code must be provided together")
+            status, resp = self._request(
+                "POST", "/api/v1/login/mfa", body={"mfa_token": mfa_token, "code": mfa_code}
+            )
+        else:
+            status, resp = self._request(
+                "POST", "/api/v1/login", body={"client": username, "password": password}
+            )
         self._check(status, resp, "login")
         return resp
 

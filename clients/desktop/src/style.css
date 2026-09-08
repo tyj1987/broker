@@ -1,0 +1,10 @@
+:root { font-family: Inter, "Segoe UI", sans-serif; color: #17324a; background: #eef3f6; }
+body { margin: 0; min-height: 100vh; }
+main { width: min(720px, calc(100% - 32px)); margin: 48px auto; display: grid; gap: 18px; }
+header { padding: 0 4px; } h1 { margin: 4px 0; font-size: 34px; } h2 { margin-top: 0; }
+.eyebrow { color: #0a6e68; font-weight: 700; letter-spacing: .16em; font-size: 12px; }
+.card { background: #fff; border: 1px solid #d7e0e6; border-radius: 14px; padding: 22px; box-shadow: 0 7px 24px #17324a12; }
+label { display: grid; gap: 6px; margin: 12px 0; font-weight: 600; }
+input, select { border: 1px solid #9fb1be; border-radius: 8px; padding: 10px 12px; font: inherit; }
+button { border: 0; border-radius: 8px; padding: 10px 16px; color: #fff; background: #0a6e68; font-weight: 700; cursor: pointer; margin-right: 8px; }
+button.secondary { color: #17324a; background: #dce7ec; } pre { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -1,0 +1,9 @@
+* text=auto
+
+*.bat text eol=crlf whitespace=cr-at-eol
+*.ps1 text eol=crlf whitespace=cr-at-eol
+*.sh text eol=lf
+
+*.ico binary
+*.jar binary
+*.png binary

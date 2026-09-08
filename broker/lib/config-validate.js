@@ -1,6 +1,8 @@
 // broker/lib/config-validate.js — lightweight config preflight (no deps)
 // Phase E. Not a full JSON Schema engine — critical invariants only.
 
+import { existsSync as nodeExistsSync } from 'node:fs';
+
 /**
  * @typedef {{ level: 'error'|'warn', path: string, message: string }}
  */
@@ -8,7 +10,7 @@
 /**
  * Validate broker CONFIG shape after load / migration.
  * @param {object} config
- * @param {{ strict?: boolean }} [opts] strict: treat warns as errors for exit code
+ * @param {{ strict?: boolean, allowWebAuthnBootstrap?: boolean }} [opts]
  * @returns {{ ok: boolean, errors: object[], warnings: object[] }}
  */
 export function validateBrokerConfig(config, opts = {}) {
@@ -46,6 +48,30 @@ export function validateBrokerConfig(config, opts = {}) {
           path: `clients.${name}`,
           message: 'allow_password_login true but no password set',
         });
+      }
+      if (c.security_profile == null) {
+        warnings.push({
+          level: 'warn', path: `clients.${name}.security_profile`,
+          message: 'security_profile is missing; compatibility behavior applies',
+        });
+      } else if (!['strict', 'controlled', 'compatible'].includes(c.security_profile)) {
+        errors.push({
+          level: 'error', path: `clients.${name}.security_profile`,
+          message: 'must be strict, controlled, or compatible',
+        });
+      }
+      if (c.security_profile === 'strict') {
+        if (c.password || c.allow_password_login) {
+          errors.push({ level: 'error', path: `clients.${name}`, message: 'strict profile cannot enable password authentication' });
+        }
+        if ((c.allowed_resolve || []).length > 0 || (c.allowed_proxy || []).length > 0) {
+          errors.push({ level: 'error', path: `clients.${name}`, message: 'strict profile cannot enable plaintext resolve or compatibility proxy access' });
+        }
+        const keys = c.factors?.webauthn?.credentials || [];
+        const hardwareKeys = keys.filter((key) => key?.device_type === 'singleDevice' && key?.backed_up === false);
+        if (hardwareKeys.length < 2 && !(opts.allowWebAuthnBootstrap && c.webauthn_bootstrap === true)) {
+          errors.push({ level: 'error', path: `clients.${name}.factors.webauthn`, message: 'strict profile requires two non-synced hardware-bound credentials' });
+        }
       }
       if (c.rate_limit && typeof c.rate_limit === 'string' && !/^\d+\/(second|minute|hour|day)$/i.test(c.rate_limit)) {
         warnings.push({
@@ -110,14 +136,7 @@ export function validateBrokerConfig(config, opts = {}) {
 export function preflightPaths(paths = {}, fsApi = null) {
   const errors = [];
   const warnings = [];
-  // dynamic import avoided; caller passes existsSync
-  const exists = fsApi?.existsSync || ((p) => {
-    try {
-      return require('node:fs').existsSync(p);
-    } catch {
-      return false;
-    }
-  });
+  const exists = fsApi?.existsSync || nodeExistsSync;
 
   // Use only if paths provided
   for (const [label, p] of Object.entries(paths)) {

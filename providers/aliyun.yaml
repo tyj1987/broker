@@ -1,0 +1,28 @@
+manifest_version: 1
+id: aliyun
+display_name: Alibaba Cloud
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://www.alibabacloud.com/help/en/ram/use-cases/ensure-security-of-alibaba-cloud-resources
+  - https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-assumerolewithoidc
+  - https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature
+origins: [https://ecs.cn-hangzhou.aliyuncs.com, https://sts.aliyuncs.com]
+authentication:
+  priority: [ecs_ram_role, assume_role_with_oidc, sts]
+  inject: { Authorization: "ACS3-HMAC-SHA256 {{signature}}", x-acs-security-token: "{{sts_token}}" }
+  maximum_ttl_seconds: 3600
+  rotation: Refresh STS credentials from the bound RAM role before expiry.
+  revocation: Revoke issued STS sessions and remove the role trust binding.
+operations:
+  - id: ecs.instances.list
+    method: POST
+    path_template: /
+    permission: ecs:DescribeInstances
+    mutating: false
+    approval: none
+    parameters: { RegionId: { type: string }, PageNumber: { type: integer }, PageSize: { type: integer } }
+    fixed_headers: { x-acs-action: DescribeInstances, x-acs-version: "2014-05-26" }
+    maximum_response_bytes: 2097152
+redaction: [Authorization, AccessKeyId, AccessKeySecret, SecurityToken, Signature]
+contract_test: { account: isolated_ram_role, required: true, last_result: not_run }

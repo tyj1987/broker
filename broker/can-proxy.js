@@ -48,6 +48,7 @@ export function matchProxyRule(rule, serviceName, path) {
 
 export function canProxy(ctx, serviceName, path) {
   if (!ctx || !ctx.client) return false;
+  if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
   for (const rule of allow) {
@@ -59,6 +60,7 @@ export function canProxy(ctx, serviceName, path) {
 // Does the client have ANY access to a service at all (for the dashboard badge)?
 export function isServiceAllowed(ctx, serviceName) {
   if (!ctx || !ctx.client) return false;
+  if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
   return allow.some(rule => matchProxyRule(rule, serviceName, '*'));

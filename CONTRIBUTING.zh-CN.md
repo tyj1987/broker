@@ -25,9 +25,8 @@
 
 **请勿在公开 GitHub issue 中报告安全漏洞。**
 
-见 [`SECURITY.md`](SECURITY.md) 和**漏洞赏金**部分。
-邮件:**security@broker.example.com**(PGP 密钥在
-`.well-known/pgp-key.asc`)。
+请使用 [GitHub 私密漏洞报告](https://github.com/tyj1987/broker/security/advisories/new)，
+并遵循 [`SECURITY.zh-CN.md`](SECURITY.zh-CN.md)。请勿提交真实凭据。
 
 ### 功能请求
 
@@ -36,10 +35,10 @@
 
 ## 提交代码
 
-1. Fork 仓库并从 `main` 创建功能分支。
+1. Fork 仓库并从 `master` 创建功能分支。
 2. 做修改。
-3. 用 `npm run test:verify-all` 验证(覆盖 broker 619 项测试 + Python
-   SDK 28 项测试)。Go SDK 或 VS Code 见 [`VERIFY.md`](VERIFY.md) §5-6。
+3. 按 [`VERIFY.md`](VERIFY.md) 运行各模块检查。除非数字来自当前 CI，
+   否则不要声称固定测试数量。
 4. 在 `CHANGELOG.md` 的下一个未发布版本下更新。
 5. 用 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) 提交 PR。
    确保所有清单项都已勾选。
@@ -79,7 +78,8 @@
 ## 发布流程
 
 1. 维护者切出发布分支 `release/vX.Y.Z`。
-2. CI 跑完整矩阵(Linux / macOS / Windows × Node 20 / 22)。
+2. CI 执行仓库中声明的 Node 24、Go、Python、Android、浏览器、Windows
+   桌面、Terraform 与安全检查任务。
 3. 打 tag `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`。
 4. GitHub Actions 自动构建 Docker 镜像(如果配置了)并发布到
    ghcr.io。

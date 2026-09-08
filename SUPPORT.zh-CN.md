@@ -20,21 +20,14 @@
 ### Bug 报告
 
 * **GitHub Issues** —— 用于可复现的 bug 和功能请求。使用
-  [Bug Report](../../issues/new?template=bug_report.yml) 模板。
-* **提交前** —— 先搜索[已有 issues](../../issues);可能已经有人报告过。
+  [Bug Report](https://github.com/tyj1987/broker/issues/new?template=bug_report.yml) 模板。
+* **提交前** —— 先搜索[已有 issues](https://github.com/tyj1987/broker/issues);可能已经有人报告过。
 
 ### 安全问题
 
 * **不要在公开 GitHub issue 中报告安全漏洞。**
-* 邮件 **security@broker.example.com**(PGP 密钥在
-  `.well-known/pgp-key.asc`)
-* 见 [`SECURITY.md`](SECURITY.md) 了解完整策略、范围和 $5,000
-  美元漏洞赏金计划。
-
-## 商业支持
-
-本项目基于 MIT 协议开源。商业支持、定制功能开发和生产部署协助
-可用 —— 联系 **sales@broker.example.com**。
+* 使用 [GitHub 私密漏洞报告](https://github.com/tyj1987/broker/security/advisories/new)。
+* 当前策略和范围见 [`SECURITY.zh-CN.md`](SECURITY.zh-CN.md)。
 
 ## 社区准则
 

@@ -16,9 +16,6 @@ spec:
       annotations:
         # Force pod restart on ConfigMap/Secret change
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if .Values.secrets.brokerYaml }}
-        checksum/secrets: {{ .Values.secrets.brokerYaml | sha256sum }}
-        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -39,33 +36,38 @@ spec:
           image: {{ include "broker.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: mTLS
+            - name: mtls
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
             - name: metrics
               containerPort: 9090
               protocol: TCP
           env:
-            - name: BROKER_CONFIG_PATH
+            - name: CONFIG_PATH
               value: /etc/broker/broker.yaml
-            - name: BROKER_TLS_CERT
+            - name: TLS_CERT
               value: /etc/broker/tls/tls.crt
-            - name: BROKER_TLS_KEY
+            - name: TLS_KEY
               value: /etc/broker/tls/tls.key
-            - name: BROKER_CA_CERT
+            - name: TLS_CA
               value: /etc/broker/tls/ca.crt
             - name: NODE_ENV
               value: production
+            - name: BROKER_HEALTH_BIND
+              value: 127.0.0.1:9080
+            - name: BROKER_CORE_SOCKET
+              value: /run/secret-broker/core.sock
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
-            httpGet:
-              path: /health
-              port: mTLS
-              scheme: HTTPS
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:9080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
@@ -73,10 +75,11 @@ spec:
           {{- end }}
           {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
-            httpGet:
-              path: /health
-              port: mTLS
-              scheme: HTTPS
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:9080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
@@ -101,22 +104,49 @@ spec:
               mountPath: /tmp
             - name: home
               mountPath: /home/broker
+            - name: core-socket
+              mountPath: /run/secret-broker
+        - name: policy-core
+          image: {{ include "broker.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/bin/secret-broker-policy"]
+          env:
+            - name: BROKER_CORE_SOCKET
+              value: /run/secret-broker/core.sock
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('node:http').get({socketPath:'/run/secret-broker/core.sock',path:'/health'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          {{- with .Values.coreResources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: core-socket
+              mountPath: /run/secret-broker
       volumes:
         - name: config
           projected:
             sources:
               - configMap:
                   name: {{ include "broker.fullname" . }}-config
-              {{- if .Values.secrets.brokerYaml }}
               - secret:
-                  name: {{ include "broker.fullname" . }}-secret
+                  name: {{ required "secrets.configSecretName is required" .Values.secrets.configSecretName }}
                   items:
                     - key: broker.yaml
                       path: broker.yaml
-              {{- end }}
         - name: tls
           secret:
-            secretName: {{ include "broker.fullname" . }}-tls
+            secretName: {{ required "secrets.tlsSecretName is required" .Values.secrets.tlsSecretName }}
             defaultMode: 0400
         {{- if .Values.persistence.enabled }}
         - name: data
@@ -126,6 +156,8 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: home
+          emptyDir: {}
+        - name: core-socket
           emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:

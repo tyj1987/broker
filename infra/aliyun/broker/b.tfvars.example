@@ -7,18 +7,25 @@
 #   3. terraform plan -var-file=b.tfvars
 #   4. terraform apply -var-file=b.tfvars
 #
-# 警告: b.tfvars 包含密码，请勿 commit（已加 .gitignore）
+# This file contains identifiers only. Authentication uses an OIDC-backed role.
 
 # 阿里云 region
 region = "cn-beijing"
 
 # SSH 入口白名单 - 你的办公 IP
 # 怎么查：curl https://ifconfig.me
-admin_cidr = "1.2.3.4/32"   # ← 改成你办公出口 IP
+admin_cidr = "203.0.113.5/32"
 
-# ECS root 密码（首次登录用，登录后立即换 SSH key）
-# 至少 8 位，含大小写+数字+特殊字符
-ssh_password = "CHANGE_ME_STRONG_PASSWORD_123!"
+# Existing ECS SSH key pair; private key material never enters Terraform.
+ssh_key_name = "secret-broker-deploy"
+operation_role_arns = [
+  "acs:ram::1234567890123456:role/secret-broker-readonly"
+]
+
+# Resolve these from the selected VPC/region documentation and review them
+# before applying. Placeholder ranges deliberately fail real connectivity.
+dns_resolver_cidrs = ["192.0.2.53/32"]
+ntp_server_cidrs   = ["192.0.2.123/32"]
 
 # broker 域名（用户本机解析到 EIP 即可）
 # 用你自己的域名；DNS 解析你自己搞定

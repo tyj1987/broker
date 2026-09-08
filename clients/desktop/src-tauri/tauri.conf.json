@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Secret Broker",
+  "version": "0.1.0",
+  "identifier": "com.secretbroker.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "Secret Broker", "width": 820, "height": 780 }],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'",
+      "capabilities": ["desktop-main"],
+      "freezePrototype": true
+    }
+  },
+  "bundle": { "active": true, "targets": "all" }
+}

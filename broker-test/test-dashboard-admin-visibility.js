@@ -50,6 +50,12 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   assert(app.includes('emitBrokerIdentity(ident)'), 'boot emits identity');
   assert(app.includes('emitBrokerIdentity(null)'), 'logout clears identity');
   assert(!/loadServices\(\)\.catch/.test(app.split('async function boot')[1] || ''), 'boot does not eager-load services');
+  const html = readFileSync(join(root, 'index.html'), 'utf8');
+  const auditUi = readFileSync(join(root, 'admin/audit.js'), 'utf8');
+  const server = readFileSync(join(root, '..', 'server.js'), 'utf8');
+  assert(!html.includes('btn-audit-clear'), 'dashboard has no audit deletion control');
+  assert(!auditUi.includes('clearAuditLogs'), 'dashboard cannot request audit deletion');
+  assert(server.includes("jsonError(res, 405, 'Audit records are immutable')"), 'server denies audit deletion');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

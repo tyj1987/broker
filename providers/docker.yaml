@@ -1,0 +1,27 @@
+manifest_version: 1
+id: docker
+display_name: Docker Hub
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://docs.docker.com/security/access-tokens/personal-access-tokens/
+  - https://docs.docker.com/security/access-tokens/organization-access-tokens/
+  - https://docs.docker.com/reference/api/registry/latest/
+origins: [https://registry-1.docker.io, https://auth.docker.io]
+authentication:
+  priority: [organization_access_token, scoped_personal_access_token]
+  inject: { Authorization: "Bearer {{registry_token}}" }
+  maximum_ttl_seconds: 300
+  rotation: Exchange the scoped access token for a short-lived registry bearer token.
+  revocation: Revoke the organization or personal access token in Docker Home.
+operations:
+  - id: repository.tags.list
+    method: GET
+    path_template: /v2/{namespace}/{repository}/tags/list
+    permission: repository:pull
+    mutating: false
+    approval: none
+    parameters: { namespace: { type: string }, repository: { type: string } }
+    maximum_response_bytes: 1048576
+redaction: [Authorization, dckr_pat, dckr_oat, registry_token]
+contract_test: { account: isolated_docker_namespace, required: true, last_result: not_run }

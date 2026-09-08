@@ -44,9 +44,9 @@ const p = {
   '/api/v1/login/mfa': {
     post: {
       tags: ['auth'],
-      summary: 'Submit MFA code (TOTP / WebAuthn / SMS)',
+      summary: 'Submit legacy MFA code (TOTP or recovery code)',
       requestBody: {
-        content: { 'application/json': { schema: { type: 'object', required: ['mfa_token', 'code'], properties: { mfa_token: { type: 'string' }, code: { type: 'string' }, factor: { type: 'string', enum: ['totp', 'webauthn', 'sms', 'recovery'] } } } } },
+        content: { 'application/json': { schema: { type: 'object', required: ['mfa_token', 'code'], properties: { mfa_token: { type: 'string' }, code: { type: 'string' }, factor: { type: 'string', enum: ['totp', 'recovery'] } } } } },
       },
       responses: { 200: jsonOK('LoginResponse'), 401: respRef('Unauthorized') },
     },
@@ -86,18 +86,6 @@ const p = {
   },
   '/api/v1/me/totp/disable': {
     post: { tags: ['me'], summary: 'Disable TOTP', responses: { 200: desc('OK') } },
-  },
-  '/api/v1/me/webauthn/register/begin': {
-    post: { tags: ['me'], summary: 'Begin WebAuthn registration', responses: { 200: desc('OK, returns challenge') } },
-  },
-  '/api/v1/me/webauthn/register/finish': {
-    post: { tags: ['me'], summary: 'Finish WebAuthn registration', requestBody: { content: { 'application/json': { schema: { type: 'object' } } } }, responses: { 200: desc('OK') } },
-  },
-  '/api/v1/me/webauthn/credentials': {
-    get: { tags: ['me'], summary: 'List WebAuthn credentials', responses: { 200: desc('OK') } },
-  },
-  '/api/v1/me/webauthn/credentials/{id}': {
-    delete: { tags: ['me'], summary: 'Delete a WebAuthn credential', parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }], responses: { 200: desc('OK') } },
   },
   '/api/v1/secrets': {
     get: { tags: ['secrets'], summary: 'List visible secrets', responses: { 200: jsonOKList('Secret') } },
@@ -205,6 +193,140 @@ const p = {
       responses: { 200: desc('OK') },
     },
   },
+  '/api/v2/operations': {
+    post: {
+      tags: ['operations-v2'],
+      summary: 'Create a policy-bound typed operation',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('OperationCreate') } } },
+      responses: { 202: jsonOK('Operation'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v2/auth/webauthn/begin': {
+    post: {
+      tags: ['auth-v2'], summary: 'Begin phishing-resistant WebAuthn authentication', security: [],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['client'], properties: { client: { type: 'string', maxLength: 128 } } } } } },
+      responses: { 200: jsonOK('WebAuthnOptions'), 401: respRef('Unauthorized') },
+    },
+  },
+  '/api/v2/auth/webauthn/finish': {
+    post: {
+      tags: ['auth-v2'], summary: 'Verify WebAuthn assertion and create a short browser session', security: [],
+      requestBody: { required: true, content: { 'application/json': { schema: ref('WebAuthnFinish') } } },
+      responses: { 200: desc('Authenticated; session is returned only as a secure cookie'), 401: respRef('Unauthorized') },
+    },
+  },
+  '/api/v2/me/webauthn/registration/begin': {
+    post: {
+      tags: ['auth-v2'], summary: 'Begin security-key registration',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, properties: { label: { type: 'string', maxLength: 80 } } } } } },
+      responses: { 200: jsonOK('WebAuthnOptions'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v2/me/webauthn/registration/finish': {
+    post: {
+      tags: ['auth-v2'], summary: 'Verify and store a security-key credential',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('WebAuthnFinish') } } },
+      responses: { 201: desc('Credential registered'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v2/me/webauthn/credentials': {
+    get: { tags: ['auth-v2'], summary: 'List public WebAuthn credential metadata', responses: { 200: desc('Credential metadata; no public key bytes') } },
+  },
+  '/api/v2/operations/{id}': {
+    get: {
+      tags: ['operations-v2'],
+      summary: 'Read a redacted operation result',
+      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { 200: jsonOK('Operation'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound') },
+    },
+  },
+  '/api/v2/approvals': {
+    post: {
+      tags: ['approvals-v2'], summary: 'Create a fully bound approval request',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('ApprovalCreate') } } },
+      responses: { 201: jsonOK('Approval'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 409: desc('Approval is not required') },
+    },
+    get: {
+      tags: ['approvals-v2'], summary: 'List approval requests visible to the requester or approver',
+      responses: { 200: desc('Approval list'), 401: respRef('Unauthorized') },
+    },
+  },
+  '/api/v2/approvals/{id}/decision': {
+    post: {
+      tags: ['approvals-v2'], summary: 'Approve or reject after WebAuthn step-up',
+      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: { required: true, content: { 'application/json': { schema: ref('ApprovalDecision') } } },
+      responses: { 200: jsonOK('Approval'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound'), 409: desc('Expired, duplicate or completed decision') },
+    },
+  },
+  '/api/v2/browser/otp/claim': {
+    post: {
+      tags: ['browser-v2'], summary: 'Claim one approved OTP for a bound browser document',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('BrowserOtpClaim') } } },
+      responses: { 200: jsonOK('BrowserOtpClaimResult'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound') },
+    },
+  },
+  '/api/v2/browser/otp/finish': {
+    post: {
+      tags: ['browser-v2'], summary: 'Finalize a single-use browser OTP claim',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('BrowserOtpFinish') } } },
+      responses: { 200: jsonOK('Operation'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 409: desc('Claim expired or already consumed') },
+    },
+  },
+  '/api/v2/devices/enroll/begin': {
+    post: {
+      tags: ['devices-v2'],
+      summary: 'Begin proof-of-possession device enrollment',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('DeviceEnrollmentBegin') } } },
+      responses: { 201: jsonOK('DeviceEnrollmentChallenge'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v2/devices/enroll/finish': {
+    post: {
+      tags: ['devices-v2'],
+      summary: 'Finish device enrollment with a supported hardware-backed signature',
+      security: [],
+      requestBody: { required: true, content: { 'application/json': { schema: ref('DeviceEnrollmentFinish') } } },
+      responses: { 201: jsonOK('Device'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v2/devices': {
+    get: { tags: ['devices-v2'], summary: 'List visible devices without public keys or secrets', responses: { 200: desc('Device list'), 401: respRef('Unauthorized') } },
+  },
+  '/api/v2/devices/{device_id}': {
+    patch: {
+      tags: ['devices-v2'], summary: 'Suspend or permanently revoke a device',
+      parameters: [{ in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['state'], properties: { state: { type: 'string', enum: ['active', 'suspended', 'revoked'] } } } } } },
+      responses: { 200: jsonOK('Device'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound'), 409: desc('Invalid state transition') },
+    },
+  },
+  '/api/v2/devices/{device_id}/otp-tasks': {
+    get: {
+      tags: ['devices-v2'], summary: 'List pending OTP task metadata for a signed device request', security: [],
+      parameters: [
+        { in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'X-Broker-Device-Timestamp', required: true, schema: { type: 'integer' } },
+        { in: 'header', name: 'X-Broker-Device-Nonce', required: true, schema: { type: 'string' } },
+        { in: 'header', name: 'X-Broker-Device-Signature', required: true, schema: { type: 'string' } },
+      ],
+      responses: { 200: { description: 'Pending task metadata; never contains an OTP', content: { 'application/json': { schema: { type: 'object', required: ['tasks'], properties: { tasks: { type: 'array', items: ref('OtpTask') } } } } } }, 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
+  },
+  '/api/v2/devices/{device_id}/otp-tasks/{task_id}/submit': {
+    post: {
+      tags: ['devices-v2'], summary: 'Submit an OTP to a pre-existing bound task', security: [],
+      parameters: [
+        { in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'path', name: 'task_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'X-Broker-Device-Timestamp', required: true, schema: { type: 'integer' } },
+        { in: 'header', name: 'X-Broker-Device-Nonce', required: true, schema: { type: 'string' } },
+        { in: 'header', name: 'X-Broker-Device-Signature', required: true, schema: { type: 'string' } },
+      ],
+      requestBody: { required: true, content: { 'application/json': { schema: ref('OtpSubmission') } } },
+      responses: { 202: desc('Accepted without echoing the OTP'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
+  },
 };
 
 const s = {
@@ -243,7 +365,6 @@ const s = {
   LoginResponse: {
     type: 'object',
     properties: {
-      token: { type: 'string' },
       expires_at: { type: 'string', format: 'date-time' },
       cn: { type: 'string' },
       role: { type: 'string', enum: ['developer', 'admin', 'ci'] },
@@ -283,6 +404,10 @@ const s = {
       ip_whitelist: { type: 'array', items: { type: 'string' } },
       allowed_secrets: { type: 'array', items: { type: 'string' } },
       allowed_services: { type: 'array', items: { type: 'string' } },
+      allowed_operations: { type: 'array', items: { type: 'string' } },
+      allowed_accounts: { type: 'array', items: { type: 'string' } },
+      allowed_resources: { type: 'array', items: { type: 'string' } },
+      allowed_environments: { type: 'array', items: { type: 'string' } },
       created_at: { type: 'string', format: 'date-time' },
       expires_at: { type: 'string', format: 'date-time' },
       revoked_at: { type: 'string', format: 'date-time' },
@@ -324,6 +449,133 @@ const s = {
       uptime_seconds: { type: 'number' },
     },
   },
+  OperationCreate: {
+    type: 'object', additionalProperties: false,
+    required: ['provider', 'operation_id', 'account_ref', 'environment', 'typed_parameters'],
+    properties: {
+      provider: { type: 'string', pattern: '^[a-z][a-z0-9_-]{1,63}$' },
+      operation_id: { type: 'string', pattern: '^[a-z][a-z0-9_.-]{1,127}$' },
+      account_ref: { type: 'string', minLength: 1, maxLength: 128 },
+      environment: { type: 'string', enum: ['development', 'staging', 'production'] },
+      typed_parameters: { type: 'object' },
+      approval_request_id: { type: 'string', format: 'uuid', description: 'Single-use approval bound to this exact request' },
+      otp: ref('OtpRequirement'),
+    },
+  },
+  ApprovalCreate: {
+    type: 'object', additionalProperties: false,
+    required: ['provider', 'operation_id', 'account_ref', 'environment', 'typed_parameters'],
+    properties: {
+      provider: { type: 'string', pattern: '^[a-z][a-z0-9_-]{1,63}$' },
+      operation_id: { type: 'string', pattern: '^[a-z][a-z0-9_.-]{1,127}$' },
+      account_ref: { type: 'string', minLength: 1, maxLength: 128 },
+      environment: { type: 'string', enum: ['development', 'staging', 'production'] },
+      typed_parameters: { type: 'object' },
+    },
+  },
+  ApprovalDecision: {
+    type: 'object', additionalProperties: false, required: ['decision'],
+    properties: { decision: { type: 'string', enum: ['approve', 'reject'] } },
+  },
+  Approval: {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'requester', 'provider', 'operation_id', 'account_ref', 'environment', 'resource_ref', 'required_approvals', 'approvals', 'status', 'created_at', 'expires_at'],
+    properties: {
+      id: { type: 'string', format: 'uuid' }, requester: { type: 'string' }, provider: { type: 'string' },
+      operation_id: { type: 'string' }, account_ref: { type: 'string' }, environment: { type: 'string' },
+      resource_ref: { type: 'string' }, required_approvals: { type: 'integer', minimum: 1, maximum: 10 },
+      approvals: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['approved_by', 'approved_at'], properties: { approved_by: { type: 'string' }, approved_at: { type: 'string', format: 'date-time' } } } },
+      status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'expired', 'consumed'] },
+      created_at: { type: 'string', format: 'date-time' }, expires_at: { type: 'string', format: 'date-time' },
+    },
+  },
+  OtpRequirement: {
+    type: 'object', additionalProperties: false,
+    required: ['device_id', 'sim_binding', 'challenge', 'recipient_hint'],
+    properties: {
+      device_id: { type: 'string', format: 'uuid' }, sim_binding: { type: 'string', maxLength: 128 },
+      challenge: { type: 'string', maxLength: 256 }, recipient_hint: { type: 'string', maxLength: 64 },
+      template_group: { type: 'string', maxLength: 64 }, ttl_seconds: { type: 'integer', minimum: 15, maximum: 120 },
+    },
+  },
+  Operation: {
+    type: 'object', required: ['id', 'provider', 'operation_id', 'status'],
+    properties: {
+      id: { type: 'string', format: 'uuid' }, provider: { type: 'string' }, operation_id: { type: 'string' },
+      account_ref: { type: 'string' }, environment: { type: 'string' },
+      status: { type: 'string', enum: ['waiting', 'received', 'consuming', 'completed', 'failed', 'expired', 'revoked'] },
+      result: { type: 'object' }, error: { type: 'object' }, created_at: { type: 'string', format: 'date-time' },
+    },
+  },
+  DeviceEnrollmentBegin: {
+    type: 'object', additionalProperties: false, required: ['label', 'platform'],
+    properties: { label: { type: 'string', maxLength: 80 }, platform: { type: 'string', enum: ['android', 'windows', 'linux', 'ios', 'browser-worker'] }, capabilities: { type: 'array', items: { type: 'string' } } },
+  },
+  DeviceEnrollmentChallenge: {
+    type: 'object', required: ['enrollment_id', 'challenge', 'expires_at'],
+    properties: { enrollment_id: { type: 'string', format: 'uuid' }, challenge: { type: 'string' }, expires_at: { type: 'string', format: 'date-time' } },
+  },
+  DeviceEnrollmentFinish: {
+    type: 'object', additionalProperties: false, required: ['enrollment_id', 'signature_algorithm', 'public_key_pem', 'signature'],
+    properties: {
+      enrollment_id: { type: 'string', format: 'uuid' },
+      signature_algorithm: { type: 'string', enum: ['ed25519', 'p256-sha256'] },
+      public_key_pem: { type: 'string', description: 'PEM encoded Ed25519 or NIST P-256 public key' },
+      signature: { type: 'string', description: 'Base64url signature over the enrollment challenge' },
+    },
+  },
+  Device: {
+    type: 'object', required: ['id', 'label', 'platform', 'signature_algorithm', 'state'],
+    properties: { id: { type: 'string', format: 'uuid' }, label: { type: 'string' }, platform: { type: 'string' }, signature_algorithm: { type: 'string', enum: ['ed25519', 'p256-sha256'] }, state: { type: 'string', enum: ['active', 'suspended', 'revoked'] }, capabilities: { type: 'array', items: { type: 'string' } }, created_at: { type: 'string', format: 'date-time' } },
+  },
+  OtpTask: {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'operation_id', 'device_id', 'sim_binding', 'provider', 'template_group', 'sender_allowlist', 'challenge', 'status', 'created_at', 'expires_at'],
+    properties: {
+      id: { type: 'string', format: 'uuid' }, operation_id: { type: 'string', format: 'uuid' }, device_id: { type: 'string', format: 'uuid' },
+      sim_binding: { type: 'string' }, provider: { type: 'string' }, template_group: { type: 'string' },
+      sender_allowlist: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', maxLength: 64 } }, challenge: { type: 'string' },
+      status: { type: 'string', enum: ['waiting', 'received', 'consuming', 'completed', 'failed', 'expired', 'revoked'] },
+      created_at: { type: 'string', format: 'date-time' }, expires_at: { type: 'string', format: 'date-time' },
+    },
+  },
+  OtpSubmission: {
+    type: 'object', additionalProperties: false, required: ['code', 'sim_binding', 'challenge'],
+    properties: { code: { type: 'string', pattern: '^[0-9]{4,10}$' }, sim_binding: { type: 'string' }, challenge: { type: 'string' } },
+  },
+  BrowserOtpClaim: {
+    type: 'object', additionalProperties: false,
+    required: ['provider', 'account_ref', 'origin', 'tab_id', 'frame_id', 'document_id'],
+    properties: {
+      provider: { type: 'string', enum: ['aliyun', 'tencent'] },
+      account_ref: { type: 'string', pattern: '^[a-z0-9][a-z0-9._:-]{0,127}$' },
+      origin: { type: 'string', enum: ['https://account.aliyun.com', 'https://cloud.tencent.com'] },
+      tab_id: { type: 'integer', minimum: 0 }, frame_id: { type: 'integer', const: 0 },
+      document_id: { type: 'string', minLength: 1, maxLength: 256 },
+    },
+  },
+  BrowserOtpClaimResult: {
+    type: 'object', additionalProperties: false,
+    required: ['type', 'provider', 'account_ref', 'origin', 'tab_id', 'frame_id', 'document_id', 'expires_at_ms', 'code', 'receipt'],
+    properties: {
+      type: { type: 'string', const: 'approved-otp' }, provider: { type: 'string' }, origin: { type: 'string' },
+      account_ref: { type: 'string' },
+      tab_id: { type: 'integer' }, frame_id: { type: 'integer' }, document_id: { type: 'string' },
+      expires_at_ms: { type: 'integer' }, code: { type: 'string', pattern: '^[0-9]{4,10}$' }, receipt: { type: 'string' },
+    },
+  },
+  BrowserOtpFinish: {
+    type: 'object', additionalProperties: false, required: ['receipt', 'completed'],
+    properties: { receipt: { type: 'string', minLength: 1, maxLength: 128 }, completed: { type: 'boolean' } },
+  },
+  WebAuthnOptions: {
+    type: 'object', additionalProperties: false, required: ['flow_id', 'options'],
+    properties: { flow_id: { type: 'string', format: 'uuid' }, options: { type: 'object', additionalProperties: true } },
+  },
+  WebAuthnFinish: {
+    type: 'object', additionalProperties: false, required: ['flow_id', 'response'],
+    properties: { flow_id: { type: 'string', format: 'uuid' }, response: { type: 'object', additionalProperties: true } },
+  },
 };
 
 const r = {
@@ -343,14 +595,15 @@ export const OPENAPI_SPEC = {
     description: 'mTLS Secret Broker for AI clients. AI never sees plaintext keys.',
   },
   servers: [
-    { url: 'https://broker.example.com:8443', description: 'Aliyun production' },
-    { url: 'https://broker-bk.example.com:8443', description: 'Tencent production (failover)' },
-    { url: 'http://localhost:8443', description: 'Local dev' },
+    { url: 'https://broker.example.com', description: 'Aliyun production' },
+    { url: 'https://broker-bk.example.com', description: 'Tencent production (failover)' },
+    { url: 'https://localhost:8443', description: 'Local development with a trusted test CA' },
   ],
   security: [{ mtls: [] }, { bearerAuth: [] }, { sessionCookie: [] }],
   tags: [
     { name: 'health', description: 'Health / ready / metrics' },
     { name: 'auth', description: 'Authentication' },
+    { name: 'auth-v2', description: 'WebAuthn authentication and security-key lifecycle' },
     { name: 'me', description: 'Self-service profile' },
     { name: 'secrets', description: 'Secret listing and resolve' },
     { name: 'services', description: 'Service listing' },
@@ -358,6 +611,9 @@ export const OPENAPI_SPEC = {
     { name: 'api-keys', description: 'API Key management' },
     { name: 'admin', description: 'Admin operations' },
     { name: 'healthcheck', description: 'Credential self-check' },
+    { name: 'operations-v2', description: 'Policy-bound typed operations' },
+    { name: 'approvals-v2', description: 'Bound, WebAuthn-stepped-up approvals with separation of duties' },
+    { name: 'devices-v2', description: 'Device proof-of-possession and bound OTP tasks' },
   ],
   paths: p,
   components: {

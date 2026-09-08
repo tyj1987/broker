@@ -1,27 +1,26 @@
 {
   "name": "secret-broker",
-  "version": "4.1.7",
+  "version": "4.2.0",
   "description": "mTLS Secret Broker with SOPS-backed credentials, proxy-mode for AI clients",
   "main": "server.js",
   "type": "module",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=24.20.0 <25"
   },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "wire": "node ../scripts/broker/apply-phase-af-full-wire.mjs",
-    "lint": "cd .. && npx --no-install eslint --config eslint.config.js broker/ broker-test/ cli/ 2>&1 | tail -40",
-    "lint:fix": "cd .. && npx --no-install eslint --config eslint.config.js --fix broker/ broker-test/ cli/ 2>&1 | tail -40",
-    "format": "cd .. && npx --no-install prettier --write --log-level=warn 'broker/**/*.js' 'broker-test/**/*.js' 'cli/**/*.js' 'broker/lib/**/*.js' 'broker/routes/**/*.js' 2>&1 | tail -10",
-    "format:check": "cd .. && npx --no-install prettier --check 'broker/**/*.js' 'broker-test/**/*.js' 'cli/**/*.js' 2>&1 | tail -10",
+    "lint": "cd .. && node broker/node_modules/eslint/bin/eslint.js --config eslint.config.js broker broker-test",
+    "lint:fix": "cd .. && node broker/node_modules/eslint/bin/eslint.js --config eslint.config.js --fix broker broker-test",
+    "format": "cd .. && node broker/node_modules/prettier/bin/prettier.cjs --write --log-level=warn broker broker-test",
+    "format:check": "cd .. && node broker/node_modules/prettier/bin/prettier.cjs --check broker broker-test",
+    "openapi:generate": "node bin/openapi-generate.js",
     "test:lib": "node ../broker-test/test-lib-phase-b.js",
     "test:ip": "node ../broker-test/test-ip-allowlist.js",
-    "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js && node ../broker-test/test-aliyun-rpc.js && node ../broker-test/test-doh.js && node ../broker-test/test-outbound-relay.js",
+    "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js && node ../broker-test/test-aliyun-rpc.js && node ../broker-test/test-doh.js && node ../broker-test/test-outbound-relay.js",
     "test:obs": "node ../broker-test/test-phase-c-obs.js",
     "test:trace": "node ../broker-test/test-phase-d-trace-audit.js",
     "test:ops": "node ../broker-test/test-phase-e-ops.js",
-    "test:backup": "node ../broker-test/test-phase-f-backup-probes.js",
     "test:redact": "node ../broker-test/test-redact.js",
     "test:mfa": "node ../broker-test/test-mfa-policy.js",
     "test:sms": "node ../broker-test/test-sms-provider.js",
@@ -43,18 +42,24 @@
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",
     "test:ws": "node ../broker-test/test-ws.js",
     "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:python-sdk": "cd ../sdk/python && python -m pip install --quiet pytest pytest-asyncio cryptography && python -m pytest tests/ -q && cd ../../broker",
+    "test:v2": "node ../broker-test/test-v2-operations.js && node ../broker-test/test-v2-boundaries.js && node ../broker-test/test-v2-routes.js && node ../broker-test/test-approvals-v2.js && node ../broker-test/test-operation-policy.js && node ../broker-test/test-go-policy-client.js && node ../broker-test/test-webauthn-service.js",
+    "test:outbound-policy": "node ../broker-test/test-outbound-policy.js",
+    "test:providers": "node ../broker-test/test-provider-manifests.js",
+    "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws && npm run test:v2 && npm run test:outbound-policy && npm run test:providers",
+    "test:coverage": "c8 --clean --all --include='lib/approvals-v2.js' --include='lib/operation-policy.js' --include='lib/operations-v2.js' --include='lib/outbound-policy.js' --reporter=text --reporter=lcov --lines=90 --branches=85 --functions=90 npm run test:verify",
+    "test:python-sdk": "cd ../sdk/python && python -m pytest tests/ -q",
     "test:verify-all": "npm run test:verify && npm run test:python-sdk",
-    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
+    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:v4"
   },
   "dependencies": {
-    "ws": "^8.21.3",
-    "yaml": "^2.9.0"
+    "@simplewebauthn/server": "14.0.1",
+    "ws": "8.21.3",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
-    "eslint": "^9.10.0",
-    "prettier": "^3.3.3"
+    "c8": "12.0.0",
+    "eslint": "10.10.0",
+    "prettier": "3.9.6"
   },
   "license": "MIT"
 }

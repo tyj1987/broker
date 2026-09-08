@@ -1,275 +1,95 @@
-# Secret Broker · 安全代理
+# Secret Broker
 
-> **AI 优先的 mTLS 凭据代理,实现零凭据泄漏。**
+面向自动化、开发工具和云工作负载的策略型凭据代理。严格档调用方只提交类型化
+操作并接收允许返回的业务结果，不会获得长期凭据。
 
-一个自托管的密钥管理与凭据代理,专为 AI Agent、Kubernetes 工作负载和开发者工作站设计。
-凭据用 SOPS 加密存储,通过 mTLS 提供服务,绝不向 AI 暴露原始密钥——只暴露元数据或脱敏占位符。
+[![CI](https://github.com/tyj1987/broker/actions/workflows/ci.yml/badge.svg)](https://github.com/tyj1987/broker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[![Version](https://img.shields.io/badge/version-v4.1.1-blue)]()
-[![License](https://img.shields.io/badge/license-MIT-green)]()
-[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-1100%2B%20passing-brightgreen)]()
+**语言：** [English](README.md) · [中文](README.zh-CN.md)
 
-> English version: [README.md](README.md)
+## 安全模型
 
----
+- `/api/v2` 是类型化操作、绑定审批、设备和短时验证码任务的严格安全边界。
+- Node 负责身份、Schema 与策略预检；生产环境还必须取得本地 socket 上 Go 策略
+  核心的允许决定。
+- 某项服务商操作只有在隔离账户完成真实契约测试并显式标记后，才允许用于生产。
+- 浏览器 Session 为 10 分钟绝对过期。审批必须经过 WebAuthn 复验、职责分离，且
+  只能消费一次。
+- 出站请求固定 scheme、主机、端口、方法、路径、Header 和响应大小；私网、回环、
+  metadata 与重定向逃逸均被拒绝。
+- 严格身份不能使用 v1 兼容接口的明文密钥解析、任意代理或自由 SSH 命令。
+- v2 状态变更必须先写入强制审计意图；审计存储不可用时拒绝变更。
 
-## 问题
+短信只是一项已经授权操作的输入，不是 Broker 登录因素。Android 客户端只上传与
+任务匹配的验证码和绑定信息，不上传短信历史或未匹配短信。短信不能批准付款、
+账户恢复或安全设置变更。
 
-AI Agent(LLM、IDE、MCP 客户端)需要 API token、数据库密码、SSH 密钥才能工作——但你不
-能信任它们不会把凭据泄漏到日志、对话历史或模型训练数据里。
+详细边界见[威胁模型](docs/THREAT-MODEL.md)与[架构说明](ARCHITECTURE.zh-CN.md)。
 
-## 解决方案
+## 当前成熟度
 
-**Secret Broker** 就是答案:
+仓库包含 Node 过渡服务、Go 策略核心、API 契约、服务商 Manifest、SDK、Windows/
+Linux 桌面客户端、Android 客户端、iOS 初始客户端和浏览器辅助扩展。代码存在不等
+于生产验收通过。
 
-* **仅 mTLS** —— 每个请求都用客户端证书认证。绝不允许匿名访问。
-* **静态加密** (SOPS) —— 凭据存在 `secrets/broker.yaml` 里,用 age 或 PGP 密钥加密。
-* **零凭据泄漏** —— broker、SDK 和审计日志都自动脱敏已知密钥模式(GitHub PAT、OpenAI
-  `sk-`、AWS `AKIA`、JWT 等)。每次 commit 都有测试断言这一点。
-* **审计日志** —— 仅追加的 JSONL,带防篡改的哈希链。每次 resolve、proxy 和管理操作都被记录。
-* **三种使用模式** —— 选最合适的:
-  - **Proxy 模式** (推荐给 AI) —— broker 把密钥注入上游请求,AI 永远看不到原始值。
-  - **API key** —— 给 AI 客户端的短期 Bearer token;自动撤销。
-  - **Resolve 模式** —— 只返回名字,值永远不离开 broker。
-* **三个官方 SDK** —— Python、Go、VSCode 扩展。
-* **Workload identity** —— K8s/ECS/GKE Pod 用 OIDC 换短期 STS 凭据;磁盘上无长期密钥。
+首批六家服务商仍受真实契约测试门禁约束；Android/iOS 仍需真机验收；制品签名、
+来源证明及生产环境发布阻断项仍未全部闭环。最新证据见
+[生产验收记录](docs/PRODUCTION-ACCEPTANCE.md)。
 
----
+## 仓库布局
 
-## 快速开始
+```text
+broker/               Node 过渡服务和管理界面
+core/                 Go 策略核心
+clients/
+  desktop/            Tauri Windows/Linux 客户端
+  android/            Kotlin/Compose 验证码设备客户端
+  ios/                SwiftUI/Secure Enclave 初始客户端
+  browser/            Chrome/Edge MV3 辅助扩展及 Native Host 元数据
+sdk/                  Go、Python、VS Code 客户端
+contracts/            生成的 OpenAPI 契约
+providers/            版本化服务商 Manifest
+deploy/               容器、Helm、nginx、systemd 与回滚资产
+infra/                阿里云主站与腾讯云灾备 Terraform 基线
+docs/                 架构、安全、运维和验收文档
+```
 
-5 分钟跑起你的第一个 broker。
+生产配置、凭据、PKI 私密材料、审计日志、备份、设备数据、Terraform state 与生成
+安装包不得进入 Git。
 
-### 1. 安装
+## 源码验证
 
-```bash
-# 克隆
-git clone https://github.com/tyj1987/broker.git
+Broker 开发环境使用 Node 24。必须从锁文件安装并运行安全覆盖率门禁：
+
+```sh
 cd broker
-
-# 一次性: 初始化 SOPS + age key + PKI
-iex (Get-Content .\bootstrap.ps1 -Raw)   # Windows
-# 或
-./bootstrap.sh                            # Linux/macOS
+npm ci --ignore-scripts --no-audit --no-fund
+npm audit --audit-level=high
+npm run lint
+npm run test:coverage
+npm run openapi:generate
+git diff --exit-code -- ../contracts/openapi.yaml
 ```
 
-### 2. 启动
+Go、Python、Rust、Android、Swift、Terraform、Helm 与容器门禁由
+[CI](.github/workflows/ci.yml)执行。本机与 CI 证据的区别见 [VERIFY.md](VERIFY.md)。
 
-```bash
-cd broker
-node server.js
-# 监听 https://127.0.0.1:8443
-```
+## 配置与部署
 
-### 3. 签发客户端证书
+[`secrets/broker.yaml.example`](secrets/broker.yaml.example) 为无凭据、默认拒绝的结构
+示例。没有保留真实契约测试证据时，不得把 `contract_verified` 改为 `true`；当前
+Terraform 根目录只用于验证，不得直接用于生产 apply。
 
-```powershell
-# Windows
-.\scripts\broker\issue-client-cert.ps1 -CN client.mylaptop -Role developer
-```
+- 本地源码验证：[快速开始](docs/QUICKSTART.md)
+- 部署与回滚：[deploy/README.md](deploy/README.md)
+- 运维手册：[RUNBOOK.md](RUNBOOK.md)
+- 生产迁移阻断项：[deploy/PRODUCTION-MIGRATION.md](deploy/PRODUCTION-MIGRATION.md)
 
-```bash
-# Linux/macOS
-./scripts/broker/issue-client-cert.sh client.mylaptop developer
-```
+## 贡献与安全报告
 
-证书由你的本地 CA 签名,打印到 stdout(请保存!)。
+提交变更前请阅读 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。安全问题按
+[SECURITY.zh-CN.md](SECURITY.zh-CN.md)私密报告；Issue 中不得包含真实凭据、验证码、
+私钥或生产配置。
 
-### 4. 发起第一次调用
-
-```bash
-# mTLS 直连 (最安全)
-curl --cert client.mylaptop.crt --key client.mylaptop.key \
-     --cacert pki/ca/ca.crt \
-     https://127.0.0.1:8443/api/v1/identity
-```
-
-完成。完整步骤见 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)。
-
----
-
-## 架构
-
-```
-┌─────────────┐  mTLS   ┌─────────────┐  HTTPS   ┌─────────────┐
-│ AI / CLI /  │ ──────▶ │   Nginx     │ ───────▶ │   Broker    │
-│ K8s / ECS   │         │  (edge)     │          │ (Node.js)   │
-└─────────────┘         └─────────────┘          └──────┬──────┘
-                                                        │
-                                              ┌─────────┴──────────┐
-                                              ▼                    ▼
-                                       ┌─────────────┐    ┌────────────────┐
-                                       │ SOPS+age    │    │ Upstream APIs  │
-                                       │ secrets/    │    │ GitHub/Cloud/  │
-                                       │ broker.yaml │    │ SSH/etc        │
-                                       └─────────────┘    └────────────────┘
-```
-
-* **Broker** (Node.js,单进程) 把密钥放在内存里,从不以明文写磁盘。
-  监听 `127.0.0.1:8443`;nginx 在前面做公网 TLS。
-* **Nginx** 终结公网 HTTPS,应用 `ssl_verify_client optional`,
-  把客户端证书(如果有)作为 `X-SSL-Client-*` header 转给 broker。
-* **SOPS** 用 age(或 KMS)在静态加密 `secrets/broker.yaml`。
-
-详见 [`ARCHITECTURE.md`](ARCHITECTURE.md) 深入了解。
-
----
-
-## 仓库结构
-
-```
-.
-├── broker/                  # 服务端源码 (Node.js, ES modules)
-│   ├── server.js            # 入口 (~3300 行, 100+ 路由)
-│   ├── lib/                 # 抽离的 helpers (sops, audit, mtls, …)
-│   ├── routes/              # 按资源的 HTTP handlers
-│   ├── signing/             # Provider 请求签名器 (Aliyun, AWS, …)
-│   ├── dashboard/           # 静态管理 UI
-│   └── …
-├── sdk/                     # 官方客户端 SDK
-│   ├── python/              # Python (零依赖,只用 stdlib)
-│   ├── go/                  # Go (只用 stdlib)
-│   └── vscode/              # VSCode 扩展 (TypeScript)
-├── broker-test/             # 服务端集成测试 (43 个文件, 1100+ 测试)
-├── docs/                    # 长篇文档
-│   ├── index.md             # MkDocs 着陆页
-│   ├── QUICKSTART.md        # 5 分钟教程
-│   ├── EXTENDING.md         # 添加新的密钥类型 / 服务模板
-│   ├── FAQ.md               # 常见问题
-│   ├── SDK-REFERENCE.md     # 3 个 SDK 速查
-│   ├── THREAT-MODEL.md      # 安全模型
-│   ├── SSH-PROXY.md         # SSH 代理功能
-│   ├── WEBSOCKET.md         # WebSocket 事件功能
-│   └── WORKLOAD-IDENTITY.md # K8s/ECS/GKE OIDC → STS
-├── scripts/                 # 安装 / 部署 / 维护脚本
-│   └── broker/              # 核心运维脚本
-├── deploy/                  # 部署资源 (helm, terraform, 等)
-├── infra/                   # Terraform 模块 (Aliyun + Tencent)
-├── pki/                     # PKI 根 CA (仅公钥证书;私钥被 .gitignore 排除)
-│   └── ca/ca.crt            # 本地 CA 证书 (提交到 git 方便开发)
-├── audit/                   # 运行时审计日志 (JSONL, gitignore)
-├── secrets/                 # 运行时密钥 (除 broker.yaml 外都 gitignore)
-├── age/                     # age 密钥 (gitignore)
-├── .github/                 # GitHub 配置: workflows, issue/PR 模板
-├── Dockerfile               # 容器镜像
-└── docker-compose.yml       # 本地开发栈
-```
-
----
-
-## API 速览
-
-所有路径都要求 mTLS(或 Bearer API key 给 AI 客户端)。
-
-| Method | Path | 用途 |
-|---|---|---|
-| GET    | `/health` | 存活检查(无需认证) |
-| GET    | `/api/v1/identity` | "我是谁,什么角色" |
-| GET    | `/api/v1/services` | 可用的上游服务 |
-| GET    | `/api/v1/secrets` | 仅密钥名(永不返回值) |
-| POST   | `/api/v1/secrets/resolve` | 获取一个密钥值(admin/有权限者) |
-| POST   | `/api/v1/proxy/<service>` | 作为该服务发起上游 API 调用 |
-| GET    | `/api/v1/admin/clients` | 列出客户端(admin) |
-| POST   | `/api/v1/admin/secrets` | CRUD 密钥(admin) |
-| GET    | `/api/v1/admin/audit/verify` | 验证审计日志哈希链 |
-| GET    | `/api/v1/healthcheck/status` | 最近一次凭据健康检查 |
-| WS     | `/api/v1/ws` | 实时事件流 |
-
-完整参考: [`docs/SDK-REFERENCE.md`](docs/SDK-REFERENCE.md)。
-
----
-
-## SDKs
-
-```python
-# Python (零依赖)
-from secret_broker import Client
-c = Client.from_env()
-me = c.identity()
-print(me.role, me.client_name)
-```
-
-```go
-// Go (零依赖)
-import "github.com/tyj1987/broker/sdk/go/broker"
-c, _ := broker.NewFromEnv()
-me, _ := c.Identity()
-fmt.Println(me.Role, me.ClientName)
-```
-
-```typescript
-// VSCode 扩展
-import { SecretBroker } from '@tyj1987/broker-vscode';
-const client = SecretBroker.fromEnv();
-const me = await client.identity();
-```
-
-三者都是**零依赖**(只用 stdlib),不会引入有漏洞的传递依赖。
-
----
-
-## 安全
-
-* **仅 mTLS** —— 匿名请求在 TLS 层就被 401 拒绝。
-* **原始密钥不离开 broker** —— proxy 模式返回带注入凭据的上游响应。
-* **审计哈希链** —— 每个事件通过 SHA-256 链接到前一个;篡改可检测。
-* **自动脱敏** —— 已知 token 模式(GitHub PAT、OpenAI `sk-`、AWS `AKIA` 等)
-  在到达审计日志、错误响应或 dashboard 之前被替换为 `ghp_***` 等。
-* **TOTP + 恢复码** 供人工管理员使用。
-* **漏洞赏金**: 见 [`SECURITY.md`](SECURITY.md) —— 关键漏洞 $5,000 美元。
-
-威胁模型: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md)。
-
----
-
-## 开发
-
-```bash
-# 安装
-cd broker && npm install
-
-# 运行所有测试 (server + 3 个 SDK 共 1100+)
-cd broker && npm run test:verify-all
-
-# 格式化
-cd broker && npm run format
-cd broker && npm run format:check
-
-# Lint
-cd broker && npm run lint
-```
-
-详见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
-
----
-
-## 部署
-
-* **Docker** — `docker build -t secret-broker . && docker run -p 8443:8443 ...`
-* **Docker Compose** — `docker-compose up`
-* **Aliyun / Tencent** — 见 `infra/` (Terraform 模块)
-* **Helm** — 见 `deploy/helm/broker/`
-* **Grafana** — 见 `deploy/grafana/`
-
-完整指南: [`RUNBOOK.md`](RUNBOOK.md) 和 [`deploy/`](deploy/) 下的部署资源
-(Helm、Terraform、Grafana)。
-
----
-
-## 许可证
-
-MIT. 见仓库根目录。
-
-## 支持
-
-* **Issues** —— Bug 报告、功能请求: [GitHub Issues](../../issues)
-* **Discussions** —— 问题、想法: [GitHub Discussions](../../discussions)
-* **Security** —— 见 [`SECURITY.md`](SECURITY.md)
-
----
-
-## 致谢
-
-由 Secret Broker 维护者和贡献者精心构建。SOPS+age 栈、nginx mTLS 模式
-和零凭据泄漏原则的灵感来自 HashiCorp Vault、BoringSSL 和 Mozilla SOPS 项目。
+本项目采用 [MIT License](LICENSE)。

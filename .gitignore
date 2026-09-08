@@ -155,6 +155,7 @@ master-key.txt
 age/key.txt
 secrets/broker_dec.yaml
 secrets/secrets-meta.json
+secrets/secrets-detail.json
 secrets/common.env
 secrets/*.bak*
 secrets/broker.yaml.*

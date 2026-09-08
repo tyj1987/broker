@@ -40,7 +40,6 @@ export function createIdentityResolver(deps) {
     requireNodeCrypto,
   } = deps;
 
-  if (!config || typeof config !== 'object') throw new Error('mtls: config required');
   if (typeof getSession !== 'function') throw new Error('mtls: getSession required');
   if (typeof parseBearer !== 'function') throw new Error('mtls: parseBearer required');
   if (typeof findApiKey !== 'function') throw new Error('mtls: findApiKey required');
@@ -50,10 +49,28 @@ export function createIdentityResolver(deps) {
   if (typeof recordClientSeen !== 'function') throw new Error('mtls: recordClientSeen required');
   if (typeof audit !== 'function') throw new Error('mtls: audit required');
 
+  // config may be a getter (so we read it lazily on each request) or a static object.
+  // The original server.js reads CONFIG at module-load time (line 3050) but CONFIG is
+  // a `let` that is assigned later by loadConfig(). To handle both shapes, accept
+  // either an object or a function returning an object.
+  const getConfig = typeof config === 'function'
+    ? config
+    : () => config;
+  // Validate lazily on first request (don't throw at construction if config is async).
+  function effectiveConfig() {
+    const c = getConfig();
+    if (!c || typeof c !== 'object') return null;
+    return c;
+  }
+
   function getApiKeyIdentity(req) {
     const authHeader = req.headers['authorization'] || req.headers['Authorization'];
     const secret = parseBearer(authHeader);
+    console.log('[DEBUG-APIKEY] authHeader=' + (authHeader ? authHeader.slice(0, 30) : 'null') + ' secret=' + (secret ? secret.slice(0, 12) : 'null'));
     if (!secret) return null;
+    const config = effectiveConfig();
+    console.log('[DEBUG-APIKEY] config.api_keys count: ' + (config && config.api_keys ? config.api_keys.length : 'NULL'));
+    if (!config) return null;
     const k = findApiKey(config.api_keys, secret);
     if (!k) return null;
     // v3.2: enforce ip_whitelist when set
@@ -127,6 +144,8 @@ export function createIdentityResolver(deps) {
       const escaped = req.headers['x-ssl-client-cert'];
       if (verify !== 'SUCCESS' || !escaped) return null;
       try {
+        const config = effectiveConfig();
+        if (!config) return null;
         const pem = decodeURIComponent(String(escaped));
         const X509 = requireNodeCrypto?.X509Certificate || X509Certificate;
         const x509 = new X509(pem);
@@ -151,6 +170,8 @@ export function createIdentityResolver(deps) {
     const cn = cert.subject.CN;
     const fp = cert.fingerprint256;
     if (!cn || !fp) return null;
+    const config = effectiveConfig();
+    if (!config) return null;
     const matched = matchClientByFingerprint(config.clients, fp);
     if (!matched) return null;
     recordClientSeen(matched.name);

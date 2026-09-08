@@ -3048,7 +3048,7 @@ async function handle(req, res) {
 // All actual logic now lives in createIdentityResolver() from lib/index.js.
 
 const identityResolver = createIdentityResolver({
-  config: CONFIG,
+  config: () => CONFIG,
   getSession,
   parseBearer,
   findApiKey,

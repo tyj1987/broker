@@ -3,7 +3,10 @@
     "list": [
       {
         "builtIn": 1,
-        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -12,7 +15,7 @@
       }
     ]
   },
-  "description": "Secret Broker V4 — operational dashboard for the AI-first mTLS secret broker. Tracks secret resolution, proxy traffic, workload identity exchanges, SSH proxy, WebSocket subscriptions, and auto-rotation health.",
+  "description": "Placeholder dashboard. Real panels should be added before deployment \u2014 see deploy/grafana/README.md for the recommended metrics (broker_http_requests_total, broker_secrets_resolved_total, broker_audit_events_total, broker_uptime_seconds, etc.).",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -21,241 +24,36 @@
   "liveNow": false,
   "panels": [
     {
-      "type": "stat",
-      "title": "Broker Version",
       "id": 1,
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "broker_info",
-          "legendFormat": "v{{version}}",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name"
+      "type": "row",
+      "title": "Recommended panels (to be filled in)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
       },
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" } } }
-    },
-    {
-      "type": "stat",
-      "title": "Uptime (s)",
-      "id": 2,
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "time() - process_start_time_seconds", "refId": "A" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "type": "stat",
-      "title": "Active mTLS Clients",
-      "id": 3,
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "broker_mtls_clients_total", "refId": "A" }
-      ],
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }] } } }
-    },
-    {
-      "type": "stat",
-      "title": "Healthy / Unhealthy",
-      "id": 4,
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "sum(broker_up)", "refId": "A", "legendFormat": "healthy" },
-        { "expr": "sum(broker_up == 0)", "refId": "B", "legendFormat": "unhealthy" }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "stat",
-      "title": "API Key Rate Limit Hits (5m)",
-      "id": 5,
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "increase(broker_api_key_rate_limit_hits_total[5m])", "refId": "A" }
-      ],
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 100 }] } } }
-    },
-    {
-      "type": "stat",
-      "title": "Risk Score Avg (5m)",
-      "id": 6,
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "avg_over_time(broker_risk_score[5m])", "refId": "A" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 30 }, { "color": "red", "value": 70 }] } } }
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Secret Resolutions / sec",
-      "id": 10,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "rate(broker_secrets_resolved_total[1m])", "refId": "A", "legendFormat": "resolved" },
-        { "expr": "rate(broker_secrets_resolve_errors_total[1m])", "refId": "B", "legendFormat": "errors" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "Proxy Requests / sec (by service)",
-      "id": 11,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "sum by (service) (rate(broker_proxy_requests_total[1m]))", "refId": "A", "legendFormat": "{{service}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-
-    {
-      "type": "timeseries",
-      "title": "HTTP Latency p50 / p95 / p99 (ms)",
-      "id": 20,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "histogram_quantile(0.50, sum by (le, route) (rate(broker_http_request_duration_seconds_bucket[5m]))) * 1000", "refId": "A", "legendFormat": "p50 {{route}}" },
-        { "expr": "histogram_quantile(0.95, sum by (le, route) (rate(broker_http_request_duration_seconds_bucket[5m]))) * 1000", "refId": "B", "legendFormat": "p95 {{route}}" },
-        { "expr": "histogram_quantile(0.99, sum by (le, route) (rate(broker_http_request_duration_seconds_bucket[5m]))) * 1000", "refId": "C", "legendFormat": "p99 {{route}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ms" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "Workload Identity STS Cache (entries)",
-      "id": 21,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "broker_workload_identity_cache_entries", "refId": "A", "legendFormat": "{{provider}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Workload Identity Assumes / sec",
-      "id": 30,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "sum by (provider) (rate(broker_workload_identity_assume_total[1m]))", "refId": "A", "legendFormat": "{{provider}}" },
-        { "expr": "sum by (provider) (rate(broker_workload_identity_assume_errors_total[1m]))", "refId": "B", "legendFormat": "{{provider}} errors" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "WebSocket Subscribers (current)",
-      "id": 31,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "broker_ws_subscribers", "refId": "A", "legendFormat": "subscribers" },
-        { "expr": "rate(broker_ws_broadcasts_total[1m])", "refId": "B", "legendFormat": "broadcasts/s" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
-    },
-
-    {
-      "type": "timeseries",
-      "title": "SSH Proxy Operations / sec",
-      "id": 40,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "sum by (action) (rate(broker_ssh_operations_total[1m]))", "refId": "A", "legendFormat": "{{action}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "Auto-Rotate Status",
-      "id": 41,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "expr": "sum by (state) (broker_rotation_state_count)", "refId": "A", "legendFormat": "{{state}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
-    },
-
-    {
-      "type": "table",
-      "title": "Top Clients by Volume (1h)",
-      "id": 50,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "topk(10, sum by (client_cn) (rate(broker_http_requests_total[1h])))",
-          "format": "table",
-          "instant": true,
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "title": "Top Services by Errors (1h)",
-      "id": 51,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "topk(10, sum by (service) (rate(broker_proxy_request_errors_total[1h])))",
-          "format": "table",
-          "instant": true,
-          "refId": "A"
-        }
-      ]
-    },
-
-    {
-      "type": "logs",
-      "title": "Recent Audit Events (no secret values)",
-      "id": 60,
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 44 },
-      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-      "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": true,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
-      },
-      "targets": [
-        {
-          "expr": "{job=\"broker\"} |= \"audit\" | line_format \"{{.time}} {{.msg}}\"",
-          "refId": "A"
-        }
-      ]
+      "collapsed": false,
+      "panels": []
     }
   ],
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["secret-broker", "ai-first", "credentials", "security"],
+  "tags": [
+    "secret-broker",
+    "ai-first",
+    "credentials",
+    "security"
+  ],
   "templating": {
     "list": [
       {
-        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
         "hide": 0,
         "includeAll": false,
         "label": "Datasource",
@@ -269,7 +67,11 @@
         "type": "datasource"
       },
       {
-        "current": { "selected": false, "text": "Loki", "value": "Loki" },
+        "current": {
+          "selected": false,
+          "text": "Loki",
+          "value": "Loki"
+        },
         "hide": 0,
         "includeAll": false,
         "label": "Datasource",
@@ -284,11 +86,14 @@
       }
     ]
   },
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timepicker": {},
-  "timezone": "",
-  "title": "Secret Broker V4",
-  "uid": "secret-broker-v4",
+  "timezone": "browser",
+  "title": "Secret Broker \u2014 overview",
+  "uid": "secret-broker",
   "version": 1,
   "weekStart": ""
 }

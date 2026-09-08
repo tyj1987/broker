@@ -13,7 +13,7 @@
 #   ssh root@<eip>
 #   cd /opt/secret-broker
 #   ./scripts/broker/init-ca.sh
-#   ./scripts/broker/issue-server-cert.sh --domain broker.52trz.com
+#   ./scripts/broker/issue-server-cert.sh --domain broker.example.com
 #   ./scripts/broker/issue-client-cert.sh --cn client.tyj-laptop
 #   docker compose up -d broker
 
@@ -159,7 +159,7 @@ output "broker_ssh_cmd" {
 
 output "broker_endpoint" {
   value       = "https://${var.broker_domain}:8443"
-  description = "mTLS endpoint. Add DNS A record broker.52trz.com -> <EIP> in Cloudflare first."
+  description = "mTLS endpoint. Add DNS A record broker.example.com -> <EIP> in Cloudflare first."
 }
 
 output "next_steps" {

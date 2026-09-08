@@ -50,7 +50,7 @@ Secret Broker 在 ECS 上的位置是 `/opt/secret-broker/`。
 ### 5.2 Day-to-day ops / 5.2 日常运维
 
 ```bash
-ssh 52trz
+ssh user@broker-host
 systemctl status secret-broker                      # status / 状态
 systemctl restart secret-broker                     # restart (after config edit) / 改配置后重启
 journalctl -u secret-broker -f                      # follow logs / 跟踪日志
@@ -71,7 +71,7 @@ For adding/changing services or clients without restarting the broker:
 加/改 services 或 clients 时，不重启 broker：
 
 ```bash
-ssh 52trz
+ssh user@broker-host
 TOKEN=$(journalctl -u secret-broker | grep "reload token" | tail -1 | grep -oE '[0-9a-f-]{36}')
 curl -sk -X POST -H "Authorization: Bearer $TOKEN" https://127.0.0.1:8443/api/v1/admin/reload
 # Returns the new audit log + token; broker keeps running.
@@ -82,7 +82,7 @@ Or use the out-of-band scripts to also re-encrypt broker.yaml via SOPS:
 或用 out-of-band 脚本调 SOPS 重加密 broker.yaml：
 
 ```bash
-ssh 52trz
+ssh user@broker-host
 /opt/secret-broker/scripts/issue-client-cert.sh <client-name>      # issue / 签发
 # Internally: decrypt → mutate → re-encrypt → call broker reload API
 # 内部：解密 → 修改 → 重加密 → 调 broker reload API
@@ -102,7 +102,7 @@ to the script. Use the script for production client certs:
 离线签发仍可用脚本：
 
 ```bash
-ssh 52trz
+ssh user@broker-host
 /opt/secret-broker/scripts/issue-client-cert.sh my-laptop
 # Generates: pki/clients/client.my-laptop.{crt,key}
 # Updates broker.yaml with new fingerprint + adds to clients
@@ -152,15 +152,15 @@ node test-audit.js          # 11 tests (filters + SSE stream + JSON/CSV export)
 
 **Hard rule / 硬规则**:
 - All tests in broker-test point at `https://127.0.0.1:18443` — NEVER
-  at `https://broker.52trz.com` (production). A pre-cleanup hook deletes
+  at `https://broker.example.com` (production). A pre-cleanup hook deletes
   any secret whose name starts with the test prefix; it does **not**
   delete hard-coded production keys like `GITHUB_PAT`. Adding a new
-  test? `grep -l 'broker.52trz.com' broker-test/test-*.js` first to
+  test? `grep -l 'broker.example.com' broker-test/test-*.js` first to
   verify no URLs leak to prod.
   所有 broker-test 测试只打 `https://127.0.0.1:18443` —— **绝对不**
-  打 `https://broker.52trz.com`（生产）。pre-cleanup 钩子只删自己命名前
+  打 `https://broker.example.com`（生产）。pre-cleanup 钩子只删自己命名前
   缀的测试残留，**不删** `GITHUB_PAT` 这类硬编码生产密钥。写新测试
-  前先 `grep -l 'broker.52trz.com' broker-test/test-*.js` 防止 URL 泄到生产。
+  前先 `grep -l 'broker.example.com' broker-test/test-*.js` 防止 URL 泄到生产。
 - If a test starts failing intermittently, check `logs/broker.err` first
   (lots of `ssl3_read_bytes: certificate unknown` is normal — those are
   password-lock or no-cert probes). Lock out after 5 fails for 15 min.
@@ -182,15 +182,15 @@ Inspect via API (admin only) / 通过 API 看（仅 admin）：
 
 ```bash
 # Last 20 events / 最近 20 条
-curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit?limit=20'
+curl -sk -b /tmp/cookies.txt 'https://broker.example.com/api/v1/admin/audit?limit=20'
 # Filter by client / service / action / status / time range / 按客户端/服务/动作/状态/时间过滤
-curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit?client=ci-runner&action=proxy&since=2026-08-15T00:00:00Z'
+curl -sk -b /tmp/cookies.txt 'https://broker.example.com/api/v1/admin/audit?client=ci-runner&action=proxy&since=2026-08-15T00:00:00Z'
 # Real-time SSE stream (30 min auto-disconnect, 25s heartbeat) / 实时 SSE 流
 curl -sk -b /tmp/cookies.txt -H 'Accept: text/event-stream' \
-  https://broker.52trz.com/api/v1/admin/audit/stream
+  https://broker.example.com/api/v1/admin/audit/stream
 # Export / 导出
-curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit/export.csv?limit=1000' -o audit.csv
-curl -sk -b /tmp/cookies.txt 'https://broker.52trz.com/api/v1/admin/audit/export.json?limit=1000' -o audit.json
+curl -sk -b /tmp/cookies.txt 'https://broker.example.com/api/v1/admin/audit/export.csv?limit=1000' -o audit.csv
+curl -sk -b /tmp/cookies.txt 'https://broker.example.com/api/v1/admin/audit/export.json?limit=1000' -o audit.json
 ```
 
 Or use the dashboard `📋 审计 / Audit` tab (filters + live stream +
@@ -254,7 +254,7 @@ admin UI), the warning clears automatically.
 ### 5.10 ECS daily snapshot policy / 5.10 ECS 每日快照策略
 
 ```bash
-ssh 52trz
+ssh user@broker-host
 /opt/secret-broker/scripts/ecs-snapshot-policy.sh install   # enable
 /opt/secret-broker/scripts/ecs-snapshot-policy.sh status    # check
 /opt/secret-broker/scripts/ecs-snapshot-policy.sh uninstall
@@ -338,11 +338,11 @@ task deploy TAG=v1.0.0
 ### Secret Broker: public access via Cloudflare Tunnel
 ### Secret Broker：Cloudflare Tunnel 公网暴露
 
-Public entry: `https://broker.52trz.com` → Cloudflare edge → tunnel →
+Public entry: `https://broker.example.com` → Cloudflare edge → tunnel →
 ECS `127.0.0.1:8443`. Secrets never leave the broker; TLS terminates
 at the CF edge, so browsers see a trusted cert without installing the
 self-signed CA.
-公网入口：`https://broker.52trz.com` → Cloudflare 边缘 → 隧道 → ECS
+公网入口：`https://broker.example.com` → Cloudflare 边缘 → 隧道 → ECS
 `127.0.0.1:8443`。明文密钥永不离开发送端；TLS 在 CF 边缘终结，浏览器看到的是
 受信证书，不需要安装自签 CA。
 
@@ -350,7 +350,7 @@ Key files on the ECS / ECS 上关键文件：
 
 | Path / 路径 | Purpose / 用途 |
 |---|---|
-| `/etc/cloudflared/config.yml` | tunnel ingress: `broker.52trz.com -> https://127.0.0.1:8443`（`noTLSVerify: true`，自签 origin） |
+| `/etc/cloudflared/config.yml` | tunnel ingress: `broker.example.com -> https://127.0.0.1:8443`（`noTLSVerify: true`，自签 origin） |
 | `/etc/systemd/system/cloudflared-secret-broker.service` | systemd unit, auto-start on boot |
 | `/root/.cloudflared/e26e5c58-….json` | tunnel credentials (keep secret) |
 | `/root/.cloudflared/cert.pem` | zone-level origin cert (from `cloudflared tunnel login`) |
@@ -358,19 +358,19 @@ Key files on the ECS / ECS 上关键文件：
 Day-to-day ops / 日常操作：
 
 ```bash
-ssh 52trz
+ssh user@broker-host
 systemctl status cloudflared-secret-broker     # status
 journalctl -u cloudflared-secret-broker -f     # follow logs
 systemctl restart cloudflared-secret-broker    # restart
 ```
 
 Add another hostname / 增加新的域名入口：
-`cloudflared tunnel route dns secret-broker other.52trz.com`，再往
+`cloudflared tunnel route dns secret-broker other.example.com`，再往
 `/etc/cloudflared/config.yml` 的 `ingress` 加一条，然后
 `systemctl restart cloudflared-secret-broker`。
 
 Local-machine note (China network) / 本机注意（国内网络）：
-`broker.52trz.com` **must be Cloudflare DNS-only (grey cloud)** in front of
+`broker.example.com` **must be Cloudflare DNS-only (grey cloud)** in front of
 the origin nginx. Orange-cloud HTTP proxy via LAX made the dashboard take
 many seconds to open and broke client-certificate passthrough. Do not pin
 random CF anycast IPs in `hosts` as a workaround.
@@ -380,7 +380,7 @@ random CF anycast IPs in `hosts` as a workaround.
 `/tmp/broker-health.sock`）。
 
 无证书打开首页必须是 200 HTML：
-`curl -sk -o /dev/null -w "%{http_code}" https://broker.52trz.com/`
+`curl -sk -o /dev/null -w "%{http_code}" https://broker.example.com/`
 
 Security notes / 安全提示：
 - Password login is protected by a 5-fail → 15-min lockout; sessions are

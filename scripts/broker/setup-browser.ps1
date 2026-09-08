@@ -2,7 +2,7 @@
 # 让浏览器可以无警告直接访问 Secret Broker dashboard（免安装客户端证书）
 #
 # 做了什么:
-#   1. hosts 添加 127.0.0.1 broker.52trz.com（解决 SNI/证书 CN 匹配, 需要管理员）
+#   1. hosts 添加 127.0.0.1 broker.example.com（解决 SNI/证书 CN 匹配, 需要管理员）
 #   2. 导入 broker CA 到当前用户信任库（自签证书免警告）
 #   3. 提示启动 SSH 隧道 + 打开 dashboard
 #
@@ -11,10 +11,10 @@
 #   若 hosts 写入失败: 用管理员 PowerShell 再运行一次
 
 param(
-  [string]$BrokerHostname = 'broker.52trz.com',
+  [string]$BrokerHostname = 'broker.example.com',
   [int]$LocalPort = 18443,
   [string]$BrokerRemotePort = '8443',
-  [string]$SshHost = '52trz',
+  [string]$SshHost = 'broker-host',
   [string]$CaCertPath = "$env:USERPROFILE\.broker\pki\ca\ca.crt",
   [switch]$SkipHosts,
   [switch]$SkipCa

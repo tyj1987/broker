@@ -103,7 +103,7 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 ### Fixed
 
 - `deepseek_key` healthcheck calls `api.deepseek.com` (not `api.openai.com`). Anthropic / Gemini / Mistral / Cohere use their own hosts too.
-- SSH healthcheck resolves hostnames via DoH so `ENOTFOUND` on UDP/53-blocked ECS is not reported as a dead credential. Timeout text includes the resolved IP (Cloudflare-proxied names like `pve.52trz.com` will still fail on port 22 until the origin IP is used).
+- SSH healthcheck resolves hostnames via DoH so `ENOTFOUND` on UDP/53-blocked ECS is not reported as a dead credential. Timeout text includes the resolved IP (Cloudflare-proxied names like `pve.example.com` will still fail on port 22 until the origin IP is used).
 
 ### Added
 
@@ -160,7 +160,7 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ### Security
 
-- **Public `GET /health` no longer fingerprints the deployment.** It now returns only `{ "status": "ok" }`. `version`, `sops_loaded`, service names and `uptime_seconds` were previously reachable without mTLS (a production recon of `broker.52trz.com` recovered GitHub / Cloudflare / Aliyun ECS / AliDNS plus SOPS state). Authenticated `GET /api/v1/health` and the loopback/unix health socket still return ops fields, but **do not list service names**.
+- **Public `GET /health` no longer fingerprints the deployment.** It now returns only `{ "status": "ok" }`. `version`, `sops_loaded`, service names and `uptime_seconds` were previously reachable without mTLS (a production recon of `broker.example.com` recovered GitHub / Cloudflare / Aliyun ECS / AliDNS plus SOPS state). Authenticated `GET /api/v1/health` and the loopback/unix health socket still return ops fields, but **do not list service names**.
 - **Public `GET /ready` / `/readyz` no longer served on the HTTPS listener.** Ready details (SOPS, probes) are local-socket only.
 - **`GET /metrics` defaults to local scrape or admin.** Set `METRICS_PUBLIC=1` to restore anonymous scrape.
 - **Unauthenticated responses no longer send `X-Broker-Version`.**
@@ -177,7 +177,7 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 ### Performance
 
 - JS/CSS static assets send `ETag` and `Cache-Control: public, max-age=300`. HTML stays `no-cache`.
-- nginx sample enables gzip and documents **Cloudflare DNS-only (grey cloud)** for `broker.52trz.com` — orange-cloud HTTP proxy via LAX was the main reason the console felt frozen from China.
+- nginx sample enables gzip and documents **Cloudflare DNS-only (grey cloud)** for `broker.example.com` — orange-cloud HTTP proxy via LAX was the main reason the console felt frozen from China.
 
 ### Added
 
@@ -344,7 +344,7 @@ Tag v4.1.0 重新指向 master HEAD 含以下 fix (原 v4.1.0 tag `e76bf3a` 标�
   - 修 `TestRedactGithubInError` 用 `_, _, err := c.Proxy(...)` (Proxy 返 3 值, 不是 2)
   - 验证: `go test ./...` → 14/15 PASS + 1 SKIP (was claimed 15/15, 实际编译不过)
   - 4 平台 cross-compile 全 OK (linux-amd64 / linux-arm64 / darwin-amd64 / windows-amd64.exe)
-- **Python SDK `pyproject.toml`**: `authors[0].email` 从 `'broker@local'` 改 `'broker@52trz.com'` (setuptools ≥68 校验 idn-email, `local` TLD < 2 chars 拒)
+- **Python SDK `pyproject.toml`**: `authors[0].email` 从 `'broker@local'` 改 `'broker@example.com'` (setuptools ≥68 校验 idn-email, `local` TLD < 2 chars 拒)
 - **server.js auto-rotate**: `persistRotatedSecret` 之前写 plaintext JSON (line 237 TODO), 现改用 `sopsEncryptAtomic` 重加密 (fallback 到 plaintext + 警告只在 sops binary 缺失)
 - **server.js fallback version string**: `server.js:1302` 死代码 fallback `3.8.0` → `'unknown'` (BROKER_VERSION 总从 `broker/version.js` import, hardcoded literal 误导)
 - **broker.yaml.server.js:3112** fingerprint 比对: 客户端 cert 指纹 server 端自带 `:` 分隔, 修 bug 后跟 `pki/ca/ca.crt` 匹配
@@ -403,7 +403,7 @@ Tag v4.1.0 重新指向 master HEAD 含以下 fix (原 v4.1.0 tag `e76bf3a` 标�
 - Python wheel `secret_broker-4.1.0-py3-none-any.whl` (11.5KB) + sdist (15.7KB) built, 28/28 tests from wheel
 - 4 Go binaries built: linux-amd64 (5.3MB) / linux-arm64 (5.1MB) / darwin-amd64 (5.4MB) / windows-amd64.exe (5.4MB)
 - Source tarball 547KB + zip 687KB
-- Local broker 跑 46+ min uptime, V3.8.0 deploy on `broker.52trz.com` 仍稳 (10.3 day uptime)
+- Local broker 跑 46+ min uptime, V3.8.0 deploy on `broker.example.com` 仍稳 (10.3 day uptime)
 
 #### Known upgrade risk (V3.x → V4.1.0)
 

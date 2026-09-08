@@ -343,8 +343,8 @@ export const OPENAPI_SPEC = {
     description: 'mTLS Secret Broker for AI clients. AI never sees plaintext keys.',
   },
   servers: [
-    { url: 'https://broker.52trz.com:8443', description: 'Aliyun production' },
-    { url: 'https://broker-bk.52trz.com:8443', description: 'Tencent production (failover)' },
+    { url: 'https://broker.example.com:8443', description: 'Aliyun production' },
+    { url: 'https://broker-bk.example.com:8443', description: 'Tencent production (failover)' },
     { url: 'http://localhost:8443', description: 'Local dev' },
   ],
   security: [{ mtls: [] }, { bearerAuth: [] }, { sessionCookie: [] }],

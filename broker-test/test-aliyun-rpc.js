@@ -27,9 +27,9 @@ assert(ALIYUN_RPC_VERSION_BY_HOST['alidns.aliyuncs.com'] === '2015-01-09', 'map'
 
 console.log('=== mergeAliyunQuery ===');
 {
-  const q = mergeAliyunQuery('/?Action=DescribeDomains&DomainName=52trz.com', { PageSize: '10' });
+  const q = mergeAliyunQuery('/?Action=DescribeDomains&DomainName=example.com', { PageSize: '10' });
   assert(q.Action === 'DescribeDomains', 'path Action');
-  assert(q.DomainName === '52trz.com', 'path DomainName');
+  assert(q.DomainName === 'example.com', 'path DomainName');
   assert(q.PageSize === '10', 'json query merged');
 }
 

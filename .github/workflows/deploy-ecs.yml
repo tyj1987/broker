@@ -2,7 +2,7 @@
 # The runner copies a tarball over SSH so the ECS does not need to fetch GitHub.
 #
 # Repository secrets (Settings → Secrets and variables → Actions):
-#   ECS_HOST              hostname, e.g. 52trz.com
+#   ECS_HOST              hostname, e.g. example.com
 #   ECS_SSH_KEY           OpenSSH private key (ed25519, no passphrase)
 #   ECS_SSH_USER          optional, default root
 #   ECS_SSH_KNOWN_HOSTS   optional ssh-keyscan line; if empty, keyscan at runtime
@@ -14,7 +14,7 @@ on:
     branches: [master]
     paths:
       - 'broker/**'
-      - 'scripts/broker/nginx-broker.52trz.com.conf'
+      - 'scripts/broker/nginx-broker.example.com.conf'
       - '.github/workflows/deploy-ecs.yml'
   workflow_dispatch:
 

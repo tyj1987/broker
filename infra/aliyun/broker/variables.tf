@@ -26,7 +26,7 @@ variable "image_id" {
 
 variable "broker_domain" {
   type        = string
-  default     = "broker.52trz.com"
+  default     = "broker.example.com"
   description = "broker 域名（用于服务端证书 SAN）"
 }
 

@@ -3,7 +3,7 @@
 // Auto-refresh child API key with master key
 //
 // 启动:
-//   node mcp-server.js --broker https://broker.52trz.com:8443 \
+//   node mcp-server.js --broker https://broker.example.com:8443 \
 //       --master-key mb_live_xxxx --port 3001
 //
 // 鉴权:

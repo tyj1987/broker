@@ -4,7 +4,7 @@
 // 用法：
 //   import { generateSecret, verify, buildOtpauthURL, generateRecoveryCodes } from './totp.js';
 //   const s = generateSecret();        // base32 32 字符
-//   const url = buildOtpauthURL('tyj', 'broker.52trz.com', s);
+//   const url = buildOtpauthURL('tyj', 'broker.example.com', s);
 //   const ok = verify(s, '123456');    // boolean
 //   const codes = generateRecoveryCodes();  // ['aB3-xY7z', ...] 10 个
 //

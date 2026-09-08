@@ -22,7 +22,7 @@ ssh_password = "CHANGE_ME_STRONG_PASSWORD_123!"
 
 # broker 域名（用户本机解析到 EIP 即可）
 # 用你自己的域名；DNS 解析你自己搞定
-broker_domain = "broker.52trz.com"
+broker_domain = "broker.example.com"
 
 # 额外 SAN（mTLS 证书也认这些）
 broker_alt_names = ["localhost", "127.0.0.1"]

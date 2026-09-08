@@ -78,7 +78,7 @@ EOF
 
 # ----- 5. PKI -----
 echo "[4/8] generating PKI (CA + server + 3 client certs)..."
-DOMAIN="${BROKER_DOMAIN:-broker.52trz.com}"
+DOMAIN="${BROKER_DOMAIN:-broker.example.com}"
 SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org || echo "127.0.0.1")
 
 # CA

@@ -58,7 +58,16 @@ jobs:
 
       - name: Run V4 unit tests
         working-directory: broker
-        run: npm run test:v4
+        run: npm run test:v4 2>&1 | tee test-v4-output.log
+        continue-on-error: false
+
+      - name: Upload V4 test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-v4-log-${{ matrix.os }}
+          path: broker/test-v4-output.log
+          retention-days: 7
 
       - name: Run V3 backward-compat tests
         working-directory: broker

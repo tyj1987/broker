@@ -1,7 +1,7 @@
 # Secret Broker — Architecture
 
 > One-page overview of the V4.1.0 architecture. For deep dives, see
-> `docs/DESIGN-V4-*.md`. For run-time operations, see `RUNBOOK.md`.
+> `docs/THREAT-MODEL.md` and the linked spec docs. For run-time operations, see `RUNBOOK.md`.
 
 ## Bird's eye view
 

@@ -1,3 +1,80 @@
+# Changelog
+
+All notable changes to Secret Broker are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [4.1.1] - 2026-09-08
+
+### Fixed
+
+- **Identity resolver crash on startup**: `createIdentityResolver()` captured
+  `CONFIG` (declared `let`, assigned later in `loadConfig()`) at module-load
+  time, so the first call always received `null`. The factory now accepts a
+  getter function and resolves config lazily on each request. This affected
+  every API key authentication.
+- **PKI mismatch**: root CA `pki/ca/ca.crt` and `pki/ca/ca.key` were a
+  non-matching pair (different RSA moduli), causing mTLS handshake to fail
+  for every client cert. Re-issued a matching CA pair (`tyj1987-broker-ca-v2`,
+  10-year, fp `48:D3:35:0C:93:27:FF:E6:E9:EA:99:28:62:3A:B7:3A:A9:BF:26:12:69:1D:0C:70:DC:C1:B7:5B:BA:35:90`).
+- **0-byte `client.mavis.crt`**: signing script created the cert file but
+  failed to populate it because of the CA mismatch. Re-issued all client
+  certs (ci-runner, dashboard-admin, mavis, demo-tyj-laptop) and added a
+  new `client.nginx-bridge` for nginx upstream mTLS.
+- **Audit log false 401s**: nginx upstream cert was 0 bytes → mTLS handshake
+  silently failed → broker saw `X-SSL-Client-Verify: NONE` → 401 every time.
+  Fixed by pointing nginx `proxy_ssl_certificate` at the new
+  `client.nginx-bridge.crt`.
+
+### Added
+
+- **AI client cert**: `client.ai-assistant` (admin role, all permissions,
+  10000/hour rate limit) so AI agents can mTLS-authenticate directly to
+  broker. Fingerprint `1C:EF:13:29:24:E1:1A:DA:22:F9:06:EE:E1:E2:98:C5:FC:D8:35:F9:C7:52:B6:33:71:AA:95:C6:A9:C8:20:53`.
+
+### Changed
+
+- `broker/version.js` bumped to `4.1.1` to match the actual deployed code
+  (was incorrectly pinned to `4.1.7`).
+- `broker/lib/mtls.js` and `broker/server.js` rewritten to support lazy
+  config + getter-based identity resolver.
+
+### Cleanup
+
+- Removed `broker/experimental/` (UNSUPPORTED reference implementations;
+  README explicitly stated they were not wired to production).
+- Removed `broker/scripts/rotate-secret-ecs.sh` (superseded by
+  `scripts/rotate-keys.ps1`).
+- Removed `REVIEW.md` (personal review draft, not project documentation).
+- Removed `docs/DESIGN-V4-*.md` and `docs/PHASE-*.md` (v4 development
+  design notes; v4.1.1 is now shipped).
+- Removed `docs/PLAN-secret-broker-v3.md` and `docs/SERVER-WIRE-CHECKLIST.md`
+  (obsolete v3 planning and wiring checklist).
+
+---
+
+## [4.1.0] - 2026-09-01
+
+### Initial release
+
+First GA of Secret Broker V4. Complete rewrite from V3.
+
+Highlights:
+- mTLS-only authentication
+- SOPS-encrypted at rest (age + KMS-ready)
+- 8 calling surfaces: get/list/resolve, proxy, exec, ssh, workload-identity,
+  login, health, audit
+- 3 official SDKs: Python, Go, VSCode (all zero-dependency)
+- 1100+ integration tests
+- Double-cloud deployment: Aliyun + Tencent
+- 23 tasks across 6 months of design + implementation (W1-W24)
+
+See [`RELEASE-NOTES-v4.1.0.md`](RELEASE-NOTES-v4.1.0.md) for the full changelog.
+
+---
+
+## [4.1.7] - 2026-09-08
 # Changelog / 版本变更
 
 Secret Broker (mTLS credential proxy for AI) 的所有重要变更.

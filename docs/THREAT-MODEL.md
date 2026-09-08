@@ -1,4 +1,4 @@
-# Secret Broker Threat Model (2026-09-05)
+# Secret Broker Threat Model (2026-09-08 (v4.1.1))
 
 ## Trust boundaries
 

@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for Secret Broker V4.1
 # Targets:
 #   dev        — full toolchain, hot reload, source mounted from host
-#   production — distroless, runs as non-root, minimal attack surface
+#   production — pinned Alpine runtime, non-root, reduced attack surface
 
 # ============================================================
 # Stage 1: install production dependencies
@@ -77,7 +77,7 @@ RUN CGO_ENABLED=0 go test ./... \
     && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-policy ./cmd/policy-server
 
 # ============================================================
-# Stage 5: production (non-root; runtime supplies read-only rootfs)
+# Stage 5: production (non-root; deployment supplies a read-only rootfs)
 # ============================================================
 FROM node:24.20.0-alpine3.24@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS production
 
@@ -99,8 +99,8 @@ ENV NODE_ENV=production \
 
 EXPOSE 8443
 
-# distroless has no shell/curl — healthcheck must be ENTRYPOINT-side
-# or use a separate probe. The helm chart uses startup + readiness probes.
+# Health checks are supplied by the deployment. The Helm chart defines startup
+# and readiness probes without embedding credentials in the image.
 
 USER 65532:65532
 CMD ["node", "server.js"]

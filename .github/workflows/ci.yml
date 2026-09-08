@@ -198,8 +198,8 @@ jobs:
           cache-dependency-path: clients/android/**/*.gradle*
       - name: Install pinned Android SDK packages
         run: >-
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          'platforms;android-37'
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --channel=3
+            'platforms;android-37.0'
           'build-tools;36.0.0'
       - run: chmod +x gradlew
       - run: ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon
@@ -271,9 +271,27 @@ jobs:
           ) | Out-Null
           if ($errors.Count) { throw ($errors | ForEach-Object Message) -join "`n" }
       - run: cargo build --release --manifest-path src-tauri/Cargo.toml --locked --bin secret-broker-browser-host
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked
-      - run: cargo audit --file src-tauri/Cargo.lock --deny warnings
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: |
+          $version = '0.22.2'
+          $archive = Join-Path $env:RUNNER_TEMP "cargo-audit-$version.zip"
+          $destination = Join-Path $env:RUNNER_TEMP 'cargo-audit'
+          $url = "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v$version/cargo-audit-x86_64-pc-windows-msvc-v$version.zip"
+          curl.exe --fail --location --proto '=https' --tlsv1.2 --output $archive $url
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-audit download failed' }
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '0a7316540862c13d954f648917ceacca593747baed6eec180fafa590be2710ab'
+          if ($actual -ne $expected) { throw 'cargo-audit checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binary = Join-Path $destination "cargo-audit-x86_64-pc-windows-msvc-v$version/cargo-audit.exe"
+          $raw = & $binary audit --file src-tauri/Cargo.lock --json
+          $auditExit = $LASTEXITCODE
+          $raw | Set-Content -LiteralPath cargo-audit.json -Encoding utf8NoBOM
+          if ($auditExit -ne 0) { throw 'cargo-audit found a security vulnerability' }
+          $report = $raw | ConvertFrom-Json
+          if ([int]$report.vulnerabilities.count -ne 0) { throw 'cargo-audit vulnerability report is non-empty' }
+          Write-Host "cargo-audit: 0 vulnerabilities; advisory warnings are retained in cargo-audit.json"
       - run: npm run tauri -- build --bundles nsis
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -282,6 +300,7 @@ jobs:
             clients/desktop/src-tauri/target/release/bundle/nsis/*.exe
             clients/desktop/src-tauri/target/release/secret-broker-browser-host.exe
             clients/browser/native-host/com.secretbroker.browser.json
+            clients/desktop/cargo-audit.json
           if-no-files-found: error
           retention-days: 7
 

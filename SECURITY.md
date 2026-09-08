@@ -14,7 +14,7 @@
 
 **Please do not file public GitHub issues for security vulnerabilities.**
 
-Email: **security@broker.example.com** (PGP key: see `security/pgp-key.asc`)
+Email: **security@broker.example.com** (PGP key: see `.well-known/pgp-key.asc`)
 
 Response SLA: **48 hours** for initial acknowledgement, **7 days** for a
 full assessment, **30 days** for a fix (or coordinated disclosure timeline).
@@ -59,7 +59,7 @@ full assessment, **30 days** for a fix (or coordinated disclosure timeline).
 ## Security Architecture
 
 For the full design, see
-[`docs/DESIGN-V4-SECURITY-MODEL.md`](docs/DESIGN-V4-SECURITY-MODEL.md).
+[`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md).
 
 Key properties:
 
@@ -102,7 +102,7 @@ Key properties:
 
 - **mTLS**: TLS 1.2 minimum, TLS 1.3 preferred; RSA 2048+ / ECDSA P-256+
 - **SOPS**: age (recommended) or PGP; see
-  [DESIGN-V4-SECURITY-MODEL § Cryptography](docs/DESIGN-V4-SECURITY-MODEL.md)
+  [DESIGN-V4-SECURITY-MODEL § Cryptography](docs/THREAT-MODEL.md)
 - **Hashing**: SHA-256 (audit chains), Argon2id (WebAuthn)
 - **CSPRNG**: Node `crypto.randomBytes` (used for session tokens, MFA codes)
 

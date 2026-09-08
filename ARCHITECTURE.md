@@ -1,6 +1,6 @@
 # Secret Broker — Architecture
 
-> One-page overview of the V4.1.0 architecture. For deep dives, see
+> One-page overview of the V4.1.1 architecture. For deep dives, see
 > `docs/THREAT-MODEL.md` and the linked spec docs. For run-time operations, see `RUNBOOK.md`.
 
 ## Bird's eye view
@@ -184,7 +184,7 @@ docs/                        # mkdocs source
 
 CHANGELOG.md                 # Version history
 RELEASE-NOTES-v4.1.0.md      # V4.1.0 GA notes
-V4.1-COMPLETE.md             # Per-task plan vs actual
+RUNBOOK.md             # Per-task plan vs actual
 VERIFY.md                    # 1-line verification recipe
 CONTRIBUTING.md              # How to contribute
 SECURITY.md                  # Bug bounty + threat model
@@ -197,8 +197,7 @@ If you are new to the project, read in this order:
 
 1. **README.md** — what it is
 2. **QUICKSTART.md** — 5-minute walkthrough
-3. **ARCHITECTURE.md** (this file) — high-level
-4. **docs/DESIGN-V4-MASTER-PLAN.md** — full design
-5. **V4.1-COMPLETE.md** — what was actually built
-6. **DESIGN-V4-SECURITY-MODEL.md** — if you care about security
-7. **Source code** — start with `broker/server.js` + `broker/lib/redact.js`
+3. **ARCHITECTURE.md** (this file) — high-level overview
+4. **docs/THREAT-MODEL.md** — full design
+5. **RUNBOOK.md** — what was actually built
+6. **Source code** — start with `broker/server.js` + `broker/lib/redact.js`

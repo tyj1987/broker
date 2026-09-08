@@ -12,6 +12,8 @@ secrets — only metadata or redacted placeholders.
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)]()
 [![Tests](https://img.shields.io/badge/tests-1100%2B%20passing-brightgreen)]()
 
+> **Languages**: [English](README.md) · [中文](README.zh-CN.md)
+
 ---
 
 ## The problem
@@ -263,7 +265,8 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 * **Helm** — see `deploy/helm/broker/`
 * **Grafana** — see `deploy/grafana/`
 
-Full guide: [`DEPLOY-52TRZ.md`](DEPLOY-52TRZ.md) and [`RUNBOOK.md`](RUNBOOK.md).
+Full guide: [`RUNBOOK.md`](RUNBOOK.md) and the deployment assets under
+[`deploy/`](deploy/) (Helm, Terraform, Grafana).
 
 ---
 

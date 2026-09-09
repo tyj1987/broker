@@ -10,3 +10,9 @@ Provider selectors and URLs must be versioned source code, not request fields.
 Container-level DNS/IP egress enforcement, credential injection, CAPTCHA/user
 handoff, real Aliyun/Tencent contract tests and an ephemeral runtime image are
 required before this worker can be enabled in production.
+
+`BrowserBrokerClient` implements the signed, single-use lease exchange without
+loading any private key. A production launcher must inject a signer backed by a
+non-exportable workload key or short-lived workload identity. Private keys are
+not accepted through environment variables or command-line arguments. Worker
+capabilities are exact grants over provider, operation, account and environment.

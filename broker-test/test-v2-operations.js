@@ -225,4 +225,73 @@ await assert.rejects(
 );
 assert.equal(failing.listDevices('owner-3').length, 0);
 
+const workerBroker = new OperationBroker({
+  now: () => now,
+  authorize: () => ({ allow: true, executionMode: 'browser', ttlMs: 120_000 }),
+});
+const workerEnrollment = workerBroker.beginEnrollment('worker-service', {
+  label: 'browser-worker-staging', platform: 'browser-worker',
+  capabilities: ['browser.execute:aliyun:account.summary:primary:staging'],
+});
+const workerMessage = Buffer.from(
+  `secret-broker-device-enrollment-v1\n${workerEnrollment.enrollment_id}\n${workerEnrollment.challenge}`,
+);
+const workerDevice = await workerBroker.completeEnrollment(null, {
+  enrollment_id: workerEnrollment.enrollment_id,
+  public_key_pem: publicKeyPem,
+  signature: sign(null, workerMessage, privateKey).toString('base64url'),
+});
+const workerOperation = await workerBroker.createOperation({ name: 'owner-4' }, {
+  provider: 'aliyun', operation_id: 'account.summary', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'summary' },
+});
+assert.equal(workerOperation.execution_mode, 'browser');
+const lease = workerBroker.claimBrowserOperation(workerDevice.id);
+assert.equal(lease.operation.id, workerOperation.id);
+assert.equal(lease.operation.provider, 'aliyun');
+assert.equal(Object.hasOwn(lease.operation, 'owner'), false);
+assert.equal(Object.hasOwn(lease.operation, 'credentials'), false);
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+    receipt: lease.receipt, status: 'completed', result: { nested: { session_token: 'forbidden' } },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_result',
+);
+const workerCompleted = workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+  receipt: lease.receipt, status: 'completed', result: { status: 'ok', records: 1 },
+});
+assert.equal(workerCompleted.status, 'completed');
+assert.deepEqual(workerCompleted.result, { status: 'ok', records: 1 });
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+    receipt: lease.receipt, status: 'completed', result: {},
+  }),
+  (error) => error instanceof V2Error && error.code === 'invalid_lease',
+);
+
+await workerBroker.createOperation({ name: 'owner-4' }, {
+  provider: 'aliyun', operation_id: 'account.summary', account_ref: 'primary', environment: 'production',
+  typed_parameters: { resource_ref: 'summary' },
+});
+assert.throws(
+  () => workerBroker.claimBrowserOperation(workerDevice.id),
+  (error) => error instanceof V2Error && error.code === 'not_found',
+  'staging worker capability cannot claim a production operation',
+);
+
+await workerBroker.createOperation({ name: 'owner-4' }, {
+  provider: 'aliyun', operation_id: 'account.summary', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'summary' },
+});
+const expiringLease = workerBroker.claimBrowserOperation(workerDevice.id);
+now += 61_000;
+workerBroker.prune();
+assert.equal(workerBroker.getOperation({ name: 'owner-4' }, expiringLease.operation.id).status, 'failed');
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, expiringLease.id, {
+    receipt: expiringLease.receipt, status: 'completed', result: {},
+  }),
+  (error) => error instanceof V2Error && error.code === 'invalid_lease',
+);
+
 console.log('v2 operations: all tests passed');

@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, randomBytes, randomUUID, verify } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify } from 'node:crypto';
 
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const OTP_RE = /^[0-9]{4,10}$/;
@@ -8,6 +8,8 @@ const MAX_CLOCK_SKEW_MS = 60_000;
 const DEFAULT_OTP_TTL_MS = 120_000;
 const MAX_JSON_BYTES = 64 * 1024;
 const DEVICE_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'p256-sha256']);
+const EXECUTION_MODES = new Set(['adapter', 'browser']);
+const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|otp|verification.?code)/i;
 
 export class V2Error extends Error {
   constructor(code, message, status = 400) {
@@ -58,6 +60,7 @@ function publicOperation(op) {
     operation_id: op.operationId,
     account_ref: op.accountRef,
     environment: op.environment,
+    execution_mode: op.executionMode,
     status: op.status,
     created_at: op.createdAt,
     expires_at: op.expiresAt,
@@ -158,6 +161,7 @@ export class OperationBroker {
     this.usedNonces = new Map();
     this.activeOtpLocks = new Map();
     this.browserClaims = new Map();
+    this.browserLeases = new Map();
   }
 
   hydrateDevices(records = []) {
@@ -345,6 +349,8 @@ export class OperationBroker {
     if (this.operations.size >= this.maxRecords) throw new V2Error('capacity', 'operation capacity reached', 503);
     const now = this.now();
     const ttlMs = Math.min(Math.max(Number(decision.ttlMs || 300_000), 10_000), 900_000);
+    const executionMode = decision.executionMode || 'adapter';
+    if (!EXECUTION_MODES.has(executionMode)) throw new V2Error('invalid_policy', 'unsupported execution mode', 500);
     const operation = {
       id: randomUUID(),
       owner: identity.name,
@@ -352,6 +358,7 @@ export class OperationBroker {
       operationId,
       accountRef,
       environment,
+      executionMode,
       typedParameters,
       status: 'waiting',
       createdAt: new Date(now).toISOString(),
@@ -445,7 +452,7 @@ export class OperationBroker {
     task.status = 'received';
     const operation = this.operations.get(task.operationId);
     if (operation) {
-      operation.status = 'received';
+      if (operation.status !== 'consuming') operation.status = 'received';
       operation.updatedAt = new Date(this.now()).toISOString();
     }
     return publicOtpTask(task);
@@ -570,6 +577,99 @@ export class OperationBroker {
     return publicOperation(operation);
   }
 
+  claimBrowserOperation(deviceId) {
+    const device = this.devices.get(deviceId);
+    if (!device || device.state !== 'active' || device.platform !== 'browser-worker') {
+      throw new V2Error('device_denied', 'active browser worker is required', 401);
+    }
+    this.prune();
+    const operation = [...this.operations.values()]
+      .filter((candidate) => ['waiting', 'received'].includes(candidate.status)
+        && candidate.executionMode === 'browser'
+        && device.capabilities.includes([
+          'browser.execute', candidate.provider, candidate.operationId, candidate.accountRef, candidate.environment,
+        ].join(':')))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    if (!operation) throw new V2Error('not_found', 'no browser operation is available', 404);
+    operation.status = 'consuming';
+    operation.updatedAt = new Date(this.now()).toISOString();
+    const leaseId = randomUUID();
+    const receipt = randomBytes(32).toString('base64url');
+    const expiresAt = Math.min(new Date(operation.expiresAt).getTime(), this.now() + 60_000);
+    this.browserLeases.set(leaseId, {
+      id: leaseId, receiptHash: sha256Base64Url(receipt), deviceId, operationId: operation.id,
+      expiresAt, otpClaimed: false,
+    });
+    return {
+      id: leaseId,
+      receipt,
+      expires_at: new Date(expiresAt).toISOString(),
+      operation: {
+        id: operation.id, provider: operation.provider, operation_id: operation.operationId,
+        account_ref: operation.accountRef, environment: operation.environment,
+        typed_parameters: structuredClone(operation.typedParameters),
+        otp_available: operation.otpTaskId
+          ? this.otpTasks.get(operation.otpTaskId)?.status === 'received' : false,
+      },
+    };
+  }
+
+  claimBrowserOperationOtp(deviceId, leaseId, receipt) {
+    const { lease, operation } = this.activeBrowserLease(deviceId, leaseId, receipt);
+    if (lease.otpClaimed || !operation.otpTaskId) throw new V2Error('invalid_state', 'lease OTP is unavailable', 409);
+    const task = this.otpTasks.get(operation.otpTaskId);
+    if (!task || task.status !== 'received' || !task.code) throw new V2Error('invalid_state', 'lease OTP is unavailable', 409);
+    task.status = 'consuming';
+    const code = task.code;
+    task.code = null;
+    lease.otpClaimed = true;
+    return { code, expires_at: task.expiresAt };
+  }
+
+  completeBrowserOperation(deviceId, leaseId, input) {
+    const { lease, operation } = this.activeBrowserLease(deviceId, leaseId, input?.receipt);
+    const completed = input?.status === 'completed';
+    if (!completed && input?.status !== 'failed') {
+      throw new V2Error('invalid_request', 'lease status must be completed or failed');
+    }
+    let result = null;
+    if (completed) {
+      result = requireObject(input?.result || {}, 'result');
+      assertSafeResult(result);
+    }
+    this.browserLeases.delete(lease.id);
+    operation.status = completed ? 'completed' : 'failed';
+    operation.result = result;
+    operation.error = completed ? null : requireId(input?.error_code || 'browser_operation_failed', 'error_code');
+    operation.updatedAt = new Date(this.now()).toISOString();
+    if (operation.otpTaskId) {
+      const task = this.otpTasks.get(operation.otpTaskId);
+      if (task && ['waiting', 'received', 'consuming'].includes(task.status)) {
+        task.code = null;
+        task.status = completed ? 'completed' : 'failed';
+        this.activeOtpLocks.delete(task.lockKey);
+      }
+    }
+    return publicOperation(operation);
+  }
+
+  activeBrowserLease(deviceId, leaseId, receipt) {
+    const lease = this.browserLeases.get(leaseId);
+    const suppliedReceiptHash = typeof receipt === 'string' ? sha256Base64Url(receipt) : '';
+    const receiptMatches = lease
+      && suppliedReceiptHash.length === lease.receiptHash.length
+      && timingSafeEqual(Buffer.from(suppliedReceiptHash), Buffer.from(lease.receiptHash));
+    if (!lease || lease.deviceId !== deviceId || lease.expiresAt <= this.now()
+      || !receiptMatches) {
+      throw new V2Error('invalid_lease', 'browser operation lease is invalid or expired', 409);
+    }
+    const operation = this.operations.get(lease.operationId);
+    if (!operation || operation.status !== 'consuming') {
+      throw new V2Error('invalid_state', 'browser operation is no longer active', 409);
+    }
+    return { lease, operation };
+  }
+
   cancelDeviceTasks(deviceId) {
     for (const task of this.otpTasks.values()) {
       if (task.deviceId === deviceId && ['waiting', 'received'].includes(task.status)) {
@@ -626,6 +726,38 @@ export class OperationBroker {
         }
       }
     }
+    for (const [id, lease] of this.browserLeases) {
+      if (lease.expiresAt > now) continue;
+      this.browserLeases.delete(id);
+      const operation = this.operations.get(lease.operationId);
+      if (operation?.status === 'consuming') {
+        operation.status = 'failed';
+        operation.error = 'browser_lease_expired';
+        operation.updatedAt = new Date(now).toISOString();
+        if (operation.otpTaskId) {
+          const task = this.otpTasks.get(operation.otpTaskId);
+          if (task && ['waiting', 'received', 'consuming'].includes(task.status)) {
+            task.code = null;
+            task.status = 'failed';
+            this.activeOtpLocks.delete(task.lockKey);
+          }
+        }
+      }
+    }
+  }
+}
+
+function assertSafeResult(value, depth = 0) {
+  if (depth > 8) throw new V2Error('unsafe_result', 'browser result is too deeply nested');
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertSafeResult(item, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') throw new V2Error('unsafe_result', 'browser result contains an unsupported value');
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_RESULT_KEY.test(key)) throw new V2Error('unsafe_result', 'browser result contains a sensitive field');
+    assertSafeResult(item, depth + 1);
   }
 }
 

@@ -212,6 +212,15 @@ export function createV2Routes(deps) {
           throw new V2Error('step_up_required', 'device enrollment requires an interactive identity', 403);
         }
         const body = await readBody(req);
+        if (body?.platform === 'browser-worker'
+          && (!identity.isAdmin || ctx.client?.security_profile !== 'strict'
+            || !ctx.authFactors?.includes('webauthn'))) {
+          throw new V2Error(
+            'step_up_required',
+            'browser worker enrollment requires a strict administrator with WebAuthn step-up',
+            403,
+          );
+        }
         mandatoryAudit({ action: 'v2_device_enroll_begin_intent', status: 'authorized', cn: ctx.cn, platform: body?.platform });
         const result = operationBroker.beginEnrollment(identity.name, body);
         audit({ action: 'v2_device_enroll_begin', status: 'ok', cn: ctx.cn, enrollment_id: result.enrollment_id });
@@ -271,6 +280,42 @@ export function createV2Routes(deps) {
         const result = operationBroker.submitOtp(deviceId, taskId, body || {});
         audit({ action: 'v2_otp_received', status: 'ok', device_id: deviceId, operation_id: result.operation_id });
         send(res, 202, result);
+        return true;
+      }
+
+      const workerClaimMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/browser-leases\/claim$/.exec(pathname);
+      if (method === 'POST' && workerClaimMatch) {
+        const body = await readBody(req);
+        const deviceId = workerClaimMatch[1];
+        operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryAudit({ action: 'v2_browser_lease_claim_intent', status: 'authorized', device_id: deviceId });
+        const result = operationBroker.claimBrowserOperation(deviceId);
+        audit({ action: 'v2_browser_lease_claim', status: 'ok', device_id: deviceId, operation_id: result.operation.id });
+        send(res, 200, result);
+        return true;
+      }
+
+      const workerOtpMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/browser-leases\/([a-f0-9-]+)\/otp$/.exec(pathname);
+      if (method === 'POST' && workerOtpMatch) {
+        const body = await readBody(req);
+        const [deviceId, leaseId] = workerOtpMatch.slice(1);
+        operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryAudit({ action: 'v2_browser_lease_otp_intent', status: 'authorized', device_id: deviceId, lease_id: leaseId });
+        const result = operationBroker.claimBrowserOperationOtp(deviceId, leaseId, body?.receipt);
+        audit({ action: 'v2_browser_lease_otp', status: 'ok', device_id: deviceId, lease_id: leaseId });
+        send(res, 200, result);
+        return true;
+      }
+
+      const workerCompleteMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/browser-leases\/([a-f0-9-]+)\/complete$/.exec(pathname);
+      if (method === 'POST' && workerCompleteMatch) {
+        const body = await readBody(req);
+        const [deviceId, leaseId] = workerCompleteMatch.slice(1);
+        operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryAudit({ action: 'v2_browser_lease_complete_intent', status: 'authorized', device_id: deviceId, lease_id: leaseId });
+        const result = operationBroker.completeBrowserOperation(deviceId, leaseId, body);
+        audit({ action: 'v2_browser_lease_complete', status: result.status, device_id: deviceId, operation_id: result.id });
+        send(res, 200, result);
         return true;
       }
 

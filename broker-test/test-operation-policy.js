@@ -45,6 +45,10 @@ const base = {
 };
 
 assert.equal(evaluateOperationPolicy(config, base, 1_000).allow, true);
+assert.equal(evaluateOperationPolicy(config, base, 1_000).executionMode, 'adapter');
+assert.equal(evaluateOperationPolicy({
+  operation_policies: { aliyun: { 'billing.read': { ...policy, execution_mode: 'browser' } } },
+}, base, 1_000).executionMode, 'browser');
 const denied = [
   ['role', { client: { ...context.client, role: 'admin' } }],
   ['profile', { client: { ...context.client, security_profile: 'compatibility' } }],

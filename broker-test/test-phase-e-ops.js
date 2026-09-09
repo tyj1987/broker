@@ -48,6 +48,18 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(good.ok === true && good.errors.length === 0, 'good config');
 
+  const badExecutionMode = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: { aliyun: { 'billing.read': { execution_mode: 'arbitrary-shell' } } },
+  });
+  assert(badExecutionMode.ok === false, 'unknown operation execution mode fails closed');
+
+  const browserExecutionMode = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: { aliyun: { 'billing.read': { execution_mode: 'browser' } } },
+  });
+  assert(browserExecutionMode.ok === true, 'browser operation execution mode is accepted');
+
   const badUrl = validateBrokerConfig({
     clients: { a: { role: 'admin' } },
     services: { x: { base_url: 'not-a-url' } },

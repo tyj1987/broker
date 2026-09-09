@@ -47,6 +47,12 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   vulnerabilities and seven transitive maintenance or soundness warnings,
   which remain registered risks rather than silently ignored findings.
 - Browser helper: JavaScript syntax, least-privilege manifest tests, native-host compilation, and native-host unit tests passed locally. Browser-to-production end-to-end fill remains unaccepted.
+- Isolated browser worker: typed input and output filtering, exact HTTPS-origin
+  routing, disposable browser contexts, server-issued 60-second leases and
+  signed device requests are unit-tested. Worker grants bind provider,
+  operation, account and environment. A production launcher, hardware-backed
+  workload signer, provider adapters, container egress enforcement and real
+  account tests are not implemented, so this is not production-ready.
 - Supply chain: Gitleaks 8.29.1 (official release checksum verified) reports no
   unallowlisted findings in either the complete Git history or the staged
   upgrade. Node broker, VS Code and desktop dependency audits report no known
@@ -72,16 +78,22 @@ restricts registry login, publication and registry-backed attestations to a
 push on `master`; feature branches still build, inspect, scan and generate an
 SBOM for the local candidate image.
 
+CI run [`34296476883`](https://github.com/tyj1987/broker/actions/runs/34296476883)
+at commit `ab1da42dc0fda9849976f60c995b050775b68d8b` completed successfully. It
+validated all source and client jobs, rebuilt the pinned SOPS toolchain, checked
+the non-root/read-only production runtime, passed the HIGH/CRITICAL container
+vulnerability gate, and generated an SBOM. Registry publication and attestation
+were correctly skipped on the feature branch and therefore remain release gates.
+
 ## Gates still required
 
-- The feature-branch CI must complete successfully after the registry
-  publication boundary change. A separate `master` publication run must prove
+- A separate `master` publication run must prove
   GHCR package permission and registry-backed attestations before release.
 - Container build, SBOM, signature, provenance, SAST/SCA, license and IaC reports must be retained as CI artifacts.
 - All production credentials potentially exposed before this audit must be rotated with evidence outside the repository.
 - Six provider adapters require isolated-account contract tests before any production-ready status.
 - Xiaomi 12S Ultra dual-SIM, permission revocation, delayed/duplicate OTP, background restriction, and manual fallback tests must pass.
 - Windows installer signing/update verification, Ubuntu packaging, iOS
-  compile/sign/device validation, isolated browser worker, and native browser
-  bridge production validation remain open.
+  compile/sign/device validation, isolated browser-worker production runtime,
+  and native browser bridge production validation remain open.
 - Aliyun-to-Tencent recovery must demonstrate RPO at most 15 minutes and RTO at most 60 minutes.

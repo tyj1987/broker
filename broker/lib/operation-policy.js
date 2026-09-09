@@ -97,6 +97,7 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
 
   return {
     allow: true,
+    executionMode: policy.execution_mode || 'adapter',
     ttlMs: policy.ttl_seconds ? Number(policy.ttl_seconds) * 1000 : undefined,
     otpRequired: policy.otp?.required === true,
     otp: policy.otp ? {

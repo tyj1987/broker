@@ -327,6 +327,47 @@ const p = {
       responses: { 202: desc('Accepted without echoing the OTP'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
     },
   },
+  '/api/v2/devices/{device_id}/browser-leases/claim': {
+    post: {
+      tags: ['browser-workers-v2'], summary: 'Claim the oldest typed browser operation allowed by an enrolled worker capability', security: [],
+      parameters: [
+        { in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'X-Broker-Device-Timestamp', required: true, schema: { type: 'integer' } },
+        { in: 'header', name: 'X-Broker-Device-Nonce', required: true, schema: { type: 'string' } },
+        { in: 'header', name: 'X-Broker-Device-Signature', required: true, schema: { type: 'string' } },
+      ],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false } } } },
+      responses: { 200: jsonOK('BrowserOperationLease'), 401: respRef('Unauthorized'), 404: respRef('NotFound'), 409: desc('Lease or operation state conflict') },
+    },
+  },
+  '/api/v2/devices/{device_id}/browser-leases/{lease_id}/otp': {
+    post: {
+      tags: ['browser-workers-v2'], summary: 'Consume the single OTP bound to an active browser operation lease', security: [],
+      parameters: [
+        { in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'path', name: 'lease_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'X-Broker-Device-Timestamp', required: true, schema: { type: 'integer' } },
+        { in: 'header', name: 'X-Broker-Device-Nonce', required: true, schema: { type: 'string' } },
+        { in: 'header', name: 'X-Broker-Device-Signature', required: true, schema: { type: 'string' } },
+      ],
+      requestBody: { required: true, content: { 'application/json': { schema: ref('BrowserLeaseReceipt') } } },
+      responses: { 200: jsonOK('BrowserLeaseOtp'), 401: respRef('Unauthorized'), 409: desc('Lease invalid, expired, or OTP unavailable') },
+    },
+  },
+  '/api/v2/devices/{device_id}/browser-leases/{lease_id}/complete': {
+    post: {
+      tags: ['browser-workers-v2'], summary: 'Complete or fail an active browser operation lease with a redacted result', security: [],
+      parameters: [
+        { in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'path', name: 'lease_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'X-Broker-Device-Timestamp', required: true, schema: { type: 'integer' } },
+        { in: 'header', name: 'X-Broker-Device-Nonce', required: true, schema: { type: 'string' } },
+        { in: 'header', name: 'X-Broker-Device-Signature', required: true, schema: { type: 'string' } },
+      ],
+      requestBody: { required: true, content: { 'application/json': { schema: ref('BrowserLeaseCompletion') } } },
+      responses: { 200: jsonOK('Operation'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 409: desc('Lease invalid, expired, or already completed') },
+    },
+  },
 };
 
 const s = {
@@ -503,13 +544,23 @@ const s = {
     properties: {
       id: { type: 'string', format: 'uuid' }, provider: { type: 'string' }, operation_id: { type: 'string' },
       account_ref: { type: 'string' }, environment: { type: 'string' },
+      execution_mode: { type: 'string', enum: ['adapter', 'browser'] },
       status: { type: 'string', enum: ['waiting', 'received', 'consuming', 'completed', 'failed', 'expired', 'revoked'] },
       result: { type: 'object' }, error: { type: 'object' }, created_at: { type: 'string', format: 'date-time' },
+      updated_at: { type: 'string', format: 'date-time' }, expires_at: { type: 'string', format: 'date-time' },
+      otp_task_id: { oneOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }] },
     },
   },
   DeviceEnrollmentBegin: {
     type: 'object', additionalProperties: false, required: ['label', 'platform'],
-    properties: { label: { type: 'string', maxLength: 80 }, platform: { type: 'string', enum: ['android', 'windows', 'linux', 'ios', 'browser-worker'] }, capabilities: { type: 'array', items: { type: 'string' } } },
+    properties: {
+      label: { type: 'string', maxLength: 80 },
+      platform: { type: 'string', enum: ['android', 'windows', 'linux', 'ios', 'browser-worker'] },
+      capabilities: {
+        type: 'array', items: { type: 'string' },
+        description: 'Browser worker grants use browser.execute:<provider>:<operation>:<account>:<environment>.',
+      },
+    },
   },
   DeviceEnrollmentChallenge: {
     type: 'object', required: ['enrollment_id', 'challenge', 'expires_at'],
@@ -542,6 +593,38 @@ const s = {
   OtpSubmission: {
     type: 'object', additionalProperties: false, required: ['code', 'sim_binding', 'challenge'],
     properties: { code: { type: 'string', pattern: '^[0-9]{4,10}$' }, sim_binding: { type: 'string' }, challenge: { type: 'string' } },
+  },
+  BrowserLeaseReceipt: {
+    type: 'object', additionalProperties: false, required: ['receipt'],
+    properties: { receipt: { type: 'string', minLength: 32, maxLength: 128 } },
+  },
+  BrowserOperationLease: {
+    type: 'object', additionalProperties: false, required: ['id', 'receipt', 'expires_at', 'operation'],
+    properties: {
+      id: { type: 'string', format: 'uuid' }, receipt: { type: 'string', minLength: 32, maxLength: 128 },
+      expires_at: { type: 'string', format: 'date-time' },
+      operation: {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'provider', 'operation_id', 'account_ref', 'environment', 'typed_parameters', 'otp_available'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, provider: { type: 'string' }, operation_id: { type: 'string' },
+          account_ref: { type: 'string' }, environment: { type: 'string' }, typed_parameters: { type: 'object' },
+          otp_available: { type: 'boolean' },
+        },
+      },
+    },
+  },
+  BrowserLeaseOtp: {
+    type: 'object', additionalProperties: false, required: ['code', 'expires_at'],
+    properties: { code: { type: 'string', pattern: '^[0-9]{4,10}$' }, expires_at: { type: 'string', format: 'date-time' } },
+  },
+  BrowserLeaseCompletion: {
+    type: 'object', additionalProperties: false, required: ['receipt', 'status'],
+    properties: {
+      receipt: { type: 'string', minLength: 32, maxLength: 128 },
+      status: { type: 'string', enum: ['completed', 'failed'] }, result: { type: 'object' },
+      error_code: { type: 'string', pattern: '^[a-z0-9][a-z0-9._:-]{0,127}$' },
+    },
   },
   BrowserOtpClaim: {
     type: 'object', additionalProperties: false,
@@ -614,6 +697,7 @@ export const OPENAPI_SPEC = {
     { name: 'operations-v2', description: 'Policy-bound typed operations' },
     { name: 'approvals-v2', description: 'Bound, WebAuthn-stepped-up approvals with separation of duties' },
     { name: 'devices-v2', description: 'Device proof-of-possession and bound OTP tasks' },
+    { name: 'browser-workers-v2', description: 'Signed short-lived leases for isolated typed browser operations' },
   ],
   paths: p,
   components: {

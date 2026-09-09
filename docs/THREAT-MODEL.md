@@ -19,6 +19,7 @@
 | Browser → control plane | session theft/fixation and weak MFA | Secure/HttpOnly/Strict cookies, short absolute TTL, AAL3 hardware key and re-authentication | session and WebAuthn routes implemented and tested; two-key production enrollment and ceremony acceptance pending |
 | Rotation → storage | failed encryption or false-success rotation | fail-closed persistence and critical alert | implemented and tested |
 | Build → production | mutable dependencies or unsigned artifact | lockfile, SAST/SCA, SBOM, signing/provenance, digest pinning | release pipeline evidence pending |
+| Broker → isolated browser worker | task theft, replay, cross-account/environment execution, or credential/result leakage | strict-admin WebAuthn enrollment, signed nonce-bound requests, short one-time leases, exact workload capability, typed parameters and nested result filtering | protocol and unit tests implemented; hardware-backed workload identity, runtime isolation and real adapters pending |
 
 ## Residual assumptions
 

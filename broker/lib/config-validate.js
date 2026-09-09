@@ -112,6 +112,29 @@ export function validateBrokerConfig(config, opts = {}) {
     errors.push({ level: 'error', path: 'api_keys', message: 'must be object/array map' });
   }
 
+  if (config.operation_policies != null) {
+    if (!config.operation_policies || typeof config.operation_policies !== 'object' || Array.isArray(config.operation_policies)) {
+      errors.push({ level: 'error', path: 'operation_policies', message: 'must be an object' });
+    } else {
+      for (const [provider, operations] of Object.entries(config.operation_policies)) {
+        if (!operations || typeof operations !== 'object' || Array.isArray(operations)) {
+          errors.push({ level: 'error', path: `operation_policies.${provider}`, message: 'must be an object' });
+          continue;
+        }
+        for (const [operationId, policy] of Object.entries(operations)) {
+          const path = `operation_policies.${provider}.${operationId}`;
+          if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+            errors.push({ level: 'error', path, message: 'must be an object' });
+            continue;
+          }
+          if (policy.execution_mode != null && !['adapter', 'browser'].includes(policy.execution_mode)) {
+            errors.push({ level: 'error', path: `${path}.execution_mode`, message: 'must be adapter or browser' });
+          }
+        }
+      }
+    }
+  }
+
   // At least one admin recommended
   const clients = config.clients || {};
   const admins = Object.values(clients).filter((c) => c && c.role === 'admin');

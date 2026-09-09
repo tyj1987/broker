@@ -377,11 +377,7 @@ export class AutomationTaskBroker {
     if (!STATES.has(state)) throw new V2Error('invalid_state', 'unknown task state', 500);
     if (!TRANSITIONS.get(task.state)?.has(state)) throw new V2Error('invalid_state', `task cannot transition from ${task.state || 'NEW'} to ${state}`, 409);
     const timestamp = new Date(this.now()).toISOString();
-    task.state = state;
-    task.updatedAt = timestamp;
-    const event = { sequence: task.nextSequence++, state, reason, at: timestamp };
-    task.events.push(event);
-    if (task.events.length > MAX_EVENTS) task.events.shift();
+    const event = { sequence: task.nextSequence, state, reason, at: timestamp };
     this.onEvent({
       task_id: task.id, execution_id: task.executionId || null, actor: task.owner,
       identity: task.identityMethod, role: task.role, policy_decision: task.policyDecision,
@@ -391,6 +387,14 @@ export class AutomationTaskBroker {
       error: state === 'FAILED' ? reason : undefined,
       latency_ms: task.latencyMs, ...event,
     });
+    // State is committed only after the mandatory audit sink accepts the
+    // transition. This prevents execution from advancing without an audit
+    // record and leaves the previous state retryable on a storage outage.
+    task.state = state;
+    task.updatedAt = timestamp;
+    task.nextSequence += 1;
+    task.events.push(event);
+    if (task.events.length > MAX_EVENTS) task.events.shift();
   }
 
   prune() {

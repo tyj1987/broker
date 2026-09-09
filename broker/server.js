@@ -193,7 +193,10 @@ const taskExecutors = new Map([
 ]);
 const taskBroker = new AutomationTaskBroker({
   toolRegistry, authorize: operationAuthorization, approvalBroker, executors: taskExecutors,
-  onEvent: (event) => audit({ action: 'v2_task_transition', status: event.state, ...event }),
+  onEvent: (event) => audit(
+    { action: 'v2_task_transition', status: event.state, ...event },
+    { mandatory: true },
+  ),
 });
 const webAuthnService = new WebAuthnService({ getConfig: () => CONFIG, persist: () => persistConfig() });
 const v2Routes = createV2Routes({

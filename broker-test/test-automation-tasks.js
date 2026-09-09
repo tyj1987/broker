@@ -474,6 +474,38 @@ const tokenFailureBroker = new AutomationTaskBroker({
 const tokenFailure = await tokenFailureBroker.create(human, { ...lowInput, idempotency_key: 'token-failure-task1' });
 assert.equal((await tokenFailureBroker.run(human, tokenFailure.id)).error.code, 'execution_token_failed');
 
+let auditedExecutionCalls = 0;
+const mandatoryAuditEvents = [];
+const auditFailureBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize,
+  approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => {
+    auditedExecutionCalls++;
+    return { name: 'blocked', version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect', risk_level: 'LOW', agent_execution: true };
+  }]]),
+  onEvent(event) {
+    mandatoryAuditEvents.push(event);
+    if (event.state === 'EXECUTING') throw new Error('mandatory audit unavailable');
+  },
+});
+const auditProtected = await auditFailureBroker.create(human, {
+  ...lowInput, idempotency_key: 'mandatory-audit-task1',
+});
+await assert.rejects(auditFailureBroker.run(human, auditProtected.id), /mandatory audit unavailable/);
+assert.equal(auditedExecutionCalls, 0, 'executor must not run when its EXECUTING audit cannot be stored');
+assert.equal(auditFailureBroker.get(human, auditProtected.id).state, 'READY', 'failed audit leaves prior task state intact');
+assert.equal(
+  mandatoryAuditEvents.filter((event) => event.state === 'EXECUTING').length,
+  1,
+  'the mandatory sink receives exactly one attempted execution transition',
+);
+assert.equal(
+  auditFailureBroker.eventsFor(human, auditProtected.id).some((event) => event.state === 'EXECUTING'),
+  false,
+  'failed audit does not enter the committed task event stream',
+);
+
 const capacityBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals, executors, maxTasks: 1,
 });

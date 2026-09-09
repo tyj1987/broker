@@ -82,6 +82,11 @@ audit is committed. The lease and operation enter a terminal state only after
 that audit succeeds. On audit outage, the lease remains active for a bounded,
 signed retry; the worker must not repeat the upstream provider action.
 
+The assisted browser-extension OTP claim has the same mandatory intent and
+result audit boundary as an isolated worker. If the result audit fails, the
+unpublished receipt is removed and the code, task and operation are restored to
+the pre-claim state.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

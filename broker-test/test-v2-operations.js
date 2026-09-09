@@ -265,9 +265,21 @@ assert.throws(
   }),
   (error) => error instanceof V2Error && error.code === 'not_found',
 );
-const claim = broker.claimBrowserOtp(browserIdentity, {
+const browserClaimInput = {
   provider: 'aliyun', account_ref: 'primary', origin: 'https://account.aliyun.com', tab_id: 1, frame_id: 0, document_id: 'doc-1',
+};
+assert.throws(
+  () => broker.claimBrowserOtpAndAudit(browserIdentity, browserClaimInput, () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, browserOperation.id).status, 'received');
+let extensionClaimAudited = false;
+const claim = broker.claimBrowserOtpAndAudit(browserIdentity, browserClaimInput, () => {
+  extensionClaimAudited = true;
 });
+assert.equal(extensionClaimAudited, true);
 assert.equal(claim.code, browserBody.code);
 assert.equal(JSON.stringify(broker.getOperation({ name: 'owner-1' }, browserOperation.id)).includes(browserBody.code), false);
 assert.throws(

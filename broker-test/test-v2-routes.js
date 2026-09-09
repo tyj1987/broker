@@ -72,6 +72,11 @@ const handler = createV2Routes({
       calls.push(['claim', subject.name, input]);
       return { type: 'approved-otp', provider: input.provider };
     },
+    claimBrowserOtpAndAudit(subject, input, commitAudit) {
+      const result = this.claimBrowserOtp(subject, input);
+      commitAudit({ provider: result.provider, operation_id: 'operation-id' });
+      return result;
+    },
     finishBrowserOtp(subject, input) {
       calls.push(['finish', subject.name, input]);
       return { id: 'operation-id', status: input.completed ? 'completed' : 'failed' };
@@ -280,6 +285,14 @@ assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'scope_deni
 identity.apiKey.scopes = ['browser:otp:fill'];
 assert.equal((await route('/api/v2/browser/otp/claim')).status, 200);
 assert.ok(calls.some((item) => item[0] === 'claim'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_claim_intent'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_claim'
+  && event.operation_id === 'operation-id'));
+const extensionClaimsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'claim').length;
+auditFailureAction = 'v2_browser_otp_claim';
+assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'claim').length, extensionClaimsBeforeResultAuditFailure + 1);
 
 body = { receipt: 'receipt', completed: true };
 assert.equal((await route('/api/v2/browser/otp/finish')).value.status, 'completed');

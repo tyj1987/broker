@@ -639,13 +639,16 @@ export class OperationBroker {
       && key.allowed_resources?.includes(operation.typedParameters.resource_ref);
     if (!allowed) throw new V2Error('forbidden', 'browser bridge key constraints denied the operation', 403);
     task.status = 'consuming';
+    const previousOperationStatus = operation.status;
+    const previousOperationUpdatedAt = operation.updatedAt;
     operation.status = 'consuming';
     operation.updatedAt = new Date(this.now()).toISOString();
     const receipt = randomBytes(32).toString('base64url');
     const expiresAt = Math.min(new Date(task.expiresAt).getTime(), this.now() + 30_000);
     const claim = {
       receipt, owner: identity.name, taskId: task.id, provider, accountRef, origin, tabId, frameId,
-      documentId, expiresAt, code: task.code,
+      documentId, expiresAt, code: task.code, previousTaskStatus: 'received',
+      previousOperationStatus, previousOperationUpdatedAt,
     };
     task.code = null;
     this.browserClaims.set(sha256Base64Url(receipt), claim);
@@ -653,6 +656,32 @@ export class OperationBroker {
       type: 'approved-otp', provider, account_ref: accountRef, origin, tab_id: tabId, frame_id: frameId,
       document_id: documentId, expires_at_ms: expiresAt, code: claim.code, receipt,
     };
+  }
+
+  claimBrowserOtpAndAudit(identity, input, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const result = this.claimBrowserOtp(identity, input);
+    const claimKey = sha256Base64Url(result.receipt);
+    const claim = this.browserClaims.get(claimKey);
+    const task = claim ? this.otpTasks.get(claim.taskId) : null;
+    const operation = task ? this.operations.get(task.operationId) : null;
+    try {
+      commitAudit({ provider: result.provider, operation_id: operation?.id });
+    } catch (error) {
+      if (!claim || this.browserClaims.get(claimKey) !== claim || !task || !operation) {
+        throw new V2Error('audit_rollback_failed', 'browser OTP claim audit rollback failed', 503);
+      }
+      this.browserClaims.delete(claimKey);
+      task.status = claim.previousTaskStatus;
+      task.code = claim.code;
+      operation.status = claim.previousOperationStatus;
+      operation.updatedAt = claim.previousOperationUpdatedAt;
+      claim.code = null;
+      throw error;
+    }
+    return result;
   }
 
   finishBrowserOtp(identity, input) {

@@ -48,6 +48,18 @@ function deviceStateApproval(deviceId, body) {
   };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validatedDeviceStateBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || Object.keys(body).sort().join(',') !== 'approval_request_id,state'
+    || !['active', 'suspended', 'revoked'].includes(body.state)
+    || typeof body.approval_request_id !== 'string' || !UUID_RE.test(body.approval_request_id)) {
+    throw new V2Error('invalid_request', 'device state requires only state and a UUID approval_request_id');
+  }
+  return body;
+}
+
 export function createV2Routes(deps) {
   const {
     operationBroker, approvalBroker, taskBroker, webAuthnService, getIdentity, readBody, send, audit,
@@ -460,7 +472,7 @@ export function createV2Routes(deps) {
         if (!['mtls', 'session'].includes(ctx.via)) {
           throw new V2Error('step_up_required', 'device state changes require an interactive identity', 403);
         }
-        const body = await readBody(req);
+        const body = validatedDeviceStateBody(await readBody(req));
         if (!identity.isAdmin || ctx.client?.security_profile !== 'strict'
           || !ctx.authFactors?.includes('webauthn')) {
           throw new V2Error('step_up_required', 'device state changes require a strict administrator with WebAuthn step-up', 403);

@@ -524,7 +524,13 @@ identity = {
   clientName: 'admin-a', via: 'session', authFactors: ['webauthn'],
   client: { role: 'admin', security_profile: 'strict' },
 };
-body = { state: 'revoked', approval_request_id: 'device-state-approval' };
+body = { state: 'revoked', approval_request_id: '00000000-0000-4000-8000-000000000077', ignored: true };
+const stateChangesBeforeInvalidBody = calls.filter((item) => item[0] === 'device-state').length;
+assert.equal((await patchRoute('/api/v2/devices/00000000-0000-4000-8000-000000000001')).value.error, 'invalid_request');
+body = { state: 'invalid', approval_request_id: '00000000-0000-4000-8000-000000000077' };
+assert.equal((await patchRoute('/api/v2/devices/00000000-0000-4000-8000-000000000001')).value.error, 'invalid_request');
+assert.equal(calls.filter((item) => item[0] === 'device-state').length, stateChangesBeforeInvalidBody);
+body = { state: 'revoked', approval_request_id: '00000000-0000-4000-8000-000000000077' };
 assert.equal((await patchRoute('/api/v2/devices/00000000-0000-4000-8000-000000000001')).status, 200);
 assert.ok(calls.some((item) => item[0] === 'device-state' && item[3] === 'revoked'));
 

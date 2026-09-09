@@ -111,6 +111,10 @@ device is added to the registry. If the audit commit fails, the pairing
 challenge remains valid for its original bounded lifetime and no device record
 is created.
 
+Device state changes enforce the closed OpenAPI request shape before intent
+audit or approval lookup. Only `state` and a UUID `approval_request_id` are
+accepted, and `state` is limited to `active`, `suspended`, or `revoked`.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

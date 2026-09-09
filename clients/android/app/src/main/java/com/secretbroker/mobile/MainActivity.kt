@@ -3,6 +3,7 @@ package com.secretbroker.mobile
 import android.Manifest
 import android.content.Context
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.secretbroker.mobile.network.BrokerDeviceApi
@@ -56,6 +58,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val preferences = getSharedPreferences("device-registration", Context.MODE_PRIVATE)
         endpoint = preferences.getString("endpoint", endpoint) ?: endpoint
         deviceId = preferences.getString("device_id", null)
@@ -85,7 +88,12 @@ class MainActivity : ComponentActivity() {
                     if (deviceId == null) {
                         OutlinedTextField(endpoint, { endpoint = it.trim() }, label = { Text("Broker HTTPS origin") })
                         OutlinedTextField(enrollmentId, { enrollmentId = it.trim() }, label = { Text("Enrollment ID") })
-                        OutlinedTextField(enrollmentChallenge, { enrollmentChallenge = it.trim() }, label = { Text("Short-lived challenge") })
+                        OutlinedTextField(
+                            enrollmentChallenge,
+                            { enrollmentChallenge = it.trim() },
+                            label = { Text("Short-lived challenge") },
+                            visualTransformation = PasswordVisualTransformation(),
+                        )
                         Button(
                             onClick = { pair(preferences) },
                             enabled = value?.hardwareSigning == true && enrollmentId.isNotBlank() && enrollmentChallenge.isNotBlank(),
@@ -111,7 +119,11 @@ class MainActivity : ComponentActivity() {
                                 },
                                 label = { Text("Binding for SIM slot $slot") },
                             )
-                            Button(onClick = { bindSim(sim.subscriptionId) }) { Text("Bind this SIM") }
+                            val draft = simBindingDrafts[sim.subscriptionId] ?: sim.binding.orEmpty()
+                            Button(
+                                onClick = { bindSim(sim.subscriptionId) },
+                                enabled = draft in expectedBindings,
+                            ) { Text("Bind this SIM") }
                         }
                         val consentSenders = pendingTasks.flatMap { it.senderAllowlist }.distinct()
                         if (value?.googleServicesAvailable == true && consentSenders.size == 1) {
@@ -192,7 +204,10 @@ class MainActivity : ComponentActivity() {
 
     private fun bindSim(subscriptionId: Int) {
         val binding = simBindingDrafts[subscriptionId].orEmpty()
-        runCatching { SimBindings.bind(this, subscriptionId, binding) }
+        runCatching {
+            require(pendingTasks.any { it.simBinding == binding }) { "Binding is not present in an active task" }
+            SimBindings.bind(this, subscriptionId, binding)
+        }
             .onSuccess {
                 state = "sim_bound"
                 refreshObservedSims()

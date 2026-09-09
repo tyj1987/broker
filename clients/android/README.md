@@ -19,3 +19,6 @@ subscription and slot metadata attached to a newly delivered SMS, never the
 message or code. The operator then binds each observed SIM to the opaque value
 shown by an active Broker task. Missing subscription metadata is rejected, and
 a changed subscription in an observed slot invalidates the previous binding.
+The app blocks screenshots and recent-task previews, masks the short-lived
+pairing challenge, and accepts a SIM binding only while a matching task is
+active.

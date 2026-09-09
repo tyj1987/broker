@@ -596,7 +596,7 @@ paths:
     get:
       tags:
         - tools-v2
-      summary: List registered tools available to the authenticated identity
+      summary: List executable tools available to the authenticated identity
       responses:
         "200":
           description: OK
@@ -607,7 +607,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "503":
-          description: Tool registry unavailable
+          description: Task broker unavailable
   /api/v2/tasks:
     post:
       tags:
@@ -634,6 +634,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           description: Idempotency conflict
+        "503":
+          description: Tool executor unavailable
   /api/v2/tasks/{id}:
     get:
       tags:

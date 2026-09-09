@@ -18,23 +18,35 @@ bound to the exact repository and expiring in no more than one hour. The token
 is injected only into the fixed outbound request and is never returned in the
 business result or included in safe errors.
 
-The repository does not yet contain a production token minter or live account
-configuration. A production implementation must scope the installation-token
-request to the named repository and use only Metadata read permission. The App
-JWT signer must be backed by a non-exportable workload/KMS identity; adding a
-private key to source, ordinary configuration, logs or an Agent response is
-prohibited.
+`github-app-token-provider.js` now implements the token-minting protocol behind
+three injected capabilities: a pinned request transport, an account-binding
+resolver and a non-exportable RS256 signer. The provider creates a short App
+JWT, requests a token for exactly one repository with only Metadata read, then
+rejects the response unless the returned repository, permissions and expiry
+match that request. Account bindings must also match the requested environment
+and repository.
+
+The signer receives only the JWT signing input and binding metadata. It must
+return signature bytes; the provider has no private-key loading API. Production
+KMS/HSM signer, account configuration and pinned network transport are not yet
+included. Adding a private key to source, ordinary configuration, logs or an
+Agent response is prohibited.
 
 ## Verification status
 
 Unit contract tests cover path and target injection, execution-binding
-tampering, missing/wrong/expired/overlong leases, redirect denial, upstream
-status mapping, invalid and oversized responses, bounded projection and error
-redaction. The provider manifest remains `contract_required` until an isolated
-GitHub App account passes a real request and revocation test.
+tampering, App/account/environment/repository binding, JWT claims and algorithm,
+invalid signer results, exact token permissions, missing/wrong/expired/overlong
+leases, redirect denial, upstream status mapping, invalid and oversized
+responses, bounded projection and error redaction. The provider manifest
+remains `contract_required` until a production-grade signer and pinned transport
+are configured and an isolated GitHub App account passes a real request and
+revocation test.
 
 Official references checked on 2026-09-09:
 
 - [Get a repository](https://docs.github.com/en/rest/repos/repos#get-a-repository)
+- [Generate a JSON Web Token for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
+- [Generate an installation access token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
 - [Authenticate as a GitHub App installation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
 - [Choose GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)

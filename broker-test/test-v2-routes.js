@@ -174,7 +174,17 @@ const handler = createV2Routes({
     get(subject, id) { return { id, owner: subject.name, state: 'SUCCEEDED' }; },
     eventsFor(_subject, id) { return [{ sequence: 1, task_id: id, state: 'REQUESTED' }]; },
   },
-  webAuthnService: {},
+  webAuthnService: {
+    async finishAuthentication(input) {
+      calls.push(['webauthn-finish', input]);
+      return {
+        clientName: 'admin-a',
+        client: { role: 'admin', security_profile: 'strict' },
+        credential: { id: 'credential-id' },
+        strictReady: true,
+      };
+    },
+  },
   toolRegistry: {
     listFor(subject) {
       calls.push(['tool-list', subject.name]);
@@ -188,8 +198,14 @@ const handler = createV2Routes({
     auditEvents.push(event);
     if ((auditFailure || event.action === auditFailureAction) && options?.mandatory) throw new Error('disk unavailable');
   },
-  makeSession: () => '',
-  sessionCookieHeader: () => '',
+  makeSession: (session) => {
+    calls.push(['session-create', session]);
+    return 'opaque-session-token';
+  },
+  sessionCookieHeader: (token) => {
+    calls.push(['session-cookie', token]);
+    return 'broker_session=opaque; Secure; HttpOnly; SameSite=Strict';
+  },
   authorizeApprovalRequest: async (operation) => {
     calls.push(['approval-authorize', operation.identity.name, operation.provider]);
     return operation.provider === 'denied' ? { allow: false, reason: 'service_denied' } : { allow: true };
@@ -217,6 +233,32 @@ const patchRoute = async (pathname) => {
   await handler({ method: 'PATCH', headers: {} }, {}, { method: 'PATCH', pathname });
   return response;
 };
+
+body = { flow_id: 'flow-id', response: { id: 'credential-id' } };
+const authHeaders = {};
+response = null;
+await handler(request, { setHeader: (name, value) => { authHeaders[name] = value; } }, {
+  method: 'POST', pathname: '/api/v2/auth/webauthn/finish',
+});
+assert.equal(response.status, 200);
+assert.equal(response.value.strict_ready, true);
+assert.equal(Object.hasOwn(response.value, 'token'), false);
+assert.ok(authHeaders['Set-Cookie']?.includes('HttpOnly'));
+assert.ok(auditEvents.some((event) => event.action === 'webauthn_authentication'
+  && event.status === 'verified' && event.credential_id === 'credential-id'));
+const sessionsBeforeAuthenticationAuditFailure = calls.filter((item) => item[0] === 'session-create').length;
+auditFailureAction = 'webauthn_authentication';
+response = null;
+await handler(request, { setHeader: () => { throw new Error('cookie must not be created'); } }, {
+  method: 'POST', pathname: '/api/v2/auth/webauthn/finish',
+});
+auditFailureAction = null;
+assert.equal(response.value.error, 'audit_unavailable');
+assert.equal(
+  calls.filter((item) => item[0] === 'session-create').length,
+  sessionsBeforeAuthenticationAuditFailure,
+  'mandatory authentication audit failure blocks session creation',
+);
 
 identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
 assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repository.read');

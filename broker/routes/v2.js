@@ -82,12 +82,15 @@ export function createV2Routes(deps) {
       if (method === 'POST' && pathname === '/api/v2/auth/webauthn/finish') {
         const result = await webAuthnService.finishAuthentication(await readBody(req));
         const cn = `${result.clientName}@webauthn`;
+        mandatoryAudit({
+          action: 'webauthn_authentication', status: 'verified', cn,
+          client: result.clientName, credential_id: result.credential.id,
+        });
         const token = makeSession({
           cn, fp: result.credential.id, clientName: result.clientName,
           client: result.client, cert: { subject: { CN: cn } }, authFactors: ['webauthn'],
         });
         res.setHeader('Set-Cookie', sessionCookieHeader(token));
-        audit({ action: 'webauthn_authentication', status: 'ok', cn, client: result.clientName });
         send(res, 200, {
           expires_in: 600,
           strict_ready: result.strictReady,

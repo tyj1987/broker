@@ -92,6 +92,11 @@ the receipt is consumed or the OTP operation becomes terminal. During an audit
 outage the bounded receipt remains active for a status-only retry; the extension
 must not repeat page submission.
 
+A successful WebAuthn assertion does not create a browser session until its
+mandatory authentication audit has been accepted. If audit storage is
+unavailable, no session record or cookie is created and the client must start a
+new WebAuthn ceremony.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

@@ -48,6 +48,9 @@ ok('docker_ registry redacted', !redact('auth: docker_' + 'f'.repeat(40)).includ
 section('HTTP headers');
 ok('Bearer header redacted', !redact('Authorization: Bearer abcDEF123_-.' + 'X'.repeat(30)).includes('X'.repeat(30)));
 ok('Basic auth redacted', !redact('Authorization: Basic dXNlcjpwYXNz').includes('dXNlcjpwYXNz'));
+const labelled = redact('upstream failed: password=ordinary-value api_key:another-value');
+ok('labelled password redacted', !labelled.includes('ordinary-value'));
+ok('labelled api key redacted', !labelled.includes('another-value'));
 
 // === PEM keys ===
 section('PEM private keys');
@@ -98,6 +101,33 @@ ok('array object redacted', !safe.list[0].y.includes('abc_DEF_123_ghi_456'));
 ok('array object has placeholder', safe.list[0].y.includes('***'));
 ok('nested ok public kept', safe.secrets.nested.ok === 'public');
 ok('array sk redacted', !safe.secrets.nested.leak.includes('A'.repeat(40)));
+
+const keyBound = redactDeep({
+  password: 'ordinary-text',
+  Authorization: 'short-value',
+  private_key: { material: 'not-pattern-shaped' },
+  access_key_id: 'ordinary-identifier',
+  totp_secret: 'short-seed',
+  recovery_codes: ['alpha', 'bravo'],
+  secret: 'human-readable-value',
+  secret_name: 'deployment-key',
+  credential_id: 'public-identifier',
+});
+ok('password key always redacted', keyBound.password === '[REDACTED]');
+ok('authorization key always redacted', keyBound.Authorization === '[REDACTED]');
+ok('private key object always redacted', keyBound.private_key === '[REDACTED]');
+ok('access key id always redacted', keyBound.access_key_id === '[REDACTED]');
+ok('totp secret always redacted', keyBound.totp_secret === '[REDACTED]');
+ok('recovery code array always redacted', keyBound.recovery_codes === '[REDACTED]');
+ok('bare secret key always redacted', keyBound.secret === '[REDACTED]');
+ok('secret name remains observable', keyBound.secret_name === 'deployment-key');
+ok('credential id remains observable', keyBound.credential_id === 'public-identifier');
+
+const cyclic = { password: 'plain-password' };
+cyclic.self = cyclic;
+const safeCycle = redactDeep(cyclic);
+ok('cyclic secret is redacted', safeCycle.password === '[REDACTED]');
+ok('cyclic reference cannot reintroduce input', safeCycle.self === '[CIRCULAR]');
 
 // === redactJson ===
 section('json output');

@@ -88,7 +88,7 @@ import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
-import { loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
+import { buildAuditEvent, loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -106,7 +106,6 @@ import {
   runProbes,
   probesFromConfig,
   buildBackupManifest,
-  redactDeep,
   securityHeaders,
   createIdentityResolver,
 } from './lib/index.js';
@@ -744,11 +743,7 @@ function auditFilePath() {
 let auditBytes = existsSync(auditFilePath()) ? statSync(auditFilePath()).size : 0;
 let auditLastHash = loadAuditChainStateSync(AUDIT_DIR, { chainOnly: true }).lastHash;
 function audit(event, options = {}) {
-  const base = redactDeep({
-    ts: new Date().toISOString(),
-    id: randomUUID(),
-    ...event,
-  });
+  const base = buildAuditEvent(event, { requestId: getRequestId() });
   const e = sealEvent(base, auditLastHash);
   const line = JSON.stringify(e) + '\n';
   try {
@@ -2155,7 +2150,7 @@ async function handle(req, res) {
           action: 'healthcheck',
           cn: ctx.cn,
           fp: ctx.fp,
-          secret: name,
+          secret_name: name,
           status: c.status,
           detail: c.detail,
           latency_ms: c.latency_ms,
@@ -3079,10 +3074,10 @@ async function handle(req, res) {
       await persistSecretsDetail();
     } catch (e) {
       SECRET_CACHE.set(name, prevSnapshot);
-      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'error', error: e.message });
+      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret_name: name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
-    audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'ok', source, note });
+    audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret_name: name, status: 'ok', source, note });
     return send(res, 200, {
       rotated: name,
       last_rotated_at: now,
@@ -3282,7 +3277,7 @@ function start() {
               action: 'healthcheck',
               cn: 'system',
               fp: 'system',
-              secret: name,
+              secret_name: name,
               status: c.status,
               detail: c.detail,
               latency_ms: c.latency_ms,

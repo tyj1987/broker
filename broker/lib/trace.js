@@ -95,8 +95,9 @@ export function resolveRequestId(reqHeaders = {}) {
     h['x-correlation-id'] ||
     h['x-amzn-trace-id'] ||
     null;
-  if (existing && typeof existing === 'string' && existing.length < 200) {
-    return existing.split(',')[0].trim();
+  if (existing && typeof existing === 'string') {
+    const candidate = existing.trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(candidate)) return candidate;
   }
   return newSpanId() + newSpanId(); // 32 hex
 }

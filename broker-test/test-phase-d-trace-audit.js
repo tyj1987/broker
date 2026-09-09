@@ -56,6 +56,10 @@ console.log('=== resolveRequestId ===');
 {
   assert(resolveRequestId({ 'x-request-id': 'r1' }) === 'r1', 'x-request-id');
   assert(resolveRequestId({}).length === 32, 'generated');
+  const injected = 'Bearer ' + 'Z'.repeat(40);
+  const replacement = resolveRequestId({ 'x-request-id': injected });
+  assert(replacement !== injected && /^[a-f0-9]{32}$/.test(replacement), 'unsafe request id replaced');
+  assert(resolveRequestId({ 'x-request-id': 'comma,value' }) !== 'comma', 'ambiguous request id replaced');
 }
 
 console.log('=== request context ALS ===');

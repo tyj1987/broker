@@ -51,6 +51,12 @@ never the bearer token or nonce. See [Single-use execution tokens](EXECUTION-TOK
 - `GET /api/v2/tasks/{id}/events` returns a bounded, ordered transition stream.
 - `POST /api/v2/tasks/{id}/cancel` terminally cancels a task before execution.
 
+Each transition emits credential-free audit metadata containing the actor,
+identity method, role, exact tool and target, environment, risk, policy
+decision, approval and execution identifiers, terminal outcome, latency and a
+safe error code. The production audit envelope adds the current validated
+request ID and seals the redacted event into the hash chain.
+
 The Go, Python and TypeScript SDKs expose the same five operations. The initial
 runnable adapter, `broker.tools.inspect@1.0.0`, returns only public tool-registry
 metadata and provides a credential-free end-to-end acceptance path.

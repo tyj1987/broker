@@ -16,13 +16,24 @@
 // sha256(canonicalize({...e[i], hash: undefined})). Also check that
 // e[i].prev_hash == e[i-1].hash.
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { redactDeep } from './redact.js';
 
 const GENESIS_HASH = '0'.repeat(64);
 export { GENESIS_HASH };
+
+export function buildAuditEvent(event, { requestId, now = () => Date.now(), idFactory = randomUUID } = {}) {
+  const base = {
+    ts: new Date(now()).toISOString(),
+    id: idFactory(),
+    ...event,
+  };
+  if (requestId && !base.request_id) base.request_id = requestId;
+  return redactDeep(base);
+}
 
 function canonicalize(obj) {
   // Stable JSON: sorted keys, no whitespace.

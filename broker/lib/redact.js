@@ -61,11 +61,28 @@ const PATTERNS = [
     replace: '-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----' },
   // Basic auth header
   { name: 'basic_auth',         regex: /(Basic\s+)[A-Za-z0-9+/=]{8,}/g,             replace: '$1***' },
+  // Free-form error text containing a labelled credential assignment
+  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, replace: '$1***' },
   // Generic Bearer token (long opaque string after "Bearer ")
   { name: 'bearer_token',       regex: /(Bearer\s+)[A-Za-z0-9_\-\.~+\/=]{20,}/g,    replace: '$1***' },
   // Docker registry token
   { name: 'docker_registry',    regex: /\bdocker_[A-Za-z0-9_\-]{20,}\b/g,            replace: 'docker_***' },
 ];
+
+const SENSITIVE_KEYS = new Set([
+  'authorization', 'proxyauthorization', 'cookie', 'setcookie',
+  'password', 'passwd', 'passphrase', 'secret', 'clientsecret',
+  'passwordhash', 'apikey', 'accesskey', 'accesskeyid', 'accesskeysecret',
+  'secretaccesskey', 'secretid', 'secretkey', 'authorizationheader',
+  'privatekey', 'token', 'accesstoken', 'refreshtoken', 'idtoken',
+  'session', 'sessiontoken', 'securitytoken', 'credential', 'credentials',
+  'recoverycode', 'recoverycodes', 'otp', 'totp', 'totpsecret',
+  'totprecoverycodeshash',
+]);
+
+function isSensitiveKey(key) {
+  return SENSITIVE_KEYS.has(String(key).toLowerCase().replace(/[^a-z0-9]/g, ''));
+}
 
 /**
  * Redact all known secret value patterns from a string.
@@ -96,14 +113,14 @@ export function redactDeep(value, seen = new WeakSet()) {
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return redact(value);
   if (typeof value !== 'object') return value;
-  if (seen.has(value)) return value;
+  if (seen.has(value)) return '[CIRCULAR]';
   seen.add(value);
   if (Array.isArray(value)) {
     return value.map(v => redactDeep(v, seen));
   }
   const out = {};
   for (const [k, v] of Object.entries(value)) {
-    out[k] = redactDeep(v, seen);
+    out[k] = isSensitiveKey(k) ? '[REDACTED]' : redactDeep(v, seen);
   }
   return out;
 }
@@ -117,7 +134,7 @@ export function redactDeep(value, seen = new WeakSet()) {
 export function hasLikelySecret(s) {
   if (typeof s !== 'string' || s.length < 8) return false;
   // Heuristics: presence of common token prefixes, PEM marker, JWT shape, UUID
-  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
+  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|(?:password|passwd|passphrase|client[_-]?secret|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
 }
 
 /**

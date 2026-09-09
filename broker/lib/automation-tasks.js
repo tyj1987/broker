@@ -319,10 +319,12 @@ export class AutomationTaskBroker {
     task.events.push(event);
     if (task.events.length > MAX_EVENTS) task.events.shift();
     this.onEvent({
-      task_id: task.id, execution_id: task.executionId || null, owner: task.owner,
+      task_id: task.id, execution_id: task.executionId || null, actor: task.owner,
       identity: task.identityMethod, role: task.role, policy_decision: task.policyDecision,
       tool: task.tool.name, target: task.parameters.resource_ref, environment: task.environment,
       risk_level: task.tool.risk_level, approval_id: task.approvalId || null,
+      result: TERMINAL.has(state) ? state.toLowerCase() : undefined,
+      error: state === 'FAILED' ? reason : undefined,
       latency_ms: task.latencyMs, ...event,
     });
   }

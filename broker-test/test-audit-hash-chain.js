@@ -19,6 +19,7 @@
 
 import {
   computeHash,
+  buildAuditEvent,
   sealEvent,
   verifyChain,
   verifyAuditDir,
@@ -46,6 +47,19 @@ section('1. computeHash determinism');
   const h2 = computeHash({ a: 1, b: 'x' });
   ok('same input → same hash', h1 === h2);
   ok('64 hex chars', /^[a-f0-9]{64}$/.test(h1));
+}
+
+section('1b. audit envelope binds request id and redacts by field name');
+
+{
+  const e = buildAuditEvent({ action: 'execute', password: 'plain-value' }, {
+    requestId: 'request-0001', now: () => 1_900_000_000_000, idFactory: () => 'event-0001',
+  });
+  ok('request id is attached', e.request_id === 'request-0001');
+  ok('timestamp and id are deterministic in test', e.ts === '2030-03-17T17:46:40.000Z' && e.id === 'event-0001');
+  ok('sensitive field is redacted before sealing', e.password === '[REDACTED]');
+  const explicit = buildAuditEvent({ action: 'execute', request_id: 'internal-request' }, { requestId: 'outer-request' });
+  ok('explicit internal request id is preserved', explicit.request_id === 'internal-request');
 }
 
 section('2. computeHash distinguishes inputs');

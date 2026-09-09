@@ -72,6 +72,25 @@ assert.deepEqual(broker.eventsFor(human, low.id).map((event) => event.state), [
   'REQUESTED', 'READY', 'EXECUTING', 'SUCCEEDED',
 ]);
 assert.ok(observed.every((event) => !JSON.stringify(event).includes('typed_parameters')));
+const completionAudit = observed.find((event) => event.task_id === low.id && event.state === 'SUCCEEDED');
+assert.deepEqual({
+  actor: completionAudit.actor,
+  identity: completionAudit.identity,
+  role: completionAudit.role,
+  tool: completionAudit.tool,
+  target: completionAudit.target,
+  environment: completionAudit.environment,
+  risk: completionAudit.risk_level,
+  decision: completionAudit.policy_decision,
+  approval: completionAudit.approval_id,
+  execution: completionAudit.execution_id,
+  result: completionAudit.result,
+  latency: completionAudit.latency_ms,
+}, {
+  actor: 'requester', identity: 'session', role: 'admin', tool: 'broker.tools.inspect',
+  target: 'tool-registry', environment: 'production', risk: 'LOW', decision: 'allow',
+  approval: null, execution: completed.execution_id, result: 'succeeded', latency: 0,
+});
 await assert.rejects(broker.run(human, low.id), expectCode('invalid_state'));
 
 let concurrentAuthorizations = 0;
@@ -217,10 +236,11 @@ await assert.rejects(approvalFailureBroker.create(human, {
 assert.equal(approvalFailureBroker.tasks.size, 0);
 assert.equal(approvalFailureBroker.idempotency.size, 0);
 
+const failureObserved = [];
 const failureBroker = (executor) => new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals,
   executors: executor === undefined ? new Map() : new Map([['broker.tools.inspect@1.0.0', executor]]),
-  now: () => now,
+  now: () => now, onEvent: (event) => failureObserved.push(event),
 });
 const unavailableBroker = failureBroker();
 const unavailable = await unavailableBroker.create(human, { ...lowInput, idempotency_key: 'task-case-missing1' });
@@ -232,6 +252,9 @@ const thrownResult = await throwingBroker.run(human, throwing.id);
 assert.equal(thrownResult.state, 'FAILED');
 assert.deepEqual(thrownResult.error, { code: 'executor_failed' });
 assert.ok(!JSON.stringify(thrownResult).includes('canary'));
+const failureAudit = failureObserved.find((event) => event.task_id === throwing.id && event.state === 'FAILED');
+assert.equal(failureAudit.result, 'failed');
+assert.equal(failureAudit.error, 'executor_failed');
 
 const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });

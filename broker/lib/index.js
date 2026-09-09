@@ -73,10 +73,12 @@ export { createAuditAsync, AsyncAuditWriteError } from './audit-async.js';
 // V4.1.1: Audit hash chain for tamper-evidence
 export {
   computeHash,
+  buildAuditEvent,
   sealEvent,
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainStateSync,
   GENESIS_HASH,
 } from './audit-hash-chain.js';
 export {

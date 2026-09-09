@@ -137,7 +137,7 @@ section('6. Redaction works');
     token: 'ghp_FAKEFAKEFAKEFAKEFAKEFAKE', // synthetic, <36 chars, won't match gitleaks
   });
   ok('ghp_ value not present in event', !('ghp_FAKEFAKEFAKE' in ev) && !JSON.stringify(ev).includes('ghp_FAKEFAKEFAKE'));
-  ok('redacted placeholder present', JSON.stringify(ev).includes('ghp_***'));
+  ok('token field is fully redacted', ev.token === '[REDACTED]' && !JSON.stringify(ev).includes('ghp_'));
 }
 
 section('7. Health endpoint');

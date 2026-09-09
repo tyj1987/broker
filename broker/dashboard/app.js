@@ -584,7 +584,7 @@ async function loadAudit() {
     }
     tbody.innerHTML = '';
     for (const e of events) {
-      const target = e.secret || (e.service ? `${e.service}${e.path || ''}` : `${e.method || ''} ${e.path || ''}`);
+      const target = e.secret_name || e.secret || (e.service ? `${e.service}${e.path || ''}` : `${e.method || ''} ${e.path || ''}`);
       const latency = e.latency_ms ? `${e.latency_ms}ms` : '-';
       const status = e.status || e.upstream_status || '-';
       const cls = e.status === 'denied' ? 'status-denied'

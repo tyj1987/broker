@@ -965,7 +965,7 @@ const guardTask = await restoreGuard.create(human, {
   ...lowInput, idempotency_key: 'persisted-guard-000001',
 });
 restoreGuard.tasks.get(guardTask.id).running = true;
-assert.throws(() => restoreGuard.exportState(), expectCode('state_busy'));
+assert.equal(restoreGuard.exportState().tasks[0].state, 'READY', 'an active pre-execution task can be checkpointed');
 assert.throws(() => restoreGuard.restoreState(taskState), expectCode('state_busy'));
 restoreGuard.tasks.get(guardTask.id).running = false;
 const validTaskState = taskState.tasks[0];
@@ -1066,5 +1066,62 @@ assert.throws(() => pendingStateBroker.exportState(), expectCode('state_busy'));
 assert.throws(() => pendingStateBroker.restoreState(taskState), expectCode('state_busy'));
 releasePendingAuthorization({ allow: true, ttlMs: 60_000 });
 await pendingCreation;
+
+const checkpointEvents = [];
+let checkpointBroker;
+checkpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+  onCheckpoint: (event) => checkpointEvents.push({ event, snapshot: checkpointBroker.exportState() }),
+});
+const checkpointTask = await checkpointBroker.create(human, {
+  ...lowInput, idempotency_key: 'checkpoint-success-0001',
+});
+await checkpointBroker.run(human, checkpointTask.id);
+assert.deepEqual(checkpointEvents.map(({ event }) => event.phase), ['pre_execute', 'terminal']);
+assert.equal(checkpointEvents[0].snapshot.tasks[0].state, 'EXECUTING');
+assert.equal(checkpointEvents[1].snapshot.tasks[0].state, 'SUCCEEDED');
+assert.ok(!JSON.stringify(checkpointEvents).includes('et1.'), 'checkpoints never expose bearer capabilities');
+
+let checkpointExecutorCalls = 0;
+const unavailableCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => {
+    checkpointExecutorCalls += 1;
+    return {
+      name: 'github.repository.read', version: '1.0.0', provider: 'github',
+      operation_id: 'repo.read', risk_level: 'LOW', agent_execution: true,
+    };
+  }]]),
+  now: () => now,
+  onCheckpoint: () => { throw new Error('durable state unavailable'); },
+});
+const unavailableCheckpointTask = await unavailableCheckpointBroker.create(human, {
+  ...lowInput, idempotency_key: 'checkpoint-failure-0001',
+});
+await assert.rejects(
+  unavailableCheckpointBroker.run(human, unavailableCheckpointTask.id),
+  /durable state unavailable/,
+);
+assert.equal(checkpointExecutorCalls, 0, 'executor cannot run before the durable EXECUTING checkpoint');
+assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).state, 'EXECUTING');
+assert.equal(unavailableCheckpointBroker.exportState().tasks[0].state, 'EXECUTING');
+assert.throws(
+  () => new AutomationTaskBroker({ toolRegistry: registry, authorize, approvalBroker: approvals, onCheckpoint: null }),
+  expectCode('checkpoint_invalid'),
+);
+let asyncCheckpointExecutorCalls = 0;
+const asyncCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => {
+    asyncCheckpointExecutorCalls += 1;
+    return {};
+  }]]),
+  onCheckpoint: async () => {},
+});
+const asyncCheckpointTask = await asyncCheckpointBroker.create(human, {
+  ...lowInput, idempotency_key: 'checkpoint-async-000001',
+});
+await assert.rejects(asyncCheckpointBroker.run(human, asyncCheckpointTask.id), expectCode('checkpoint_invalid'));
+assert.equal(asyncCheckpointExecutorCalls, 0, 'asynchronous persistence cannot race executor invocation');
 
 console.log('automation tasks: low-risk and approved critical end-to-end loops passed');

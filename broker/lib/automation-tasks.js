@@ -278,7 +278,7 @@ function canAdministerOtherTasks(identity) {
 }
 
 export class AutomationTaskBroker {
-  constructor({ toolRegistry, authorize, approvalBroker, executionTokens, executors = new Map(), now = () => Date.now(), onEvent = () => {}, maxTasks = MAX_TASKS } = {}) {
+  constructor({ toolRegistry, authorize, approvalBroker, executionTokens, executors = new Map(), now = () => Date.now(), onEvent = () => {}, onCheckpoint = () => {}, maxTasks = MAX_TASKS } = {}) {
     this.toolRegistry = toolRegistry;
     this.authorize = authorize;
     this.approvalBroker = approvalBroker;
@@ -286,6 +286,10 @@ export class AutomationTaskBroker {
     this.executors = executors;
     this.now = now;
     this.onEvent = onEvent;
+    if (typeof onCheckpoint !== 'function') {
+      throw new V2Error('checkpoint_invalid', 'automation task checkpoint handler must be synchronous', 500);
+    }
+    this.onCheckpoint = onCheckpoint;
     this.maxTasks = maxTasks;
     this.tasks = new Map();
     this.idempotency = new Map();
@@ -485,6 +489,7 @@ export class AutomationTaskBroker {
         this.releaseExecutionRateLimit(task);
         throw error;
       }
+      this.checkpoint(task, 'pre_execute');
       const startedAt = this.now();
       let result;
       try {
@@ -506,6 +511,7 @@ export class AutomationTaskBroker {
           this.fail(task, error instanceof V2Error ? error.code : 'executor_failed');
         }
         if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
+        this.checkpoint(task, 'terminal');
         return publicTask(task);
       }
       task.result = structuredClone(result);
@@ -515,6 +521,7 @@ export class AutomationTaskBroker {
       // terminal state. If audit fails, EXECUTING prevents any caller replay.
       this.transition(task, 'SUCCEEDED', 'executor_succeeded');
       if (approvalClaim) this.approvalBroker.markSucceeded(approvalClaim.id);
+      this.checkpoint(task, 'terminal');
       return publicTask(task);
     } finally {
       task.running = false;
@@ -614,9 +621,23 @@ export class AutomationTaskBroker {
     if (task.events.length > MAX_EVENTS) task.events.shift();
   }
 
+  checkpoint(task, phase) {
+    const result = this.onCheckpoint({
+      phase,
+      task_id: task.id,
+      state: task.state,
+      execution_id: task.executionId || null,
+      approval_id: task.approvalId || null,
+      at: task.updatedAt,
+    });
+    if (result && typeof result.then === 'function') {
+      Promise.resolve(result).catch(() => {});
+      throw new V2Error('checkpoint_invalid', 'automation task checkpoint handler must be synchronous', 500);
+    }
+  }
+
   exportState() {
-    if ([...this.tasks.values()].some((task) => task.running)
-      || [...this.idempotency.values()].some((entry) => entry.promise)) {
+    if ([...this.idempotency.values()].some((entry) => entry.promise)) {
       throw new V2Error('state_busy', 'automation task state has active mutations', 409);
     }
     this.prune();

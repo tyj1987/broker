@@ -139,6 +139,46 @@ releaseExecution();
 assert.equal((await firstRun).state, 'SUCCEEDED');
 assert.equal(executionCalls, 1, 'concurrent run requests cannot invoke an adapter twice');
 
+let raceNow = 1_900_100_000_000;
+let releaseExpiryRace;
+const expiryRaceGate = new Promise((resolveExecution) => { releaseExpiryRace = resolveExecution; });
+const expiryRaceBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize: async () => ({ allow: true, ttlMs: 5_000 }),
+  approvalBroker: approvals,
+  now: () => raceNow,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => {
+    await expiryRaceGate;
+    return {
+      name: 'github.repository.read', version: '1.0.0', provider: 'github',
+      operation_id: 'repo.read', risk_level: 'LOW', agent_execution: true,
+    };
+  }]]),
+});
+const expiryRaceTask = await expiryRaceBroker.create(human, {
+  ...lowInput, idempotency_key: 'execution-expiry-race-01',
+});
+const expiryRaceRun = expiryRaceBroker.run(human, expiryRaceTask.id);
+await new Promise((resolvePending) => setImmediate(resolvePending));
+raceNow += 5_001;
+assert.equal(
+  expiryRaceBroker.get(human, expiryRaceTask.id).state,
+  'EXECUTING',
+  'observation cannot expire a running task',
+);
+assert.equal(
+  expiryRaceBroker.eventsFor(human, expiryRaceTask.id).at(-1).state,
+  'EXECUTING',
+  'event reads cannot mutate a running task',
+);
+assert.throws(
+  () => expiryRaceBroker.cancel(human, expiryRaceTask.id),
+  expectCode('invalid_state'),
+  'cancellation cannot rewrite an in-flight execution as expired',
+);
+releaseExpiryRace();
+assert.equal((await expiryRaceRun).state, 'SUCCEEDED');
+
 let releaseAuthorization;
 let authorizationCalls = 0;
 const authorizationGate = new Promise((resolveAuthorization) => { releaseAuthorization = resolveAuthorization; });

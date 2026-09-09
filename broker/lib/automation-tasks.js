@@ -315,7 +315,9 @@ export class AutomationTaskBroker {
   }
 
   expire(task) {
-    if (!TERMINAL.has(task.state) && Date.parse(task.expiresAt) <= this.now()) this.transition(task, 'EXPIRED', 'task_expired');
+    if (!task.running && !TERMINAL.has(task.state) && Date.parse(task.expiresAt) <= this.now()) {
+      this.transition(task, 'EXPIRED', 'task_expired');
+    }
   }
 
   fail(task, code) {

@@ -24,7 +24,7 @@ function claimDualControlApproval(approvalBroker, identity, input) {
   const claim = approvalBroker.claimFor(identity, input);
   const approvers = new Set((claim?.grants || []).map((grant) => grant?.approved_by).filter(Boolean));
   if (!claim || approvers.size < 2 || approvers.has(identity.name)) {
-    if (claim) approvalBroker.release(claim.id);
+    if (claim) approvalBroker.markFailed(claim.id);
     throw new V2Error('approval_required', 'two independent approvals are required', 403);
   }
   return claim;
@@ -157,9 +157,9 @@ export function createV2Routes(deps) {
         let result;
         try {
           result = await operationBroker.createOperation(authorizedIdentity, body);
-          if (claim) approvalBroker.consume(claim.id);
+          if (claim) approvalBroker.markSucceeded(claim.id);
         } catch (error) {
-          if (claim) approvalBroker.release(claim.id);
+          if (claim) approvalBroker.markFailed(claim.id);
           throw error;
         }
         audit({ action: 'v2_operation_create', status: 'ok', cn: ctx.cn, operation_id: result.id, provider: result.provider });
@@ -222,6 +222,23 @@ export function createV2Routes(deps) {
         return true;
       }
 
+      const approvalCancelMatch = /^\/api\/v2\/approvals\/([a-f0-9-]+)\/cancel$/.exec(pathname);
+      if (method === 'POST' && approvalCancelMatch) {
+        const ctx = getIdentity(req);
+        const identity = identityView(ctx);
+        if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        const cancelBody = await readBody(req);
+        if (!cancelBody || typeof cancelBody !== 'object' || Array.isArray(cancelBody)
+          || Object.keys(cancelBody).length !== 0) {
+          throw new V2Error('invalid_request', 'approval cancellation body must be an empty object');
+        }
+        mandatoryAudit({ action: 'v2_approval_cancel_intent', status: 'authorized', cn: ctx.cn, approval_id: approvalCancelMatch[1] });
+        const result = approvalBroker.cancel(identity, approvalCancelMatch[1]);
+        audit({ action: 'v2_approval_cancel', status: result.status, cn: ctx.cn, approval_id: result.id });
+        send(res, 200, result);
+        return true;
+      }
+
       const operationMatch = /^\/api\/v2\/operations\/([a-f0-9-]+)$/.exec(pathname);
       if (method === 'GET' && operationMatch) {
         const ctx = getIdentity(req);
@@ -276,9 +293,9 @@ export function createV2Routes(deps) {
         let result;
         try {
           result = operationBroker.beginEnrollment(identity.name, body);
-          approvalBroker.consume(claim.id);
+          approvalBroker.markSucceeded(claim.id);
         } catch (error) {
-          approvalBroker.release(claim.id);
+          approvalBroker.markFailed(claim.id);
           throw error;
         }
         audit({ action: 'v2_device_enroll_begin', status: 'ok', cn: ctx.cn, enrollment_id: result.enrollment_id });
@@ -323,9 +340,9 @@ export function createV2Routes(deps) {
         let result;
         try {
           result = await operationBroker.setDeviceState(identity.name, deviceMatch[1], body?.state, identity.isAdmin);
-          approvalBroker.consume(claim.id);
+          approvalBroker.markSucceeded(claim.id);
         } catch (error) {
-          approvalBroker.release(claim.id);
+          approvalBroker.markFailed(claim.id);
           throw error;
         }
         audit({ action: 'v2_device_state', status: 'ok', cn: ctx.cn, device_id: result.id, device_state: result.state });

@@ -37,12 +37,12 @@
   function actionButtons(approval) {
     const wrap = document.createElement('div');
     wrap.className = 'approval-actions';
-    const canDecide = approval.status === 'pending'
+    const canDecide = approval.status === 'REQUESTED'
       && currentIdentity?.via === 'session'
       && currentIdentity?.auth_factors?.includes('webauthn')
       && approval.requester !== currentIdentity?.client_name;
     if (!canDecide) {
-      wrap.textContent = approval.status === 'pending' ? 'WebAuthn approver required' : '—';
+      wrap.textContent = approval.status === 'REQUESTED' ? 'WebAuthn approver required' : '—';
       return wrap;
     }
     for (const decision of ['approve', 'reject']) {

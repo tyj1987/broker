@@ -78,7 +78,7 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
                 "id": "op-123", "provider": "github", "operation_id": "repo.read", "status": "completed"
             })
         if self.path == "/api/v2/approvals":
-            return self._send_json(200, {"approvals": [{"id": "approval-123", "status": "approved"}]})
+            return self._send_json(200, {"approvals": [{"id": "approval-123", "status": "APPROVED"}]})
         return self._send_json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -114,11 +114,13 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
                 "id": "approval-123", "requester": "test-client", "provider": body.get("provider"),
                 "operation_id": body.get("operation_id"), "account_ref": body.get("account_ref"),
                 "environment": body.get("environment"), "resource_ref": body.get("typed_parameters", {}).get("resource_ref"),
-                "required_approvals": 2, "approvals": [], "status": "pending",
+                "required_approvals": 2, "approvals": [], "status": "REQUESTED",
                 "created_at": "2026-09-09T00:00:00Z", "expires_at": "2026-09-09T00:05:00Z",
             })
         if self.path == "/api/v2/approvals/approval-123/decision":
             return self._send_json(200, {"id": "approval-123", "status": body.get("decision", "approve") + "d"})
+        if self.path == "/api/v2/approvals/approval-123/cancel":
+            return self._send_json(200, {"id": "approval-123", "status": "CANCELLED"})
         if self.path == "/api/v1/ssh/exec":
             return self._send_json(200, {"ok": True, "exitCode": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 12})
         if self.path == "/api/v1/ssh/tunnel":
@@ -283,8 +285,9 @@ def test_bound_approval_workflow(mock_broker):
     approval = c.create_approval(
         "github", "repo.read", "personal", "production", {"resource_ref": "repository"}
     )
-    assert approval["status"] == "pending"
+    assert approval["status"] == "REQUESTED"
     assert c.list_approvals()[0]["id"] == "approval-123"
+    assert c.cancel_approval("approval-123")["status"] == "CANCELLED"
     c._request = lambda *args, **kwargs: pytest.fail("decision attempted a network request")
     with pytest.raises(BrokerError, match="WebAuthn browser workbench"):
         c.decide_approval("approval-123", "approve")

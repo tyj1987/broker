@@ -51,8 +51,9 @@ test('mock broker supports health and typed V2 operations', async () => {
       provider: 'github', operation_id: 'repo.read', account_ref: 'personal',
       environment: 'production', typed_parameters: { resource_ref: 'repository' },
     });
-    assert.equal(approval.status, 'pending');
+    assert.equal(approval.status, 'REQUESTED');
     assert.equal((await client.listApprovals())[0].id, approval.id);
+    assert.equal((await client.cancelApproval(approval.id)).status, 'CANCELLED');
     await assert.rejects(client.decideApproval(approval.id, 'approve'), /WebAuthn browser workbench/);
   } finally {
     await mock.stop();

@@ -63,7 +63,7 @@ export interface ApprovalResponse {
   resource_ref: string;
   required_approvals: number;
   approvals: Array<{ approved_by: string; approved_at: string }>;
-  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed';
+  status: 'REQUESTED' | 'APPROVED' | 'EXECUTING' | 'SUCCEEDED' | 'DENIED' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
   created_at: string;
   expires_at: string;
 }
@@ -283,6 +283,14 @@ export class BrokerClient {
   async listApprovals(): Promise<ApprovalResponse[]> {
     const r = await this.request<{ approvals: ApprovalResponse[] }>('list_approvals', 'GET', '/api/v2/approvals');
     return (r.body as { approvals: ApprovalResponse[] }).approvals;
+  }
+
+  async cancelApproval(id: string): Promise<ApprovalResponse> {
+    if (!id) throw new Error('approval id must be provided');
+    const r = await this.request<ApprovalResponse>(
+      'cancel_approval', 'POST', `/api/v2/approvals/${encodeURIComponent(id)}/cancel`, {}
+    );
+    return r.body as ApprovalResponse;
   }
 
   async decideApproval(id: string, decision: 'approve' | 'reject'): Promise<ApprovalResponse> {

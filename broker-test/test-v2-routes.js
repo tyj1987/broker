@@ -53,12 +53,12 @@ const handler = createV2Routes({
   approvalBroker: {
     create(subject, input) {
       calls.push(['approval-create', subject.name, input]);
-      return { id: 'approval-id', status: 'pending' };
+      return { id: 'approval-id', status: 'REQUESTED' };
     },
     list(subject) { return [{ id: 'approval-id', requester: subject.name }]; },
     decide(subject, id, decision) {
       calls.push(['approval-decision', subject.name, id, decision]);
-      return { id, status: decision === 'approve' ? 'approved' : 'rejected' };
+      return { id, status: decision === 'approve' ? 'APPROVED' : 'DENIED' };
     },
     claimFor(_subject, input) {
       if (!input.approval_request_id) return null;
@@ -69,8 +69,12 @@ const handler = createV2Routes({
         : [{ approved_by: 'admin-a' }];
       return { id: input.approval_request_id, grants };
     },
-    consume(id) { calls.push(['approval-consume', id]); },
-    release(id) { calls.push(['approval-release', id]); },
+    markSucceeded(id) { calls.push(['approval-succeeded', id]); },
+    markFailed(id) { calls.push(['approval-failed', id]); },
+    cancel(subject, id) {
+      calls.push(['approval-cancel', subject.name, id]);
+      return { id, status: 'CANCELLED' };
+    },
   },
   webAuthnService: {},
   toolRegistry: {
@@ -151,7 +155,7 @@ auditFailure = false;
 identity = { clientName: 'admin-a', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
 body = { decision: 'approve' };
 request.headers.origin = 'https://broker.test';
-assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000001/decision')).value.status, 'approved');
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000001/decision')).value.status, 'APPROVED');
 assert.ok(calls.some((item) => item[0] === 'browser-mutation'));
 const decisionsBeforeDenials = calls.filter((item) => item[0] === 'approval-decision').length;
 request.headers.origin = 'https://attacker.test';
@@ -162,11 +166,16 @@ assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-00000000000
 assert.equal(calls.filter((item) => item[0] === 'approval-decision').length, decisionsBeforeDenials);
 delete request.headers.origin;
 
+identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' } };
+body = {};
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000003/cancel')).value.status, 'CANCELLED');
+assert.ok(calls.some((item) => item[0] === 'approval-cancel'));
+
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' }, approval_request_id: 'approval-id' };
 assert.equal((await route('/api/v2/operations')).status, 202);
 assert.equal(calls.find((item) => item[0] === 'operation')[3].length, 1);
-assert.ok(calls.some((item) => item[0] === 'approval-consume'));
+assert.ok(calls.some((item) => item[0] === 'approval-succeeded'));
 
 identity = {
   clientName: 'admin-a', via: 'session', authFactors: ['webauthn'],

@@ -408,6 +408,18 @@ class BrokerClient:
             raise BrokerError("unexpected approval list response")
         return body["approvals"]
 
+    def cancel_approval(self, approval_id: str) -> Dict[str, Any]:
+        """Cancel a request owned by this identity before execution starts."""
+        if not approval_id:
+            raise ValueError("approval id must be provided")
+        status, body = self._request(
+            "POST", f"/api/v2/approvals/{urllib.parse.quote(approval_id, safe='')}/cancel", body={}
+        )
+        self._check(status, body, "cancel_approval")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected approval response")
+        return body
+
     def decide_approval(self, approval_id: str, decision: str) -> Dict[str, Any]:
         """Fail closed: decisions require the same-origin WebAuthn workbench."""
         if not approval_id or decision not in ("approve", "reject"):

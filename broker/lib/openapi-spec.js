@@ -270,6 +270,14 @@ const p = {
       responses: { 200: jsonOK('Approval'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound'), 409: desc('Expired, duplicate or completed decision') },
     },
   },
+  '/api/v2/approvals/{id}/cancel': {
+    post: {
+      tags: ['approvals-v2'], summary: 'Cancel a requested or approved operation before execution starts',
+      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, maxProperties: 0 } } } },
+      responses: { 200: jsonOK('Approval'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound'), 409: desc('Approval is already executing or terminal') },
+    },
+  },
   '/api/v2/browser/otp/claim': {
     post: {
       tags: ['browser-v2'], summary: 'Claim one approved OTP for a bound browser document',
@@ -579,7 +587,7 @@ const s = {
       operation_id: { type: 'string' }, account_ref: { type: 'string' }, environment: { type: 'string' },
       resource_ref: { type: 'string' }, required_approvals: { type: 'integer', minimum: 1, maximum: 10 },
       approvals: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['approved_by', 'approved_at'], properties: { approved_by: { type: 'string' }, approved_at: { type: 'string', format: 'date-time' } } } },
-      status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'expired', 'consumed'] },
+      status: { type: 'string', enum: ['REQUESTED', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'DENIED', 'FAILED', 'EXPIRED', 'CANCELLED'] },
       created_at: { type: 'string', format: 'date-time' }, expires_at: { type: 'string', format: 'date-time' },
     },
   },

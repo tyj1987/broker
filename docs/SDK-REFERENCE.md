@@ -13,6 +13,7 @@ or long-lived credential.
 | Read redacted state/result | `get_operation(id)` | `GetOperation(id)` | `getOperation(id)` |
 | Create approval request | `create_approval(...)` | `CreateApproval(...)` | `createApproval(...)` |
 | List visible approvals | `list_approvals()` | `ListApprovals(...)` | `listApprovals()` |
+| Cancel owned approval | `cancel_approval(id)` | `CancelApproval(...)` | `cancelApproval(id)` |
 | Health check | `health()` | `Health()` | `health()` |
 
 An operation request contains exactly:
@@ -61,6 +62,12 @@ surface. The compatibility methods `decide_approval`, `DecideApproval`, and
 `decideApproval` fail locally without sending a request. A human must use the
 same-origin `/approvals` browser workbench so the Broker can verify a fresh
 WebAuthn factor and the configured HTTPS origin.
+
+Approval lifecycle states are `REQUESTED`, `APPROVED`, `EXECUTING`,
+`SUCCEEDED`, `DENIED`, `FAILED`, `EXPIRED`, and `CANCELLED`. Once execution is
+claimed, failure is terminal; the approval cannot be returned to an executable
+state. The requester may cancel before execution. An administrator cancelling
+another request needs a WebAuthn-stepped-up browser session.
 
 ## Legacy API surface
 

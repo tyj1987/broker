@@ -38,34 +38,47 @@ assert.throws(() => broker.create(requester, { ...input, account_ref: 'other' })
 assert.throws(() => broker.create(requester, { ...input, typed_parameters: {} }), expectCode('invalid_request'));
 
 const request = broker.create(requester, input);
-assert.equal(request.status, 'pending');
+assert.equal(request.status, 'REQUESTED');
 assert.equal(request.required_approvals, 2);
 assert.equal(broker.list(requester).length, 1);
 assert.throws(() => broker.decide({ name: 'admin-a', context: { via: 'mtls', client: { role: 'admin' } } }, request.id, 'approve'), expectCode('step_up_required'));
 assert.throws(() => broker.decide(approver('requester'), request.id, 'approve'), expectCode('separation_of_duties'));
 assert.throws(() => broker.decide(approver('developer-a', 'developer'), request.id, 'approve'), expectCode('forbidden'));
 assert.throws(() => broker.decide(approver('admin-a'), request.id, 'invalid'), expectCode('invalid_request'));
-assert.equal(broker.decide(approver('admin-a'), request.id, 'approve').status, 'pending');
+assert.equal(broker.decide(approver('admin-a'), request.id, 'approve').status, 'REQUESTED');
 assert.throws(() => broker.decide(approver('admin-a'), request.id, 'approve'), expectCode('duplicate_approval'));
-assert.equal(broker.decide(approver('admin-b'), request.id, 'approve').status, 'approved');
+assert.equal(broker.decide(approver('admin-b'), request.id, 'approve').status, 'APPROVED');
 assert.throws(() => broker.decide(approver('admin-c'), request.id, 'approve'), expectCode('invalid_state'));
 
 assert.throws(() => broker.claimFor(requester, { ...input, account_ref: 'other', approval_request_id: request.id }), expectCode('approval_mismatch'));
 const claim = broker.claimFor(requester, { ...input, approval_request_id: request.id });
 assert.equal(claim.grants.length, 2);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: request.id }), expectCode('approval_mismatch'));
-broker.release(claim.id);
-const retry = broker.claimFor(requester, { ...input, approval_request_id: request.id });
-broker.consume(retry.id);
+broker.markFailed(claim.id);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: request.id }), expectCode('invalid_state'));
 
+const successful = broker.create(requester, input);
+broker.decide(approver('admin-a'), successful.id, 'approve');
+broker.decide(approver('admin-b'), successful.id, 'approve');
+broker.claimFor(requester, { ...input, approval_request_id: successful.id });
+broker.markSucceeded(successful.id);
+assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: successful.id }), expectCode('invalid_state'));
+
 const rejected = broker.create(requester, input);
-assert.equal(broker.decide(approver('admin-a'), rejected.id, 'reject').status, 'rejected');
+assert.equal(broker.decide(approver('admin-a'), rejected.id, 'reject').status, 'DENIED');
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: rejected.id }), expectCode('invalid_state'));
 
 const expiring = broker.create(requester, input);
 now += 5 * 60_000 + 1;
 assert.throws(() => broker.decide(approver('admin-a'), expiring.id, 'approve'), expectCode('approval_expired'));
+
+const cancelled = broker.create(requester, input);
+assert.throws(() => broker.cancel({ name: 'outsider', context: { client: { role: 'developer' } } }, cancelled.id), expectCode('forbidden'));
+assert.equal(broker.cancel(requester, cancelled.id).status, 'CANCELLED');
+assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: cancelled.id }), expectCode('invalid_state'));
+const adminCancelled = broker.create(requester, input);
+assert.throws(() => broker.cancel({ name: 'admin-c', context: { via: 'api_key', client: { role: 'admin' } } }, adminCancelled.id), expectCode('step_up_required'));
+assert.equal(broker.cancel(approver('admin-c'), adminCancelled.id).status, 'CANCELLED');
 
 const capped = new ApprovalBroker({ maxRecords: 1, getPolicy: () => policy });
 capped.create(requester, input);

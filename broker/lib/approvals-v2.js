@@ -3,7 +3,7 @@ import { V2Error, canonicalJson, sha256Base64Url } from './operations-v2.js';
 import { validateTypedParameters } from './operation-policy.js';
 
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
-const STATES = new Set(['pending', 'approved', 'consuming', 'rejected', 'expired', 'consumed']);
+const STATES = new Set(['REQUESTED', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'DENIED', 'FAILED', 'EXPIRED', 'CANCELLED']);
 
 function requireId(value, field) {
   if (typeof value !== 'string' || !ID_RE.test(value)) {
@@ -23,7 +23,7 @@ function publicApproval(record) {
     resource_ref: record.resourceRef,
     required_approvals: record.requiredApprovals,
     approvals: record.approvers.map((item) => ({ approved_by: item.name, approved_at: item.approvedAt })),
-    status: record.status === 'consuming' ? 'approved' : record.status,
+    status: record.status,
     created_at: record.createdAt,
     expires_at: record.expiresAt,
   };
@@ -74,7 +74,7 @@ export class ApprovalBroker {
     const record = {
       id: randomUUID(), requester: identity.name, provider, operationId, accountRef,
       environment: input.environment, resourceRef, requestHash: requestHash(input), requiredApprovals,
-      approvalRoles: [...new Set(policy.approval_roles || ['admin'])], approvers: [], status: 'pending',
+      approvalRoles: [...new Set(policy.approval_roles || ['admin'])], approvers: [], status: 'REQUESTED',
       createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
     };
     this.records.set(record.id, record);
@@ -83,7 +83,7 @@ export class ApprovalBroker {
 
   decide(identity, id, decision) {
     const record = this.getActive(id);
-    if (record.status !== 'pending') {
+    if (record.status !== 'REQUESTED') {
       throw new V2Error('invalid_state', 'approval request is already decided', 409);
     }
     if (!identity?.name || !identity.context || identity.context.via !== 'session'
@@ -97,7 +97,7 @@ export class ApprovalBroker {
       throw new V2Error('separation_of_duties', 'requester cannot approve the request', 403);
     }
     if (decision === 'reject') {
-      record.status = 'rejected';
+      record.status = 'DENIED';
       return publicApproval(record);
     }
     if (decision !== 'approve') throw new V2Error('invalid_request', 'decision must be approve or reject');
@@ -105,7 +105,7 @@ export class ApprovalBroker {
       throw new V2Error('duplicate_approval', 'approver has already decided', 409);
     }
     record.approvers.push({ name: identity.name, approvedAt: new Date(this.now()).toISOString() });
-    if (record.approvers.length >= record.requiredApprovals) record.status = 'approved';
+    if (record.approvers.length >= record.requiredApprovals) record.status = 'APPROVED';
     return publicApproval(record);
   }
 
@@ -122,11 +122,11 @@ export class ApprovalBroker {
     const id = input?.approval_request_id;
     if (!id) return null;
     const record = this.getActive(id);
-    if (record.status !== 'approved' || record.requester !== identity?.name
+    if (record.status !== 'APPROVED' || record.requester !== identity?.name
       || record.requestHash !== requestHash(input)) {
       throw new V2Error('approval_mismatch', 'approval does not match this operation', 403);
     }
-    record.status = 'consuming';
+    record.status = 'EXECUTING';
     const grants = record.approvers.map((item) => ({
       provider: record.provider,
       operation_id: record.operationId,
@@ -137,26 +137,45 @@ export class ApprovalBroker {
     return { id, grants };
   }
 
-  consume(id) {
+  markSucceeded(id) {
     if (!id) return;
     const record = this.records.get(id);
-    if (!record || record.status !== 'consuming') throw new V2Error('approval_mismatch', 'approval is unavailable', 409);
-    record.status = 'consumed';
+    if (!record || record.status !== 'EXECUTING') throw new V2Error('approval_mismatch', 'approval is unavailable', 409);
+    record.status = 'SUCCEEDED';
   }
 
-  release(id) {
+  markFailed(id) {
+    if (!id) return;
     const record = this.records.get(id);
-    if (record?.status === 'consuming') record.status = 'approved';
+    if (!record || record.status !== 'EXECUTING') throw new V2Error('approval_mismatch', 'approval is unavailable', 409);
+    record.status = 'FAILED';
+  }
+
+  cancel(identity, id) {
+    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    const record = this.records.get(id);
+    if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
+    if (!['REQUESTED', 'APPROVED'].includes(record.status)) {
+      throw new V2Error('invalid_state', 'approval request cannot be cancelled', 409);
+    }
+    const isAdmin = identity.context?.client?.role === 'admin';
+    if (record.requester !== identity.name && !isAdmin) throw new V2Error('forbidden', 'identity cannot cancel this request', 403);
+    if (record.requester !== identity.name
+      && (identity.context?.via !== 'session' || !identity.context?.authFactors?.includes('webauthn'))) {
+      throw new V2Error('step_up_required', 'administrator cancellation requires a fresh WebAuthn session', 403);
+    }
+    record.status = 'CANCELLED';
+    return publicApproval(record);
   }
 
   getActive(id) {
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
-    if (new Date(record.expiresAt).getTime() <= this.now() && ['pending', 'approved', 'consuming'].includes(record.status)) {
-      record.status = 'expired';
+    if (new Date(record.expiresAt).getTime() <= this.now() && ['REQUESTED', 'APPROVED', 'EXECUTING'].includes(record.status)) {
+      record.status = 'EXPIRED';
     }
-    if (record.status === 'expired') throw new V2Error('approval_expired', 'approval request expired', 409);
-    if (['rejected', 'consumed'].includes(record.status)) {
+    if (record.status === 'EXPIRED') throw new V2Error('approval_expired', 'approval request expired', 409);
+    if (['DENIED', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(record.status)) {
       throw new V2Error('invalid_state', 'approval request is no longer active', 409);
     }
     return record;

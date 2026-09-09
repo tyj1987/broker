@@ -802,6 +802,41 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           description: Expired, duplicate or completed decision
+  /api/v2/approvals/{id}/cancel:
+    post:
+      tags:
+        - approvals-v2
+      summary: Cancel a requested or approved operation before execution starts
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              maxProperties: 0
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Approval is already executing or terminal
   /api/v2/browser/otp/claim:
     post:
       tags:
@@ -1710,11 +1745,14 @@ components:
         status:
           type: string
           enum:
-            - pending
-            - approved
-            - rejected
-            - expired
-            - consumed
+            - REQUESTED
+            - APPROVED
+            - EXECUTING
+            - SUCCEEDED
+            - DENIED
+            - FAILED
+            - EXPIRED
+            - CANCELLED
         created_at:
           type: string
           format: date-time

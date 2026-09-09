@@ -360,6 +360,20 @@ func (c *Client) ListApprovals(ctx context.Context) ([]Approval, error) {
 	return response.Approvals, nil
 }
 
+// CancelApproval cancels a request before execution starts. It cannot approve
+// or revive a request.
+func (c *Client) CancelApproval(ctx context.Context, id string) (*Approval, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: approval id required", ErrInvalidArg)
+	}
+	var approval Approval
+	path := "/api/v2/approvals/" + url.PathEscape(id) + "/cancel"
+	if err := c.doAndCheck(ctx, "cancel_approval", "POST", path, map[string]any{}, nil, &approval); err != nil {
+		return nil, err
+	}
+	return &approval, nil
+}
+
 // DecideApproval is retained for source compatibility. Approval decisions are
 // browser-only so the Broker can verify the same-origin WebAuthn session.
 // This method never sends a network request.

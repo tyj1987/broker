@@ -82,13 +82,16 @@ export async function startMockBroker(): Promise<{ port: number; certPath: strin
         } else if (url === '/api/v2/approvals' && method === 'POST') {
           const parsed = JSON.parse(body || '{}');
           res.writeHead(201, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', requester: 'test', provider: parsed.provider, operation_id: parsed.operation_id, account_ref: parsed.account_ref, environment: parsed.environment, resource_ref: parsed.typed_parameters.resource_ref, required_approvals: 2, approvals: [], status: 'pending', created_at: '2026-09-09T00:00:00Z', expires_at: '2026-09-09T00:05:00Z' }));
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', requester: 'test', provider: parsed.provider, operation_id: parsed.operation_id, account_ref: parsed.account_ref, environment: parsed.environment, resource_ref: parsed.typed_parameters.resource_ref, required_approvals: 2, approvals: [], status: 'REQUESTED', created_at: '2026-09-09T00:00:00Z', expires_at: '2026-09-09T00:05:00Z' }));
         } else if (url === '/api/v2/approvals' && method === 'GET') {
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ approvals: [{ id: '00000000-0000-4000-8000-000000000002', status: 'pending' }] }));
+          res.end(JSON.stringify({ approvals: [{ id: '00000000-0000-4000-8000-000000000002', status: 'REQUESTED' }] }));
         } else if (url === '/api/v2/approvals/00000000-0000-4000-8000-000000000002/decision' && method === 'POST') {
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', status: 'approved' }));
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', status: 'APPROVED' }));
+        } else if (url === '/api/v2/approvals/00000000-0000-4000-8000-000000000002/cancel' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', status: 'CANCELLED' }));
         } else if (url === '/api/v1/proxy/github' && method === 'POST') {
           const parsed = JSON.parse(body || '{}');
           if (parsed.path === '/forbidden') {

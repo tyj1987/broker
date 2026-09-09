@@ -71,6 +71,15 @@ assert.equal(
   'an unstepped-up admin session cannot enumerate other requesters approvals',
 );
 assert.equal(broker.list(approver('admin-reviewer')).length, 1);
+const narrowedApprover = {
+  ...approver('admin-narrowed'),
+  context: {
+    ...approver('admin-narrowed').context,
+    apiKey: { ...requester.context.apiKey, allowed_operations: [] },
+  },
+};
+assert.equal(broker.list(narrowedApprover).length, 0, 'a bearer key narrows approval visibility on a session');
+assert.throws(() => broker.decide(narrowedApprover, request.id, 'approve'), expectCode('forbidden'));
 assert.throws(() => broker.decide({ name: 'admin-a', context: { via: 'mtls', client: { role: 'admin' } } }, request.id, 'approve'), expectCode('step_up_required'));
 assert.throws(() => broker.decide(approver('requester'), request.id, 'approve'), expectCode('separation_of_duties'));
 assert.throws(() => broker.decide(approver('developer-a', 'developer'), request.id, 'approve'), expectCode('forbidden'));

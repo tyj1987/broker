@@ -41,8 +41,8 @@ function requestHash(input) {
 
 function apiKeyAllowsApproval(identity, record) {
   const context = identity?.context;
-  if (context?.via !== 'api_key') return true;
-  const key = context.apiKey;
+  const key = context?.apiKey;
+  if (!key) return context?.via !== 'api_key';
   const exactScope = `operations:${record.provider}:${record.operationId}`;
   return (key?.scopes?.includes('operations:execute') || key?.scopes?.includes(exactScope))
     && key.allowed_services?.includes(record.provider)
@@ -105,6 +105,9 @@ export class ApprovalBroker {
     if (!identity?.name || !identity.context || identity.context.via !== 'session'
       || !identity.context.authFactors?.includes('webauthn')) {
       throw new V2Error('step_up_required', 'approval requires a fresh WebAuthn session', 403);
+    }
+    if (!apiKeyAllowsApproval(identity, record)) {
+      throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
     }
     if (!record.approvalRoles.includes(identity.context.client?.role)) {
       throw new V2Error('forbidden', 'identity is not an approver', 403);

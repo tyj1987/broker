@@ -72,6 +72,10 @@ assert.equal(broker.listDevices({
   name: 'admin-session',
   context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } },
 }).length, 1);
+assert.equal(broker.listDevices({
+  name: 'admin-session',
+  context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' }, apiKey: {} },
+}).length, 0, 'a bearer delegation narrows interactive device inventory access');
 
 await assert.rejects(
   broker.createOperation({ name: 'owner-1' }, {

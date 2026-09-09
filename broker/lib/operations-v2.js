@@ -299,7 +299,7 @@ export class OperationBroker {
   }
 
   listDevices(identity) {
-    if (identity?.context?.via === 'api_key') return [];
+    if (identity?.context?.apiKey || identity?.context?.via === 'api_key') return [];
     return [...this.devices.values()]
       .filter((device) => device.owner === identity?.name || canAdministerOtherOwners(identity))
       .map(publicDevice);

@@ -41,6 +41,12 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   passed `testDebugUnitTest`, `assembleDebug` and `lintDebug` against Android API
   37 and Build Tools 36.0.0 and retained the debug APK as a digest-addressed
   artifact. Physical-device behavior remains unverified.
+- Android dual-SIM binding no longer has a disconnected code path: after local
+  pairing the receiver records only delivery subscription/slot metadata, the
+  operator explicitly binds that observed SIM to an opaque task binding, and a
+  subscription change in a slot clears the old binding. The SMS body and OTP
+  are never persisted. This change still requires CI and Xiaomi hardware
+  evidence before acceptance.
 - Windows desktop: the same run passed the TypeScript build, formatting,
   Clippy with warnings denied, Rust tests, native-host release build, RustSec
   vulnerability gate and unsigned NSIS build. RustSec reported no

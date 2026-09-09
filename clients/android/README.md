@@ -13,3 +13,9 @@ assumption based on its model name.
 `RECEIVE_SMS` is restricted by Android and might not be grantable to a self-signed APK. The app reports the observed capability. When it is unavailable, SMS User Consent requires a visible user confirmation, or the code must be entered manually. Neither fallback is unattended operation.
 
 The first physical-device acceptance target is a dual-SIM Xiaomi 12S Ultra. A release is not considered device-tested until permission grant, both SIM bindings, delayed and duplicate messages, background restrictions, permission revocation, and the manual fallback have been exercised on that device.
+
+The receiver does not guess a default SIM. After pairing, it records only the
+subscription and slot metadata attached to a newly delivered SMS, never the
+message or code. The operator then binds each observed SIM to the opaque value
+shown by an active Broker task. Missing subscription metadata is rejected, and
+a changed subscription in an observed slot invalidates the previous binding.

@@ -11,19 +11,20 @@ import kotlin.concurrent.thread
 class OtpSmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        val preferences = context.getSharedPreferences("device-registration", Context.MODE_PRIVATE)
+        val endpoint = preferences.getString("endpoint", null) ?: return
+        val deviceId = preferences.getString("device_id", null) ?: return
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         val sender = messages.firstOrNull()?.originatingAddress ?: return
         val body = messages.joinToString(separator = "") { it.messageBody ?: "" }
-        val subscriptionId = intent.getIntExtra("subscription", -1)
-        val binding = SimBindings.resolve(context, subscriptionId) ?: return
+        val incomingSim = IncomingSimResolver.fromIntent(intent) ?: return
+        val observed = SimBindings.observe(context, incomingSim, System.currentTimeMillis())
+        val binding = observed.binding ?: return
         if (PendingTaskRegistry.accept(sender, body, binding, System.currentTimeMillis())) return
 
         // A process killed by the OS has no in-memory task registry. Fetch the
         // already-authorized tasks during this system broadcast, match locally,
         // and submit only one unambiguous result. No SMS or OTP is persisted.
-        val preferences = context.getSharedPreferences("device-registration", Context.MODE_PRIVATE)
-        val endpoint = preferences.getString("endpoint", null) ?: return
-        val deviceId = preferences.getString("device_id", null) ?: return
         val now = System.currentTimeMillis()
         synchronized(OtpSmsReceiver::class.java) {
             if (now - preferences.getLong("last_cold_receive_ms", 0) < 15_000) return

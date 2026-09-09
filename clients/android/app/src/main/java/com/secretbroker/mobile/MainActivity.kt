@@ -25,6 +25,8 @@ import androidx.lifecycle.lifecycleScope
 import com.secretbroker.mobile.network.BrokerDeviceApi
 import com.secretbroker.mobile.network.OtpSyncController
 import com.secretbroker.mobile.otp.PendingOtpTask
+import com.secretbroker.mobile.otp.ObservedSim
+import com.secretbroker.mobile.otp.SimBindings
 import com.secretbroker.mobile.otp.SmsConsentCoordinator
 import com.secretbroker.mobile.security.DeviceSigner
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +42,8 @@ class MainActivity : ComponentActivity() {
     private var deviceId by mutableStateOf<String?>(null)
     private var state by mutableStateOf("not_paired")
     private var pendingTasks by mutableStateOf<List<PendingOtpTask>>(emptyList())
+    private var observedSims by mutableStateOf<List<ObservedSim>>(emptyList())
+    private var simBindingDrafts by mutableStateOf<Map<Int, String>>(emptyMap())
     private var sync: OtpSyncController? = null
     private lateinit var consent: SmsConsentCoordinator
 
@@ -55,6 +59,7 @@ class MainActivity : ComponentActivity() {
         val preferences = getSharedPreferences("device-registration", Context.MODE_PRIVATE)
         endpoint = preferences.getString("endpoint", endpoint) ?: endpoint
         deviceId = preferences.getString("device_id", null)
+        observedSims = SimBindings.observed(this)
         consent = SmsConsentCoordinator(this, requestConsent::launch) { state = it }
         capabilities = CapabilityProbe.inspect(this)
         setContent {
@@ -90,6 +95,24 @@ class MainActivity : ComponentActivity() {
                     } else {
                         Text("Paired device: ${deviceId!!.take(8)}…")
                         Text("Pending OTP tasks: ${pendingTasks.size}")
+                        val expectedBindings = pendingTasks.map { it.simBinding }.distinct()
+                        if (expectedBindings.isNotEmpty()) Text("Expected SIM bindings: ${expectedBindings.joinToString()}")
+                        Button(onClick = { refreshObservedSims() }) { Text("Refresh observed SIMs") }
+                        if (observedSims.isEmpty()) {
+                            Text("No receiving SIM has been observed. Receive one test message, then refresh.")
+                        }
+                        observedSims.forEach { sim ->
+                            val slot = sim.slotIndex?.plus(1)?.toString() ?: "unknown"
+                            Text("SIM slot $slot · subscription ${sim.subscriptionId} · ${sim.binding ?: "not bound"}")
+                            OutlinedTextField(
+                                value = simBindingDrafts[sim.subscriptionId] ?: sim.binding.orEmpty(),
+                                onValueChange = { value ->
+                                    simBindingDrafts = simBindingDrafts + (sim.subscriptionId to value.trim())
+                                },
+                                label = { Text("Binding for SIM slot $slot") },
+                            )
+                            Button(onClick = { bindSim(sim.subscriptionId) }) { Text("Bind this SIM") }
+                        }
                         val consentSenders = pendingTasks.flatMap { it.senderAllowlist }.distinct()
                         if (value?.googleServicesAvailable == true && consentSenders.size == 1) {
                             Button(onClick = { consent.start(consentSenders.single()) }) {
@@ -105,6 +128,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        refreshObservedSims()
         startSync()
     }
 
@@ -156,8 +180,23 @@ class MainActivity : ComponentActivity() {
         sync?.stop()
         sync = null
         preferences.edit().remove("device_id").remove("endpoint").remove("last_cold_receive_ms").apply()
+        SimBindings.clear(this)
         deviceId = null
         pendingTasks = emptyList()
         state = "not_paired"
+    }
+
+    private fun refreshObservedSims() {
+        observedSims = SimBindings.observed(this)
+    }
+
+    private fun bindSim(subscriptionId: Int) {
+        val binding = simBindingDrafts[subscriptionId].orEmpty()
+        runCatching { SimBindings.bind(this, subscriptionId, binding) }
+            .onSuccess {
+                state = "sim_bound"
+                refreshObservedSims()
+            }
+            .onFailure { state = "sim_binding_failed" }
     }
 }

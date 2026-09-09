@@ -19,6 +19,7 @@ only approved business results; they do not receive long-lived credentials.
 - [GitHub adapter](GITHUB-ADAPTER.md) — fixed-origin repository metadata operation and credential lease boundary.
 - [Cloudflare adapter](CLOUDFLARE-ADAPTER.md) — account-bound zone inventory with a scoped token capability.
 - [SSH capability](SSH-PROXY.md) — typed target inspection and the isolated-runner production boundary.
+- [Docker adapter](DOCKER-ADAPTER.md) — repository-bound tag inventory through a short-lived pull token.
 - [Decision queue](DECISION_QUEUE.md) — open high-impact choices and their required evidence.
 - [Verification](https://github.com/tyj1987/broker/blob/master/VERIFY.md) — reproducible local and CI checks.
 - [Production acceptance](PRODUCTION-ACCEPTANCE.md) — observed evidence, release blockers and remaining gates.

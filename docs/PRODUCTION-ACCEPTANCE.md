@@ -115,6 +115,12 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   The production target registry,
   verified host-key authority, short-lived certificate signer, isolated runner
   and target contract test remain open, so SSH is `contract_required`.
+- The Docker tags-list adapter binds the task, resource reference, credential
+  lease, pull scope, request path and response name to one exact repository. It
+  accepts only bounded repository components, requires a token expiring within
+  five minutes, denies redirects and projects at most 100 validated tags over
+  the pinned HTTPS transport. No real token exchange or isolated Docker Hub
+  account contract has run, so Docker remains `contract_required`.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test

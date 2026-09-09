@@ -6,7 +6,8 @@ status: contract_required
 official_docs:
   - https://docs.docker.com/security/access-tokens/personal-access-tokens/
   - https://docs.docker.com/security/access-tokens/organization-access-tokens/
-  - https://docs.docker.com/reference/api/registry/latest/
+  - https://distribution.github.io/distribution/spec/api/
+  - https://distribution.github.io/distribution/spec/auth/token/
 origins: [https://registry-1.docker.io, https://auth.docker.io]
 authentication:
   priority: [organization_access_token, scoped_personal_access_token]
@@ -21,7 +22,7 @@ operations:
     permission: repository:pull
     mutating: false
     approval: none
-    parameters: { namespace: { type: string }, repository: { type: string } }
+    parameters: { resource_ref: { type: string }, namespace: { type: string }, repository: { type: string } }
     maximum_response_bytes: 1048576
 redaction: [Authorization, dckr_pat, dckr_oat, registry_token]
 contract_test: { account: isolated_docker_namespace, required: true, last_result: not_run }

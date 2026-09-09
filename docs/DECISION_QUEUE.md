@@ -38,3 +38,18 @@ continue.
   enforcement and disaster-recovery tests.
 - Current safe default: restart-safe local chain verification; no claim of
   independent non-repudiation.
+
+## DQ-004: provider signing and account-binding authority
+
+- Status: open
+- Needed before: any live provider adapter is production-enabled
+- Decision: select the independently managed KMS/HSM signing service and the
+  authoritative encrypted store for provider account, environment, installation
+  and resource bindings. Define workload attestation, key rotation, revocation,
+  regional failover and break-glass ownership without exposing signing keys to
+  the Broker process.
+- Required evidence: signer policy denial, wrong-key and wrong-workload tests,
+  rotation overlap, revocation latency, store rollback detection, regional
+  outage behavior and isolated-account contract tests.
+- Current safe default: dependency-injected signer and account resolver used
+  only by deterministic tests; every provider remains `contract_required`.

@@ -90,11 +90,15 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   Legacy unsealed logs remain outside the migration genesis, and the missing
   independent signed chain-head anchor remains a P1 acceptance blocker.
 - The GitHub repository-read adapter has a fixed origin, method, API version,
-  response limit and projection. Unit contracts enforce repository-scoped
-  installation-token leases, execution-target binding, redirect denial and
-  safe errors with 100% line/function and 95.52% branch coverage. No token
-  minter or isolated-account live contract has run, so the manifest remains
-  `contract_required` and this is not production-available evidence.
+  response limit and projection. The App token provider produces an RS256 JWT
+  only through an injected signer capability, requests exactly one repository
+  with Metadata read, and verifies the returned repository, permission and
+  expiry. The HTTPS transport validates all DNS answers, pins the connection,
+  keeps TLS hostname verification enabled, denies redirects and bounds body,
+  response and time. The composed executor is integration-tested without a
+  private key. No production KMS/HSM signer, account binding or isolated-account
+  live contract has run, so the manifest remains `contract_required` and this
+  is not production-available evidence.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test

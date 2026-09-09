@@ -443,14 +443,14 @@ assert.equal(timeoutSignalAborted, true, 'deadline aborts the adapter signal');
 assert.equal(timeoutBroker.get(human, timedOut.id).result, undefined, 'late adapter output cannot commit');
 
 let expirySignalAborted = false;
-const expiryTool = { ...timeoutTool, timeout_ms: 2_000 };
+const expiryTool = { ...timeoutTool, timeout_ms: 2_500 };
 const expiryBroker = new AutomationTaskBroker({
   toolRegistry: {
     findByName(name, version) {
       return name === expiryTool.name && version === expiryTool.version ? structuredClone(expiryTool) : null;
     },
   },
-  authorize: async () => ({ allow: true, ttlMs: 1_000 }), approvalBroker: approvals,
+  authorize: async () => ({ allow: true, ttlMs: 1_500 }), approvalBroker: approvals,
   executors: new Map([['broker.tools.inspect@1.0.0', async (_parameters, context) => new Promise((resolve) => {
     context.signal.addEventListener('abort', () => {
       expirySignalAborted = true;

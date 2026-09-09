@@ -66,6 +66,14 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(browserExecutionMode.ok === true, 'browser operation execution mode is accepted');
 
+  const unsupportedPolicySchema = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: { aliyun: { 'billing.read': {
+      parameter_schema: { type: 'object', properties: { resource_ref: { type: 'string', pattern: '.*' } } },
+    } } },
+  });
+  assert(unsupportedPolicySchema.ok === false, 'unenforced policy schema keyword fails closed');
+
   const invalidPolicyConditions = validateBrokerConfig({
     clients: { admin: { role: 'admin' } },
     operation_policies: { github: { 'repo.read': { source_cidrs: ['not-a-cidr'] } } },

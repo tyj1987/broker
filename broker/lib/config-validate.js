@@ -3,6 +3,7 @@
 
 import { existsSync as nodeExistsSync } from 'node:fs';
 import { validatePolicyConditions } from './policy-conditions.js';
+import { validateParameterSchema } from './operation-policy.js';
 
 /**
  * @typedef {{ level: 'error'|'warn', path: string, message: string }}
@@ -138,6 +139,10 @@ export function validateBrokerConfig(config, opts = {}) {
           }
           if (policy.execution_mode != null && !['adapter', 'browser'].includes(policy.execution_mode)) {
             errors.push({ level: 'error', path: `${path}.execution_mode`, message: 'must be adapter or browser' });
+          }
+          if (policy.parameter_schema != null) {
+            const schema = validateParameterSchema(policy.parameter_schema);
+            if (!schema.ok) errors.push({ level: 'error', path: `${path}.parameter_schema`, message: schema.reason });
           }
           const conditions = validatePolicyConditions(policy);
           if (!conditions.ok) {

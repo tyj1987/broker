@@ -85,18 +85,24 @@ const parameterCases = [
   [[], { type: 'object', properties: {} }, 'typed_parameters_invalid'],
   [{ count: 1.5 }, { type: 'object', properties: { count: { type: 'integer' } } }, 'parameter_type_mismatch'],
   [{ count: Infinity }, { type: 'object', properties: { count: { type: 'number' } } }, 'parameter_type_mismatch'],
-  [{ value: [] }, { type: 'object', properties: { value: { type: 'object' } } }, 'parameter_type_mismatch'],
+  [{ value: [] }, { type: 'object', properties: { value: { type: 'object', additional_properties: false, required: [], properties: {} } } }, 'parameter_type_mismatch'],
   [{ value: 'a' }, { type: 'object', properties: { value: { type: 'string', min_length: 2 } } }, 'parameter_too_short'],
   [{ value: 'abc' }, { type: 'object', properties: { value: { type: 'string', max_length: 2 } } }, 'parameter_too_long'],
   [{ value: 'Bad value' }, { type: 'object', properties: { value: { type: 'string', format: 'identifier' } } }, 'parameter_format_mismatch'],
-  [{ value: [1, 2] }, { type: 'object', properties: { value: { type: 'array', max_items: 1 } } }, 'parameter_array_too_large'],
+  [{ value: [1, 2] }, { type: 'object', properties: { value: { type: 'array', max_items: 1, items: { type: 'integer' } } } }, 'parameter_array_too_large'],
+  [{ value: ['bad'] }, { type: 'object', properties: { value: { type: 'array', items: { type: 'integer' } } } }, 'parameter_type_mismatch'],
+  [{ value: 0 }, { type: 'object', properties: { value: { type: 'integer', minimum: 1 } } }, 'parameter_below_minimum'],
+  [{ value: 2 }, { type: 'object', properties: { value: { type: 'integer', maximum: 1 } } }, 'parameter_above_maximum'],
+  [{ value: 'ok' }, { type: 'object', properties: { value: { type: 'string', pattern: '.*' } } }, 'parameter_schema_invalid'],
 ];
 for (const [value, schema, reason] of parameterCases) {
   assert.equal(validateTypedParameters(value, schema).reason, reason);
 }
-assert.equal(validateTypedParameters({ count: 2, ratio: 1.5, nested: {}, values: [] }, {
+assert.equal(validateTypedParameters({ count: 2, ratio: 1.5, nested: { label: 'ok' }, values: [] }, {
   type: 'object', properties: {
-    count: { type: 'integer' }, ratio: { type: 'number' }, nested: { type: 'object' }, values: { type: 'array' },
+    count: { type: 'integer' }, ratio: { type: 'number' },
+    nested: { type: 'object', additional_properties: false, required: ['label'], properties: { label: { type: 'string' } } },
+    values: { type: 'array', items: { type: 'string' } },
   },
 }).ok, true);
 

@@ -321,6 +321,14 @@ assert.throws(
   }),
   (error) => error instanceof V2Error && error.code === 'unsafe_result',
 );
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+    receipt: lease.receipt,
+    status: 'completed',
+    result: { status: `gh${'p_'}${'B'.repeat(24)}` },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_result',
+);
 const workerCompleted = workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
   receipt: lease.receipt, status: 'completed', result: { status: 'ok', records: 1 },
 });

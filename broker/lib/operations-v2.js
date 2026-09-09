@@ -1,4 +1,5 @@
 import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify } from 'node:crypto';
+import { redactDeep } from './redact.js';
 
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const OTP_RE = /^[0-9]{4,10}$/;
@@ -683,6 +684,9 @@ export class OperationBroker {
     if (completed) {
       result = requireObject(input?.result || {}, 'result');
       assertSafeResult(result);
+      if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
+        throw new V2Error('unsafe_result', 'browser result contains credential material');
+      }
     }
     this.browserLeases.delete(lease.id);
     operation.status = completed ? 'completed' : 'failed';

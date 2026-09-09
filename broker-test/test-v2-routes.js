@@ -199,10 +199,26 @@ assert.equal((await getRoute(`/api/v2/tasks/${routeTaskId}`)).value.state, 'SUCC
 assert.equal((await getRoute(`/api/v2/tasks/${routeTaskId}/events`)).value.events.length, 1);
 assert.equal((await route(`/api/v2/tasks/${routeTaskId}/cancel`)).value.state, 'CANCELLED');
 assert.ok(calls.some((item) => item[0] === 'task-run'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_task_create_intent' && event.status === 'attempt'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_task_run_intent' && event.status === 'attempt'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_task_cancel_intent' && event.status === 'attempt'));
+assert.equal(
+  auditEvents.some((event) => event.action?.startsWith('v2_task_')
+    && event.action.endsWith('_intent') && event.status === 'authorized'),
+  false,
+  'pre-policy task intents must not be mislabeled as authorization decisions',
+);
 assert.ok(auditEvents.some((event) => event.action === 'v2_task_get' && event.task_state === 'SUCCEEDED'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_task_event_list' && event.count === 1));
 const taskCreatesBeforeAuditFailure = calls.filter((item) => item[0] === 'task-create').length;
+const taskRunsBeforeAuditFailure = calls.filter((item) => item[0] === 'task-run').length;
+const taskCancelsBeforeAuditFailure = calls.filter((item) => item[0] === 'task-cancel').length;
 auditFailure = true;
+body = {};
+assert.equal((await route(`/api/v2/tasks/${routeTaskId}/run`)).value.error, 'audit_unavailable');
+assert.equal((await route(`/api/v2/tasks/${routeTaskId}/cancel`)).value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'task-run').length, taskRunsBeforeAuditFailure);
+assert.equal(calls.filter((item) => item[0] === 'task-cancel').length, taskCancelsBeforeAuditFailure);
 body = {
   tool: 'broker.tools.inspect', tool_version: '1.0.0', account_ref: 'control-plane',
   environment: 'production', parameters: { resource_ref: 'tool-registry' }, idempotency_key: 'route-task-audit01',

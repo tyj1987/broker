@@ -63,6 +63,11 @@ never the bearer token or nonce. See [Single-use execution tokens](EXECUTION-TOK
 - `GET /api/v2/tasks/{id}/events` returns a bounded, ordered transition stream.
 - `POST /api/v2/tasks/{id}/cancel` terminally cancels a task before execution.
 
+Mutation intent events are durably written before the broker is called and use
+`status=attempt`. They are availability and trace evidence, not an authorization
+decision. The task broker's policy result and bounded state-transition events
+remain the authoritative decision trail.
+
 Task status, events, execution and cancellation are owner-bound. Cross-owner
 administration requires an authenticated browser session for an administrator
 with a current WebAuthn factor; an API key, workload identity or unstepped-up

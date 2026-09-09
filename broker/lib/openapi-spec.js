@@ -278,7 +278,7 @@ const p = {
   '/api/v2/operations/{id}': {
     get: {
       tags: ['operations-v2'],
-      summary: 'Read a redacted operation result',
+      summary: 'Read a redacted operation result within current API key grants',
       parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: { 200: jsonOK('Operation'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound') },
     },
@@ -348,7 +348,11 @@ const p = {
     },
   },
   '/api/v2/devices': {
-    get: { tags: ['devices-v2'], summary: 'List visible devices without public keys or secrets', responses: { 200: desc('Device list'), 401: respRef('Unauthorized') } },
+    get: {
+      tags: ['devices-v2'],
+      summary: 'List visible devices using an interactive identity',
+      responses: { 200: desc('Device list without public keys or secrets'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
   },
   '/api/v2/devices/{device_id}': {
     patch: {

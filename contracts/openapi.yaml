@@ -850,7 +850,7 @@ paths:
     get:
       tags:
         - operations-v2
-      summary: Read a redacted operation result
+      summary: Read a redacted operation result within current API key grants
       parameters:
         - in: path
           name: id
@@ -1086,12 +1086,14 @@ paths:
     get:
       tags:
         - devices-v2
-      summary: List visible devices without public keys or secrets
+      summary: List visible devices using an interactive identity
       responses:
         "200":
-          description: Device list
+          description: Device list without public keys or secrets
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/v2/devices/{device_id}:
     patch:
       tags:

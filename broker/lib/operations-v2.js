@@ -93,6 +93,19 @@ function canAdministerOtherOwners(identity) {
     && context.authFactors?.includes('webauthn');
 }
 
+function apiKeyAllowsOperation(identity, operation) {
+  const context = identity?.context;
+  if (context?.via !== 'api_key') return true;
+  const key = context.apiKey;
+  const exactScope = `operations:${operation.provider}:${operation.operationId}`;
+  return (key?.scopes?.includes('operations:execute') || key?.scopes?.includes(exactScope))
+    && key.allowed_services?.includes(operation.provider)
+    && key.allowed_operations?.includes(`${operation.provider}:${operation.operationId}`)
+    && key.allowed_accounts?.includes(operation.accountRef)
+    && key.allowed_environments?.includes(operation.environment)
+    && key.allowed_resources?.includes(operation.typedParameters?.resource_ref);
+}
+
 function validatedDeviceKey(publicKeyPem, requestedAlgorithm = null) {
   if (typeof publicKeyPem !== 'string' || !publicKeyPem.includes('BEGIN PUBLIC KEY')) {
     throw new V2Error('invalid_request', 'device public key is invalid');
@@ -286,6 +299,7 @@ export class OperationBroker {
   }
 
   listDevices(identity) {
+    if (identity?.context?.via === 'api_key') return [];
     return [...this.devices.values()]
       .filter((device) => device.owner === identity?.name || canAdministerOtherOwners(identity))
       .map(publicDevice);
@@ -400,6 +414,9 @@ export class OperationBroker {
     if (!operation) throw new V2Error('not_found', 'operation not found', 404);
     if (operation.owner !== identity?.name && !canAdministerOtherOwners(identity)) {
       throw new V2Error('forbidden', 'operation access denied', 403);
+    }
+    if (!apiKeyAllowsOperation(identity, operation)) {
+      throw new V2Error('forbidden', 'API key is not authorized for this operation', 403);
     }
     this.expireOperation(operation);
     return publicOperation(operation);

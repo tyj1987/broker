@@ -61,6 +61,10 @@ assert.equal(broker.listDevices({
   context: { via: 'api_key', client: { role: 'admin' } },
 }).length, 0);
 assert.equal(broker.listDevices({
+  name: 'owner-1',
+  context: { via: 'api_key', client: { role: 'operator' } },
+}).length, 0);
+assert.equal(broker.listDevices({
   name: 'admin-session',
   context: { via: 'session', authFactors: [], client: { role: 'admin' } },
 }).length, 0);
@@ -308,6 +312,35 @@ const workerCompleted = workerBroker.completeBrowserOperation(workerDevice.id, l
 });
 assert.equal(workerCompleted.status, 'completed');
 assert.deepEqual(workerCompleted.result, { status: 'ok', records: 1 });
+const operationReader = (overrides = {}) => ({
+  name: 'owner-4',
+  context: {
+    via: 'api_key',
+    apiKey: {
+      scopes: ['operations:execute'],
+      allowed_services: ['aliyun'],
+      allowed_operations: ['aliyun:account.summary'],
+      allowed_accounts: ['primary'],
+      allowed_environments: ['staging'],
+      allowed_resources: ['summary'],
+      ...overrides,
+    },
+  },
+});
+assert.equal(workerBroker.getOperation(operationReader(), workerOperation.id).id, workerOperation.id);
+for (const revokedGrant of [
+  { scopes: [] },
+  { allowed_services: [] },
+  { allowed_operations: [] },
+  { allowed_accounts: ['other'] },
+  { allowed_environments: ['production'] },
+  { allowed_resources: ['other'] },
+]) {
+  assert.throws(
+    () => workerBroker.getOperation(operationReader(revokedGrant), workerOperation.id),
+    (error) => error instanceof V2Error && error.code === 'forbidden',
+  );
+}
 assert.throws(
   () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
     receipt: lease.receipt, status: 'completed', result: {},

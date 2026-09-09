@@ -173,7 +173,7 @@ assert.ok(auditEvents.some((event) => event.action === 'v2_device_list' && event
 
 identity = { clientName: 'admin-key', via: 'api_key', client: { role: 'admin' } };
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).value.error, 'forbidden');
-assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'admin-key-device');
+assert.equal((await getRoute('/api/v2/devices')).value.error, 'identity_denied');
 assert.ok(auditEvents.some((event) => event.action === 'v2_request'
   && event.reason === 'forbidden' && event.actor === 'admin-key'));
 

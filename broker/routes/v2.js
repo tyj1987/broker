@@ -388,6 +388,7 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (ctx.via === 'api_key') throw new V2Error('identity_denied', 'device inventory requires an interactive identity', 403);
         const devices = operationBroker.listDevices(identity);
         audit({ action: 'v2_device_list', status: 'ok', cn: ctx.cn, count: devices.length });
         send(res, 200, { devices });

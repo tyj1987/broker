@@ -86,6 +86,7 @@ import { AutomationTaskBroker } from './lib/automation-tasks.js';
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
+import { loadSecretCacheCandidate, replaceSecretCache } from './lib/secret-cache.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
 import { buildAuditEvent, loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
@@ -365,40 +366,31 @@ async function loadConfig() {
 }
 
 async function loadSecrets() {
-  // 1. Try new structured store first
-  if (existsSync(SECRETS_DETAIL_PATH)) {
-    try {
+  const loaded = await loadSecretCacheCandidate({
+    structuredExists: existsSync(SECRETS_DETAIL_PATH),
+    legacyExists: existsSync(SECRETS_PATH),
+    normalizeEntry: normalizeSecretEntry,
+    readStructured: async () => {
       const skipSops2 = process.env.SOPS_SKIP === '1' || process.env.SOPS_SKIP === 'true';
       const text = skipSops2
         ? readFileSync(SECRETS_DETAIL_PATH, 'utf8')
         : await sopsDecrypt(SECRETS_DETAIL_PATH);
-      const obj = JSON.parse(text);
-      SECRET_CACHE.clear();
-      for (const [name, entry] of Object.entries(obj.secrets || {})) {
-        SECRET_CACHE.set(name, normalizeSecretEntry(name, entry));
-      }
-      console.log(`[secrets] Loaded ${SECRET_CACHE.size} structured secrets from ${SECRETS_DETAIL_PATH}`);
-      return;
-    } catch (e) {
-      console.error(`[secrets] Failed to load ${SECRETS_DETAIL_PATH}: ${e.message}`);
-      // fall through to migration
-    }
-  }
-  // 2. Migrate from legacy common.env (one-time)
-  if (existsSync(SECRETS_PATH)) {
+      return JSON.parse(text);
+    },
+    migrateLegacy: migrateFromCommonEnv,
+  });
+  if (loaded.source === 'legacy') {
     console.log(`[secrets] ${SECRETS_DETAIL_PATH} not found; migrating from ${SECRETS_PATH}...`);
-    const migrated = await migrateFromCommonEnv();
-    SECRET_CACHE.clear();
-    for (const [name, entry] of Object.entries(migrated)) {
-      SECRET_CACHE.set(name, entry);
-    }
-    console.log(`[secrets] Migrated ${SECRET_CACHE.size} secrets; persisting to ${SECRETS_DETAIL_PATH}`);
-    await persistSecretsDetail();
-    return;
+    await persistSecretsDetail(loaded.cache);
   }
-  // 3. Nothing to load
-  SECRET_CACHE.clear();
-  console.log('[secrets] No secrets found (neither structured nor legacy)');
+  replaceSecretCache(SECRET_CACHE, loaded.cache);
+  if (loaded.source === 'structured') {
+    console.log(`[secrets] Loaded ${SECRET_CACHE.size} structured secrets from ${SECRETS_DETAIL_PATH}`);
+  } else if (loaded.source === 'legacy') {
+    console.log(`[secrets] Migrated ${SECRET_CACHE.size} secrets; persisted to ${SECRETS_DETAIL_PATH}`);
+  } else {
+    console.log('[secrets] No secrets found (neither structured nor legacy)');
+  }
 }
 
 function normalizeSecretEntry(name, entry) {
@@ -491,8 +483,8 @@ async function migrateFromCommonEnv() {
   return secrets;
 }
 
-async function persistSecretsDetail() {
-  const obj = { version: 1, secrets: Object.fromEntries(SECRET_CACHE) };
+async function persistSecretsDetail(secretCache = SECRET_CACHE) {
+  const obj = { version: 1, secrets: Object.fromEntries(secretCache) };
   const text = JSON.stringify(obj, null, 2) + '\n';
   await sopsEncryptAtomic(SECRETS_DETAIL_PATH, text);
 }

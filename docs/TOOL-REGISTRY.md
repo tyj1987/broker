@@ -20,7 +20,10 @@ Startup and configuration reload fail if an enabled operation is unregistered,
 uses parameters absent from its registration, exceeds its registered
 environments, or weakens a HIGH or CRITICAL approval requirement. Runtime
 authorization repeats the relevant checks before consulting the Go policy
-core. A missing registration is a denial, not a compatibility fallback.
+core. The core independently intersects principal type, role, tool version,
+target kind, risk, provider, operation, account, resource, environment,
+approval, source network, time and lifetime. A missing registration is a
+denial, not a compatibility fallback.
 
 Risk levels have these minimum controls:
 

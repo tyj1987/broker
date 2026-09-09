@@ -7,18 +7,23 @@ import (
 
 func baseline() (Subject, Request, Rule) {
 	subject := Subject{
-		ID: "workload-1", Role: "automation", SecurityProfile: "strict",
-		Providers: []string{"github"}, Operations: []string{"repo.read"},
+		ID: "workload-1", Role: "automation", PrincipalType: "agent", SecurityProfile: "strict",
+		Tools: []string{"github.repository.read@1.0.0"}, TargetKinds: []string{"github-repository"},
+		RiskLevels: []string{"LOW"},
+		Providers:  []string{"github"}, Operations: []string{"repo.read"},
 		Accounts: []string{"personal"}, Resources: []string{"tyj1987/broker"},
 		Environments: []string{"production"}, MaximumTTL: 5 * time.Minute,
 	}
 	request := Request{
+		Tool: "github.repository.read@1.0.0", TargetKind: "github-repository", RiskLevel: "LOW",
 		Provider: "github", Operation: "repo.read", Account: "personal",
 		Resource: "tyj1987/broker", Environment: "production", RequestedTTL: time.Minute,
 		SourceIP: "203.0.113.42", At: time.Now().UTC(),
 	}
 	rule := Rule{
-		Enabled: true, Roles: []string{"automation"}, SecurityProfiles: []string{"strict"},
+		Enabled: true, Tools: []string{"github.repository.read@1.0.0"}, TargetKinds: []string{"github-repository"},
+		RiskLevels: []string{"LOW"}, AllowAgentExecute: true,
+		Roles: []string{"automation"}, SecurityProfiles: []string{"strict"},
 		Providers: []string{"github"}, Operations: []string{"repo.read"},
 		Accounts: []string{"personal"}, Resources: []string{"tyj1987/broker"},
 		Environments: []string{"production"}, MaximumTTL: 2 * time.Minute,
@@ -36,6 +41,9 @@ func TestEvaluateAllowsExactIntersection(t *testing.T) {
 
 func TestEvaluateFailsClosedForEveryDimension(t *testing.T) {
 	mutations := map[string]func(*Request){
+		"tool":        func(r *Request) { r.Tool = "github.repository.write@1.0.0" },
+		"target kind": func(r *Request) { r.TargetKind = "organization" },
+		"risk":        func(r *Request) { r.RiskLevel = "HIGH" },
 		"provider":    func(r *Request) { r.Provider = "openai" },
 		"operation":   func(r *Request) { r.Operation = "repo.write" },
 		"account":     func(r *Request) { r.Account = "other" },
@@ -50,6 +58,45 @@ func TestEvaluateFailsClosedForEveryDimension(t *testing.T) {
 				t.Fatal("mismatched authorization dimension was allowed")
 			}
 		})
+	}
+}
+
+func TestEvaluateRiskFloor(t *testing.T) {
+	subject, request, rule := baseline()
+	request.RiskLevel = "HIGH"
+	subject.RiskLevels = []string{"HIGH"}
+	rule.RiskLevels = []string{"HIGH"}
+	if decision := Evaluate(subject, request, rule); decision.Code != "approval_required" {
+		t.Fatalf("expected HIGH approval denial, got %#v", decision)
+	}
+	request.ApprovalCount = 1
+	if decision := Evaluate(subject, request, rule); !decision.Allow {
+		t.Fatalf("expected approved HIGH request, got %#v", decision)
+	}
+
+	request.RiskLevel = "CRITICAL"
+	subject.RiskLevels = []string{"CRITICAL"}
+	rule.RiskLevels = []string{"CRITICAL"}
+	rule.AllowAgentExecute = false
+	if decision := Evaluate(subject, request, rule); decision.Code != "agent_execution_denied" {
+		t.Fatalf("expected agent denial, got %#v", decision)
+	}
+	subject.PrincipalType = "human"
+	request.StepUp = true
+	request.ApprovalCount = 2
+	if decision := Evaluate(subject, request, rule); !decision.Allow {
+		t.Fatalf("expected stepped-up human CRITICAL request, got %#v", decision)
+	}
+}
+
+func TestApprovalPreflightDoesNotExecute(t *testing.T) {
+	subject, request, rule := baseline()
+	request.RiskLevel = "HIGH"
+	request.ApprovalPhase = true
+	subject.RiskLevels = []string{"HIGH"}
+	rule.RiskLevels = []string{"HIGH"}
+	if decision := Evaluate(subject, request, rule); !decision.Allow {
+		t.Fatalf("approval preflight should authorize request creation: %#v", decision)
 	}
 }
 
@@ -87,6 +134,7 @@ func TestEvaluateDenyConditions(t *testing.T) {
 	}{
 		"invalid subject":    {func(s *Subject, _ *Request, _ *Rule) { s.ID = "" }, "invalid_subject"},
 		"invalid request":    {func(_ *Subject, r *Request, _ *Rule) { r.Provider = "" }, "invalid_request"},
+		"invalid risk":       {func(_ *Subject, r *Request, _ *Rule) { r.RiskLevel = "UNKNOWN" }, "invalid_request"},
 		"disabled":           {func(_ *Subject, _ *Request, p *Rule) { p.Enabled = false }, "rule_disabled"},
 		"role":               {func(s *Subject, _ *Request, _ *Rule) { s.Role = "reader" }, "role_denied"},
 		"profile":            {func(s *Subject, _ *Request, _ *Rule) { s.SecurityProfile = "compatible" }, "profile_denied"},

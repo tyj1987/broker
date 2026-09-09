@@ -12,18 +12,23 @@ import (
 func validPayload() map[string]any {
 	return map[string]any{
 		"subject": map[string]any{
-			"id": "client", "role": "automation", "security_profile": "strict",
-			"providers": []string{"github"}, "operations": []string{"repo.read"},
+			"id": "client", "role": "automation", "principal_type": "agent", "security_profile": "strict",
+			"tools": []string{"github.repository.read@1.0.0"}, "target_kinds": []string{"github-repository"},
+			"risk_levels": []string{"LOW"},
+			"providers":   []string{"github"}, "operations": []string{"repo.read"},
 			"accounts": []string{"primary"}, "resources": []string{"tyj1987/broker"},
 			"environments": []string{"production"}, "maximum_ttl_ms": 120000,
 		},
 		"request": map[string]any{
+			"tool": "github.repository.read@1.0.0", "target_kind": "github-repository", "risk_level": "LOW",
 			"provider": "github", "operation": "repo.read", "account": "primary",
 			"resource": "tyj1987/broker", "environment": "production",
 			"requested_ttl_ms": 60000, "source_ip": "203.0.113.42", "at": "2026-09-09T00:00:00Z",
 		},
 		"rule": map[string]any{
-			"enabled": true, "roles": []string{"automation"}, "security_profiles": []string{"strict"},
+			"enabled": true, "tools": []string{"github.repository.read@1.0.0"},
+			"target_kinds": []string{"github-repository"}, "risk_levels": []string{"LOW"},
+			"allow_agent_execute": true, "roles": []string{"automation"}, "security_profiles": []string{"strict"},
 			"providers": []string{"github"}, "operations": []string{"repo.read"},
 			"accounts": []string{"primary"}, "resources": []string{"tyj1987/broker"},
 			"environments": []string{"production"}, "maximum_ttl_ms": 90000,

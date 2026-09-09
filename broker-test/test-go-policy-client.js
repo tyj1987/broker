@@ -42,15 +42,25 @@ const operation = {
   typedParameters: { resource_ref: 'tyj1987/broker' },
 };
 
-const payload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_000 });
+const tool = {
+  name: 'github.repository.read', version: '1.0.0', risk_level: 'LOW', agent_execution: true,
+  target: { kind: 'github-repository', resource_parameter: 'resource_ref' },
+};
+
+const payload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_000, tool });
 assert.equal(payload.request.approval_count, 2);
 assert.equal(payload.request.step_up, true);
+assert.equal(payload.request.tool, 'github.repository.read@1.0.0');
+assert.equal(payload.request.target_kind, 'github-repository');
+assert.equal(payload.request.risk_level, 'LOW');
+assert.equal(payload.subject.principal_type, 'agent');
 assert.deepEqual(payload.subject.providers, ['github']);
 assert.deepEqual(payload.rule.source_cidrs, ['127.0.0.0/8']);
 assert.equal(payload.rule.not_before, policy.not_before);
 assert.equal(payload.rule.not_after, policy.not_after);
-const preflightPayload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_000 }, Date.now(), { ignoreApproval: true });
-assert.equal(preflightPayload.rule.required_approvals, 0);
+const preflightPayload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_000, tool }, Date.now(), { ignoreApproval: true });
+assert.equal(preflightPayload.rule.required_approvals, 2);
+assert.equal(preflightPayload.request.approval_phase, true);
 assert.equal(preflightPayload.subject.requires_two_persons, true);
 
 const socket = process.platform === 'win32'
@@ -66,11 +76,11 @@ await new Promise((resolve) => server.listen(socket, resolve));
 try {
   assert.deepEqual(await evaluateWithCore(socket, payload), { allow: true, reason: 'allowed', ttlMs: 45_000 });
   const authorize = createOperationAuthorizer(config, { socketPath: socket, requireCore: true });
-  const decision = await authorize(operation, { allow: true, ttlMs: 90_000, marker: true });
+  const decision = await authorize(operation, { allow: true, ttlMs: 90_000, marker: true, tool });
   assert.equal(decision.allow, true);
   assert.equal(decision.ttlMs, 45_000);
   assert.equal(decision.marker, true);
-  const preflight = await authorize(operation, { allow: true, ttlMs: 90_000 }, { ignoreApproval: true });
+  const preflight = await authorize(operation, { allow: true, ttlMs: 90_000, tool }, { ignoreApproval: true });
   assert.equal(preflight.allow, true);
 } finally {
   await new Promise((resolve) => server.close(resolve));

@@ -14,7 +14,11 @@ import (
 type Subject struct {
 	ID                 string
 	Role               string
+	PrincipalType      string
 	SecurityProfile    string
+	Tools              []string
+	TargetKinds        []string
+	RiskLevels         []string
 	Providers          []string
 	Operations         []string
 	Accounts           []string
@@ -26,6 +30,9 @@ type Subject struct {
 }
 
 type Request struct {
+	Tool          string
+	TargetKind    string
+	RiskLevel     string
 	Provider      string
 	Operation     string
 	Account       string
@@ -34,12 +41,17 @@ type Request struct {
 	RequestedTTL  time.Duration
 	StepUp        bool
 	ApprovalCount int
+	ApprovalPhase bool
 	SourceIP      string
 	At            time.Time
 }
 
 type Rule struct {
 	Enabled           bool
+	Tools             []string
+	TargetKinds       []string
+	RiskLevels        []string
+	AllowAgentExecute bool
 	Roles             []string
 	SecurityProfiles  []string
 	Providers         []string
@@ -63,10 +75,12 @@ type Decision struct {
 
 func Evaluate(subject Subject, request Request, rule Rule) Decision {
 	deny := func(code string) Decision { return Decision{Allow: false, Code: code} }
-	if subject.ID == "" || subject.Role == "" || subject.SecurityProfile == "" {
+	if subject.ID == "" || subject.Role == "" || subject.SecurityProfile == "" ||
+		!contains([]string{"human", "agent", "workload"}, subject.PrincipalType) {
 		return deny("invalid_subject")
 	}
-	if request.Provider == "" || request.Operation == "" || request.Account == "" || request.Environment == "" {
+	if request.Tool == "" || request.TargetKind == "" || !validRisk(request.RiskLevel) ||
+		request.Provider == "" || request.Operation == "" || request.Account == "" || request.Environment == "" {
 		return deny("invalid_request")
 	}
 	if !rule.Enabled {
@@ -78,6 +92,9 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 		rule    []string
 		code    string
 	}{
+		{request.Tool, subject.Tools, rule.Tools, "tool_denied"},
+		{request.TargetKind, subject.TargetKinds, rule.TargetKinds, "target_kind_denied"},
+		{request.RiskLevel, subject.RiskLevels, rule.RiskLevels, "risk_denied"},
 		{subject.Role, []string{subject.Role}, rule.Roles, "role_denied"},
 		{subject.SecurityProfile, []string{subject.SecurityProfile}, rule.SecurityProfiles, "profile_denied"},
 		{request.Provider, subject.Providers, rule.Providers, "provider_denied"},
@@ -90,6 +107,17 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 			return deny(check.code)
 		}
 	}
+	if subject.PrincipalType != "human" && !rule.AllowAgentExecute {
+		return deny("agent_execution_denied")
+	}
+	if request.RiskLevel == "CRITICAL" {
+		if subject.PrincipalType != "human" {
+			return deny("critical_agent_denied")
+		}
+		if !request.StepUp {
+			return deny("step_up_required")
+		}
+	}
 	if request.Resource != "" && (!contains(subject.Resources, request.Resource) || !contains(rule.Resources, request.Resource)) {
 		return deny("resource_denied")
 	}
@@ -97,10 +125,16 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 		return deny("step_up_required")
 	}
 	requiredApprovals := rule.RequiredApprovals
+	if request.RiskLevel == "HIGH" && requiredApprovals < 1 {
+		requiredApprovals = 1
+	}
+	if request.RiskLevel == "CRITICAL" && requiredApprovals < 2 {
+		requiredApprovals = 2
+	}
 	if subject.RequiresTwoPersons && requiredApprovals < 2 {
 		requiredApprovals = 2
 	}
-	if request.ApprovalCount < requiredApprovals {
+	if !request.ApprovalPhase && request.ApprovalCount < requiredApprovals {
 		return deny("approval_required")
 	}
 	if len(rule.SourceCIDRs) > 0 {
@@ -138,6 +172,10 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 		}
 	}
 	return Decision{Allow: true, TTL: ttl, Code: "allowed"}
+}
+
+func validRisk(value string) bool {
+	return contains([]string{"LOW", "MEDIUM", "HIGH", "CRITICAL"}, value)
 }
 
 func sourceAllowed(source string, cidrs []string) (bool, bool) {
@@ -183,6 +221,9 @@ func ValidateDelegation(parent, child Subject) error {
 		parent []string
 		child  []string
 	}{
+		{"tools", parent.Tools, child.Tools},
+		{"target kinds", parent.TargetKinds, child.TargetKinds},
+		{"risk levels", parent.RiskLevels, child.RiskLevels},
 		{"providers", parent.Providers, child.Providers},
 		{"operations", parent.Operations, child.Operations},
 		{"accounts", parent.Accounts, child.Accounts},
@@ -192,6 +233,9 @@ func ValidateDelegation(parent, child Subject) error {
 		if !subset(field.child, field.parent) {
 			return fmt.Errorf("child %s exceed parent", field.name)
 		}
+	}
+	if parent.PrincipalType != "human" && child.PrincipalType != parent.PrincipalType {
+		return errors.New("child changed principal type")
 	}
 	if child.MaximumTTL <= 0 || parent.MaximumTTL <= 0 || child.MaximumTTL > parent.MaximumTTL {
 		return errors.New("child ttl exceeds parent")

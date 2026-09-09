@@ -21,6 +21,10 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
   const ctx = identity.context;
   const client = ctx.client;
   const policy = config.operation_policies[provider][operationId];
+  const tool = preliminary.tool;
+  const toolIdentity = tool?.name && tool?.version ? `${tool.name}@${tool.version}` : '';
+  const targetKind = tool?.target?.kind || '';
+  const riskLevel = tool?.risk_level || '';
   const key = ctx.apiKey;
   const resource = typeof typedParameters.resource_ref === 'string' ? typedParameters.resource_ref : '';
   const policyTTL = Math.min(Math.max(Number(policy.ttl_seconds || 300) * 1000, 10_000), 900_000);
@@ -33,12 +37,15 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
   const resourceValues = listOr(key?.allowed_resources, listOr(client.allowed_resources, policy.resources || []));
   const environmentValues = listOr(key?.allowed_environments, listOr(client.allowed_environments, policy.environments));
   const configuredApprovals = Math.max(Number(policy.required_approvals || 0), policy.approval_required ? 1 : 0);
-  const requiredApprovals = options.ignoreApproval === true ? 0 : configuredApprovals;
   return {
     subject: {
       id: identity.name,
       role: client.role,
+      principal_type: client.principal_type || (ctx.via === 'session' ? 'human' : 'agent'),
       security_profile: client.security_profile,
+      tools: toolIdentity ? [toolIdentity] : [],
+      target_kinds: targetKind ? [targetKind] : [],
+      risk_levels: riskLevel ? [riskLevel] : [],
       providers: serviceValues,
       operations: listOr(operationValues, [operationId]),
       accounts: accountValues,
@@ -49,6 +56,9 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
       requires_two_persons: configuredApprovals >= 2,
     },
     request: {
+      tool: toolIdentity,
+      target_kind: targetKind,
+      risk_level: riskLevel,
       provider,
       operation: operationId,
       account: accountRef,
@@ -57,11 +67,16 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
       requested_ttl_ms: Math.min(Number(preliminary.ttlMs || policyTTL), policyTTL),
       step_up: (ctx.authFactors || []).includes('webauthn'),
       approval_count: approvalsFor(ctx, provider, operationId, accountRef, now),
+      approval_phase: options.ignoreApproval === true,
       source_ip: ctx.sourceIp || '',
       at: new Date(now).toISOString(),
     },
     rule: {
       enabled: policy.enabled === true,
+      tools: toolIdentity ? [toolIdentity] : [],
+      target_kinds: targetKind ? [targetKind] : [],
+      risk_levels: riskLevel ? [riskLevel] : [],
+      allow_agent_execute: tool?.agent_execution === true,
       roles: policy.roles,
       security_profiles: policy.security_profiles,
       providers: [provider],
@@ -71,7 +86,7 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
       environments: policy.environments,
       maximum_ttl_ms: policyTTL,
       require_step_up: policy.step_up_required === true,
-      required_approvals: requiredApprovals,
+      required_approvals: configuredApprovals,
       source_cidrs: policy.source_cidrs || [],
       not_before: policy.not_before || '',
       not_after: policy.not_after || '',

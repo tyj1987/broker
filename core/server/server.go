@@ -21,7 +21,11 @@ const maxRequestBytes = 64 * 1024
 type wireSubject struct {
 	ID                 string   `json:"id"`
 	Role               string   `json:"role"`
+	PrincipalType      string   `json:"principal_type"`
 	SecurityProfile    string   `json:"security_profile"`
+	Tools              []string `json:"tools"`
+	TargetKinds        []string `json:"target_kinds"`
+	RiskLevels         []string `json:"risk_levels"`
 	Providers          []string `json:"providers"`
 	Operations         []string `json:"operations"`
 	Accounts           []string `json:"accounts"`
@@ -33,6 +37,9 @@ type wireSubject struct {
 }
 
 type wireRequest struct {
+	Tool           string `json:"tool"`
+	TargetKind     string `json:"target_kind"`
+	RiskLevel      string `json:"risk_level"`
 	Provider       string `json:"provider"`
 	Operation      string `json:"operation"`
 	Account        string `json:"account"`
@@ -41,12 +48,17 @@ type wireRequest struct {
 	RequestedTTLMS int64  `json:"requested_ttl_ms"`
 	StepUp         bool   `json:"step_up"`
 	ApprovalCount  int    `json:"approval_count"`
+	ApprovalPhase  bool   `json:"approval_phase"`
 	SourceIP       string `json:"source_ip"`
 	At             string `json:"at"`
 }
 
 type wireRule struct {
 	Enabled           bool     `json:"enabled"`
+	Tools             []string `json:"tools"`
+	TargetKinds       []string `json:"target_kinds"`
+	RiskLevels        []string `json:"risk_levels"`
+	AllowAgentExecute bool     `json:"allow_agent_execute"`
 	Roles             []string `json:"roles"`
 	SecurityProfiles  []string `json:"security_profiles"`
 	Providers         []string `json:"providers"`
@@ -111,20 +123,26 @@ func Handler() http.Handler {
 		}
 		decision := policy.Evaluate(
 			policy.Subject{
-				ID: input.Subject.ID, Role: input.Subject.Role, SecurityProfile: input.Subject.SecurityProfile,
+				ID: input.Subject.ID, Role: input.Subject.Role, PrincipalType: input.Subject.PrincipalType,
+				SecurityProfile: input.Subject.SecurityProfile, Tools: input.Subject.Tools,
+				TargetKinds: input.Subject.TargetKinds, RiskLevels: input.Subject.RiskLevels,
 				Providers: input.Subject.Providers, Operations: input.Subject.Operations,
 				Accounts: input.Subject.Accounts, Resources: input.Subject.Resources,
 				Environments: input.Subject.Environments, MaximumTTL: milliseconds(input.Subject.MaximumTTLMS),
 				RequiresApproval: input.Subject.RequiresApproval, RequiresTwoPersons: input.Subject.RequiresTwoPersons,
 			},
 			policy.Request{
+				Tool: input.Request.Tool, TargetKind: input.Request.TargetKind, RiskLevel: input.Request.RiskLevel,
 				Provider: input.Request.Provider, Operation: input.Request.Operation, Account: input.Request.Account,
 				Resource: input.Request.Resource, Environment: input.Request.Environment,
 				RequestedTTL: milliseconds(input.Request.RequestedTTLMS), StepUp: input.Request.StepUp,
-				ApprovalCount: input.Request.ApprovalCount, SourceIP: input.Request.SourceIP, At: at,
+				ApprovalCount: input.Request.ApprovalCount, ApprovalPhase: input.Request.ApprovalPhase,
+				SourceIP: input.Request.SourceIP, At: at,
 			},
 			policy.Rule{
-				Enabled: input.Rule.Enabled, Roles: input.Rule.Roles, SecurityProfiles: input.Rule.SecurityProfiles,
+				Enabled: input.Rule.Enabled, Tools: input.Rule.Tools, TargetKinds: input.Rule.TargetKinds,
+				RiskLevels: input.Rule.RiskLevels, AllowAgentExecute: input.Rule.AllowAgentExecute,
+				Roles: input.Rule.Roles, SecurityProfiles: input.Rule.SecurityProfiles,
 				Providers: input.Rule.Providers, Operations: input.Rule.Operations, Accounts: input.Rule.Accounts,
 				Resources: input.Rule.Resources, Environments: input.Rule.Environments,
 				MaximumTTL: milliseconds(input.Rule.MaximumTTLMS), RequireStepUp: input.Rule.RequireStepUp,

@@ -393,7 +393,14 @@ jobs:
           --set secrets.tlsSecretName=broker-tls
           --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
           > /tmp/broker-rendered.yaml
-      - run: sh -n deploy/bin/secret-broker-deploy
+      - run: bash -n deploy/bin/secret-broker-deploy
+      - name: Verify deployment helper fail-closed invariants
+        run: |
+          grep -Fq 'policy core is not active' deploy/bin/secret-broker-deploy
+          grep -Fq 'proxy_ssl_verify[[:space:]]+off' deploy/bin/secret-broker-deploy
+          grep -Fq '/etc/secret-broker/pki/ca' deploy/bin/secret-broker-deploy
+          grep -Fq '/etc/secret-broker/pki/clients' deploy/bin/secret-broker-deploy
+          grep -Fq '/opt/secret-broker/pki' deploy/bin/secret-broker-deploy
 
   image:
     name: Production image

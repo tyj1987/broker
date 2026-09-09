@@ -34,6 +34,19 @@ Cloud resources live under `infra/`. The retired generic Kubernetes Terraform
 module accepted private keys as Terraform variables, which placed them in
 state, so it is intentionally not part of the supported deployment path.
 
+## Atomic ECS deployment
+
+The protected GitHub environment deploys one attested release through
+`bin/secret-broker-deploy`. The helper refuses to read the release archive
+unless the active service already runs as `broker:broker`, the Go policy core
+is active, nginx has upstream certificate verification enabled with no
+effective `proxy_ssl_verify off`, and no CA or final-client private key remains
+in either the target PKI layout or the legacy application PKI tree.
+
+The one-time production migration must establish those invariants first.
+Normal CI deployment is deliberately unable to migrate a legacy or unsafe
+host.
+
 ## Grafana
 
 Pre-built observability:

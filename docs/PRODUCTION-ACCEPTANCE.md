@@ -78,6 +78,13 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   removed executor fails terminally without an upstream call. Provider
   manifests and unit-test adapters can no longer be mistaken for live runtime
   availability.
+- The MCP server now derives its tools from that executable view and submits
+  only typed `/api/v2/tasks`. The former master-key child issuance, plaintext
+  secret resolution, arbitrary service proxy and credential-healthcheck tools
+  were removed. Its loopback listener denies browser origins and CORS, and its
+  Broker transport requires TLS verification, fixed v2 paths and bounded
+  bodies. File-backed scoped API-key identity remains a migration boundary;
+  production workload federation is open in DQ-008.
 - The management console now exposes a bound approval workbench. Decisions
   require an exact same-origin request from a WebAuthn-authenticated browser
   session; missing or cross-site Origin, API-key identity, unknown decision

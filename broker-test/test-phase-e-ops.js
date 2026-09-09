@@ -54,6 +54,12 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(badExecutionMode.ok === false, 'unknown operation execution mode fails closed');
 
+  const externalMcpHealthcheck = validateBrokerConfig({
+    clients: {},
+    healthcheck: { upstream: 'mcp_server' },
+  });
+  assert(externalMcpHealthcheck.ok === false, 'external MCP healthcheck execution fails closed');
+
   const browserExecutionMode = validateBrokerConfig({
     clients: { admin: { role: 'admin' } },
     operation_policies: { aliyun: { 'billing.read': { execution_mode: 'browser' } } },

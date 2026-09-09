@@ -14,6 +14,7 @@ only approved business results; they do not receive long-lived credentials.
 - [SDK reference](SDK-REFERENCE.md) — `/api/v2` typed-operation and approval clients.
 - [Tool registry](TOOL-REGISTRY.md) — versioned capability metadata and risk invariants.
 - [Automation tasks](AUTOMATION-TASKS.md) — policy-routed task lifecycle, APIs and current durability boundary.
+- [MCP typed-task bridge](MCP-TASK-BRIDGE.md) — executable-tool discovery and task execution without secret or arbitrary-proxy access.
 - [Execution tokens](EXECUTION-TOKENS.md) — short-lived, bound, single-use adapter capabilities.
 - [Audit integrity](AUDIT-INTEGRITY.md) — restart-safe hash chaining, migration boundary and external-anchor gate.
 - [GitHub adapter](GITHUB-ADAPTER.md) — fixed-origin repository metadata operation and credential lease boundary.

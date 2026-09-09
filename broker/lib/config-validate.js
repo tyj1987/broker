@@ -113,6 +113,14 @@ export function validateBrokerConfig(config, opts = {}) {
     errors.push({ level: 'error', path: 'api_keys', message: 'must be object/array map' });
   }
 
+  if (config.healthcheck?.upstream && config.healthcheck.upstream !== 'local') {
+    errors.push({
+      level: 'error',
+      path: 'healthcheck.upstream',
+      message: 'external MCP healthcheck execution is not supported',
+    });
+  }
+
   if (config.operation_policies != null) {
     if (!config.operation_policies || typeof config.operation_policies !== 'object' || Array.isArray(config.operation_policies)) {
       errors.push({ level: 'error', path: 'operation_policies', message: 'must be an object' });

@@ -103,3 +103,19 @@ continue.
 - Current safe default: dependency-injected token and content-filter
   capabilities used only by deterministic tests. The adapter accepts only a
   fixed plain-text export for one file and remains `contract_required`.
+
+## DQ-008: MCP workload identity and credential delivery
+
+- Status: open
+- Needed before: production or remotely reachable MCP execution
+- Decision: select the attested workload identity, short-lived Broker token
+  exchange and revocation authority for each MCP deployment. Define audience,
+  host, process, tool/account/resource/environment scope, rotation and emergency
+  ownership without making a master key available to the MCP or Agent process.
+- Required evidence: wrong-workload and wrong-audience denial, token theft and
+  replay, process restart, revocation latency, issuer outage, mTLS rotation,
+  local listener DNS-rebinding and browser-origin tests, and secret-free crash,
+  error and audit logs.
+- Current safe default: loopback-only MCP with a pre-provisioned scoped API key
+  loaded from a file. Master keys, environment credentials, secret resolution,
+  arbitrary proxying and external MCP healthcheck execution are denied.

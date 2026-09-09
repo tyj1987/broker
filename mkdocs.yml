@@ -88,6 +88,7 @@ nav:
   - WebSocket: WEBSOCKET.md
   - Tool registry: TOOL-REGISTRY.md
   - Automation tasks: AUTOMATION-TASKS.md
+  - MCP typed-task bridge: MCP-TASK-BRIDGE.md
   - Execution tokens: EXECUTION-TOKENS.md
   - Audit integrity: AUDIT-INTEGRITY.md
   - Provider adapters:

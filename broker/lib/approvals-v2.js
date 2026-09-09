@@ -112,9 +112,13 @@ export class ApprovalBroker {
   list(identity) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     this.prune();
-    const role = identity.context?.client?.role;
+    const context = identity.context;
+    const role = context?.client?.role;
+    const canReviewOthers = context?.via === 'session'
+      && context.authFactors?.includes('webauthn');
     return [...this.records.values()]
-      .filter((record) => record.requester === identity.name || record.approvalRoles.includes(role))
+      .filter((record) => record.requester === identity.name
+        || (canReviewOthers && record.approvalRoles.includes(role)))
       .map(publicApproval);
   }
 
@@ -171,7 +175,8 @@ export class ApprovalBroker {
   getActive(id) {
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
-    if (new Date(record.expiresAt).getTime() <= this.now() && ['REQUESTED', 'APPROVED', 'EXECUTING'].includes(record.status)) {
+    if (new Date(record.expiresAt).getTime() <= this.now()
+      && ['REQUESTED', 'APPROVED'].includes(record.status)) {
       record.status = 'EXPIRED';
     }
     if (record.status === 'EXPIRED') throw new V2Error('approval_expired', 'approval request expired', 409);

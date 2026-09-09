@@ -41,6 +41,17 @@ const request = broker.create(requester, input);
 assert.equal(request.status, 'REQUESTED');
 assert.equal(request.required_approvals, 2);
 assert.equal(broker.list(requester).length, 1);
+assert.equal(
+  broker.list({ name: 'admin-key', context: { via: 'api_key', client: { role: 'admin' } } }).length,
+  0,
+  'an admin API key cannot enumerate other requesters approvals',
+);
+assert.equal(
+  broker.list({ name: 'admin-session', context: { via: 'session', authFactors: [], client: { role: 'admin' } } }).length,
+  0,
+  'an unstepped-up admin session cannot enumerate other requesters approvals',
+);
+assert.equal(broker.list(approver('admin-reviewer')).length, 1);
 assert.throws(() => broker.decide({ name: 'admin-a', context: { via: 'mtls', client: { role: 'admin' } } }, request.id, 'approve'), expectCode('step_up_required'));
 assert.throws(() => broker.decide(approver('requester'), request.id, 'approve'), expectCode('separation_of_duties'));
 assert.throws(() => broker.decide(approver('developer-a', 'developer'), request.id, 'approve'), expectCode('forbidden'));
@@ -63,6 +74,22 @@ broker.decide(approver('admin-b'), successful.id, 'approve');
 broker.claimFor(requester, { ...input, approval_request_id: successful.id });
 broker.markSucceeded(successful.id);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: successful.id }), expectCode('invalid_state'));
+
+const executingAcrossExpiry = broker.create(requester, input);
+broker.decide(approver('admin-a'), executingAcrossExpiry.id, 'approve');
+broker.decide(approver('admin-b'), executingAcrossExpiry.id, 'approve');
+broker.claimFor(requester, { ...input, approval_request_id: executingAcrossExpiry.id });
+now += 5 * 60_000 + 1;
+assert.throws(
+  () => broker.claimFor(requester, { ...input, approval_request_id: executingAcrossExpiry.id }),
+  expectCode('approval_mismatch'),
+  'a replay cannot expire an approval already bound to an execution',
+);
+broker.markSucceeded(executingAcrossExpiry.id);
+assert.equal(
+  broker.list(requester).find((item) => item.id === executingAcrossExpiry.id).status,
+  'SUCCEEDED',
+);
 
 const rejected = broker.create(requester, input);
 assert.equal(broker.decide(approver('admin-a'), rejected.id, 'reject').status, 'DENIED');

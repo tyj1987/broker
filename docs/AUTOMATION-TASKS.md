@@ -23,6 +23,13 @@ approvers and cannot be initiated by an agent identity. Authorization is
 evaluated again immediately before an executor starts, so revocation and policy
 changes take effect on queued tasks.
 
+Approval discovery is requester-bound. Only an administrator using a current
+WebAuthn browser session can review another requester's queue; an administrator
+API key or unstepped-up session cannot enumerate it. Approval expiry prevents a
+new execution claim. Once a claim has atomically entered `EXECUTING`, concurrent
+replay or expiry checks cannot rewrite it; the bound task deadline owns the
+terminal success, failure or expiry transition.
+
 Every creation requires a caller-selected idempotency key. Reusing the key with
 the same request returns the original task; reusing it with different parameters
 is rejected. Execution and failure are terminal. The broker does not retry an

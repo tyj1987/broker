@@ -158,6 +158,18 @@ expectInvalidTool((tool) => {
   tool.input_schema.properties.owner.maxLength = 4;
 }, /inconsistent string bounds/);
 expectInvalidTool((tool) => { tool.input_schema.required = ['owner', 'owner']; }, /unique property names/);
+expectInvalidTool((tool) => {
+  tool.output_schema.properties.access_token = { type: 'string' };
+}, /sensitive output field/);
+expectInvalidTool((tool) => {
+  tool.output_schema.properties.items = {
+    type: 'array',
+    items: {
+      type: 'object', additionalProperties: false,
+      properties: { private_key: { type: 'string' } },
+    },
+  };
+}, /sensitive output field/);
 expectInvalidTool((tool) => { tool.target.resource_parameter = 'other'; }, /target must bind/);
 expectInvalidTool((tool) => { tool.timeout_ms = 99; }, /invalid timeout/);
 expectInvalidTool((tool) => { tool.rate_limit.requests = 0; }, /invalid rate limit/);

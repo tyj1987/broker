@@ -8,6 +8,7 @@ const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
 const AGENT_IDENTITY_METHODS = new Set(['api_key', 'workload', 'workload_identity', 'oidc', 'mcp', 'agent']);
 const SCHEMA_TYPES = new Set(['object', 'array', 'string', 'integer', 'number', 'boolean']);
 const COMMON_SCHEMA_KEYS = new Set(['type', 'const', 'enum']);
+const SENSITIVE_OUTPUT_KEY = /(?:^|[_-])(?:secret|password|authorization|cookie|session|credential|private[_-]?key|otp|verification[_-]?code)(?:$|[_-])|(?:^|[_-])(?:access|refresh|bearer|api|auth|identity|session)[_-]?token(?:$|[_-])|^token$/i;
 const TOOL_KEYS = new Set([
   'name', 'version', 'description', 'provider', 'operation_id', 'input_schema', 'output_schema',
   'required_role', 'risk_level', 'environments', 'target', 'timeout_ms', 'rate_limit',
@@ -104,6 +105,17 @@ function assertClosedSchema(schema, field, tool) {
   assertObject(schema.properties, `${tool}: ${field}.properties is required`);
 }
 
+function assertSafeOutputSchema(schema, path) {
+  if (schema.type === 'object') {
+    for (const [name, child] of Object.entries(schema.properties || {})) {
+      if (SENSITIVE_OUTPUT_KEY.test(name)) throw new Error(`${path}.${name} exposes a sensitive output field`);
+      assertSafeOutputSchema(child, `${path}.${name}`);
+    }
+  } else if (schema.type === 'array' && schema.items) {
+    assertSafeOutputSchema(schema.items, `${path}.items`);
+  }
+}
+
 function validateTool(tool) {
   assertObject(tool, 'tool registry entry must be an object');
   for (const key of Object.keys(tool)) if (!TOOL_KEYS.has(key)) throw new Error(`${tool.name || 'tool'}: unknown field ${key}`);
@@ -116,6 +128,7 @@ function validateTool(tool) {
     || tool.environments.some((item) => !ENVIRONMENTS.has(item))) throw new Error(`${tool.name}: invalid environments`);
   assertClosedSchema(tool.input_schema, 'input_schema', tool.name);
   assertClosedSchema(tool.output_schema, 'output_schema', tool.name);
+  assertSafeOutputSchema(tool.output_schema, `${tool.name}: output_schema`);
   if (!Object.hasOwn(tool.input_schema.properties, 'resource_ref') || tool.target?.resource_parameter !== 'resource_ref') {
     throw new Error(`${tool.name}: target must bind input resource_ref`);
   }

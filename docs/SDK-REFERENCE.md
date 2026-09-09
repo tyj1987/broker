@@ -63,6 +63,11 @@ creation audit succeeds. An audit failure deletes the unused challenge and
 releases the dual-control approval claim, so a caller cannot receive an
 unaudited pairing capability.
 
+Device OTP submission is committed with its mandatory result audit in the same
+synchronous transition. If the audit commit fails, the OTP code, task state and
+operation state are restored to their pre-submission values; the device must use
+a fresh signed request nonce to retry.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

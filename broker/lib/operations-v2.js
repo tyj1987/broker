@@ -525,6 +525,37 @@ export class OperationBroker {
     return publicOtpTask(task);
   }
 
+  submitOtpAndAudit(deviceId, taskId, input, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const task = this.otpTasks.get(taskId);
+    const operation = task ? this.operations.get(task.operationId) : null;
+    const previous = task ? {
+      taskStatus: task.status,
+      taskCode: task.code,
+      operationStatus: operation?.status,
+      operationUpdatedAt: operation?.updatedAt,
+    } : null;
+    const result = this.submitOtp(deviceId, taskId, input);
+    try {
+      commitAudit(result);
+    } catch (error) {
+      if (!previous || this.otpTasks.get(taskId) !== task
+        || (operation && this.operations.get(operation.id) !== operation)) {
+        throw new V2Error('audit_rollback_failed', 'OTP audit rollback failed', 503);
+      }
+      task.status = previous.taskStatus;
+      task.code = previous.taskCode;
+      if (operation) {
+        operation.status = previous.operationStatus;
+        operation.updatedAt = previous.operationUpdatedAt;
+      }
+      throw error;
+    }
+    return result;
+  }
+
   listDeviceOtpTasks(deviceId) {
     const device = this.devices.get(deviceId);
     if (!device || device.state !== 'active') throw new V2Error('device_denied', 'device is unavailable', 401);

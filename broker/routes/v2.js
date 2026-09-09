@@ -473,8 +473,9 @@ export function createV2Routes(deps) {
         const [deviceId, taskId] = submitMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
         mandatoryAudit({ action: 'v2_otp_submit_intent', status: 'authorized', device_id: deviceId, operation_id: taskId });
-        const result = operationBroker.submitOtp(deviceId, taskId, body || {});
-        audit({ action: 'v2_otp_received', status: 'ok', device_id: deviceId, operation_id: result.operation_id });
+        const result = operationBroker.submitOtpAndAudit(deviceId, taskId, body || {}, (received) => {
+          mandatoryAudit({ action: 'v2_otp_received', status: 'ok', device_id: deviceId, operation_id: received.operation_id });
+        });
         send(res, 202, result);
         return true;
       }

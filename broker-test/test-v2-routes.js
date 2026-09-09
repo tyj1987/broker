@@ -35,6 +35,15 @@ const handler = createV2Routes({
       calls.push(['device-otp-list', deviceId]);
       return [{ id: 'otp-task-id', status: 'waiting' }];
     },
+    submitOtp(deviceId, taskId, input) {
+      calls.push(['otp-submit', deviceId, taskId, input]);
+      return { id: taskId, operation_id: 'operation-id', status: 'received' };
+    },
+    submitOtpAndAudit(deviceId, taskId, input, commitAudit) {
+      const result = this.submitOtp(deviceId, taskId, input);
+      commitAudit(result);
+      return result;
+    },
     async createOperation(subject, input) {
       calls.push(['operation', subject.name, input, subject.context.approvalGrants || []]);
       return { id: 'operation-id', provider: input.provider, status: 'waiting' };
@@ -411,6 +420,24 @@ await handler({ method: 'GET', headers: signedHeaders }, {}, { method: 'GET', pa
 assert.equal(response.status, 200);
 assert.ok(auditEvents.some((event) => event.action === 'v2_device_otp_task_list'
   && event.device_id === deviceId));
+
+body = { code: '654321', sim_binding: 'sim-primary', challenge: 'route-challenge' };
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, {
+  method: 'POST', pathname: `/api/v2/devices/${deviceId}/otp-tasks/${leaseId}/submit`,
+});
+assert.equal(response.status, 202);
+assert.ok(auditEvents.some((event) => event.action === 'v2_otp_received'
+  && event.operation_id === 'operation-id'));
+const submissionsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'otp-submit').length;
+auditFailureAction = 'v2_otp_received';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, {
+  method: 'POST', pathname: `/api/v2/devices/${deviceId}/otp-tasks/${leaseId}/submit`,
+});
+auditFailureAction = null;
+assert.equal(response.value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'otp-submit').length, submissionsBeforeResultAuditFailure + 1);
 
 body = { receipt: 'a'.repeat(43) };
 response = null;

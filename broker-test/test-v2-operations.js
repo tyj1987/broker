@@ -164,7 +164,23 @@ assert.throws(
   (error) => error instanceof V2Error && error.code === 'replay',
 );
 
-const submitted = broker.submitOtp(device.id, operation.otp_task_id, body);
+assert.throws(
+  () => broker.submitOtpAndAudit(device.id, operation.otp_task_id, body, () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(
+  broker.listDeviceOtpTasks(device.id).find((task) => task.id === operation.otp_task_id).status,
+  'waiting',
+  'an OTP result audit failure restores the waiting task',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, operation.id).status, 'waiting');
+let otpAuditCommitted = false;
+const submitted = broker.submitOtpAndAudit(device.id, operation.otp_task_id, body, () => {
+  otpAuditCommitted = true;
+});
+assert.equal(otpAuditCommitted, true);
 assert.equal(submitted.status, 'received');
 assert.equal(JSON.stringify(submitted).includes(body.code), false);
 assert.throws(

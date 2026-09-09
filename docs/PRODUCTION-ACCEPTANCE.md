@@ -95,6 +95,17 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   passed `testDebugUnitTest`, `assembleDebug` and `lintDebug` against Android API
   37 and Build Tools 36.0.0 and retained the debug APK as a digest-addressed
   artifact. Physical-device behavior remains unverified.
+- Android physical-device partial evidence on 2026-09-09: the debug APK was
+  built locally and installed without replacing app data on a Xiaomi 12S Ultra
+  (`2203121C`) running Android 15 / API 35 and HyperOS
+  `OS3.0.6.0.VLACNXM`. Both SIM slots reported loaded in DSDS mode. The app
+  reported hardware-backed P-256 signing, available Google SMS User Consent,
+  no Android background restriction, and active battery optimization. Its
+  fixed approval entrypoint opened Chrome at the exact
+  `https://broker.52trz.com/approvals` URL. `RECEIVE_SMS` remained denied while
+  the system permission dialog awaited the operator, and no real SMS delivery
+  or OTP consumption was attempted. This is capability evidence, not full
+  device acceptance.
 - Android dual-SIM binding no longer has a disconnected code path: after local
   pairing the receiver records only delivery subscription/slot metadata, the
   operator explicitly binds that observed SIM to an opaque task binding, and a

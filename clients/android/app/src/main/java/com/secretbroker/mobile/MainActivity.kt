@@ -78,8 +78,12 @@ class MainActivity : ComponentActivity() {
                     Text("Secret Broker device", style = MaterialTheme.typography.headlineSmall)
                     val value = capabilities
                     Text("${value?.manufacturer ?: ""} ${value?.model ?: ""} · API ${value?.apiLevel ?: "-"}")
+                    Text("Android ${value?.androidRelease ?: "-"} · ${value?.buildIncremental ?: "unknown OEM build"}")
+                    Text("Build ${value?.buildDisplay ?: "unknown"}")
                     Text(if (value?.hardwareSigning == true) "P-256 signing key is hardware-backed" else "Hardware-backed signing is unavailable")
                     Text(if (value?.unattendedOtpPossible == true) "Automatic OTP capability available" else "Automatic OTP unavailable; confirmation or manual input is required")
+                    Text(if (value?.backgroundRestricted == true) "Background execution is restricted by the system" else "No system background restriction is reported")
+                    Text(if (value?.batteryOptimizationExempt == true) "Battery optimization exemption is active" else "Battery optimization remains active; no exemption is requested")
                     Text(if (value?.googleServicesAvailable == true) "SMS User Consent fallback available (confirmation required)" else "Google SMS consent fallback unavailable")
                     Text("State: $state")
                     Button(onClick = { openApprovalConsole() }) {

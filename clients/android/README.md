@@ -11,6 +11,14 @@ fails closed and does not pair when the generated key is not reported as
 hardware-backed; this is a capability decision observed on the device, not an
 assumption based on its model name.
 
+The capability screen records the Android release, API level and OEM build
+display and public incremental version (including the HyperOS/MIUI build string
+when the device exposes it),
+plus the system background-restriction and battery-optimization state. A
+reported background restriction disables the unattended-capability claim. The
+app only reports battery optimization; it never asks the operator to disable a
+system protection.
+
 `RECEIVE_SMS` is restricted by Android and might not be grantable to a self-signed APK. The app reports the observed capability. When it is unavailable, SMS User Consent requires a visible user confirmation, or the code must be entered manually. Neither fallback is unattended operation.
 
 The first physical-device acceptance target is a dual-SIM Xiaomi 12S Ultra. A release is not considered device-tested until permission grant, both SIM bindings, delayed and duplicate messages, background restrictions, permission revocation, and the manual fallback have been exercised on that device.

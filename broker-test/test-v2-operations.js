@@ -404,6 +404,68 @@ const workerCompleted = workerBroker.completeBrowserOperation(workerDevice.id, l
 });
 assert.equal(workerCompleted.status, 'completed');
 assert.deepEqual(workerCompleted.result, { status: 'ok', records: 1 });
+
+let otpWorkerPhoneId = null;
+const otpWorkerBroker = new OperationBroker({
+  now: () => now,
+  authorize: () => ({
+    allow: true,
+    executionMode: 'browser',
+    ttlMs: 120_000,
+    otpRequired: true,
+    otp: {
+      deviceId: otpWorkerPhoneId,
+      simBinding: 'sim-worker',
+      templateGroup: 'worker-login',
+      senderAllowlist: ['CloudLogin'],
+    },
+  }),
+});
+const enrollWorkerDevice = async (label, platform, capabilities) => {
+  const pending = otpWorkerBroker.beginEnrollment('owner-otp-worker', { label, platform, capabilities });
+  const message = Buffer.from(
+    `secret-broker-device-enrollment-v1\n${pending.enrollment_id}\n${pending.challenge}`,
+  );
+  return otpWorkerBroker.completeEnrollment(null, {
+    enrollment_id: pending.enrollment_id,
+    public_key_pem: publicKeyPem,
+    signature: sign(null, message, privateKey).toString('base64url'),
+  });
+};
+const otpWorkerPhone = await enrollWorkerDevice('otp-worker-phone', 'android', ['otp.receive']);
+otpWorkerPhoneId = otpWorkerPhone.id;
+const otpBrowserWorker = await enrollWorkerDevice(
+  'otp-browser-worker',
+  'browser-worker',
+  ['browser.execute:aliyun:console.login:primary:staging'],
+);
+const otpWorkerOperation = await otpWorkerBroker.createOperation({ name: 'owner-otp-worker' }, {
+  provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'console' },
+});
+const otpWorkerTask = otpWorkerBroker.listDeviceOtpTasks(otpWorkerPhone.id)[0];
+const otpWorkerBody = { code: '927461', sim_binding: 'sim-worker', challenge: otpWorkerTask.challenge };
+otpWorkerBroker.submitOtp(otpWorkerPhone.id, otpWorkerTask.id, otpWorkerBody);
+const otpWorkerLease = otpWorkerBroker.claimBrowserOperation(otpBrowserWorker.id);
+assert.throws(
+  () => otpWorkerBroker.claimBrowserOperationOtpAndAudit(
+    otpBrowserWorker.id,
+    otpWorkerLease.id,
+    otpWorkerLease.receipt,
+    () => { throw new Error('audit unavailable'); },
+  ),
+  /audit unavailable/,
+);
+let otpReleaseAudited = false;
+const otpRelease = otpWorkerBroker.claimBrowserOperationOtpAndAudit(
+  otpBrowserWorker.id,
+  otpWorkerLease.id,
+  otpWorkerLease.receipt,
+  () => { otpReleaseAudited = true; },
+);
+assert.equal(otpReleaseAudited, true);
+assert.equal(otpRelease.code, otpWorkerBody.code, 'audit rollback retains the server-side OTP for retry');
+assert.equal(otpWorkerLease.operation.id, otpWorkerOperation.id);
 const operationReader = (overrides = {}) => ({
   name: 'owner-4',
   context: {

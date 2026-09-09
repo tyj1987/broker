@@ -499,8 +499,9 @@ export function createV2Routes(deps) {
         const [deviceId, leaseId] = workerOtpMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
         mandatoryAudit({ action: 'v2_browser_lease_otp_intent', status: 'authorized', device_id: deviceId, lease_id: leaseId });
-        const result = operationBroker.claimBrowserOperationOtp(deviceId, leaseId, body?.receipt);
-        audit({ action: 'v2_browser_lease_otp', status: 'ok', device_id: deviceId, lease_id: leaseId });
+        const result = operationBroker.claimBrowserOperationOtpAndAudit(deviceId, leaseId, body?.receipt, () => {
+          mandatoryAudit({ action: 'v2_browser_lease_otp', status: 'ok', device_id: deviceId, lease_id: leaseId });
+        });
         send(res, 200, result);
         return true;
       }

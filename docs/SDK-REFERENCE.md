@@ -72,6 +72,11 @@ An isolated browser lease is not released to a worker until its mandatory claim
 audit succeeds. Audit failure deletes the unpublished receipt and lease, then
 restores the operation to its prior waiting or OTP-received state.
 
+OTP release to an isolated browser worker follows the same rule. The mandatory
+result audit contains only device, lease and status metadata. If it fails, the
+code remains server-side, the OTP task returns to `received`, and the lease may
+retry with a fresh signed request without an unaudited disclosure.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

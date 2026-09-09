@@ -89,6 +89,11 @@ const handler = createV2Routes({
       calls.push(['worker-otp', deviceId, leaseId, receipt]);
       return { code: '123456', expires_at: new Date().toISOString() };
     },
+    claimBrowserOperationOtpAndAudit(deviceId, leaseId, receipt, commitAudit) {
+      const result = this.claimBrowserOperationOtp(deviceId, leaseId, receipt);
+      commitAudit({ expires_at: result.expires_at });
+      return result;
+    },
     completeBrowserOperation(deviceId, leaseId, input) {
       calls.push(['worker-complete', deviceId, leaseId, input]);
       return { id: 'operation-id', status: input.status };
@@ -458,6 +463,15 @@ response = null;
 await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/${leaseId}/otp` });
 assert.equal(response.status, 200);
 assert.ok(calls.some((item) => item[0] === 'worker-otp' && item[3] === body.receipt));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_lease_otp'
+  && event.lease_id === leaseId));
+const otpClaimsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'worker-otp').length;
+auditFailureAction = 'v2_browser_lease_otp';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/${leaseId}/otp` });
+auditFailureAction = null;
+assert.equal(response.value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'worker-otp').length, otpClaimsBeforeResultAuditFailure + 1);
 
 body = { receipt: 'b'.repeat(43), status: 'completed', result: { count: 1 } };
 response = null;

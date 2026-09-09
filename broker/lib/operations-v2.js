@@ -753,6 +753,34 @@ export class OperationBroker {
     return { code, expires_at: task.expiresAt };
   }
 
+  claimBrowserOperationOtpAndAudit(deviceId, leaseId, receipt, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const lease = this.browserLeases.get(leaseId);
+    const operation = lease ? this.operations.get(lease.operationId) : null;
+    const task = operation?.otpTaskId ? this.otpTasks.get(operation.otpTaskId) : null;
+    const previous = task && lease ? {
+      otpClaimed: lease.otpClaimed,
+      taskStatus: task.status,
+      taskCode: task.code,
+    } : null;
+    const result = this.claimBrowserOperationOtp(deviceId, leaseId, receipt);
+    try {
+      commitAudit({ expires_at: result.expires_at });
+    } catch (error) {
+      if (!previous || this.browserLeases.get(leaseId) !== lease
+        || this.otpTasks.get(task.id) !== task) {
+        throw new V2Error('audit_rollback_failed', 'browser OTP audit rollback failed', 503);
+      }
+      lease.otpClaimed = previous.otpClaimed;
+      task.status = previous.taskStatus;
+      task.code = previous.taskCode;
+      throw error;
+    }
+    return result;
+  }
+
   completeBrowserOperation(deviceId, leaseId, input) {
     const { lease, operation } = this.activeBrowserLease(deviceId, leaseId, input?.receipt);
     const completed = input?.status === 'completed';

@@ -8,6 +8,8 @@ let body = {};
 let response = null;
 let auditFailure = false;
 let auditFailureAction = null;
+let checkpointFailurePhase = null;
+let asyncCheckpointPhase = null;
 const calls = [];
 const auditEvents = [];
 const handler = createV2Routes({
@@ -244,6 +246,12 @@ const handler = createV2Routes({
     calls.push(['browser-mutation', req.headers.origin, ctx.via]);
     requireTrustedBrowserMutation(req, ctx, 'https://broker.test');
   },
+  checkpointState: (phase) => {
+    calls.push(['checkpoint', phase]);
+    if (phase === checkpointFailurePhase) throw new Error('state unavailable');
+    if (phase === asyncCheckpointPhase) return Promise.resolve(true);
+    return true;
+  },
 });
 
 const request = { method: 'POST', headers: {} };
@@ -416,6 +424,7 @@ identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' } };
 assert.equal((await route('/api/v2/approvals')).status, 201);
 assert.ok(calls.some((item) => item[0] === 'approval-authorize'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'approval_created'));
 assert.equal((await getRoute('/api/v2/approvals')).value.approvals.length, 1);
 assert.ok(auditEvents.some((event) => event.action === 'v2_approval_list' && event.count === 1));
 
@@ -437,17 +446,32 @@ assert.equal(calls.filter((item) => item[0] === 'approval-create').length, appro
 assert.ok(calls.some((item) => item[0] === 'approval-create-rollback'
   && item[1] === 'requester' && item[2] === 'approval-id'));
 
+const approvalCreatesBeforeCheckpointFailure = calls.filter((item) => item[0] === 'approval-create').length;
+checkpointFailurePhase = 'approval_created';
+assert.equal((await route('/api/v2/approvals')).value.error, 'state_unavailable');
+checkpointFailurePhase = null;
+assert.equal(calls.filter((item) => item[0] === 'approval-create').length, approvalCreatesBeforeCheckpointFailure + 1);
+assert.ok(calls.filter((item) => item[0] === 'approval-create-rollback').length >= 2);
+asyncCheckpointPhase = 'approval_created';
+assert.equal((await route('/api/v2/approvals')).value.error, 'checkpoint_invalid');
+asyncCheckpointPhase = null;
+assert.ok(calls.filter((item) => item[0] === 'approval-create-rollback').length >= 3);
+
 identity = { clientName: 'admin-a', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
 body = { decision: 'approve' };
 request.headers.origin = 'https://broker.test';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000001/decision')).value.status, 'APPROVED');
 assert.ok(calls.some((item) => item[0] === 'browser-mutation'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_approval_decision' && event.status === 'APPROVED'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'approval_decided'));
 const decisionsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'approval-decision').length;
 auditFailureAction = 'v2_approval_decision';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000004/decision')).value.error, 'audit_unavailable');
 auditFailureAction = null;
 assert.equal(calls.filter((item) => item[0] === 'approval-decision').length, decisionsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'approval_decided';
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000006/decision')).value.error, 'state_unavailable');
+checkpointFailurePhase = null;
 const decisionsBeforeDenials = calls.filter((item) => item[0] === 'approval-decision').length;
 request.headers.origin = 'https://attacker.test';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000002/decision')).value.error, 'origin_denied');
@@ -462,11 +486,15 @@ body = {};
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000003/cancel')).value.status, 'CANCELLED');
 assert.ok(calls.some((item) => item[0] === 'approval-cancel'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_approval_cancel' && event.status === 'CANCELLED'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'approval_cancelled'));
 const cancellationsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'approval-cancel').length;
 auditFailureAction = 'v2_approval_cancel';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000005/cancel')).value.error, 'audit_unavailable');
 auditFailureAction = null;
 assert.equal(calls.filter((item) => item[0] === 'approval-cancel').length, cancellationsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'approval_cancelled';
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000007/cancel')).value.error, 'state_unavailable');
+checkpointFailurePhase = null;
 
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' }, approval_request_id: 'approval-id' };

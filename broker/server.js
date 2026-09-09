@@ -226,6 +226,7 @@ const v2Routes = createV2Routes({
   makeSession, sessionCookieHeader, authorizeApprovalRequest: approvalRequestAuthorization,
   consumeRateLimit: rateLimit,
   requireBrowserMutation: (req, ctx) => requireTrustedBrowserMutation(req, ctx, CONFIG?.webauthn?.rp_origin),
+  checkpointState: checkpointControlPlaneState,
 });
 
 console.log('============================================');

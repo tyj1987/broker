@@ -110,13 +110,28 @@ export function createV2Routes(deps) {
   const {
     operationBroker, approvalBroker, taskBroker, webAuthnService, getIdentity, readBody, send, audit,
     makeSession, sessionCookieHeader, authorizeApprovalRequest, consumeRateLimit,
-    requireBrowserMutation,
+    requireBrowserMutation, checkpointState,
   } = deps;
   const mandatoryAudit = (event) => {
     try {
       return audit(event, { mandatory: true });
     } catch {
       throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+  };
+  const mandatoryCheckpoint = (phase) => {
+    if (typeof checkpointState !== 'function') {
+      throw new V2Error('state_unavailable', 'durable control-plane state is unavailable', 503);
+    }
+    try {
+      const result = checkpointState(phase);
+      if (result && typeof result.then === 'function') {
+        throw new V2Error('checkpoint_invalid', 'control-plane checkpoint must be synchronous', 503);
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof V2Error) throw error;
+      throw new V2Error('state_unavailable', 'durable control-plane state is unavailable', 503);
     }
   };
 
@@ -341,6 +356,7 @@ export function createV2Routes(deps) {
         const result = approvalBroker.create(identity, body);
         try {
           mandatoryAudit({ action: 'v2_approval_create', status: 'ok', cn: ctx.cn, approval_id: result.id });
+          mandatoryCheckpoint('approval_created');
         } catch (error) {
           approvalBroker.rollbackCreation(identity, result.id);
           throw error;
@@ -376,6 +392,7 @@ export function createV2Routes(deps) {
         mandatoryAudit({ action: 'v2_approval_decision_intent', status: 'authorized', cn: ctx.cn, approval_id: approvalMatch[1] });
         const result = approvalBroker.decideAndAudit(identity, approvalMatch[1], body?.decision, (decision) => {
           mandatoryAudit({ action: 'v2_approval_decision', status: decision.status, cn: ctx.cn, approval_id: decision.id });
+          mandatoryCheckpoint('approval_decided');
         });
         send(res, 200, result);
         return true;
@@ -394,6 +411,7 @@ export function createV2Routes(deps) {
         mandatoryAudit({ action: 'v2_approval_cancel_intent', status: 'authorized', cn: ctx.cn, approval_id: approvalCancelMatch[1] });
         const result = approvalBroker.cancelAndAudit(identity, approvalCancelMatch[1], (cancelled) => {
           mandatoryAudit({ action: 'v2_approval_cancel', status: cancelled.status, cn: ctx.cn, approval_id: cancelled.id });
+          mandatoryCheckpoint('approval_cancelled');
         });
         send(res, 200, result);
         return true;

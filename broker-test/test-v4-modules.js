@@ -176,6 +176,11 @@ section('OpenAPI');
   ok('has LoginResponse schema', !!OPENAPI_SPEC.components.schemas.LoginResponse);
   ok('has mTLS security scheme', !!OPENAPI_SPEC.components.securitySchemes.mtls);
   ok('has bearerAuth', !!OPENAPI_SPEC.components.securitySchemes.bearerAuth);
+  const decision = OPENAPI_SPEC.paths['/api/v2/approvals/{id}/decision'].post;
+  ok('approval decision is session-only', JSON.stringify(decision.security) === JSON.stringify([{ sessionCookie: [] }]));
+  ok('approval decision requires Origin', decision.parameters.some((parameter) => parameter.in === 'header' && parameter.name === 'Origin' && parameter.required));
+  ok('browser OTP claim is API-key only', JSON.stringify(OPENAPI_SPEC.paths['/api/v2/browser/otp/claim'].post.security) === JSON.stringify([{ bearerAuth: [] }]));
+  ok('browser OTP finish is API-key only', JSON.stringify(OPENAPI_SPEC.paths['/api/v2/browser/otp/finish'].post.security) === JSON.stringify([{ bearerAuth: [] }]));
   ok('proxy endpoint has 502/503 responses', OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['502'] && OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['503']);
 }
 

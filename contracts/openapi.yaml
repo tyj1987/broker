@@ -746,7 +746,9 @@ paths:
     post:
       tags:
         - approvals-v2
-      summary: Approve or reject after WebAuthn step-up
+      summary: Approve or reject in the same-origin WebAuthn browser workbench
+      security:
+        - sessionCookie: []
       parameters:
         - in: path
           name: id
@@ -754,6 +756,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - in: header
+          name: Origin
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Exact configured Broker HTTPS origin
       requestBody:
         required: true
         content:
@@ -780,6 +789,8 @@ paths:
       tags:
         - browser-v2
       summary: Claim one approved OTP for a bound browser document
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -804,6 +815,8 @@ paths:
       tags:
         - browser-v2
       summary: Finalize a single-use browser OTP claim
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:

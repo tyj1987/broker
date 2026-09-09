@@ -253,8 +253,12 @@ const p = {
   },
   '/api/v2/approvals/{id}/decision': {
     post: {
-      tags: ['approvals-v2'], summary: 'Approve or reject after WebAuthn step-up',
-      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+      tags: ['approvals-v2'], summary: 'Approve or reject in the same-origin WebAuthn browser workbench',
+      security: [{ sessionCookie: [] }],
+      parameters: [
+        { in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'Origin', required: true, schema: { type: 'string', format: 'uri' }, description: 'Exact configured Broker HTTPS origin' },
+      ],
       requestBody: { required: true, content: { 'application/json': { schema: ref('ApprovalDecision') } } },
       responses: { 200: jsonOK('Approval'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound'), 409: desc('Expired, duplicate or completed decision') },
     },
@@ -262,6 +266,7 @@ const p = {
   '/api/v2/browser/otp/claim': {
     post: {
       tags: ['browser-v2'], summary: 'Claim one approved OTP for a bound browser document',
+      security: [{ bearerAuth: [] }],
       requestBody: { required: true, content: { 'application/json': { schema: ref('BrowserOtpClaim') } } },
       responses: { 200: jsonOK('BrowserOtpClaimResult'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound') },
     },
@@ -269,6 +274,7 @@ const p = {
   '/api/v2/browser/otp/finish': {
     post: {
       tags: ['browser-v2'], summary: 'Finalize a single-use browser OTP claim',
+      security: [{ bearerAuth: [] }],
       requestBody: { required: true, content: { 'application/json': { schema: ref('BrowserOtpFinish') } } },
       responses: { 200: jsonOK('Operation'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 409: desc('Claim expired or already consumed') },
     },

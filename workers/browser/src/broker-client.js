@@ -94,7 +94,7 @@ export class BrowserBrokerClient {
     this.now = now;
   }
 
-  async request(path, body, { allowNotFound = false } = {}) {
+  async request(path, body, { allowNotFound = false, signal } = {}) {
     const prefix = `/api/v2/devices/${this.deviceId}/browser-leases/`;
     const allowedPath =
       path === `${prefix}claim` ||
@@ -131,8 +131,20 @@ export class BrowserBrokerClient {
       );
     }
     const controller = new AbortController();
+    if (signal !== undefined && !(signal instanceof AbortSignal)) {
+      throw new BrowserBrokerError('invalid_request', 'request signal is invalid');
+    }
+    if (signal?.aborted) {
+      throw new BrowserBrokerError('request_cancelled', 'broker request was cancelled');
+    }
+    const cancelRequest = () => controller.abort();
+    signal?.addEventListener('abort', cancelRequest, { once: true });
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     timer.unref?.();
+    const finishRequest = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancelRequest);
+    };
     let response;
     try {
       response = await this.fetchImpl(`${this.origin}${path}`, {
@@ -148,12 +160,16 @@ export class BrowserBrokerClient {
         },
       });
     } catch {
-      clearTimeout(timer);
-      throw new BrowserBrokerError('broker_unavailable', 'broker request failed');
+      finishRequest();
+      const cancelled = signal?.aborted;
+      throw new BrowserBrokerError(
+        cancelled ? 'request_cancelled' : 'broker_unavailable',
+        cancelled ? 'broker request was cancelled' : 'broker request failed',
+      );
     }
     const contentLength = Number(response.headers?.get?.('content-length') || 0);
     if (contentLength > MAX_RESPONSE_BYTES) {
-      clearTimeout(timer);
+      finishRequest();
       await response.body?.cancel?.();
       throw new BrowserBrokerError(
         'invalid_response',
@@ -165,14 +181,14 @@ export class BrowserBrokerClient {
     try {
       text = await response.text();
     } catch {
-      clearTimeout(timer);
+      finishRequest();
       throw new BrowserBrokerError(
         'invalid_response',
         'broker response body could not be read',
         response.status,
       );
     }
-    clearTimeout(timer);
+    finishRequest();
     if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES)
       throw new BrowserBrokerError(
         'invalid_response',
@@ -208,11 +224,11 @@ export class BrowserBrokerClient {
     );
   }
 
-  claimOtp(lease) {
+  claimOtp(lease, options = {}) {
     requireUuid(lease?.id, 'lease id', LEASE_ID_RE);
     return this.request(`/api/v2/devices/${this.deviceId}/browser-leases/${lease.id}/otp`, {
       receipt: lease.receipt,
-    });
+    }, options);
   }
 
   complete(lease, result) {
@@ -245,7 +261,7 @@ export class BrowserBrokerClient {
     if (!lease) return null;
     try {
       const result = await executor.execute(lease.operation, {
-        claimOtp: () => this.claimOtp(lease),
+        claimOtp: (options) => this.claimOtp(lease, options),
       });
       return await this.complete(lease, result);
     } catch (error) {

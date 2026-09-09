@@ -175,6 +175,29 @@ export class BrowserOperationExecutor {
       permissions: [],
     });
     let timer;
+    let active = true;
+    let otpClaimed = false;
+    const controller = new AbortController();
+    const claimOtp =
+      typeof runtime.claimOtp === 'function'
+        ? async () => {
+            if (!active || controller.signal.aborted) {
+              throw new BrowserWorkerError(
+                'otp_claim_closed',
+                'OTP claim is outside the active browser operation',
+              );
+            }
+            if (otpClaimed) {
+              throw new BrowserWorkerError(
+                'otp_already_claimed',
+                'OTP claim is single-use for this browser operation',
+              );
+            }
+            // A failed or timed-out exchange is still uncertain. Do not retry it.
+            otpClaimed = true;
+            return runtime.claimOtp({ signal: controller.signal });
+          }
+        : undefined;
     try {
       await context.route('**/*', async (route) => {
         let origin;
@@ -188,7 +211,10 @@ export class BrowserOperationExecutor {
       const page = await context.newPage();
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new BrowserWorkerError('operation_timeout', 'browser operation timed out')),
+          () => {
+            controller.abort();
+            reject(new BrowserWorkerError('operation_timeout', 'browser operation timed out'));
+          },
           this.timeoutMs,
         );
         timer.unref?.();
@@ -198,12 +224,15 @@ export class BrowserOperationExecutor {
           page,
           startUrl: adapter.startUrl,
           parameters: structuredClone(parameters),
-          claimOtp: typeof runtime.claimOtp === 'function' ? runtime.claimOtp : undefined,
+          claimOtp,
+          signal: controller.signal,
         }),
         timeout,
       ]);
       return safeResult(result);
     } finally {
+      active = false;
+      controller.abort();
       clearTimeout(timer);
       await context.close({ reason: 'operation_complete' });
     }

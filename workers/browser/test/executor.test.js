@@ -96,3 +96,46 @@ test('always closes the context when an adapter fails', async () => {
   await assert.rejects(() => executor.execute(request), /page_changed/);
   assert.equal(fixture.state.closed, 1);
 });
+
+test('OTP claim is single-use even when the first result is uncertain', async () => {
+  const fixture = fakeBrowser();
+  let claims = 0;
+  fixture.adapter.execute = async ({ claimOtp }) => {
+    await assert.rejects(
+      claimOtp(),
+      /upstream outcome unknown/,
+    );
+    await assert.rejects(
+      claimOtp(),
+      (error) => error instanceof BrowserWorkerError && error.code === 'otp_already_claimed',
+    );
+    return { status: 'manual_review' };
+  };
+  const executor = new BrowserOperationExecutor({ browser: fixture.browser, adapters: [fixture.adapter] });
+  assert.deepEqual(
+    await executor.execute(request, {
+      async claimOtp() {
+        claims += 1;
+        throw new Error('upstream outcome unknown');
+      },
+    }),
+    { status: 'manual_review' },
+  );
+  assert.equal(claims, 1);
+});
+
+test('OTP claim closes when the operation completes', async () => {
+  const fixture = fakeBrowser();
+  let deferredClaim;
+  fixture.adapter.execute = async ({ claimOtp, signal }) => {
+    assert.equal(signal.aborted, false);
+    deferredClaim = claimOtp;
+    return { status: 'ok' };
+  };
+  const executor = new BrowserOperationExecutor({ browser: fixture.browser, adapters: [fixture.adapter] });
+  await executor.execute(request, { async claimOtp() { return { code: 'not-returned' }; } });
+  await assert.rejects(
+    deferredClaim(),
+    (error) => error instanceof BrowserWorkerError && error.code === 'otp_claim_closed',
+  );
+});

@@ -4,6 +4,9 @@ This module enforces the application boundary for reviewed web adapters. It
 accepts only typed operations, creates a non-persistent browser context for one
 operation, blocks service workers and downloads, applies an exact HTTPS-origin
 allowlist, filters returned data, and closes the context on every outcome.
+An OTP claim is single-use and bound to the active execution lifetime. A failed
+or timed-out claim has an uncertain outcome and cannot be retried by the
+adapter.
 
 It deliberately contains no provider login adapter or production launcher yet.
 Provider selectors and URLs must be versioned source code, not request fields.

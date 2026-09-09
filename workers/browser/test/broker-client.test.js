@@ -122,6 +122,27 @@ test('provides one bound OTP callback to the adapter', async () => {
   assert.deepEqual(calls[1][1], { receipt: lease.receipt });
 });
 
+test('cancels an in-flight OTP exchange with the operation signal', async () => {
+  const operation = new AbortController();
+  const client = new BrowserBrokerClient({
+    brokerOrigin: 'https://broker.example.test',
+    deviceId,
+    signer: async () => 's'.repeat(64),
+    fetchImpl: async (_url, options) => new Promise((_, reject) => {
+      options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }),
+  });
+  const pending = client.claimOtp(
+    { id: leaseId, receipt: 'r'.repeat(43) },
+    { signal: operation.signal },
+  );
+  operation.abort();
+  await assert.rejects(
+    pending,
+    (error) => error instanceof BrowserBrokerError && error.code === 'request_cancelled',
+  );
+});
+
 test('reports a sanitized failure without sending exception messages', async () => {
   const bodies = [];
   const lease = { id: leaseId, receipt: 'r'.repeat(43), operation: {} };

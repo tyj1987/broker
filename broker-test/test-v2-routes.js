@@ -90,6 +90,11 @@ const handler = createV2Routes({
       calls.push(['approval-decision', subject.name, id, decision]);
       return { id, status: decision === 'approve' ? 'APPROVED' : 'DENIED' };
     },
+    decideAndAudit(subject, id, decision, commitAudit) {
+      const result = this.decide(subject, id, decision);
+      commitAudit(result);
+      return result;
+    },
     claimFor(_subject, input) {
       if (!input.approval_request_id) return null;
       const grants = input.approval_request_id === 'one-approval'
@@ -105,6 +110,11 @@ const handler = createV2Routes({
     cancel(subject, id) {
       calls.push(['approval-cancel', subject.name, id]);
       return { id, status: 'CANCELLED' };
+    },
+    cancelAndAudit(subject, id, commitAudit) {
+      const result = this.cancel(subject, id);
+      commitAudit(result);
+      return result;
     },
   },
   taskBroker: {
@@ -278,6 +288,12 @@ body = { decision: 'approve' };
 request.headers.origin = 'https://broker.test';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000001/decision')).value.status, 'APPROVED');
 assert.ok(calls.some((item) => item[0] === 'browser-mutation'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_approval_decision' && event.status === 'APPROVED'));
+const decisionsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'approval-decision').length;
+auditFailureAction = 'v2_approval_decision';
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000004/decision')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'approval-decision').length, decisionsBeforeResultAuditFailure + 1);
 const decisionsBeforeDenials = calls.filter((item) => item[0] === 'approval-decision').length;
 request.headers.origin = 'https://attacker.test';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000002/decision')).value.error, 'origin_denied');
@@ -291,6 +307,12 @@ identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer
 body = {};
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000003/cancel')).value.status, 'CANCELLED');
 assert.ok(calls.some((item) => item[0] === 'approval-cancel'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_approval_cancel' && event.status === 'CANCELLED'));
+const cancellationsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'approval-cancel').length;
+auditFailureAction = 'v2_approval_cancel';
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000005/cancel')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'approval-cancel').length, cancellationsBeforeResultAuditFailure + 1);
 
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' }, approval_request_id: 'approval-id' };

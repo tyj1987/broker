@@ -292,8 +292,9 @@ export function createV2Routes(deps) {
           throw new V2Error('invalid_request', 'decision body must contain only approve or reject');
         }
         mandatoryAudit({ action: 'v2_approval_decision_intent', status: 'authorized', cn: ctx.cn, approval_id: approvalMatch[1] });
-        const result = approvalBroker.decide(identity, approvalMatch[1], body?.decision);
-        audit({ action: 'v2_approval_decision', status: result.status, cn: ctx.cn, approval_id: result.id });
+        const result = approvalBroker.decideAndAudit(identity, approvalMatch[1], body?.decision, (decision) => {
+          mandatoryAudit({ action: 'v2_approval_decision', status: decision.status, cn: ctx.cn, approval_id: decision.id });
+        });
         send(res, 200, result);
         return true;
       }
@@ -309,8 +310,9 @@ export function createV2Routes(deps) {
           throw new V2Error('invalid_request', 'approval cancellation body must be an empty object');
         }
         mandatoryAudit({ action: 'v2_approval_cancel_intent', status: 'authorized', cn: ctx.cn, approval_id: approvalCancelMatch[1] });
-        const result = approvalBroker.cancel(identity, approvalCancelMatch[1]);
-        audit({ action: 'v2_approval_cancel', status: result.status, cn: ctx.cn, approval_id: result.id });
+        const result = approvalBroker.cancelAndAudit(identity, approvalCancelMatch[1], (cancelled) => {
+          mandatoryAudit({ action: 'v2_approval_cancel', status: cancelled.status, cn: ctx.cn, approval_id: cancelled.id });
+        });
         send(res, 200, result);
         return true;
       }

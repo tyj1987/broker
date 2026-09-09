@@ -49,6 +49,10 @@ const input = {
   provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production',
   typed_parameters: { resource_ref: 'billing-summary' },
 };
+const atomicBroker = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'aliyun' && operationId === 'billing.read' ? policy : null,
+});
 
 assert.throws(() => broker.create(null, input), expectCode('unauthorized'));
 assert.throws(() => broker.create(requester, { ...input, operation_id: 'unapproved' }), expectCode('approval_not_required'));
@@ -63,6 +67,53 @@ assert.throws(
 );
 broker.rollbackCreation(requester, unpublished.id);
 assert.throws(() => broker.rollbackCreation(requester, unpublished.id), expectCode('not_found'));
+
+const decisionRollback = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.decideAndAudit(approver('admin-rollback'), decisionRollback.id, 'approve', () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(
+  atomicBroker.list(requester).find((item) => item.id === decisionRollback.id).approvals.length,
+  0,
+  'a failed decision audit restores the approver set',
+);
+assert.equal(atomicBroker.decide(approver('admin-rollback'), decisionRollback.id, 'approve').status, 'REQUESTED');
+assert.equal(atomicBroker.cancel(requester, decisionRollback.id).status, 'CANCELLED');
+const decisionWithoutAudit = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.decideAndAudit(approver('admin-no-audit'), decisionWithoutAudit.id, 'approve'),
+  expectCode('audit_unavailable'),
+);
+assert.equal(atomicBroker.cancel(requester, decisionWithoutAudit.id).status, 'CANCELLED');
+const auditedDecision = atomicBroker.create(requester, input);
+let decisionAuditCommitted = false;
+assert.equal(
+  atomicBroker.decideAndAudit(approver('admin-audited'), auditedDecision.id, 'approve', () => {
+    decisionAuditCommitted = true;
+  }).status,
+  'REQUESTED',
+);
+assert.equal(decisionAuditCommitted, true);
+assert.equal(atomicBroker.cancel(requester, auditedDecision.id).status, 'CANCELLED');
+const rejectedRollback = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.decideAndAudit(approver('admin-reject'), rejectedRollback.id, 'reject', () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(atomicBroker.decide(approver('admin-reject'), rejectedRollback.id, 'reject').status, 'DENIED');
+const decisionRollbackFailure = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.decideAndAudit(approver('admin-map-change'), decisionRollbackFailure.id, 'approve', () => {
+    atomicBroker.records.delete(decisionRollbackFailure.id);
+    throw new Error('audit unavailable');
+  }),
+  expectCode('audit_rollback_failed'),
+);
 
 const request = broker.create(requester, input);
 assert.equal(request.status, 'REQUESTED');
@@ -192,6 +243,40 @@ assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: 
 const adminCancelled = broker.create(requester, input);
 assert.throws(() => broker.cancel({ name: 'admin-c', context: { via: 'api_key', client: { role: 'admin' } } }, adminCancelled.id), expectCode('step_up_required'));
 assert.equal(broker.cancel(approver('admin-c'), adminCancelled.id).status, 'CANCELLED');
+
+const cancellationRollback = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.cancelAndAudit(requester, cancellationRollback.id, () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(
+  atomicBroker.list(requester).find((item) => item.id === cancellationRollback.id).status,
+  'REQUESTED',
+  'a failed cancellation audit restores the active request',
+);
+assert.equal(atomicBroker.cancel(requester, cancellationRollback.id).status, 'CANCELLED');
+const auditedCancellation = atomicBroker.create(requester, input);
+let cancellationAuditCommitted = false;
+assert.equal(
+  atomicBroker.cancelAndAudit(requester, auditedCancellation.id, () => {
+    cancellationAuditCommitted = true;
+  }).status,
+  'CANCELLED',
+);
+assert.equal(cancellationAuditCommitted, true);
+const missingAudit = atomicBroker.create(requester, input);
+assert.throws(() => atomicBroker.cancelAndAudit(requester, missingAudit.id), expectCode('audit_unavailable'));
+assert.equal(atomicBroker.cancel(requester, missingAudit.id).status, 'CANCELLED');
+const cancellationRollbackFailure = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.cancelAndAudit(requester, cancellationRollbackFailure.id, () => {
+    atomicBroker.records.delete(cancellationRollbackFailure.id);
+    throw new Error('audit unavailable');
+  }),
+  expectCode('audit_rollback_failed'),
+);
 
 const capped = new ApprovalBroker({ maxRecords: 1, getPolicy: () => policy });
 capped.create(requester, input);

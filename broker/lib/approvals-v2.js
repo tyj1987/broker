@@ -146,6 +146,29 @@ export class ApprovalBroker {
     return publicApproval(record);
   }
 
+  decideAndAudit(identity, id, decision, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const record = this.records.get(id);
+    const previous = record ? {
+      status: record.status,
+      approvers: record.approvers.map((item) => ({ ...item })),
+    } : null;
+    const result = this.decide(identity, id, decision);
+    try {
+      commitAudit(result);
+    } catch (error) {
+      if (!previous || this.records.get(id) !== record) {
+        throw new V2Error('audit_rollback_failed', 'approval audit rollback failed', 503);
+      }
+      record.status = previous.status;
+      record.approvers = previous.approvers;
+      throw error;
+    }
+    return result;
+  }
+
   list(identity) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     this.prune();
@@ -233,6 +256,25 @@ export class ApprovalBroker {
     }
     record.status = 'CANCELLED';
     return publicApproval(record);
+  }
+
+  cancelAndAudit(identity, id, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const record = this.records.get(id);
+    const previousStatus = record?.status;
+    const result = this.cancel(identity, id);
+    try {
+      commitAudit(result);
+    } catch (error) {
+      if (!record || this.records.get(id) !== record) {
+        throw new V2Error('audit_rollback_failed', 'approval audit rollback failed', 503);
+      }
+      record.status = previousStatus;
+      throw error;
+    }
+    return result;
   }
 
   getActive(id) {

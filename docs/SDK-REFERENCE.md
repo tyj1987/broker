@@ -52,6 +52,12 @@ returned only after its mandatory creation audit is accepted; otherwise the
 unpublished request is removed. The rollback is rejected once any approver has
 acted on the request.
 
+Approval decisions and cancellations also require a mandatory result audit. The
+in-memory transition and its audit commit are synchronous: if the audit commit
+fails, the exact prior status and approver set are restored before the caller can
+observe success. A durable multi-node implementation remains gated on the state
+store transaction decision in DQ-001.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

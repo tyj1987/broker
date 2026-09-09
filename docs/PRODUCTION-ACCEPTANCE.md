@@ -36,15 +36,16 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test
   requirements passed `pip-audit --strict` with no known vulnerabilities.
 - VS Code extension: build and 6 tests passed; VSIX packaging rejects fixture private keys and the final package contains only runtime files.
-- Android: an earlier revision passed `testDebugUnitTest`, `assembleDebug` and
-  `lintDebug` with Android API 37 and Build Tools 36. The latest source changed
-  enrollment to require hardware-backed P-256; this Windows host currently has
-  no Android SDK, so that revision awaits clean CI rebuild. Physical-device
-  behavior remains unverified.
-- Windows desktop: an earlier revision passed the TypeScript build, Cargo check,
-  Clippy with warnings denied, five Rust tests, release executable, native host
-  executable and unsigned NSIS build. The latest ACL addition awaits clean CI
-  rebuild because Rust tooling is no longer available in this session.
+- Android: CI run
+  [`34293025716`](https://github.com/tyj1987/broker/actions/runs/34293025716)
+  passed `testDebugUnitTest`, `assembleDebug` and `lintDebug` against Android API
+  37 and Build Tools 36.0.0 and retained the debug APK as a digest-addressed
+  artifact. Physical-device behavior remains unverified.
+- Windows desktop: the same run passed the TypeScript build, formatting,
+  Clippy with warnings denied, Rust tests, native-host release build, RustSec
+  vulnerability gate and unsigned NSIS build. RustSec reported no
+  vulnerabilities and seven transitive maintenance or soundness warnings,
+  which remain registered risks rather than silently ignored findings.
 - Browser helper: JavaScript syntax, least-privilege manifest tests, native-host compilation, and native-host unit tests passed locally. Browser-to-production end-to-end fill remains unaccepted.
 - Supply chain: Gitleaks 8.29.1 (official release checksum verified) reports no
   unallowlisted findings in either the complete Git history or the staged
@@ -54,14 +55,28 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
 - Terraform: both Aliyun and Tencent roots pass formatting and validation with
   Terraform 1.16.1 and committed cross-platform provider lock files. No plan or
   apply has been run against a cloud account.
-- iOS: a Swift package now contains the initial SwiftUI pairing client, Secure
-  Enclave P-256 proof protocol and protocol tests. Swift/Xcode is unavailable
-  on this Windows host, so compilation, signing and physical-device evidence
-  remain open.
+- Ubuntu desktop: CI built both unsigned Debian and AppImage packages after
+  passing Rust formatting, Clippy, tests and dependency auditing.
+- iOS: CI compiled and tested the Swift package containing the initial SwiftUI
+  pairing client and Secure Enclave P-256 proof protocol. Signing and
+  physical-device evidence remain open.
+
+## GitHub Actions evidence
+
+CI run [`34293025716`](https://github.com/tyj1987/broker/actions/runs/34293025716)
+at commit `c101a3b45497e81a11d6e18409c097e46726452c` proved that all source,
+contract, client, CodeQL, dependency, secret-history, IaC and deployment-script
+jobs pass. Its container build completed, but the job failed while publishing
+to GHCR because the token had insufficient package scope. The workflow now
+restricts registry login, publication and registry-backed attestations to a
+push on `master`; feature branches still build, inspect, scan and generate an
+SBOM for the local candidate image.
 
 ## Gates still required
 
-- GitHub Actions must execute successfully after the account billing/spending restriction is resolved.
+- The feature-branch CI must complete successfully after the registry
+  publication boundary change. A separate `master` publication run must prove
+  GHCR package permission and registry-backed attestations before release.
 - Container build, SBOM, signature, provenance, SAST/SCA, license and IaC reports must be retained as CI artifacts.
 - All production credentials potentially exposed before this audit must be rotated with evidence outside the repository.
 - Six provider adapters require isolated-account contract tests before any production-ready status.

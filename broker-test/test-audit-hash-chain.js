@@ -25,7 +25,7 @@ import {
   createChainWriter,
   GENESIS_HASH,
 } from '../broker/lib/audit-hash-chain.js';
-import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -170,7 +170,7 @@ section('13. verifyAuditDir works on real files');
   const WORK = mkdtempSync(join(tmpdir(), 'broker-chain-'));
   process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
   // Create some audit files with chained events
-  const writer = createChainWriter({ onEvent: e => {} });
+  const writer = createChainWriter({ onEvent: () => {} });
   const events = [];
   for (let i = 0; i < 3; i++) {
     const ev = writer.write({ action: 'test', n: i });

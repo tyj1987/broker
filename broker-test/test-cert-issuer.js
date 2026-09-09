@@ -18,8 +18,6 @@
 // under 20 seconds (each genrsa + x509 takes 2-3 seconds). All other
 // functions are tested against the certs issued for tests 1, 4, 5.
 
-import { strict as assert } from 'node:assert';
-import { test, before, after } from 'node:test';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

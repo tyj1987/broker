@@ -1,0 +1,22 @@
+# Residual risk register
+
+This register separates verified source controls from evidence that still
+requires a production account, signed release, physical device, or recovery
+exercise. An open item is not evidence of acceptance.
+
+| ID | Severity | Risk and current control | Closure evidence |
+|---|---|---|---|
+| RR-001 | P0 | Production nginx was observed with upstream certificate verification disabled. The hardened repository configuration fails closed, but the live host is unchanged. | Reviewed proxy workload certificate rollout, `proxy_ssl_verify on`, forged-header regression, direct-backend denial and rollback evidence. |
+| RR-002 | P1 | The production service runs as root and is not deployed through an atomic release symlink. | Dedicated locked account, versioned release migration, read-only filesystem checks and rollback exercise. |
+| RR-003 | P1 | Existing production credentials have no completed rotation evidence following possible historical exposure. | Provider-side revocation timestamps and replacement identifiers stored outside the repository. |
+| RR-004 | P1 | Strict AAL3 enrollment and approval require two physical FIDO2 keys; no complete operator ceremony has been recorded. | Two-key enrollment, loss/revocation, challenge replay, RP ID/origin and step-up tests on staging. |
+| RR-005 | P1 | The isolated browser executor and real provider-account contract tests are not implemented. Typed operations and manifests remain contract-gated. | Isolation escape tests plus successful least-privilege contracts for GitHub, Docker, OpenAI, Aliyun, Tencent Cloud and Cloudflare. |
+| RR-006 | P1 | Android OTP receipt has build and unit evidence only. Restricted SMS permission, dual-SIM routing and OEM background behavior remain unknown. | Xiaomi 12S Ultra dual-SIM matrix including denial, revocation, delayed/duplicate OTP, SIM change, offline expiry and manual fallback. |
+| RR-007 | P2 | Desktop packages and the Android APK are unsigned development artifacts. | Windows code signing and update verification, Linux package provenance, Android release signing and iOS signing/device validation. |
+| RR-008 | P2 | RustSec reports seven transitive warnings: six unmaintained `unic`/macro crates and one `glib 0.18.5` soundness advisory. No known vulnerability was reported. | Dependency upgrade/removal, or written risk acceptance proving the affected code path is unreachable with compensating controls. |
+| RR-009 | P1 | GHCR publication and registry-backed attestations have not succeeded with the repository package permissions. | Successful `master`-only image publication, digest verification, SBOM, vulnerability scan and registry attestation. |
+| RR-010 | P1 | Aliyun-to-Tencent recovery targets are design values only. | Timed recovery with encrypted backup restore, revocation state, continuous audit evidence, RPO at most 15 minutes and RTO at most 60 minutes. |
+
+P0 and P1 entries block production approval. P2 entries require remediation or
+explicit written acceptance with a named owner, expiry date and compensating
+control.

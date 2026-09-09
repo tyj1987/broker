@@ -92,7 +92,7 @@ jobs:
         working-directory: sdk/python
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12.11'
           cache: pip
@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12.11'
           cache: pip
@@ -125,7 +125,7 @@ jobs:
         working-directory: sdk/go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.23.12'
           cache-dependency-path: sdk/go/go.mod
@@ -143,7 +143,7 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.27.1'
           cache-dependency-path: core/go.mod
@@ -175,7 +175,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run package -- --no-dependencies
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vscode-extension-${{ github.sha }}
           path: sdk/vscode/*.vsix
@@ -202,7 +202,7 @@ jobs:
           'platforms;android-37.0' 'build-tools;36.0.0'
       - run: chmod +x gradlew
       - run: ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-debug-${{ github.sha }}
           path: clients/android/app/build/outputs/apk/debug/app-debug.apk
@@ -292,7 +292,7 @@ jobs:
           if ([int]$report.vulnerabilities.count -ne 0) { throw 'cargo-audit vulnerability report is non-empty' }
           Write-Host "cargo-audit: 0 vulnerabilities; advisory warnings are retained in cargo-audit.json"
       - run: npm run tauri -- build --bundles nsis
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: desktop-windows-unsigned-${{ github.sha }}
           path: |
@@ -326,7 +326,7 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo build --release --manifest-path src-tauri/Cargo.toml --locked --bin secret-broker-browser-host
       - run: npm run tauri -- build --bundles deb,appimage
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: desktop-linux-unsigned-${{ github.sha }}
           path: |
@@ -346,7 +346,7 @@ jobs:
         directory: [infra/aliyun/broker, infra/tencent]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         with:
           terraform_version: '1.16.1'
       - working-directory: ${{ matrix.directory }}
@@ -389,7 +389,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -399,7 +399,7 @@ jobs:
         with:
           context: .
           target: production
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
           load: true
           tags: |
             secret-broker:${{ github.sha }}
@@ -417,25 +417,25 @@ jobs:
           fi
       - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
         with:
-          image-ref: ${{ github.event_name == 'push' && format('ghcr.io/{0}@{1}', github.repository, steps.build.outputs.digest) || format('secret-broker:{0}', github.sha) }}
+          image-ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && format('ghcr.io/{0}@{1}', github.repository, steps.build.outputs.digest) || format('secret-broker:{0}', github.sha) }}
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
       - uses: anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3
         with:
-          image: ${{ github.event_name == 'push' && format('ghcr.io/{0}@{1}', github.repository, steps.build.outputs.digest) || format('secret-broker:{0}', github.sha) }}
+          image: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && format('ghcr.io/{0}@{1}', github.repository, steps.build.outputs.digest) || format('secret-broker:{0}', github.sha) }}
           format: spdx-json
           output-file: secret-broker-${{ github.sha }}.spdx.json
           artifact-name: sbom-${{ github.sha }}
           upload-release-assets: false
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}

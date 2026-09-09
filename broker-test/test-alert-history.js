@@ -10,13 +10,9 @@
 //   7. clearLastTests 清空内存 (下次 runAll 当首次)
 //   8. emit 'status_change' 事件 (HEALTHCHECK_BUS)
 
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, unlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -25,13 +21,12 @@ function ok(name, cond, detail) {
 }
 function section(s) { console.log(`\n--- ${s} ---`); }
 
-const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
-
 (async () => {
   // ======== Setup: 隔离 ALERT_HISTORY_PATH 到 tempdir ========
   const tempDir = mkdtempSync(join(tmpdir(), 'alert-test-'));
   const histPath = join(tempDir, 'alert-history.jsonl');
   process.env.ALERT_HISTORY_PATH = histPath;
+  const hc = await import('../broker/healthcheck.js');
 
   // ======== 1. 空状态: 启动时无历史 ========
   section('getAlertHistory() 启动时无历史');

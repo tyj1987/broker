@@ -12,7 +12,7 @@
 //   9. Redaction works
 //  10. readFiltered returns recent events from disk
 
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditAsync } from '../broker/lib/audit-async.js';
@@ -76,7 +76,6 @@ section('3. Mandatory audit throws on FS failure');
   // Actually simpler: write to a file path we can't create a dir at.
   // Skip the mkdir-block trick; use the fact that appendFile on an unwritable
   // file fails.
-  const audit = createAuditAsync({ auditDir: WORK });
   // Make the audit file unreadable/unwritable to current user
   // (won't work as root, so just check behavior matches when there's a write error)
   // Instead, simulate by passing a deliberately bad onWriteError trigger.

@@ -81,6 +81,7 @@ nav:
   - Quickstart: QUICKSTART.md
   - Threat model: THREAT-MODEL.md
   - Production acceptance: PRODUCTION-ACCEPTANCE.md
+  - Residual risks: RESIDUAL-RISKS.md
   - Extending providers: EXTENDING.md
   - Workload identity: WORKLOAD-IDENTITY.md
   - SSH proxy: SSH-PROXY.md

@@ -590,6 +590,45 @@ assert.equal(
   'SUCCEEDED',
 );
 
+let policyOutage = true;
+let policyRecoveryExecutions = 0;
+const policyRecoveryApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const policyRecoveryBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize: async (operation, options = {}) => {
+    if (options.ignoreApproval === true) return { allow: true, ttlMs: 60_000 };
+    if (policyOutage) {
+      policyOutage = false;
+      throw new V2Error('policy_unavailable', 'policy unavailable', 503);
+    }
+    return authorize(operation, options);
+  },
+  approvalBroker: policyRecoveryApprovals,
+  executors: new Map([['broker.device.state@1.0.0', async (parameters) => {
+    policyRecoveryExecutions++;
+    return { id: parameters.device_id, state: parameters.state };
+  }]]),
+  now: () => now,
+});
+const policyRecoveryTask = await policyRecoveryBroker.create(human, {
+  ...criticalInput, idempotency_key: 'policy-retry-0001',
+});
+policyRecoveryApprovals.decide(approver('admin-l'), policyRecoveryTask.approval_id, 'approve');
+policyRecoveryApprovals.decide(approver('admin-m'), policyRecoveryTask.approval_id, 'approve');
+await assert.rejects(policyRecoveryBroker.run(human, policyRecoveryTask.id), expectCode('policy_unavailable'));
+assert.equal(policyRecoveryBroker.get(human, policyRecoveryTask.id).state, 'READY');
+assert.equal(policyRecoveryExecutions, 0);
+assert.equal(
+  policyRecoveryApprovals.list(human).find((item) => item.id === policyRecoveryTask.approval_id).status,
+  'APPROVED',
+  'a policy outage releases an approval that has not reached an executor',
+);
+assert.equal((await policyRecoveryBroker.run(human, policyRecoveryTask.id)).state, 'SUCCEEDED');
+assert.equal(policyRecoveryExecutions, 1);
+
 const terminalAuditApprovals = new ApprovalBroker({
   now: () => now,
   getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,

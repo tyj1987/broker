@@ -260,10 +260,16 @@ export class AutomationTaskBroker {
           }
         }
       }
-      const decision = await this.authorize({
-        identity: authorizedIdentity, provider: task.tool.provider, operationId: task.tool.operation_id,
-        accountRef: task.accountRef, environment: task.environment, typedParameters: structuredClone(task.parameters),
-      });
+      let decision;
+      try {
+        decision = await this.authorize({
+          identity: authorizedIdentity, provider: task.tool.provider, operationId: task.tool.operation_id,
+          accountRef: task.accountRef, environment: task.environment, typedParameters: structuredClone(task.parameters),
+        });
+      } catch (error) {
+        if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+        throw error;
+      }
       if (!decision?.allow) {
         task.policyDecision = 'deny';
         if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);

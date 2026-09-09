@@ -313,10 +313,11 @@ export class AutomationTaskBroker {
         throw error;
       }
       const startedAt = this.now();
+      let result;
       try {
         const timeoutMs = Math.min(task.tool.timeout_ms, remainingMs);
         const timeoutCode = remainingMs <= task.tool.timeout_ms ? 'task_expired' : 'executor_timeout';
-        const result = await executeWithDeadline(executor, structuredClone(task.parameters), {
+        result = await executeWithDeadline(executor, structuredClone(task.parameters), {
           taskId: task.id, actor: identity.name, accountRef: task.accountRef, environment: task.environment,
           execution: executionGrant,
         }, timeoutMs, timeoutCode);
@@ -324,19 +325,23 @@ export class AutomationTaskBroker {
         if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
           throw new V2Error('unsafe_result', 'executor result contains credential material', 502);
         }
-        task.result = structuredClone(result);
-        task.latencyMs = Math.max(0, this.now() - startedAt);
-        if (approvalClaim) this.approvalBroker.markSucceeded(approvalClaim.id);
-        this.transition(task, 'SUCCEEDED', 'executor_succeeded');
       } catch (error) {
         task.latencyMs = Math.max(0, this.now() - startedAt);
-        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
         if (error instanceof V2Error && error.code === 'task_expired') {
           this.transition(task, 'EXPIRED', 'task_expired');
         } else {
           this.fail(task, error instanceof V2Error ? error.code : 'executor_failed');
         }
+        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
+        return publicTask(task);
       }
+      task.result = structuredClone(result);
+      task.latencyMs = Math.max(0, this.now() - startedAt);
+      // Once an executor has been invoked its upstream result may be
+      // indeterminate. Commit the terminal audit before consuming the approval
+      // terminal state. If audit fails, EXECUTING prevents any caller replay.
+      this.transition(task, 'SUCCEEDED', 'executor_succeeded');
+      if (approvalClaim) this.approvalBroker.markSucceeded(approvalClaim.id);
       return publicTask(task);
     } finally {
       task.running = false;
@@ -372,8 +377,8 @@ export class AutomationTaskBroker {
   }
 
   fail(task, code) {
-    task.error = code;
     this.transition(task, 'FAILED', code);
+    task.error = code;
   }
 
   consumeExecutionRateLimit(task) {

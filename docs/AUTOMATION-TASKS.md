@@ -45,6 +45,13 @@ the same request returns the original task; reusing it with different parameters
 is rejected. Execution and failure are terminal. The broker does not retry an
 operation whose result is uncertain.
 
+If the mandatory terminal audit cannot be committed after an adapter has been
+invoked, the task and its approval remain `EXECUTING`. The result is not
+released and another run is rejected, because the upstream side effect may
+already have occurred. An operator must reconcile the execution against the
+provider and audit store. Automating that recovery depends on the delivery and
+idempotency decision in DQ-002.
+
 Execution is bounded by the smaller of the registered tool timeout and the
 task's absolute remaining lifetime. At the deadline the task becomes
 `FAILED/executor_timeout` or `EXPIRED`, the adapter receives an aborted

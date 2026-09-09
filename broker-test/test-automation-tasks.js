@@ -590,6 +590,74 @@ assert.equal(
   'SUCCEEDED',
 );
 
+const terminalAuditApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+let terminalAuditExecutions = 0;
+const terminalAuditFailureBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize,
+  approvalBroker: terminalAuditApprovals,
+  executors: new Map([['broker.device.state@1.0.0', async (parameters) => {
+    terminalAuditExecutions++;
+    return { id: parameters.device_id, state: parameters.state };
+  }]]),
+  now: () => now,
+  onEvent(event) {
+    if (event.state === 'SUCCEEDED') throw new Error('terminal audit unavailable');
+  },
+});
+const terminalAuditProtected = await terminalAuditFailureBroker.create(human, {
+  ...criticalInput, idempotency_key: 'terminal-audit-failure1',
+});
+terminalAuditApprovals.decide(approver('admin-h'), terminalAuditProtected.approval_id, 'approve');
+terminalAuditApprovals.decide(approver('admin-i'), terminalAuditProtected.approval_id, 'approve');
+await assert.rejects(
+  terminalAuditFailureBroker.run(human, terminalAuditProtected.id),
+  /terminal audit unavailable/,
+);
+const indeterminateTask = terminalAuditFailureBroker.get(human, terminalAuditProtected.id);
+assert.equal(indeterminateTask.state, 'EXECUTING', 'post-execution audit failure cannot make the task retryable');
+assert.equal(indeterminateTask.result, undefined, 'an unaudited result is not released to the caller');
+assert.equal(
+  terminalAuditApprovals.list(human).find((item) => item.id === terminalAuditProtected.approval_id).status,
+  'EXECUTING',
+  'the consumed approval remains bound to the indeterminate execution',
+);
+await assert.rejects(terminalAuditFailureBroker.run(human, terminalAuditProtected.id), expectCode('invalid_state'));
+assert.equal(terminalAuditExecutions, 1, 'an indeterminate upstream result is never replayed');
+
+const failedTerminalApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const failedTerminalAuditBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize,
+  approvalBroker: failedTerminalApprovals,
+  executors: new Map([['broker.device.state@1.0.0', async () => { throw new Error('upstream failure'); }]]),
+  now: () => now,
+  onEvent(event) {
+    if (event.state === 'FAILED') throw new Error('failed terminal audit unavailable');
+  },
+});
+const failedTerminalTask = await failedTerminalAuditBroker.create(human, {
+  ...criticalInput, idempotency_key: 'failed-audit-failure01',
+});
+failedTerminalApprovals.decide(approver('admin-j'), failedTerminalTask.approval_id, 'approve');
+failedTerminalApprovals.decide(approver('admin-k'), failedTerminalTask.approval_id, 'approve');
+await assert.rejects(
+  failedTerminalAuditBroker.run(human, failedTerminalTask.id),
+  /failed terminal audit unavailable/,
+);
+assert.equal(failedTerminalAuditBroker.get(human, failedTerminalTask.id).state, 'EXECUTING');
+assert.equal(
+  failedTerminalApprovals.list(human).find((item) => item.id === failedTerminalTask.approval_id).status,
+  'EXECUTING',
+);
+await assert.rejects(failedTerminalAuditBroker.run(human, failedTerminalTask.id), expectCode('invalid_state'));
+
 const capacityBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals, executors, maxTasks: 1,
 });

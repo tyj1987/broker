@@ -245,13 +245,20 @@ export class AutomationTaskBroker {
         environment: task.environment, typed_parameters: structuredClone(task.parameters),
         approval_request_id: task.approvalId,
       };
-      if (task.state === 'PENDING_APPROVAL') {
+      if (task.approvalId && ['PENDING_APPROVAL', 'READY'].includes(task.state)) {
         approvalClaim = this.approvalBroker.claimFor(identity, operationInput);
         authorizedIdentity = {
           ...identity,
           context: { ...identity.context, approvalGrants: [...(identity.context?.approvalGrants || []), ...approvalClaim.grants] },
         };
-        this.transition(task, 'READY', 'approval_claimed');
+        if (task.state === 'PENDING_APPROVAL') {
+          try {
+            this.transition(task, 'READY', 'approval_claimed');
+          } catch (error) {
+            this.approvalBroker.releaseClaim(approvalClaim.id);
+            throw error;
+          }
+        }
       }
       const decision = await this.authorize({
         identity: authorizedIdentity, provider: task.tool.provider, operationId: task.tool.operation_id,
@@ -299,7 +306,12 @@ export class AutomationTaskBroker {
         this.fail(task, error instanceof V2Error ? error.code : 'execution_token_failed');
         return publicTask(task);
       }
-      this.transition(task, 'EXECUTING', 'executor_started');
+      try {
+        this.transition(task, 'EXECUTING', 'executor_started');
+      } catch (error) {
+        if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+        throw error;
+      }
       const startedAt = this.now();
       try {
         const timeoutMs = Math.min(task.tool.timeout_ms, remainingMs);

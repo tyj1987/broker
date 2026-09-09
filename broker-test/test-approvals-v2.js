@@ -119,6 +119,17 @@ broker.claimFor(requester, { ...input, approval_request_id: successful.id });
 broker.markSucceeded(successful.id);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: successful.id }), expectCode('invalid_state'));
 
+const retryable = broker.create(requester, input);
+broker.decide(approver('admin-a'), retryable.id, 'approve');
+broker.decide(approver('admin-b'), retryable.id, 'approve');
+broker.claimFor(requester, { ...input, approval_request_id: retryable.id });
+broker.releaseClaim(retryable.id);
+assert.equal(broker.list(requester).find((item) => item.id === retryable.id).status, 'APPROVED');
+const retryClaim = broker.claimFor(requester, { ...input, approval_request_id: retryable.id });
+broker.markSucceeded(retryClaim.id);
+broker.releaseClaim(null);
+assert.throws(() => broker.releaseClaim(retryClaim.id), expectCode('approval_mismatch'));
+
 const executingAcrossExpiry = broker.create(requester, input);
 broker.decide(approver('admin-a'), executingAcrossExpiry.id, 'approve');
 broker.decide(approver('admin-b'), executingAcrossExpiry.id, 'approve');

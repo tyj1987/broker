@@ -185,6 +185,13 @@ export class ApprovalBroker {
     record.status = 'FAILED';
   }
 
+  releaseClaim(id) {
+    if (!id) return;
+    const record = this.records.get(id);
+    if (!record || record.status !== 'EXECUTING') throw new V2Error('approval_mismatch', 'approval is unavailable', 409);
+    record.status = 'APPROVED';
+  }
+
   cancel(identity, id) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const record = this.records.get(id);

@@ -545,6 +545,51 @@ assert.equal(
   'failed audit does not enter the committed task event stream',
 );
 
+let approvedExecutionCalls = 0;
+let failApprovedExecutionAudit = true;
+const retryableApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const approvedAuditFailureBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize,
+  approvalBroker: retryableApprovals,
+  executors: new Map([['broker.device.state@1.0.0', async (parameters) => {
+    approvedExecutionCalls++;
+    return { id: parameters.device_id, state: parameters.state };
+  }]]),
+  now: () => now,
+  onEvent(event) {
+    if (event.state === 'EXECUTING' && failApprovedExecutionAudit) {
+      failApprovedExecutionAudit = false;
+      throw new Error('mandatory approval audit unavailable');
+    }
+  },
+});
+const approvalAuditProtected = await approvedAuditFailureBroker.create(human, {
+  ...criticalInput, idempotency_key: 'approval-audit-retry01',
+});
+retryableApprovals.decide(approver('admin-f'), approvalAuditProtected.approval_id, 'approve');
+retryableApprovals.decide(approver('admin-g'), approvalAuditProtected.approval_id, 'approve');
+await assert.rejects(
+  approvedAuditFailureBroker.run(human, approvalAuditProtected.id),
+  /mandatory approval audit unavailable/,
+);
+assert.equal(approvedExecutionCalls, 0, 'an approved executor cannot run before its mandatory audit is stored');
+assert.equal(approvedAuditFailureBroker.get(human, approvalAuditProtected.id).state, 'READY');
+assert.equal(
+  retryableApprovals.list(human).find((item) => item.id === approvalAuditProtected.approval_id).status,
+  'APPROVED',
+  'an unused approval claim is released after a pre-execution audit outage',
+);
+assert.equal((await approvedAuditFailureBroker.run(human, approvalAuditProtected.id)).state, 'SUCCEEDED');
+assert.equal(approvedExecutionCalls, 1, 'the released approval can be claimed once after audit recovery');
+assert.equal(
+  retryableApprovals.list(human).find((item) => item.id === approvalAuditProtected.approval_id).status,
+  'SUCCEEDED',
+);
+
 const capacityBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals, executors, maxTasks: 1,
 });

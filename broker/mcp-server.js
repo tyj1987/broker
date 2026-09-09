@@ -57,7 +57,9 @@ function safeBrokerError(status, body) {
   let code = 'broker_request_failed';
   try {
     const parsed = JSON.parse(body);
-    const candidate = parsed?.error?.code || parsed?.code;
+    const candidate = typeof parsed?.error === 'string'
+      ? parsed.error
+      : parsed?.error?.code || parsed?.code;
     if (/^[a-z][a-z0-9_]{1,63}$/.test(candidate || '')) code = candidate;
   } catch {
     // Upstream bodies are intentionally omitted from MCP errors.

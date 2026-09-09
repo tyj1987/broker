@@ -240,6 +240,18 @@ await assert.rejects(
   /403, policy_denied/,
 );
 await assert.rejects(
+  brokerClientForResponse({ statusCode: 409, chunks: ['{"error":"invalid_state","message":"not executable"}'] })(
+    '/api/v2/tasks/00000000-0000-4000-8000-000000000010/run', { method: 'POST', body: {} },
+  ),
+  /409, invalid_state/,
+);
+await assert.rejects(
+  brokerClientForResponse({ statusCode: 500, chunks: ['{"error":"unsafe code"}'] })(
+    '/api/v2/tools',
+  ),
+  /500, broker_request_failed/,
+);
+await assert.rejects(
   brokerClientForResponse({ statusCode: 500, chunks: ['not-json'] })('/api/v2/tools'),
   /500, broker_request_failed/,
 );

@@ -29,7 +29,11 @@ request also requires an independent high-entropy bearer capability loaded from
 Broker API key. This prevents another local process from silently borrowing the
 MCP workload's Broker authority. The
 Broker client permits only fixed `/api/v2/tools` and `/api/v2/tasks` paths,
-always verifies TLS and bounds requests, responses and time.
+always verifies TLS and bounds requests, responses and time. Broker failures
+expose only a validated machine-readable error code to the MCP caller. Response
+messages and all other upstream body fields are discarded, so an orchestrator
+can route retry or approval handling without receiving provider details or
+credential material.
 
 The old `healthcheck.upstream: mcp_server` setting is rejected. Credential
 health checks remain inside the Broker's controlled local implementation until

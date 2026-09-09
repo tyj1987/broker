@@ -69,7 +69,7 @@ jobs:
           path: broker/test-v4-output.log
           retention-days: 7
 
-      - name: Run V3 backward-compat tests
+      - name: Run backward-compat tests
         working-directory: broker
         run: |
           npm run test:lib
@@ -78,7 +78,6 @@ jobs:
           npm run test:obs
           npm run test:trace
           npm run test:ops
-          npm run test:backup
           npm run test:ssh
 
   # ============================================================

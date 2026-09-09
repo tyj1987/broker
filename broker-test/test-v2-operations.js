@@ -399,9 +399,26 @@ assert.throws(
   }),
   (error) => error instanceof V2Error && error.code === 'unsafe_result',
 );
-const workerCompleted = workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+assert.throws(
+  () => workerBroker.completeBrowserOperationAndAudit(workerDevice.id, lease.id, {
+    receipt: lease.receipt, status: 'completed', result: { status: 'ok', records: 1 },
+  }, () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(
+  workerBroker.getOperation({ name: 'owner-4' }, workerOperation.id).status,
+  'consuming',
+  'a failed completion audit retains the active lease for a safe report retry',
+);
+let completionAuditCommitted = false;
+const workerCompleted = workerBroker.completeBrowserOperationAndAudit(workerDevice.id, lease.id, {
   receipt: lease.receipt, status: 'completed', result: { status: 'ok', records: 1 },
+}, () => {
+  completionAuditCommitted = true;
 });
+assert.equal(completionAuditCommitted, true);
 assert.equal(workerCompleted.status, 'completed');
 assert.deepEqual(workerCompleted.result, { status: 'ok', records: 1 });
 

@@ -98,6 +98,11 @@ const handler = createV2Routes({
       calls.push(['worker-complete', deviceId, leaseId, input]);
       return { id: 'operation-id', status: input.status };
     },
+    completeBrowserOperationAndAudit(deviceId, leaseId, input, commitAudit) {
+      const result = this.completeBrowserOperation(deviceId, leaseId, input);
+      commitAudit({ operation_id: result.id, status: result.status });
+      return result;
+    },
   },
   approvalBroker: {
     create(subject, input) {
@@ -478,6 +483,15 @@ response = null;
 await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/${leaseId}/complete` });
 assert.equal(response.status, 200);
 assert.ok(calls.some((item) => item[0] === 'worker-complete' && item[3].status === 'completed'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_lease_complete'
+  && event.status === 'completed'));
+const completionsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'worker-complete').length;
+auditFailureAction = 'v2_browser_lease_complete';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/${leaseId}/complete` });
+auditFailureAction = null;
+assert.equal(response.value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'worker-complete').length, completionsBeforeResultAuditFailure + 1);
 
 auditFailure = true;
 const claimsBeforeAuditFailure = calls.filter((item) => item[0] === 'worker-claim').length;

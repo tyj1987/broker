@@ -77,6 +77,11 @@ result audit contains only device, lease and status metadata. If it fails, the
 code remains server-side, the OTP task returns to `received`, and the lease may
 retry with a fresh signed request without an unaudited disclosure.
 
+Browser completion reports are fully validated before their mandatory result
+audit is committed. The lease and operation enter a terminal state only after
+that audit succeeds. On audit outage, the lease remains active for a bounded,
+signed retry; the worker must not repeat the upstream provider action.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

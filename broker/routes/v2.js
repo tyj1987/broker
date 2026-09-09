@@ -512,8 +512,9 @@ export function createV2Routes(deps) {
         const [deviceId, leaseId] = workerCompleteMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
         mandatoryAudit({ action: 'v2_browser_lease_complete_intent', status: 'authorized', device_id: deviceId, lease_id: leaseId });
-        const result = operationBroker.completeBrowserOperation(deviceId, leaseId, body);
-        audit({ action: 'v2_browser_lease_complete', status: result.status, device_id: deviceId, operation_id: result.id });
+        const result = operationBroker.completeBrowserOperationAndAudit(deviceId, leaseId, body, (completion) => {
+          mandatoryAudit({ action: 'v2_browser_lease_complete', status: completion.status, device_id: deviceId, operation_id: completion.operation_id });
+        });
         send(res, 200, result);
         return true;
       }

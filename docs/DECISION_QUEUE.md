@@ -4,12 +4,13 @@ This queue records consequential choices that should not be guessed during
 incremental implementation. Work that does not depend on a queued choice may
 continue.
 
-## DQ-001: durable task and approval state
+## DQ-001: durable control-plane state
 
 - Status: open
 - Needed before: production automation scheduling or more than one Broker node
 - Decision: choose the authoritative durable store and transaction boundary for
-  task state, approval claims, idempotency records and audit outbox events.
+  task, approval, operation, OTP, browser lease and device registry state,
+  idempotency records and audit outbox events.
 - Required evidence: encrypted backup/restore, failover, concurrent claim,
   revocation race, audit-write failure and disaster-recovery tests.
 - Current safe default: bounded in-process storage; no production scheduling.

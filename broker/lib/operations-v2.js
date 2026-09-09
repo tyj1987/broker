@@ -795,10 +795,37 @@ export class OperationBroker {
         throw new V2Error('unsafe_result', 'browser result contains credential material');
       }
     }
+    const errorCode = completed ? null : requireId(input?.error_code || 'browser_operation_failed', 'error_code');
+    return this.commitBrowserCompletion({ lease, operation, completed, result, errorCode });
+  }
+
+  completeBrowserOperationAndAudit(deviceId, leaseId, input, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const { lease, operation } = this.activeBrowserLease(deviceId, leaseId, input?.receipt);
+    const completed = input?.status === 'completed';
+    if (!completed && input?.status !== 'failed') {
+      throw new V2Error('invalid_request', 'lease status must be completed or failed');
+    }
+    let result = null;
+    if (completed) {
+      result = requireObject(input?.result || {}, 'result');
+      assertSafeResult(result);
+      if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
+        throw new V2Error('unsafe_result', 'browser result contains credential material');
+      }
+    }
+    const errorCode = completed ? null : requireId(input?.error_code || 'browser_operation_failed', 'error_code');
+    commitAudit({ operation_id: operation.id, status: completed ? 'completed' : 'failed' });
+    return this.commitBrowserCompletion({ lease, operation, completed, result, errorCode });
+  }
+
+  commitBrowserCompletion({ lease, operation, completed, result, errorCode }) {
     this.browserLeases.delete(lease.id);
     operation.status = completed ? 'completed' : 'failed';
     operation.result = result;
-    operation.error = completed ? null : requireId(input?.error_code || 'browser_operation_failed', 'error_code');
+    operation.error = errorCode;
     operation.updatedAt = new Date(this.now()).toISOString();
     if (operation.otpTaskId) {
       const task = this.otpTasks.get(operation.otpTaskId);

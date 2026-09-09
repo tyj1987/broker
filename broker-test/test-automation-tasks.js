@@ -53,6 +53,12 @@ const lowInput = {
   parameters: { resource_ref: 'tool-registry', tool_name: 'github.repository.read', tool_version: '1.0.0' },
 };
 
+await assert.rejects(
+  new AutomationTaskBroker({ toolRegistry: registry, authorize, approvalBroker: approvals, executors })
+    .create({ ...human, name: 'invalid\0principal' }, lowInput),
+  expectCode('unauthorized'),
+);
+
 assert.deepEqual(
   broker.listTools(human).map((tool) => tool.name),
   ['broker.tools.inspect', 'broker.device.state'],
@@ -889,5 +895,176 @@ await rejectSchema({ ...validSchemaParameters, enabled: 'yes' });
 await rejectSchema({ ...validSchemaParameters, mode: 'unsafe' });
 await rejectSchema({ ...validSchemaParameters, label: 'x' });
 await rejectSchema({ ...validSchemaParameters, label: 'excess' });
+
+const persistenceTool = {
+  ...registry.findByName('broker.tools.inspect', '1.0.0'),
+  rate_limit: { requests: 1, window_seconds: 60 },
+};
+const persistenceRegistry = {
+  findByName(name, version) {
+    return name === persistenceTool.name && version === persistenceTool.version
+      ? structuredClone(persistenceTool) : null;
+  },
+};
+let persistenceExecutions = 0;
+const persistenceExecutors = new Map([['broker.tools.inspect@1.0.0', async () => {
+  persistenceExecutions += 1;
+  return {
+    name: 'github.repository.read', version: '1.0.0', provider: 'github',
+    operation_id: 'repo.read', risk_level: 'LOW', agent_execution: true,
+  };
+}]]);
+const beforeRestart = new AutomationTaskBroker({
+  toolRegistry: persistenceRegistry, authorize, approvalBroker: approvals,
+  executors: persistenceExecutors, now: () => now,
+});
+const persistedSuccess = await beforeRestart.create(human, {
+  ...lowInput, idempotency_key: 'persisted-success-0001',
+});
+assert.equal((await beforeRestart.run(human, persistedSuccess.id)).state, 'SUCCEEDED');
+const persistedReady = await beforeRestart.create(human, {
+  ...lowInput, idempotency_key: 'persisted-ready-000001',
+});
+const taskState = beforeRestart.exportState();
+assert.equal(taskState.version, 1);
+assert.equal(taskState.tasks.length, 2);
+
+const afterRestart = new AutomationTaskBroker({
+  toolRegistry: persistenceRegistry, authorize, approvalBroker: approvals,
+  executors: persistenceExecutors, now: () => now,
+});
+afterRestart.restoreState(taskState);
+assert.equal(afterRestart.get(human, persistedSuccess.id).state, 'SUCCEEDED');
+assert.equal(
+  (await afterRestart.create(human, { ...lowInput, idempotency_key: 'persisted-success-0001' })).id,
+  persistedSuccess.id,
+  'idempotency bindings must survive restart',
+);
+assert.equal((await afterRestart.run(human, persistedReady.id)).error.code, 'tool_rate_limited');
+assert.equal(persistenceExecutions, 1, 'execution rate limits must survive restart');
+
+const indeterminateState = terminalAuditFailureBroker.exportState();
+assert.equal(indeterminateState.tasks[0].result, null, 'an unaudited upstream result is not persisted');
+assert.ok(!JSON.stringify(indeterminateState).includes('et1.'), 'durable task state contains no bearer capability');
+const indeterminateAfterRestart = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: terminalAuditApprovals,
+  executors, now: () => now,
+});
+indeterminateAfterRestart.restoreState(indeterminateState);
+await assert.rejects(
+  indeterminateAfterRestart.run(human, terminalAuditProtected.id),
+  expectCode('invalid_state'),
+  'an indeterminate execution must not become replayable after restart',
+);
+
+const restoreGuard = new AutomationTaskBroker({
+  toolRegistry: persistenceRegistry, authorize, approvalBroker: approvals,
+  executors: persistenceExecutors, now: () => now,
+});
+const guardTask = await restoreGuard.create(human, {
+  ...lowInput, idempotency_key: 'persisted-guard-000001',
+});
+restoreGuard.tasks.get(guardTask.id).running = true;
+assert.throws(() => restoreGuard.exportState(), expectCode('state_busy'));
+assert.throws(() => restoreGuard.restoreState(taskState), expectCode('state_busy'));
+restoreGuard.tasks.get(guardTask.id).running = false;
+const validTaskState = taskState.tasks[0];
+const readyTaskState = taskState.tasks[1];
+for (const corrupt of [
+  null,
+  { version: 2, tasks: [], idempotency: [], rate_limits: [] },
+  { ...taskState, unexpected: true },
+  { ...taskState, tasks: [null] },
+  { ...taskState, tasks: [{ ...validTaskState, unexpected: true }] },
+  { ...taskState, tasks: [{ ...validTaskState, owner: '' }] },
+  { ...taskState, tasks: [{ ...validTaskState, state: 'UNKNOWN' }] },
+  { ...taskState, tasks: [{ ...validTaskState, tool: 'missing.tool' }] },
+  { ...taskState, tasks: [{ ...validTaskState, parameters: {} }] },
+  { ...taskState, tasks: [{ ...validTaskState, request_fingerprint: 'not-a-digest' }] },
+  { ...taskState, tasks: [{ ...validTaskState, created_at: 'not-a-timestamp' }] },
+  { ...taskState, tasks: [{ ...validTaskState, updated_at: new Date(now - 1).toISOString() }] },
+  { ...taskState, tasks: [{ ...validTaskState, events: [] }] },
+  { ...taskState, tasks: [{ ...readyTaskState, next_sequence: 1 }] },
+  { ...taskState, tasks: [{ ...readyTaskState, events: [null] }] },
+  { ...taskState, tasks: [{
+    ...readyTaskState,
+    events: readyTaskState.events.map((event, index) => index === 0 ? { ...event, unexpected: true } : event),
+  }] },
+  { ...taskState, tasks: [{
+    ...readyTaskState,
+    events: readyTaskState.events.map((event, index) => index === 0 ? { ...event, sequence: 2 } : event),
+  }] },
+  { ...taskState, tasks: [{
+    ...readyTaskState,
+    events: readyTaskState.events.map((event, index) => index === 1 ? { ...event, state: 'SUCCEEDED' } : event),
+  }] },
+  { ...taskState, tasks: [{
+    ...readyTaskState,
+    events: readyTaskState.events.map((event, index) => index === 1 ? { ...event, reason: '' } : event),
+  }] },
+  { ...taskState, tasks: [{ ...readyTaskState, next_sequence: readyTaskState.next_sequence + 1 }] },
+  { ...taskState, tasks: [{ ...readyTaskState, updated_at: new Date(now + 1).toISOString() }] },
+  { ...taskState, tasks: [{ ...validTaskState, approval_id: 'not-a-uuid' }] },
+  { ...taskState, tasks: [{ ...validTaskState, execution_id: null }] },
+  { ...taskState, tasks: [{ ...validTaskState, result: null }] },
+  { ...taskState, tasks: [{
+    ...validTaskState,
+    result: { ...validTaskState.result, name: `gh${'p_'}${'A'.repeat(24)}` },
+  }] },
+  { ...taskState, tasks: [{ ...validTaskState, error: 'unexpected' }] },
+  { ...taskState, tasks: [{ ...readyTaskState, result: validTaskState.result }] },
+  { ...taskState, tasks: [{ ...validTaskState, latency_ms: -1 }] },
+  { ...taskState, tasks: [validTaskState, validTaskState] },
+  { ...taskState, idempotency: [null] },
+  { ...taskState, idempotency: [{ ...taskState.idempotency[0], key: '' }] },
+  { ...taskState, idempotency: [{ ...taskState.idempotency[0], task_id: '00000000-0000-4000-8000-000000000000' }] },
+  { ...taskState, idempotency: [{ ...taskState.idempotency[0], fingerprint: 'not-a-digest' }] },
+  { ...taskState, idempotency: [taskState.idempotency[0], taskState.idempotency[0]] },
+  { ...taskState, rate_limits: [null] },
+  { ...taskState, rate_limits: [{ ...taskState.rate_limits[0], owner: '' }] },
+  { ...taskState, rate_limits: [{ ...taskState.rate_limits[0], tool: 'missing.tool' }] },
+  { ...taskState, rate_limits: [{ ...taskState.rate_limits[0], expires_at_ms: taskState.rate_limits[0].started_at_ms }] },
+  { ...taskState, rate_limits: [{ ...taskState.rate_limits[0], expires_at_ms: taskState.rate_limits[0].expires_at_ms + 1 }] },
+  { ...taskState, rate_limits: [{ ...taskState.rate_limits[0], count: 2 }] },
+  { ...taskState, rate_limits: [taskState.rate_limits[0], taskState.rate_limits[0]] },
+]) {
+  assert.throws(() => restoreGuard.restoreState(corrupt), expectCode('state_corrupt'));
+}
+assert.equal(restoreGuard.get(human, guardTask.id).state, 'READY', 'rejected restore is atomic');
+assert.throws(
+  () => new AutomationTaskBroker({
+    toolRegistry: persistenceRegistry, authorize, approvalBroker: approvals,
+    executors: persistenceExecutors, maxTasks: 1,
+  }).restoreState(taskState),
+  expectCode('state_corrupt'),
+);
+assert.throws(
+  () => new AutomationTaskBroker({
+    toolRegistry: { findByName() { throw new Error('registry unavailable'); } },
+    authorize, approvalBroker: approvals, executors: persistenceExecutors,
+  }).restoreState({ ...taskState, idempotency: [], rate_limits: [] }),
+  expectCode('state_corrupt'),
+);
+assert.throws(
+  () => new AutomationTaskBroker({
+    toolRegistry: { findByName() { throw new Error('registry unavailable'); } },
+    authorize, approvalBroker: approvals, executors: persistenceExecutors,
+  }).restoreState({ version: 1, tasks: [], idempotency: [], rate_limits: taskState.rate_limits }),
+  expectCode('state_corrupt'),
+);
+let releasePendingAuthorization;
+const pendingStateBroker = new AutomationTaskBroker({
+  toolRegistry: persistenceRegistry,
+  authorize: async () => new Promise((resolveAuthorization) => { releasePendingAuthorization = resolveAuthorization; }),
+  approvalBroker: approvals, executors: persistenceExecutors, now: () => now,
+});
+const pendingCreation = pendingStateBroker.create(human, {
+  ...lowInput, idempotency_key: 'persisted-pending-00001',
+});
+await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+assert.throws(() => pendingStateBroker.exportState(), expectCode('state_busy'));
+assert.throws(() => pendingStateBroker.restoreState(taskState), expectCode('state_busy'));
+releasePendingAuthorization({ allow: true, ttlMs: 60_000 });
+await pendingCreation;
 
 console.log('automation tasks: low-risk and approved critical end-to-end loops passed');

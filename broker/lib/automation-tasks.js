@@ -17,12 +17,178 @@ const TRANSITIONS = new Map([
 ]);
 const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+const VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{16,128}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
 const MAX_TASKS = 10_000;
 const MAX_EVENTS = 64;
+const STATE_VERSION = 1;
+const STATE_KEYS = new Set(['version', 'tasks', 'idempotency', 'rate_limits']);
+const TASK_STATE_KEYS = new Set([
+  'id', 'owner', 'tool', 'tool_version', 'account_ref', 'environment', 'parameters',
+  'request_fingerprint', 'identity_method', 'role', 'policy_decision', 'state', 'events',
+  'next_sequence', 'created_at', 'updated_at', 'expires_at', 'approval_id', 'execution_id',
+  'result', 'error', 'latency_ms',
+]);
+const EVENT_STATE_KEYS = new Set(['sequence', 'state', 'reason', 'at']);
+const IDEMPOTENCY_STATE_KEYS = new Set(['key', 'task_id', 'fingerprint']);
+const RATE_LIMIT_STATE_KEYS = new Set([
+  'owner', 'tool', 'tool_version', 'environment', 'started_at_ms', 'expires_at_ms', 'count',
+]);
 
 function hash(value) {
   return createHash('sha256').update(canonicalJson(value)).digest('base64url');
+}
+
+function stateCorrupt(message) {
+  return new V2Error('state_corrupt', `automation task state is invalid: ${message}`, 500);
+}
+
+function hasExactKeys(value, keys) {
+  const actual = Object.keys(value);
+  return actual.length === keys.size && actual.every((key) => keys.has(key));
+}
+
+function validTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function validBoundedString(value, max = 256) {
+  return typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
+}
+
+function exportedTask(task) {
+  return {
+    id: task.id,
+    owner: task.owner,
+    tool: task.tool.name,
+    tool_version: task.tool.version,
+    account_ref: task.accountRef,
+    environment: task.environment,
+    parameters: structuredClone(task.parameters),
+    request_fingerprint: task.requestFingerprint,
+    identity_method: task.identityMethod,
+    role: task.role,
+    policy_decision: task.policyDecision,
+    state: task.state,
+    events: task.events.map((event) => structuredClone(event)),
+    next_sequence: task.nextSequence,
+    created_at: task.createdAt,
+    updated_at: task.updatedAt,
+    expires_at: task.expiresAt,
+    approval_id: task.approvalId || null,
+    execution_id: task.executionId || null,
+    result: task.state === 'SUCCEEDED' ? structuredClone(task.result) : null,
+    error: task.state === 'FAILED' ? task.error : null,
+    latency_ms: Number.isFinite(task.latencyMs) ? task.latencyMs : null,
+  };
+}
+
+function restoreTaskRecord(value, toolRegistry) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !hasExactKeys(value, TASK_STATE_KEYS)) {
+    throw stateCorrupt('task fields are invalid');
+  }
+  if (!UUID_RE.test(value.id || '') || !validBoundedString(value.owner)
+    || !ID_RE.test(value.tool || '') || !VERSION_RE.test(value.tool_version || '')
+    || !ID_RE.test(value.account_ref || '') || !ENVIRONMENTS.has(value.environment)
+    || !DIGEST_RE.test(value.request_fingerprint || '')
+    || !validBoundedString(value.identity_method, 64) || !validBoundedString(value.role, 64)
+    || !['allow', 'deny'].includes(value.policy_decision) || !STATES.has(value.state)) {
+    throw stateCorrupt('task identity or state is invalid');
+  }
+  let tool;
+  try {
+    tool = toolRegistry?.findByName(value.tool, value.tool_version);
+  } catch {
+    throw stateCorrupt('task tool lookup failed');
+  }
+  if (!tool) throw stateCorrupt('task tool is not registered');
+  let parameters;
+  try {
+    parameters = structuredClone(value.parameters);
+    assertSchema(parameters, tool.input_schema, 'parameters');
+  } catch {
+    throw stateCorrupt('task parameters are invalid');
+  }
+  const expectedFingerprint = hash({
+    tool: tool.name, version: tool.version, account: value.account_ref,
+    environment: value.environment, parameters,
+  });
+  if (expectedFingerprint !== value.request_fingerprint) throw stateCorrupt('task fingerprint is invalid');
+  if (!validTimestamp(value.created_at) || !validTimestamp(value.updated_at) || !validTimestamp(value.expires_at)) {
+    throw stateCorrupt('task timestamps are invalid');
+  }
+  const createdAtMs = Date.parse(value.created_at);
+  const updatedAtMs = Date.parse(value.updated_at);
+  const expiresAtMs = Date.parse(value.expires_at);
+  if (updatedAtMs < createdAtMs || expiresAtMs - createdAtMs < 1 || expiresAtMs - createdAtMs > 900_000) {
+    throw stateCorrupt('task timestamp order is invalid');
+  }
+  if (!Array.isArray(value.events) || value.events.length < 1 || value.events.length > MAX_EVENTS
+    || !Number.isSafeInteger(value.next_sequence) || value.next_sequence < 2) {
+    throw stateCorrupt('task event sequence is invalid');
+  }
+  let priorState = null;
+  let priorSequence = 0;
+  for (const event of value.events) {
+    if (!event || typeof event !== 'object' || Array.isArray(event) || !hasExactKeys(event, EVENT_STATE_KEYS)
+      || !Number.isSafeInteger(event.sequence) || event.sequence !== priorSequence + 1
+      || !STATES.has(event.state) || !TRANSITIONS.get(priorState)?.has(event.state)
+      || !validBoundedString(event.reason, 128) || !validTimestamp(event.at)
+      || Date.parse(event.at) < createdAtMs || Date.parse(event.at) > updatedAtMs) {
+      throw stateCorrupt('task event is invalid');
+    }
+    priorSequence = event.sequence;
+    priorState = event.state;
+  }
+  if (priorSequence + 1 !== value.next_sequence || priorState !== value.state
+    || value.events.at(-1).at !== value.updated_at) {
+    throw stateCorrupt('task event head is invalid');
+  }
+  const approvalId = value.approval_id;
+  const executionId = value.execution_id;
+  if ((approvalId !== null && !UUID_RE.test(approvalId || ''))
+    || (executionId !== null && !UUID_RE.test(executionId || ''))
+    || (value.state === 'PENDING_APPROVAL' && approvalId === null)
+    || (value.state === 'EXECUTING' && executionId === null)) {
+    throw stateCorrupt('task execution binding is invalid');
+  }
+  let result;
+  if (value.state === 'SUCCEEDED') {
+    try {
+      result = structuredClone(value.result);
+      assertSchema(result, tool.output_schema, 'result');
+      if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) throw new Error('unsafe');
+    } catch {
+      throw stateCorrupt('task result is invalid');
+    }
+    if (value.error !== null || executionId === null) throw stateCorrupt('successful task markers are invalid');
+  } else if (value.result !== null) {
+    throw stateCorrupt('non-terminal result is invalid');
+  }
+  if ((value.state === 'FAILED' && !validBoundedString(value.error, 128))
+    || (value.state !== 'FAILED' && value.error !== null)) {
+    throw stateCorrupt('task error marker is invalid');
+  }
+  if (value.latency_ms !== null
+    && (!Number.isSafeInteger(value.latency_ms) || value.latency_ms < 0)) {
+    throw stateCorrupt('task latency is invalid');
+  }
+  return {
+    id: value.id, owner: value.owner, tool, accountRef: value.account_ref,
+    environment: value.environment, parameters, requestFingerprint: value.request_fingerprint,
+    identityMethod: value.identity_method, role: value.role, policyDecision: value.policy_decision,
+    state: value.state, events: structuredClone(value.events), nextSequence: value.next_sequence,
+    createdAt: value.created_at, updatedAt: value.updated_at, expiresAt: value.expires_at,
+    ...(approvalId ? { approvalId } : {}), ...(executionId ? { executionId } : {}),
+    ...(value.state === 'SUCCEEDED' ? { result } : {}),
+    ...(value.state === 'FAILED' ? { error: value.error } : {}),
+    ...(value.latency_ms !== null ? { latencyMs: value.latency_ms } : {}),
+    running: false,
+  };
 }
 async function executeWithDeadline(executor, parameters, context, timeoutMs, timeoutCode) {
   const controller = new AbortController();
@@ -146,7 +312,7 @@ export class AutomationTaskBroker {
   }
 
   async create(identity, input) {
-    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    if (!validBoundedString(identity?.name)) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const allowedKeys = new Set(['tool', 'tool_version', 'account_ref', 'environment', 'parameters', 'idempotency_key']);
     if (!input || typeof input !== 'object' || Array.isArray(input)
       || Object.keys(input).some((key) => !allowedKeys.has(key))) throw new V2Error('invalid_request', 'task request contains unknown fields');
@@ -448,9 +614,116 @@ export class AutomationTaskBroker {
     if (task.events.length > MAX_EVENTS) task.events.shift();
   }
 
+  exportState() {
+    if ([...this.tasks.values()].some((task) => task.running)
+      || [...this.idempotency.values()].some((entry) => entry.promise)) {
+      throw new V2Error('state_busy', 'automation task state has active mutations', 409);
+    }
+    this.prune();
+    return {
+      version: STATE_VERSION,
+      tasks: [...this.tasks.values()].map(exportedTask),
+      idempotency: [...this.idempotency.entries()]
+        .filter(([, entry]) => entry.taskId && this.tasks.has(entry.taskId))
+        .map(([key, entry]) => ({ key, task_id: entry.taskId, fingerprint: entry.fingerprint })),
+      rate_limits: [...this.executionRateLimits.entries()].map(([key, bucket]) => {
+        const [owner, toolIdentity, environment] = key.split('\0');
+        const separator = toolIdentity.lastIndexOf('@');
+        return {
+          owner,
+          tool: toolIdentity.slice(0, separator),
+          tool_version: toolIdentity.slice(separator + 1),
+          environment,
+          started_at_ms: bucket.startedAt,
+          expires_at_ms: bucket.expiresAt,
+          count: bucket.count,
+        };
+      }),
+    };
+  }
+
+  restoreState(snapshot) {
+    if ([...this.tasks.values()].some((task) => task.running)
+      || [...this.idempotency.values()].some((entry) => entry.promise)) {
+      throw new V2Error('state_busy', 'automation task state has active mutations', 409);
+    }
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
+      || !hasExactKeys(snapshot, STATE_KEYS) || snapshot.version !== STATE_VERSION
+      || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.idempotency)
+      || !Array.isArray(snapshot.rate_limits)) {
+      throw stateCorrupt('snapshot envelope is invalid');
+    }
+    if (snapshot.tasks.length > this.maxTasks || snapshot.idempotency.length > this.maxTasks
+      || snapshot.rate_limits.length > this.maxTasks) {
+      throw stateCorrupt('snapshot exceeds capacity');
+    }
+    const tasks = new Map();
+    for (const candidate of snapshot.tasks) {
+      const task = restoreTaskRecord(candidate, this.toolRegistry);
+      if (tasks.has(task.id)) throw stateCorrupt('snapshot contains duplicate tasks');
+      tasks.set(task.id, task);
+    }
+    const idempotency = new Map();
+    const boundTasks = new Set();
+    for (const candidate of snapshot.idempotency) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)
+        || !hasExactKeys(candidate, IDEMPOTENCY_STATE_KEYS)
+        || !validBoundedString(candidate.key, 512) || !UUID_RE.test(candidate.task_id || '')
+        || !DIGEST_RE.test(candidate.fingerprint || '')) {
+        throw stateCorrupt('idempotency binding is invalid');
+      }
+      const task = tasks.get(candidate.task_id);
+      const separator = candidate.key.lastIndexOf(':');
+      if (!task || separator < 1 || candidate.key.slice(0, separator) !== task.owner
+        || !IDEMPOTENCY_RE.test(candidate.key.slice(separator + 1))
+        || candidate.fingerprint !== task.requestFingerprint
+        || idempotency.has(candidate.key) || boundTasks.has(task.id)) {
+        throw stateCorrupt('idempotency binding does not match a task');
+      }
+      idempotency.set(candidate.key, { taskId: task.id, fingerprint: candidate.fingerprint });
+      boundTasks.add(task.id);
+    }
+    const executionRateLimits = new Map();
+    for (const candidate of snapshot.rate_limits) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)
+        || !hasExactKeys(candidate, RATE_LIMIT_STATE_KEYS) || !validBoundedString(candidate.owner)
+        || !ID_RE.test(candidate.tool || '') || !VERSION_RE.test(candidate.tool_version || '')
+        || !ENVIRONMENTS.has(candidate.environment)
+        || !Number.isSafeInteger(candidate.started_at_ms) || !Number.isSafeInteger(candidate.expires_at_ms)
+        || candidate.started_at_ms < 0 || candidate.expires_at_ms <= candidate.started_at_ms
+        || !Number.isSafeInteger(candidate.count) || candidate.count < 0) {
+        throw stateCorrupt('rate limit bucket is invalid');
+      }
+      let tool;
+      try {
+        tool = this.toolRegistry?.findByName(candidate.tool, candidate.tool_version);
+      } catch {
+        throw stateCorrupt('rate limit tool lookup failed');
+      }
+      if (!tool || candidate.expires_at_ms - candidate.started_at_ms !== tool.rate_limit.window_seconds * 1_000
+        || candidate.count > tool.rate_limit.requests) {
+        throw stateCorrupt('rate limit bucket exceeds its registered policy');
+      }
+      const key = `${candidate.owner}\0${tool.name}@${tool.version}\0${candidate.environment}`;
+      if (executionRateLimits.has(key)) throw stateCorrupt('snapshot contains duplicate rate limits');
+      executionRateLimits.set(key, {
+        startedAt: candidate.started_at_ms,
+        expiresAt: candidate.expires_at_ms,
+        count: candidate.count,
+      });
+    }
+    this.tasks = tasks;
+    this.idempotency = idempotency;
+    this.executionRateLimits = executionRateLimits;
+    this.prune();
+  }
+
   prune() {
     const cutoff = this.now() - 60 * 60_000;
     for (const [id, task] of this.tasks) if (TERMINAL.has(task.state) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);
+    for (const [key, entry] of this.idempotency) {
+      if (entry.taskId && !this.tasks.has(entry.taskId)) this.idempotency.delete(key);
+    }
     const now = this.now();
     for (const [key, bucket] of this.executionRateLimits) if (now >= bucket.expiresAt) this.executionRateLimits.delete(key);
   }

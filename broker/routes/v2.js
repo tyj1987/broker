@@ -127,7 +127,14 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        const result = await webAuthnService.finishRegistration(identity, await readBody(req));
+        const body = await readBody(req);
+        mandatoryAudit({ action: 'webauthn_registration_finish_intent', status: 'authorized', cn: ctx.cn });
+        const result = await webAuthnService.finishRegistrationAndAudit(identity, body, (verified) => {
+          mandatoryAudit({
+            action: 'webauthn_registration_verified', status: 'ok', cn: ctx.cn,
+            credential_id: verified.credential_id,
+          });
+        });
         audit({ action: 'webauthn_registration_finish', status: 'ok', cn: ctx.cn, credential_id: result.credential.id });
         send(res, 201, result);
         return true;

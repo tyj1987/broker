@@ -168,6 +168,17 @@ export class WebAuthnService {
   }
 
   async finishRegistration(identity, input) {
+    return this.finishRegistrationInternal(identity, input, null);
+  }
+
+  async finishRegistrationAndAudit(identity, input, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    return this.finishRegistrationInternal(identity, input, commitAudit);
+  }
+
+  async finishRegistrationInternal(identity, input, commitAudit) {
     const flow = this.takeFlow(input?.flow_id, 'registration');
     if (flow.clientName !== identity?.name) throw new V2Error('forbidden', 'Registration identity changed', 403);
     const config = this.getConfig();
@@ -209,6 +220,7 @@ export class WebAuthnService {
       attestation_format: info.fmt,
       created_at: new Date(this.now()).toISOString(),
     };
+    if (commitAudit) commitAudit({ credential_id: item.id });
     client.factors.webauthn.credentials.push(item);
     try { await this.persist(); } catch {
       client.factors.webauthn.credentials = client.factors.webauthn.credentials.filter((value) => value !== item);

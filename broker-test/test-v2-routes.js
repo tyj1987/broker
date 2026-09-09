@@ -183,6 +183,15 @@ const handler = createV2Routes({
       calls.push(['webauthn-registration-begin', subject.name, input]);
       return { flow_id: 'registration-flow', options: {} };
     },
+    async finishRegistration(subject, input) {
+      calls.push(['webauthn-registration-finish', subject.name, input]);
+      return { credential: { id: 'new-credential' }, strict_ready: true };
+    },
+    async finishRegistrationAndAudit(subject, input, commitAudit) {
+      const result = await this.finishRegistration(subject, input);
+      commitAudit({ credential_id: result.credential.id });
+      return result;
+    },
     rollbackFlowCreation(id, kind, clientName) {
       calls.push(['webauthn-flow-rollback', id, kind, clientName]);
     },
@@ -289,6 +298,19 @@ assert.equal((await route('/api/v2/me/webauthn/registration/begin')).value.error
 auditFailureAction = null;
 assert.ok(calls.some((item) => item[0] === 'webauthn-flow-rollback'
   && item[1] === 'registration-flow' && item[2] === 'registration' && item[3] === 'owner-1'));
+body = { flow_id: 'registration-flow', response: { id: 'new-credential' } };
+assert.equal((await route('/api/v2/me/webauthn/registration/finish')).status, 201);
+assert.ok(auditEvents.some((event) => event.action === 'webauthn_registration_finish_intent'));
+assert.ok(auditEvents.some((event) => event.action === 'webauthn_registration_verified'
+  && event.credential_id === 'new-credential'));
+const registrationsBeforeAuditFailure = calls.filter((item) => item[0] === 'webauthn-registration-finish').length;
+auditFailureAction = 'webauthn_registration_verified';
+assert.equal((await route('/api/v2/me/webauthn/registration/finish')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(
+  calls.filter((item) => item[0] === 'webauthn-registration-finish').length,
+  registrationsBeforeAuditFailure + 1,
+);
 assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repository.read');
 assert.ok(calls.some((item) => item[0] === 'tool-list'));
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).status, 200);

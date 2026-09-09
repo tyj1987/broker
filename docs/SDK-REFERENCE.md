@@ -101,6 +101,11 @@ Authentication and registration challenges are also unpublished until their
 mandatory creation audit succeeds. On audit failure the exact flow, ceremony
 type and client binding are checked before the challenge is removed.
 
+A WebAuthn registration result is verified and mandatorily audited before the
+credential is added to the client configuration. Audit failure consumes the
+one-time ceremony but leaves the credential set unchanged, requiring a new
+registration challenge.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

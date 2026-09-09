@@ -55,11 +55,26 @@ await assert.rejects(
 
 const steppedUpIdentity = { name: 'alice', context: { via: 'session', authFactors: ['webauthn'] } };
 const second = await service.beginRegistration(steppedUpIdentity, { label: 'Backup security key' });
-const secondResult = await service.finishRegistration(steppedUpIdentity, {
+let registrationAuditCommitted = false;
+const secondResult = await service.finishRegistrationAndAudit(steppedUpIdentity, {
   flow_id: second.flow_id,
   response: { id: 'key-2', response: { transports: ['usb'] } },
+}, ({ credential_id: credentialId }) => {
+  assert.equal(credentialId, 'key-2');
+  registrationAuditCommitted = true;
 });
+assert.equal(registrationAuditCommitted, true);
 assert.equal(secondResult.strict_ready, true);
+
+const unauditedRegistration = await service.beginRegistration(steppedUpIdentity, { label: 'Unaudited key' });
+await assert.rejects(
+  service.finishRegistrationAndAudit(steppedUpIdentity, {
+    flow_id: unauditedRegistration.flow_id,
+    response: { id: 'unaudited-key', response: { transports: ['usb'] } },
+  }, () => { throw new Error('audit unavailable'); }),
+  /audit unavailable/,
+);
+assert.equal(config.clients.alice.factors.webauthn.credentials.length, 2);
 
 const authentication = await service.beginAuthentication({ client: 'alice' });
 const authenticated = await service.finishAuthentication({

@@ -507,8 +507,8 @@ const schemaTool = {
     required: ['resource_ref', 'items', 'count', 'ratio', 'enabled', 'mode', 'label'],
     properties: {
       resource_ref: { type: 'string', const: 'schema' },
-      items: { type: 'array', maxItems: 2, items: { type: 'string' } },
-      count: { type: 'integer' }, ratio: { type: 'number' }, enabled: { type: 'boolean' },
+      items: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'string' } },
+      count: { type: 'integer', minimum: 1, maximum: 2 }, ratio: { type: 'number', minimum: 0, maximum: 1 }, enabled: { type: 'boolean' },
       mode: { type: 'string', enum: ['safe'] }, label: { type: 'string', minLength: 2, maxLength: 4 },
     },
   },
@@ -531,10 +531,13 @@ const rejectSchema = async (parameters) => assert.rejects(schemaBroker.create(hu
 }), expectCode('schema_mismatch'));
 await rejectSchema({ ...validSchemaParameters, resource_ref: 'other' });
 await rejectSchema({ ...validSchemaParameters, items: 'a' });
+await rejectSchema({ ...validSchemaParameters, items: [] });
 await rejectSchema({ ...validSchemaParameters, items: ['a', 'b', 'c'] });
 await rejectSchema({ ...validSchemaParameters, items: [1] });
 await rejectSchema({ ...validSchemaParameters, count: 1.5 });
+await rejectSchema({ ...validSchemaParameters, count: 0 });
 await rejectSchema({ ...validSchemaParameters, ratio: Number.POSITIVE_INFINITY });
+await rejectSchema({ ...validSchemaParameters, ratio: 2 });
 await rejectSchema({ ...validSchemaParameters, enabled: 'yes' });
 await rejectSchema({ ...validSchemaParameters, mode: 'unsafe' });
 await rejectSchema({ ...validSchemaParameters, label: 'x' });

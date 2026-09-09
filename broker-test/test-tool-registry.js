@@ -6,6 +6,9 @@ const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registr
 const github = registry.find('github', 'repo.read');
 assert.equal(github.name, 'github.repository.read');
 assert.equal(github.risk_level, 'LOW');
+const deviceEnroll = registry.find('broker', 'device.enroll');
+assert.equal(deviceEnroll.input_schema.properties.capabilities.maxItems, 32);
+assert.equal(deviceEnroll.input_schema.properties.capabilities.items.type, 'string');
 github.name = 'tampered';
 assert.equal(registry.find('github', 'repo.read').name, 'github.repository.read', 'callers receive defensive copies');
 
@@ -148,6 +151,13 @@ expectInvalidTool((tool) => { tool.environments = ['unknown']; }, /invalid envir
 expectInvalidTool((tool) => { tool.input_schema = []; }, /object schema/);
 expectInvalidTool((tool) => { tool.input_schema.properties = null; }, /properties is required/);
 expectInvalidTool((tool) => { tool.input_schema.required = ['missing']; }, /requires undefined property/);
+expectInvalidTool((tool) => { tool.input_schema.properties.owner.pattern = '.*'; }, /unsupported schema keyword pattern/);
+expectInvalidTool((tool) => { tool.input_schema.properties.owner.type = 'secret'; }, /unsupported type/);
+expectInvalidTool((tool) => {
+  tool.input_schema.properties.owner.minLength = 5;
+  tool.input_schema.properties.owner.maxLength = 4;
+}, /inconsistent string bounds/);
+expectInvalidTool((tool) => { tool.input_schema.required = ['owner', 'owner']; }, /unique property names/);
 expectInvalidTool((tool) => { tool.target.resource_parameter = 'other'; }, /target must bind/);
 expectInvalidTool((tool) => { tool.timeout_ms = 99; }, /invalid timeout/);
 expectInvalidTool((tool) => { tool.rate_limit.requests = 0; }, /invalid rate limit/);

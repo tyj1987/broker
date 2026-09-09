@@ -6,6 +6,8 @@ const RISK_LEVELS = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
 const ROLES = new Set(['viewer', 'developer', 'operator', 'admin']);
 const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
 const AGENT_IDENTITY_METHODS = new Set(['api_key', 'workload', 'workload_identity', 'oidc', 'mcp', 'agent']);
+const SCHEMA_TYPES = new Set(['object', 'array', 'string', 'integer', 'number', 'boolean']);
+const COMMON_SCHEMA_KEYS = new Set(['type', 'const', 'enum']);
 const TOOL_KEYS = new Set([
   'name', 'version', 'description', 'provider', 'operation_id', 'input_schema', 'output_schema',
   'required_role', 'risk_level', 'environments', 'target', 'timeout_ms', 'rate_limit',
@@ -16,16 +18,90 @@ function assertObject(value, message) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message);
 }
 
+function schemaValueMatchesType(value, type) {
+  if (type === 'integer') return Number.isSafeInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'boolean') return typeof value === 'boolean';
+  if (type === 'string') return typeof value === 'string';
+  if (type === 'array') return Array.isArray(value);
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertBound(value, path) {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new Error(`${path} must be a non-negative safe integer`);
+  }
+}
+
+function validateSchemaNode(schema, path) {
+  assertObject(schema, `${path} must be an object schema`);
+  if (!SCHEMA_TYPES.has(schema.type)) throw new Error(`${path} has an unsupported type`);
+  const typeKeys = schema.type === 'object' ? ['properties', 'required', 'additionalProperties']
+    : schema.type === 'array' ? ['items', 'minItems', 'maxItems']
+      : schema.type === 'string' ? ['minLength', 'maxLength']
+        : ['integer', 'number'].includes(schema.type) ? ['minimum', 'maximum'] : [];
+  const allowed = new Set([...COMMON_SCHEMA_KEYS, ...typeKeys]);
+  for (const key of Object.keys(schema)) {
+    if (!allowed.has(key)) throw new Error(`${path} uses unsupported schema keyword ${key}`);
+  }
+  if (Object.hasOwn(schema, 'const') && !schemaValueMatchesType(schema.const, schema.type)) {
+    throw new Error(`${path}.const does not match its declared type`);
+  }
+  if (schema.enum !== undefined) {
+    if (!Array.isArray(schema.enum) || schema.enum.length === 0
+      || schema.enum.some((value) => !schemaValueMatchesType(value, schema.type))) {
+      throw new Error(`${path}.enum must contain values of its declared type`);
+    }
+  }
+  if (['object', 'array'].includes(schema.type) && (schema.enum !== undefined || Object.hasOwn(schema, 'const'))) {
+    throw new Error(`${path} supports const and enum only for primitive values`);
+  }
+  if (schema.type === 'object') {
+    if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') {
+      throw new Error(`${path}.additionalProperties must be boolean`);
+    }
+    if (schema.properties !== undefined) assertObject(schema.properties, `${path}.properties is required and must be an object`);
+    const required = schema.required || [];
+    if (!Array.isArray(required)
+      || required.some((name) => typeof name !== 'string')
+      || new Set(required).size !== required.length) {
+      throw new Error(`${path}.required must contain unique property names`);
+    }
+    const properties = new Set(Object.keys(schema.properties || {}));
+    for (const name of required) {
+      if (!properties.has(name)) throw new Error(`${path} requires undefined property ${name}`);
+    }
+    for (const [name, child] of Object.entries(schema.properties || {})) validateSchemaNode(child, `${path}.${name}`);
+  } else if (schema.type === 'array') {
+    if (schema.items !== undefined) validateSchemaNode(schema.items, `${path}.items`);
+    assertBound(schema.minItems, `${path}.minItems`);
+    assertBound(schema.maxItems, `${path}.maxItems`);
+    if (schema.minItems !== undefined && schema.maxItems !== undefined && schema.minItems > schema.maxItems) {
+      throw new Error(`${path} has inconsistent item bounds`);
+    }
+  } else if (schema.type === 'string') {
+    assertBound(schema.minLength, `${path}.minLength`);
+    assertBound(schema.maxLength, `${path}.maxLength`);
+    if (schema.minLength !== undefined && schema.maxLength !== undefined && schema.minLength > schema.maxLength) {
+      throw new Error(`${path} has inconsistent string bounds`);
+    }
+  } else if (['integer', 'number'].includes(schema.type)) {
+    for (const [name, value] of [['minimum', schema.minimum], ['maximum', schema.maximum]]) {
+      if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value))) {
+        throw new Error(`${path}.${name} must be finite`);
+      }
+    }
+    if (schema.minimum !== undefined && schema.maximum !== undefined && schema.minimum > schema.maximum) {
+      throw new Error(`${path} has inconsistent numeric bounds`);
+    }
+  }
+}
+
 function assertClosedSchema(schema, field, tool) {
-  assertObject(schema, `${tool}: ${field} must be an object schema`);
-  if (schema.type !== 'object' || schema.additionalProperties !== false) {
-    throw new Error(`${tool}: ${field} must deny additional properties`);
-  }
+  validateSchemaNode(schema, `${tool}: ${field}`);
+  if (schema.type !== 'object') throw new Error(`${tool}: ${field} must be an object schema`);
+  if (schema.additionalProperties !== false) throw new Error(`${tool}: ${field} must deny additional properties`);
   assertObject(schema.properties, `${tool}: ${field}.properties is required`);
-  const properties = new Set(Object.keys(schema.properties));
-  for (const required of schema.required || []) {
-    if (!properties.has(required)) throw new Error(`${tool}: ${field} requires undefined property ${required}`);
-  }
 }
 
 function validateTool(tool) {

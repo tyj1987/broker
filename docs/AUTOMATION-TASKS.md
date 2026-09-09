@@ -5,6 +5,11 @@ agents. A caller names a registered tool and supplies schema-checked parameters;
 it cannot supply a URL, authentication header, credential, command or adapter
 implementation.
 
+Registry schemas use an explicitly validated JSON Schema subset. Unsupported
+keywords are rejected at startup instead of being silently ignored. Object
+closure, primitive constants and enums, string lengths, array item/count bounds
+and numeric ranges are enforced again on task input and adapter output.
+
 ## Lifecycle
 
 ```text

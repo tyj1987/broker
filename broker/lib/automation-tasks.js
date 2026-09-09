@@ -58,6 +58,7 @@ function assertSchema(value, schema, path = 'value') {
   }
   if (schema.type === 'array') {
     if (!Array.isArray(value)) throw new V2Error('schema_mismatch', `${path} must be an array`);
+    if (schema.minItems !== undefined && value.length < schema.minItems) throw new V2Error('schema_mismatch', `${path} has too few items`);
     if (schema.maxItems !== undefined && value.length > schema.maxItems) throw new V2Error('schema_mismatch', `${path} has too many items`);
     if (schema.items) value.forEach((item, index) => assertSchema(item, schema.items, `${path}[${index}]`));
     return;
@@ -68,6 +69,10 @@ function assertSchema(value, schema, path = 'value') {
         : schema.type === 'boolean' ? typeof value === 'boolean'
           : true;
   if (!valid) throw new V2Error('schema_mismatch', `${path} has the wrong type`);
+  if (typeof value === 'number' && ((schema.minimum !== undefined && value < schema.minimum)
+    || (schema.maximum !== undefined && value > schema.maximum))) {
+    throw new V2Error('schema_mismatch', `${path} is outside its allowed range`);
+  }
   if (typeof value === 'string' && ((schema.minLength !== undefined && value.length < schema.minLength)
     || (schema.maxLength !== undefined && value.length > schema.maxLength))) {
     throw new V2Error('schema_mismatch', `${path} has an invalid length`);

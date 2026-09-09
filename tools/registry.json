@@ -25,7 +25,7 @@
       "description": "Enroll a hardware-bound broker device after strict dual control.",
       "provider": "broker",
       "operation_id": "device.enroll",
-      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "label", "platform", "capabilities"], "properties": { "resource_ref": { "type": "string" }, "label": { "type": "string" }, "platform": { "type": "string" }, "capabilities": { "type": "array" } } },
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "label", "platform", "capabilities"], "properties": { "resource_ref": { "type": "string" }, "label": { "type": "string" }, "platform": { "type": "string" }, "capabilities": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 64 } } } },
       "output_schema": { "type": "object", "additionalProperties": false, "required": ["enrollment_id", "expires_at"], "properties": { "enrollment_id": { "type": "string" }, "expires_at": { "type": "string" } } },
       "required_role": "admin",
       "risk_level": "CRITICAL",

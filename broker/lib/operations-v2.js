@@ -685,6 +685,22 @@ export class OperationBroker {
   }
 
   finishBrowserOtp(identity, input) {
+    return this.commitBrowserOtpFinish(this.prepareBrowserOtpFinish(identity, input));
+  }
+
+  finishBrowserOtpAndAudit(identity, input, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const completion = this.prepareBrowserOtpFinish(identity, input);
+    commitAudit({
+      operation_id: completion.operation.id,
+      status: completion.completed ? 'completed' : 'failed',
+    });
+    return this.commitBrowserOtpFinish(completion);
+  }
+
+  prepareBrowserOtpFinish(identity, input) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const receipt = requireText(input?.receipt, 'receipt', 128);
     const claimKey = sha256Base64Url(receipt);
@@ -693,13 +709,21 @@ export class OperationBroker {
       if (claim?.owner === identity.name) this.browserClaims.delete(claimKey);
       throw new V2Error('invalid_claim', 'browser OTP claim is invalid or expired', 409);
     }
-    this.browserClaims.delete(claimKey);
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.keys(input).length !== 2 || typeof input.completed !== 'boolean') {
+      throw new V2Error('invalid_request', 'browser OTP finish requires only receipt and completed');
+    }
     const task = this.otpTasks.get(claim.taskId);
     const operation = task ? this.operations.get(task.operationId) : null;
     if (!task || task.status !== 'consuming' || !operation) {
       throw new V2Error('invalid_state', 'browser OTP claim is no longer active', 409);
     }
     const completed = input?.completed === true;
+    return { claimKey, claim, task, operation, completed };
+  }
+
+  commitBrowserOtpFinish({ claimKey, claim, task, operation, completed }) {
+    this.browserClaims.delete(claimKey);
     task.status = completed ? 'completed' : 'failed';
     this.activeOtpLocks.delete(task.lockKey);
     operation.status = completed ? 'completed' : 'failed';

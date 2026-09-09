@@ -352,8 +352,14 @@ export function createV2Routes(deps) {
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         if (ctx.via !== 'api_key') throw new V2Error('identity_denied', 'browser bridge API key required', 403);
         if (!ctx.apiKey?.scopes?.includes('browser:otp:fill')) throw new V2Error('scope_denied', 'browser bridge scope required', 403);
-        const result = operationBroker.finishBrowserOtp(identity, await readBody(req));
-        audit({ action: 'v2_browser_otp_finish', status: 'ok', cn: ctx.cn, operation_id: result.id, completed: result.status === 'completed' });
+        const body = await readBody(req);
+        mandatoryAudit({ action: 'v2_browser_otp_finish_intent', status: 'authorized', cn: ctx.cn });
+        const result = operationBroker.finishBrowserOtpAndAudit(identity, body, (completion) => {
+          mandatoryAudit({
+            action: 'v2_browser_otp_finish', status: completion.status, cn: ctx.cn,
+            operation_id: completion.operation_id,
+          });
+        });
         send(res, 200, result);
         return true;
       }

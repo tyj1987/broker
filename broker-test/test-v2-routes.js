@@ -81,6 +81,11 @@ const handler = createV2Routes({
       calls.push(['finish', subject.name, input]);
       return { id: 'operation-id', status: input.completed ? 'completed' : 'failed' };
     },
+    finishBrowserOtpAndAudit(subject, input, commitAudit) {
+      const result = this.finishBrowserOtp(subject, input);
+      commitAudit({ operation_id: result.id, status: result.status });
+      return result;
+    },
     claimBrowserOperation(deviceId) {
       calls.push(['worker-claim', deviceId]);
       return { id: '00000000-0000-4000-8000-000000000002', operation: { id: 'operation-id' } };
@@ -297,6 +302,14 @@ assert.equal(calls.filter((item) => item[0] === 'claim').length, extensionClaims
 body = { receipt: 'receipt', completed: true };
 assert.equal((await route('/api/v2/browser/otp/finish')).value.status, 'completed');
 assert.ok(calls.some((item) => item[0] === 'finish'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_finish_intent'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_finish'
+  && event.status === 'completed'));
+const extensionFinishesBeforeResultAuditFailure = calls.filter((item) => item[0] === 'finish').length;
+auditFailureAction = 'v2_browser_otp_finish';
+assert.equal((await route('/api/v2/browser/otp/finish')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'finish').length, extensionFinishesBeforeResultAuditFailure + 1);
 
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' } };

@@ -87,6 +87,11 @@ result audit boundary as an isolated worker. If the result audit fails, the
 unpublished receipt is removed and the code, task and operation are restored to
 the pre-claim state.
 
+The extension completion callback is validated and mandatorily audited before
+the receipt is consumed or the OTP operation becomes terminal. During an audit
+outage the bounded receipt remains active for a status-only retry; the extension
+must not repeat page submission.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

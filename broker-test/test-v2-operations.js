@@ -283,12 +283,31 @@ assert.equal(extensionClaimAudited, true);
 assert.equal(claim.code, browserBody.code);
 assert.equal(JSON.stringify(broker.getOperation({ name: 'owner-1' }, browserOperation.id)).includes(browserBody.code), false);
 assert.throws(
+  () => broker.finishBrowserOtp(browserIdentity, { receipt: claim.receipt, completed: true, ignored: true }),
+  (error) => error instanceof V2Error && error.code === 'invalid_request',
+);
+assert.throws(
   () => broker.claimBrowserOtp(browserIdentity, {
     provider: 'aliyun', account_ref: 'primary', origin: 'https://account.aliyun.com', tab_id: 1, frame_id: 0, document_id: 'doc-1',
   }),
   (error) => error instanceof V2Error && error.code === 'not_found',
 );
-const browserFinished = broker.finishBrowserOtp(browserIdentity, { receipt: claim.receipt, completed: true });
+assert.throws(
+  () => broker.finishBrowserOtpAndAudit(
+    browserIdentity,
+    { receipt: claim.receipt, completed: true },
+    () => { throw new Error('audit unavailable'); },
+  ),
+  /audit unavailable/,
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, browserOperation.id).status, 'consuming');
+let extensionFinishAudited = false;
+const browserFinished = broker.finishBrowserOtpAndAudit(
+  browserIdentity,
+  { receipt: claim.receipt, completed: true },
+  () => { extensionFinishAudited = true; },
+);
+assert.equal(extensionFinishAudited, true);
 assert.equal(browserFinished.status, 'completed');
 assert.throws(
   () => broker.finishBrowserOtp(browserIdentity, { receipt: claim.receipt, completed: true }),

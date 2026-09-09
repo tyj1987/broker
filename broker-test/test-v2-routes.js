@@ -175,6 +175,17 @@ const handler = createV2Routes({
     eventsFor(_subject, id) { return [{ sequence: 1, task_id: id, state: 'REQUESTED' }]; },
   },
   webAuthnService: {
+    async beginAuthentication(input) {
+      calls.push(['webauthn-begin', input]);
+      return { flow_id: 'authentication-flow', options: {} };
+    },
+    async beginRegistration(subject, input) {
+      calls.push(['webauthn-registration-begin', subject.name, input]);
+      return { flow_id: 'registration-flow', options: {} };
+    },
+    rollbackFlowCreation(id, kind, clientName) {
+      calls.push(['webauthn-flow-rollback', id, kind, clientName]);
+    },
     async finishAuthentication(input) {
       calls.push(['webauthn-finish', input]);
       return {
@@ -234,6 +245,15 @@ const patchRoute = async (pathname) => {
   return response;
 };
 
+body = { client: 'admin-a' };
+assert.equal((await route('/api/v2/auth/webauthn/begin')).status, 200);
+assert.ok(auditEvents.some((event) => event.action === 'webauthn_authentication_begin'));
+auditFailureAction = 'webauthn_authentication_begin';
+assert.equal((await route('/api/v2/auth/webauthn/begin')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.ok(calls.some((item) => item[0] === 'webauthn-flow-rollback'
+  && item[1] === 'authentication-flow' && item[2] === 'authentication' && item[3] === 'admin-a'));
+
 body = { flow_id: 'flow-id', response: { id: 'credential-id' } };
 const authHeaders = {};
 response = null;
@@ -261,6 +281,14 @@ assert.equal(
 );
 
 identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
+body = { label: 'hardware-key' };
+assert.equal((await route('/api/v2/me/webauthn/registration/begin')).status, 200);
+assert.ok(auditEvents.some((event) => event.action === 'webauthn_registration_begin_intent'));
+auditFailureAction = 'webauthn_registration_begin';
+assert.equal((await route('/api/v2/me/webauthn/registration/begin')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.ok(calls.some((item) => item[0] === 'webauthn-flow-rollback'
+  && item[1] === 'registration-flow' && item[2] === 'registration' && item[3] === 'owner-1'));
 assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repository.read');
 assert.ok(calls.some((item) => item[0] === 'tool-list'));
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).status, 200);

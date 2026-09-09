@@ -70,6 +70,34 @@ assert.equal(authenticated.clientName, 'alice');
 assert.equal(authenticated.strictReady, true);
 assert.equal(config.clients.alice.factors.webauthn.credentials[0].counter, 1);
 
+const rollbackAuthentication = await service.beginAuthentication({ client: 'alice' });
+assert.throws(
+  () => service.rollbackFlowCreation(rollbackAuthentication.flow_id, 'registration', 'alice'),
+  (error) => error.code === 'invalid_flow',
+);
+assert.throws(
+  () => service.rollbackFlowCreation(rollbackAuthentication.flow_id, 'authentication', 'other-client'),
+  (error) => error.code === 'invalid_flow',
+);
+service.rollbackFlowCreation(rollbackAuthentication.flow_id, 'authentication', 'alice');
+await assert.rejects(
+  service.finishAuthentication({
+    flow_id: rollbackAuthentication.flow_id,
+    response: { id: 'key-1', response: {} },
+  }),
+  (error) => error.code === 'invalid_flow',
+);
+
+const rollbackRegistration = await service.beginRegistration(steppedUpIdentity, { label: 'Unused key' });
+service.rollbackFlowCreation(rollbackRegistration.flow_id, 'registration', 'alice');
+await assert.rejects(
+  service.finishRegistration(steppedUpIdentity, {
+    flow_id: rollbackRegistration.flow_id,
+    response: { id: 'unused-key', response: {} },
+  }),
+  (error) => error.code === 'invalid_flow',
+);
+
 const synced = await service.beginRegistration(steppedUpIdentity, { label: 'Synced passkey' });
 await assert.rejects(
   service.finishRegistration(steppedUpIdentity, {

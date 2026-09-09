@@ -97,6 +97,10 @@ mandatory authentication audit has been accepted. If audit storage is
 unavailable, no session record or cookie is created and the client must start a
 new WebAuthn ceremony.
 
+Authentication and registration challenges are also unpublished until their
+mandatory creation audit succeeds. On audit failure the exact flow, ceremony
+type and client binding are checked before the challenge is removed.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

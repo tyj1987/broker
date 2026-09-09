@@ -229,6 +229,14 @@ export class WebAuthnService {
     return id;
   }
 
+  rollbackFlowCreation(id, kind, clientName) {
+    const flow = this.flows.get(id);
+    if (!flow || flow.kind !== kind || flow.clientName !== clientName) {
+      throw new V2Error('invalid_flow', 'Authentication flow is invalid or expired', 401);
+    }
+    this.flows.delete(id);
+  }
+
   takeFlow(id, kind) {
     this.prune();
     const flow = this.flows.get(id);

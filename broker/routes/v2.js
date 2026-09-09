@@ -74,7 +74,14 @@ export function createV2Routes(deps) {
       }
 
       if (method === 'POST' && pathname === '/api/v2/auth/webauthn/begin') {
-        const result = await webAuthnService.beginAuthentication(await readBody(req));
+        const body = await readBody(req);
+        const result = await webAuthnService.beginAuthentication(body);
+        try {
+          mandatoryAudit({ action: 'webauthn_authentication_begin', status: 'ok', client: body?.client });
+        } catch (error) {
+          webAuthnService.rollbackFlowCreation(result.flow_id, 'authentication', String(body?.client || ''));
+          throw error;
+        }
         send(res, 200, result);
         return true;
       }
@@ -103,8 +110,15 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        const result = await webAuthnService.beginRegistration(identity, await readBody(req));
-        audit({ action: 'webauthn_registration_begin', status: 'ok', cn: ctx.cn });
+        const body = await readBody(req);
+        mandatoryAudit({ action: 'webauthn_registration_begin_intent', status: 'authorized', cn: ctx.cn });
+        const result = await webAuthnService.beginRegistration(identity, body);
+        try {
+          mandatoryAudit({ action: 'webauthn_registration_begin', status: 'ok', cn: ctx.cn });
+        } catch (error) {
+          webAuthnService.rollbackFlowCreation(result.flow_id, 'registration', identity.name);
+          throw error;
+        }
         send(res, 200, result);
         return true;
       }

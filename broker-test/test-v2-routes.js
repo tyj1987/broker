@@ -8,6 +8,7 @@ let body = {};
 let response = null;
 let auditFailure = false;
 const calls = [];
+const auditEvents = [];
 const handler = createV2Routes({
   operationBroker: {
     verifyDeviceRequest(deviceId, signed) {
@@ -25,6 +26,10 @@ const handler = createV2Routes({
     async suspendDevice(deviceId) {
       calls.push(['device-self-suspend', deviceId]);
       return { id: deviceId, state: 'suspended' };
+    },
+    listDeviceOtpTasks(deviceId) {
+      calls.push(['device-otp-list', deviceId]);
+      return [{ id: 'otp-task-id', status: 'waiting' }];
     },
     async createOperation(subject, input) {
       calls.push(['operation', subject.name, input, subject.context.approvalGrants || []]);
@@ -124,7 +129,8 @@ const handler = createV2Routes({
   getIdentity: () => identity,
   readBody: async () => body,
   send: (_res, status, value) => { response = { status, value }; },
-  audit: (_event, options) => {
+  audit: (event, options) => {
+    auditEvents.push(event);
     if (auditFailure && options?.mandatory) throw new Error('disk unavailable');
   },
   makeSession: () => '',
@@ -162,10 +168,14 @@ assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repo
 assert.ok(calls.some((item) => item[0] === 'tool-list'));
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).status, 200);
 assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'owner-1-device');
+assert.ok(auditEvents.some((event) => event.action === 'v2_operation_get' && event.operation_id));
+assert.ok(auditEvents.some((event) => event.action === 'v2_device_list' && event.count === 1));
 
 identity = { clientName: 'admin-key', via: 'api_key', client: { role: 'admin' } };
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).value.error, 'forbidden');
 assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'admin-key-device');
+assert.ok(auditEvents.some((event) => event.action === 'v2_request'
+  && event.reason === 'forbidden' && event.actor === 'admin-key'));
 
 identity = { clientName: 'admin-session', via: 'session', authFactors: [], client: { role: 'admin' } };
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).value.error, 'forbidden');
@@ -189,6 +199,8 @@ assert.equal((await getRoute(`/api/v2/tasks/${routeTaskId}`)).value.state, 'SUCC
 assert.equal((await getRoute(`/api/v2/tasks/${routeTaskId}/events`)).value.events.length, 1);
 assert.equal((await route(`/api/v2/tasks/${routeTaskId}/cancel`)).value.state, 'CANCELLED');
 assert.ok(calls.some((item) => item[0] === 'task-run'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_task_get' && event.task_state === 'SUCCEEDED'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_task_event_list' && event.count === 1));
 const taskCreatesBeforeAuditFailure = calls.filter((item) => item[0] === 'task-create').length;
 auditFailure = true;
 body = {
@@ -217,6 +229,7 @@ body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary
 assert.equal((await route('/api/v2/approvals')).status, 201);
 assert.ok(calls.some((item) => item[0] === 'approval-authorize'));
 assert.equal((await getRoute('/api/v2/approvals')).value.approvals.length, 1);
+assert.ok(auditEvents.some((event) => event.action === 'v2_approval_list' && event.count === 1));
 
 body = { ...body, provider: 'denied' };
 assert.equal((await route('/api/v2/approvals')).value.error, 'forbidden');
@@ -317,6 +330,12 @@ const claimVerify = calls.findLast((item) => item[0] === 'device-verify');
 assert.equal(claimVerify[2].body, '{}');
 assert.equal(claimVerify[2].nonce, 'route-nonce');
 assert.ok(calls.some((item) => item[0] === 'worker-claim'));
+
+response = null;
+await handler({ method: 'GET', headers: signedHeaders }, {}, { method: 'GET', pathname: `/api/v2/devices/${deviceId}/otp-tasks` });
+assert.equal(response.status, 200);
+assert.ok(auditEvents.some((event) => event.action === 'v2_device_otp_task_list'
+  && event.device_id === deviceId));
 
 body = { receipt: 'a'.repeat(43) };
 response = null;

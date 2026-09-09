@@ -66,9 +66,10 @@ export function createV2Routes(deps) {
     const { method, pathname } = route;
     if (!pathname.startsWith('/api/v2/')) return false;
 
+    let requestContext = null;
     try {
-      const initialContext = getIdentity(req);
-      if (initialContext && (typeof consumeRateLimit !== 'function' || !consumeRateLimit(initialContext))) {
+      requestContext = getIdentity(req);
+      if (requestContext && (typeof consumeRateLimit !== 'function' || !consumeRateLimit(requestContext))) {
         throw new V2Error('rate_limited', 'request rate limit exceeded', 429);
       }
 
@@ -119,8 +120,10 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        const credentials = webAuthnService.list(ctx.client);
+        audit({ action: 'v2_webauthn_credential_list', status: 'ok', cn: ctx.cn, count: credentials.length });
         send(res, 200, {
-          credentials: webAuthnService.list(ctx.client),
+          credentials,
           strict_ready: webAuthnService.strictReady(ctx.client),
         });
         return true;
@@ -158,7 +161,9 @@ export function createV2Routes(deps) {
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
-        send(res, 200, { events: taskBroker.eventsFor(identity, taskEventsMatch[1]) });
+        const events = taskBroker.eventsFor(identity, taskEventsMatch[1]);
+        audit({ action: 'v2_task_event_list', status: 'ok', cn: ctx.cn, task_id: taskEventsMatch[1], count: events.length });
+        send(res, 200, { events });
         return true;
       }
 
@@ -192,7 +197,9 @@ export function createV2Routes(deps) {
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
-        send(res, 200, taskBroker.get(identity, taskMatch[1]));
+        const result = taskBroker.get(identity, taskMatch[1]);
+        audit({ action: 'v2_task_get', status: 'ok', cn: ctx.cn, task_id: result.id, task_state: result.state });
+        send(res, 200, result);
         return true;
       }
 
@@ -253,7 +260,9 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        send(res, 200, { approvals: approvalBroker.list(identity) });
+        const approvals = approvalBroker.list(identity);
+        audit({ action: 'v2_approval_list', status: 'ok', cn: ctx.cn, count: approvals.length });
+        send(res, 200, { approvals });
         return true;
       }
 
@@ -300,7 +309,12 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        send(res, 200, operationBroker.getOperation(identity, operationMatch[1]));
+        const result = operationBroker.getOperation(identity, operationMatch[1]);
+        audit({
+          action: 'v2_operation_get', status: 'ok', cn: ctx.cn,
+          operation_id: result.id, provider: result.provider, operation_status: result.status,
+        });
+        send(res, 200, result);
         return true;
       }
 
@@ -374,7 +388,9 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        send(res, 200, { devices: operationBroker.listDevices(identity) });
+        const devices = operationBroker.listDevices(identity);
+        audit({ action: 'v2_device_list', status: 'ok', cn: ctx.cn, count: devices.length });
+        send(res, 200, { devices });
         return true;
       }
 
@@ -425,7 +441,9 @@ export function createV2Routes(deps) {
       if (method === 'GET' && taskListMatch) {
         const deviceId = taskListMatch[1];
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname));
-        send(res, 200, { tasks: operationBroker.listDeviceOtpTasks(deviceId) });
+        const tasks = operationBroker.listDeviceOtpTasks(deviceId);
+        audit({ action: 'v2_device_otp_task_list', status: 'ok', device_id: deviceId, count: tasks.length });
+        send(res, 200, { tasks });
         return true;
       }
 
@@ -482,7 +500,10 @@ export function createV2Routes(deps) {
       const safe = error instanceof V2Error
         ? error
         : new V2Error('internal_error', 'request could not be processed', 500);
-      audit({ action: 'v2_request', status: 'denied', reason: safe.code, path: pathname });
+      audit({
+        action: 'v2_request', status: 'denied', reason: safe.code, path: pathname,
+        cn: requestContext?.cn, actor: requestContext?.clientName,
+      });
       send(res, safe.status, { error: safe.code, message: safe.message, status: safe.status });
       return true;
     }

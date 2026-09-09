@@ -12,13 +12,14 @@ only approved business results; they do not receive long-lived credentials.
 - [Architecture](https://github.com/tyj1987/broker/blob/master/ARCHITECTURE.md) — current trust boundaries and repository layout.
 - [Threat model](THREAT-MODEL.md) — assets, actors, attacks, implemented controls and open gaps.
 - [SDK reference](SDK-REFERENCE.md) — `/api/v2` typed-operation and approval clients.
+- [Tool registry](TOOL-REGISTRY.md) — versioned capability metadata and risk invariants.
 - [Verification](https://github.com/tyj1987/broker/blob/master/VERIFY.md) — reproducible local and CI checks.
 - [Production acceptance](PRODUCTION-ACCEPTANCE.md) — observed evidence, release blockers and remaining gates.
 - [Operations runbook](https://github.com/tyj1987/broker/blob/master/RUNBOOK.md) — deployment, rollback, rotation, incidents and disaster recovery.
 
 ## Security boundary
 
-`/api/v2` covers typed operations, WebAuthn-backed approvals, registered
+`/api/v2` covers the versioned tool registry, typed operations, WebAuthn-backed approvals, registered
 devices and operation-bound OTP tasks. A production request must pass both the
 Node precheck and the Go policy core, and its exact provider operation must have
 retained isolated-account contract evidence.

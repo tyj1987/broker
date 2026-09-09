@@ -73,6 +73,12 @@ const handler = createV2Routes({
     release(id) { calls.push(['approval-release', id]); },
   },
   webAuthnService: {},
+  toolRegistry: {
+    listFor(subject) {
+      calls.push(['tool-list', subject.name]);
+      return [{ name: 'github.repository.read', version: '1.0.0' }];
+    },
+  },
   getIdentity: () => identity,
   readBody: async () => body,
   send: (_res, status, value) => { response = { status, value }; },
@@ -110,6 +116,8 @@ const patchRoute = async (pathname) => {
 };
 
 identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
+assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repository.read');
+assert.ok(calls.some((item) => item[0] === 'tool-list'));
 body = { provider: 'aliyun' };
 assert.equal((await route('/api/v2/browser/otp/claim')).status, 403);
 
@@ -118,11 +126,11 @@ assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'scope_deni
 
 identity.apiKey.scopes = ['browser:otp:fill'];
 assert.equal((await route('/api/v2/browser/otp/claim')).status, 200);
-assert.equal(calls[0][0], 'claim');
+assert.ok(calls.some((item) => item[0] === 'claim'));
 
 body = { receipt: 'receipt', completed: true };
 assert.equal((await route('/api/v2/browser/otp/finish')).value.status, 'completed');
-assert.equal(calls[1][0], 'finish');
+assert.ok(calls.some((item) => item[0] === 'finish'));
 
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' } };
@@ -247,7 +255,7 @@ assert.equal(calls.filter((item) => item[0] === 'worker-claim').length, claimsBe
 auditFailure = false;
 
 const limitedHandler = createV2Routes({
-  operationBroker: {}, approvalBroker: {}, webAuthnService: {}, getIdentity: () => identity,
+  operationBroker: {}, approvalBroker: {}, webAuthnService: {}, toolRegistry: {}, getIdentity: () => identity,
   readBody: async () => ({}), send: (_res, status, value) => { response = { status, value }; },
   audit: () => {}, makeSession: () => '', sessionCookieHeader: () => '',
   authorizeApprovalRequest: async () => ({ allow: true }), consumeRateLimit: () => false,

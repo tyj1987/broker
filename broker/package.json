@@ -42,11 +42,11 @@
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",
     "test:ws": "node ../broker-test/test-ws.js",
     "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:v2": "node ../broker-test/test-v2-operations.js && node ../broker-test/test-v2-boundaries.js && node ../broker-test/test-v2-routes.js && node ../broker-test/test-approvals-v2.js && node ../broker-test/test-browser-request.js && node ../broker-test/test-operation-policy.js && node ../broker-test/test-policy-conditions.js && node ../broker-test/test-go-policy-client.js && node ../broker-test/test-webauthn-service.js",
+    "test:v2": "node ../broker-test/test-v2-operations.js && node ../broker-test/test-v2-boundaries.js && node ../broker-test/test-v2-routes.js && node ../broker-test/test-approvals-v2.js && node ../broker-test/test-browser-request.js && node ../broker-test/test-operation-policy.js && node ../broker-test/test-policy-conditions.js && node ../broker-test/test-go-policy-client.js && node ../broker-test/test-tool-registry.js && node ../broker-test/test-webauthn-service.js",
     "test:outbound-policy": "node ../broker-test/test-outbound-policy.js",
     "test:providers": "node ../broker-test/test-provider-manifests.js",
     "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws && npm run test:v2 && npm run test:outbound-policy && npm run test:providers",
-    "test:coverage": "c8 --clean --all --include='lib/approvals-v2.js' --include='lib/browser-request.js' --include='lib/operation-policy.js' --include='lib/operations-v2.js' --include='lib/outbound-policy.js' --include='lib/policy-conditions.js' --reporter=text --reporter=lcov --lines=90 --branches=85 --functions=90 npm run test:verify",
+    "test:coverage": "c8 --clean --all --include='lib/approvals-v2.js' --include='lib/browser-request.js' --include='lib/operation-policy.js' --include='lib/operations-v2.js' --include='lib/outbound-policy.js' --include='lib/policy-conditions.js' --include='lib/tool-registry.js' --reporter=text --reporter=lcov --lines=90 --branches=85 --functions=90 npm run test:verify",
     "test:python-sdk": "cd ../sdk/python && python -m pytest tests/ -q",
     "test:verify-all": "npm run test:verify && npm run test:python-sdk",
     "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:v4"

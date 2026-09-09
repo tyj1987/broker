@@ -84,6 +84,7 @@ import { OperationBroker } from './lib/operations-v2.js';
 import { ApprovalBroker } from './lib/approvals-v2.js';
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
+import { loadToolRegistry } from './lib/tool-registry.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
 import {
@@ -144,11 +145,20 @@ const TLS_KEY        = process.env.TLS_KEY  || join(PKI_DIR, 'server/server.key'
 const TLS_CA         = process.env.TLS_CA   || join(PKI_DIR, 'ca/ca.crt');
 const TLS_CRL        = process.env.TLS_CRL  || join(PKI_DIR, 'ca/crl.pem');
 const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
+const packagedToolRegistry = resolvePath(__dirname, 'tools/registry.json');
+const TOOL_REGISTRY_PATH = process.env.TOOL_REGISTRY_PATH
+  || (existsSync(packagedToolRegistry) ? packagedToolRegistry : resolvePath(__dirname, '../tools/registry.json'));
+const toolRegistry = loadToolRegistry(TOOL_REGISTRY_PATH);
 
 const coreOperationAuthorization = createOperationAuthorizer(() => CONFIG);
 async function operationAuthorization(request, options = {}) {
   const preliminary = evaluateOperationPolicy(CONFIG, request, Date.now(), options);
-  return coreOperationAuthorization(request, preliminary, options);
+  const registered = toolRegistry.evaluate(request, preliminary, {
+    ...options,
+    operationPolicy: CONFIG?.operation_policies?.[request.provider]?.[request.operationId],
+  });
+  if (!registered.allow) return registered;
+  return coreOperationAuthorization(request, registered, options);
 }
 
 async function approvalRequestAuthorization(request) {
@@ -169,7 +179,7 @@ const operationBroker = new OperationBroker({
 });
 const webAuthnService = new WebAuthnService({ getConfig: () => CONFIG, persist: () => persistConfig() });
 const v2Routes = createV2Routes({
-  operationBroker, approvalBroker, webAuthnService, getIdentity, readBody, send, audit,
+  operationBroker, approvalBroker, webAuthnService, toolRegistry, getIdentity, readBody, send, audit,
   makeSession, sessionCookieHeader, authorizeApprovalRequest: approvalRequestAuthorization,
   consumeRateLimit: rateLimit,
   requireBrowserMutation: (req, ctx) => requireTrustedBrowserMutation(req, ctx, CONFIG?.webauthn?.rp_origin),
@@ -327,6 +337,7 @@ async function loadConfig() {
   if (!cfg || typeof cfg !== 'object') throw new Error('Invalid broker.yaml');
   cfg.services = cfg.services || {};
   cfg.clients = cfg.clients || {};
+  toolRegistry.validateConfiguration(cfg);
   CONFIG = cfg;
   operationBroker.hydrateDevices(CONFIG.device_registry || []);
   console.log(`[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`);

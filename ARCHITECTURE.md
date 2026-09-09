@@ -17,7 +17,8 @@ trusted nginx edge
         v
 Node transition layer -- identity/schema/policy precheck -- local socket -- Go policy core
         |
-        +-- typed /api/v2 operations, approvals, devices and OTP tasks
+        +-- versioned tool registry and typed /api/v2 operations
+        +-- approvals, devices and operation-bound OTP tasks
         +-- isolated /api/v1 compatibility surface; strict callers denied
         +-- append-only audit and common redaction
         +-- provider adapters with pinned outbound request shapes
@@ -28,6 +29,13 @@ a transition, UI and protocol-compatibility layer; it must not offer a route
 that bypasses the Go policy decision.
 
 ## Typed operation model
+
+Every executable operation must exist in `tools/registry.json`. The registry
+binds its version, closed input/output schemas, required role, risk level,
+environment, target, timeout, rate limit, approval and audit policy. Enabled
+configuration that is absent from or weaker than the registry fails closed.
+HIGH tools require approval. CRITICAL tools additionally deny agent execution
+and require an interactive WebAuthn step-up.
 
 A caller supplies only `provider`, `operation_id`, `account_ref`, `environment`
 and schema-approved `typed_parameters`. Authorization binds subject, role,
@@ -105,6 +113,7 @@ clients/              desktop, android, ios and browser
 sdk/                  Go, Python and VS Code clients
 contracts/            OpenAPI and generated contracts
 providers/            versioned provider manifests
+tools/                versioned executable tool registry and schema
 deploy/               container, Helm, nginx, systemd and rollback assets
 infra/                Aliyun primary and Tencent DR Terraform
 docs/                 architecture, security, usage and acceptance records

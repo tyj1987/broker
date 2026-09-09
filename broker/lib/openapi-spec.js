@@ -201,6 +201,13 @@ const p = {
       responses: { 202: jsonOK('Operation'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
     },
   },
+  '/api/v2/tools': {
+    get: {
+      tags: ['tools-v2'],
+      summary: 'List registered tools available to the authenticated identity',
+      responses: { 200: jsonOK('ToolList'), 401: respRef('Unauthorized'), 503: desc('Tool registry unavailable') },
+    },
+  },
   '/api/v2/auth/webauthn/begin': {
     post: {
       tags: ['auth-v2'], summary: 'Begin phishing-resistant WebAuthn authentication', security: [],
@@ -515,6 +522,27 @@ const s = {
       uptime_seconds: { type: 'number' },
     },
   },
+  ToolList: {
+    type: 'object', additionalProperties: false, required: ['registry_version', 'tools'],
+    properties: {
+      registry_version: { type: 'integer', const: 1 },
+      tools: { type: 'array', items: ref('ToolRegistration') },
+    },
+  },
+  ToolRegistration: {
+    type: 'object', additionalProperties: false,
+    required: ['name', 'version', 'description', 'provider', 'operation_id', 'input_schema', 'output_schema', 'required_role', 'risk_level', 'environments', 'target', 'timeout_ms', 'rate_limit', 'approval_policy', 'audit_policy', 'agent_execution'],
+    properties: {
+      name: { type: 'string' }, version: { type: 'string' }, description: { type: 'string' },
+      provider: { type: 'string' }, operation_id: { type: 'string' },
+      input_schema: { type: 'object' }, output_schema: { type: 'object' },
+      required_role: { type: 'string', enum: ['viewer', 'developer', 'operator', 'admin'] },
+      risk_level: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+      environments: { type: 'array', items: { type: 'string', enum: ['development', 'staging', 'production'] } },
+      target: { type: 'object' }, timeout_ms: { type: 'integer' }, rate_limit: { type: 'object' },
+      approval_policy: { type: 'object' }, audit_policy: { type: 'object' }, agent_execution: { type: 'boolean' },
+    },
+  },
   OperationCreate: {
     type: 'object', additionalProperties: false,
     required: ['provider', 'operation_id', 'account_ref', 'environment', 'typed_parameters'],
@@ -721,6 +749,7 @@ export const OPENAPI_SPEC = {
     { name: 'admin', description: 'Admin operations' },
     { name: 'healthcheck', description: 'Credential self-check' },
     { name: 'operations-v2', description: 'Policy-bound typed operations' },
+    { name: 'tools-v2', description: 'Versioned, risk-classified tool registry' },
     { name: 'approvals-v2', description: 'Bound, WebAuthn-stepped-up approvals with separation of duties' },
     { name: 'devices-v2', description: 'Device proof-of-possession and bound OTP tasks' },
     { name: 'browser-workers-v2', description: 'Signed short-lived leases for isolated typed browser operations' },

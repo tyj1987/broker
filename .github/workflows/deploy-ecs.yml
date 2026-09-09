@@ -54,6 +54,7 @@ jobs:
         run: go build -trimpath -buildvcs=true -ldflags='-s -w' -o broker/bin/secret-broker-policy ./core/cmd/policy-server
       - name: Create immutable payload and checksum
         run: |
+          cp -R tools broker/tools
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             --exclude='docs/openapi.yaml' -czf broker-${RELEASE_SHA}.tgz -C broker .
           sha256sum broker-${RELEASE_SHA}.tgz > broker-${RELEASE_SHA}.tgz.sha256

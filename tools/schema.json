@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://broker.52trz.com/schemas/tool-registry-v1.json",
+  "title": "Secret Broker Tool Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registry_version", "tools"],
+  "properties": {
+    "registry_version": { "const": 1 },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "version", "description", "provider", "operation_id", "input_schema", "output_schema", "required_role", "risk_level", "environments", "target", "timeout_ms", "rate_limit", "approval_policy", "audit_policy", "agent_execution"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$" },
+          "version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$" },
+          "description": { "type": "string", "minLength": 12, "maxLength": 240 },
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$" },
+          "operation_id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,127}$" },
+          "input_schema": { "$ref": "#/$defs/closedObjectSchema" },
+          "output_schema": { "$ref": "#/$defs/closedObjectSchema" },
+          "required_role": { "enum": ["viewer", "developer", "operator", "admin"] },
+          "risk_level": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+          "environments": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["development", "staging", "production"] } },
+          "target": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "resource_parameter"],
+            "properties": {
+              "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$" },
+              "resource_parameter": { "const": "resource_ref" }
+            }
+          },
+          "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 120000 },
+          "rate_limit": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requests", "window_seconds"],
+            "properties": {
+              "requests": { "type": "integer", "minimum": 1, "maximum": 10000 },
+              "window_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 }
+            }
+          },
+          "approval_policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "approvals_required"],
+            "properties": {
+              "mode": { "enum": ["none", "step_up", "two_person"] },
+              "approvals_required": { "type": "integer", "minimum": 0, "maximum": 10 }
+            }
+          },
+          "audit_policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["required", "redact"],
+            "properties": {
+              "required": { "const": true },
+              "redact": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+            }
+          },
+          "agent_execution": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "closedObjectSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "additionalProperties", "properties"],
+      "properties": {
+        "type": { "const": "object" },
+        "additionalProperties": { "const": false },
+        "required": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "properties": { "type": "object" }
+      }
+    }
+  }
+}

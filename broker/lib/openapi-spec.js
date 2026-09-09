@@ -691,10 +691,11 @@ const s = {
   DeviceEnrollmentBegin: {
     type: 'object', additionalProperties: false, required: ['label', 'platform', 'approval_request_id'],
     properties: {
-      label: { type: 'string', maxLength: 80 },
+      label: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[a-z0-9][a-z0-9._:-]{0,79}$' },
       platform: { type: 'string', enum: ['android', 'windows', 'linux', 'ios', 'browser-worker'] },
       capabilities: {
-        type: 'array', items: { type: 'string' },
+        type: 'array', maxItems: 32, uniqueItems: true,
+        items: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[a-z0-9][a-z0-9._:-]{0,127}$' },
         description: 'Browser worker grants use browser.execute:<provider>:<operation>:<account>:<environment>.',
       },
       approval_request_id: { type: 'string', format: 'uuid', description: 'Two-person approval bound to the complete enrollment request' },
@@ -709,8 +710,8 @@ const s = {
     properties: {
       enrollment_id: { type: 'string', format: 'uuid' },
       signature_algorithm: { type: 'string', enum: ['ed25519', 'p256-sha256'] },
-      public_key_pem: { type: 'string', description: 'PEM encoded Ed25519 or NIST P-256 public key' },
-      signature: { type: 'string', description: 'Base64url signature over the enrollment challenge' },
+      public_key_pem: { type: 'string', minLength: 1, maxLength: 4096, description: 'PEM encoded Ed25519 or NIST P-256 public key' },
+      signature: { type: 'string', minLength: 1, maxLength: 512, pattern: '^[A-Za-z0-9_-]+$', description: 'Base64url signature over the enrollment challenge' },
     },
   },
   Device: {

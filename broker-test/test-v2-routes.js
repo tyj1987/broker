@@ -494,6 +494,10 @@ for (const invalidBody of [
   { label: 'worker', platform: 'unknown', approval_request_id: '00000000-0000-4000-8000-000000000022' },
   { label: 'worker', platform: 'android', approval_request_id: 'not-a-uuid' },
   { label: 'worker', platform: 'android', capabilities: 'otp.receive', approval_request_id: '00000000-0000-4000-8000-000000000022' },
+  { label: 'worker', platform: 'android', capabilities: ['otp.receive', 'otp.receive'], approval_request_id: '00000000-0000-4000-8000-000000000022' },
+  { label: 'worker', platform: 'android', capabilities: Array(33).fill('otp.receive'), approval_request_id: '00000000-0000-4000-8000-000000000022' },
+  { label: 'worker', platform: 'android', capabilities: ['otp receive'], approval_request_id: '00000000-0000-4000-8000-000000000022' },
+  { label: 'worker label', platform: 'android', approval_request_id: '00000000-0000-4000-8000-000000000022' },
   { label: 'x'.repeat(81), platform: 'android', approval_request_id: '00000000-0000-4000-8000-000000000022' },
 ]) {
   body = invalidBody;
@@ -533,6 +537,16 @@ const deviceFinishesBeforeInvalidBody = calls.filter((item) => item[0] === 'enro
 body = {
   enrollment_id: '00000000-0000-4000-8000-000000000099', signature_algorithm: 'ed25519',
   public_key_pem: 'public-key', signature: 'signature', ignored: true,
+};
+assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'invalid_request');
+body = {
+  enrollment_id: '00000000-0000-4000-8000-000000000099', signature_algorithm: 'ed25519',
+  public_key_pem: 'x'.repeat(4097), signature: 'signature',
+};
+assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'invalid_request');
+body = {
+  enrollment_id: '00000000-0000-4000-8000-000000000099', signature_algorithm: 'ed25519',
+  public_key_pem: 'public-key', signature: 'not+base64url=',
 };
 assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'invalid_request');
 body = {

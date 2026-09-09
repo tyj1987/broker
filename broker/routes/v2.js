@@ -51,6 +51,9 @@ function deviceStateApproval(deviceId, body) {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEVICE_PLATFORMS = new Set(['android', 'windows', 'linux', 'ios', 'browser-worker']);
 const DEVICE_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'p256-sha256']);
+const DEVICE_LABEL_RE = /^[a-z0-9][a-z0-9._:-]{0,79}$/;
+const DEVICE_CAPABILITY_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+const DEVICE_PROOF_RE = /^[A-Za-z0-9_-]{1,512}$/;
 
 function isRecord(body) {
   return body !== null && typeof body === 'object' && !Array.isArray(body);
@@ -66,12 +69,15 @@ function hasOnlyKeys(body, required, optional = []) {
 function validatedDeviceEnrollmentBeginBody(body) {
   if (!isRecord(body)
     || !hasOnlyKeys(body, ['label', 'platform', 'approval_request_id'], ['capabilities'])
-    || typeof body.label !== 'string' || body.label.length === 0 || body.label.length > 80
+    || typeof body.label !== 'string' || !DEVICE_LABEL_RE.test(body.label)
     || !DEVICE_PLATFORMS.has(body.platform)
     || typeof body.approval_request_id !== 'string' || !UUID_RE.test(body.approval_request_id)
     || (Object.hasOwn(body, 'capabilities')
       && (!Array.isArray(body.capabilities)
-        || body.capabilities.some((capability) => typeof capability !== 'string')))) {
+        || body.capabilities.length > 32
+        || new Set(body.capabilities).size !== body.capabilities.length
+        || body.capabilities.some((capability) => typeof capability !== 'string'
+          || !DEVICE_CAPABILITY_RE.test(capability))))) {
     throw new V2Error('invalid_request', 'device enrollment request does not match the published schema');
   }
   return body;
@@ -82,8 +88,9 @@ function validatedDeviceEnrollmentFinishBody(body) {
     || !hasOnlyKeys(body, ['enrollment_id', 'signature_algorithm', 'public_key_pem', 'signature'])
     || typeof body.enrollment_id !== 'string' || !UUID_RE.test(body.enrollment_id)
     || !DEVICE_SIGNATURE_ALGORITHMS.has(body.signature_algorithm)
-    || typeof body.public_key_pem !== 'string'
-    || typeof body.signature !== 'string') {
+    || typeof body.public_key_pem !== 'string' || body.public_key_pem.length === 0
+    || body.public_key_pem.length > 4096
+    || typeof body.signature !== 'string' || !DEVICE_PROOF_RE.test(body.signature)) {
     throw new V2Error('invalid_request', 'device enrollment proof does not match the published schema');
   }
   return body;

@@ -116,7 +116,9 @@ before approval lookup, intent audit, proof verification, or registry mutation.
 Unknown fields, unsupported platforms or signature algorithms, and malformed
 approval or enrollment identifiers are rejected without publishing a challenge
 or attempting a device proof. Public keys and proof signatures are never copied
-into audit events.
+into audit events. Labels and capability identifiers use bounded safe character
+sets; capability lists, public keys, and Base64url proof signatures have explicit
+size limits before cryptographic parsing.
 
 Device state changes enforce the closed OpenAPI request shape before intent
 audit or approval lookup. Only `state` and a UUID `approval_request_id` are

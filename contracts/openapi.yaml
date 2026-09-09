@@ -2140,7 +2140,9 @@ components:
       properties:
         label:
           type: string
+          minLength: 1
           maxLength: 80
+          pattern: ^[a-z0-9][a-z0-9._:-]{0,79}$
         platform:
           type: string
           enum:
@@ -2151,8 +2153,13 @@ components:
             - browser-worker
         capabilities:
           type: array
+          maxItems: 32
+          uniqueItems: true
           items:
             type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[a-z0-9][a-z0-9._:-]{0,127}$
           description: Browser worker grants use
             browser.execute:<provider>:<operation>:<account>:<environment>.
         approval_request_id:
@@ -2193,9 +2200,14 @@ components:
             - p256-sha256
         public_key_pem:
           type: string
+          minLength: 1
+          maxLength: 4096
           description: PEM encoded Ed25519 or NIST P-256 public key
         signature:
           type: string
+          minLength: 1
+          maxLength: 512
+          pattern: ^[A-Za-z0-9_-]+$
           description: Base64url signature over the enrollment challenge
     Device:
       type: object

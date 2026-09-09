@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { V2Error, canonicalJson } from './operations-v2.js';
 import { ExecutionTokenBroker } from './execution-tokens.js';
+import { redactDeep } from './redact.js';
 
 const STATES = new Set([
   'REQUESTED', 'PENDING_APPROVAL', 'READY', 'EXECUTING',
@@ -308,6 +309,9 @@ export class AutomationTaskBroker {
           execution: executionGrant,
         }, timeoutMs, timeoutCode);
         assertSchema(result, task.tool.output_schema, 'result');
+        if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
+          throw new V2Error('unsafe_result', 'executor result contains credential material', 502);
+        }
         task.result = structuredClone(result);
         task.latencyMs = Math.max(0, this.now() - startedAt);
         if (approvalClaim) this.approvalBroker.markSucceeded(approvalClaim.id);

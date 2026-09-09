@@ -495,6 +495,24 @@ const tokenFailureBroker = new AutomationTaskBroker({
 const tokenFailure = await tokenFailureBroker.create(human, { ...lowInput, idempotency_key: 'token-failure-task1' });
 assert.equal((await tokenFailureBroker.run(human, tokenFailure.id)).error.code, 'execution_token_failed');
 
+const unsafeOutputBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize,
+  approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => ({
+    name: `gh${'p_'}${'A'.repeat(24)}`,
+    version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect',
+    risk_level: 'LOW', agent_execution: true,
+  })]]),
+});
+const unsafeOutput = await unsafeOutputBroker.create(human, {
+  ...lowInput, idempotency_key: 'unsafe-output-task01',
+});
+const unsafeOutputResult = await unsafeOutputBroker.run(human, unsafeOutput.id);
+assert.equal(unsafeOutputResult.state, 'FAILED');
+assert.deepEqual(unsafeOutputResult.error, { code: 'unsafe_result' });
+assert.equal(unsafeOutputResult.result, undefined, 'credential-like executor output is never retained');
+
 let auditedExecutionCalls = 0;
 const mandatoryAuditEvents = [];
 const auditFailureBroker = new AutomationTaskBroker({

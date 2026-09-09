@@ -257,7 +257,12 @@ export function createV2Routes(deps) {
         }
         mandatoryAudit({ action: 'v2_approval_create_intent', status: 'authorized', cn: ctx.cn, provider: body?.provider });
         const result = approvalBroker.create(identity, body);
-        audit({ action: 'v2_approval_create', status: 'ok', cn: ctx.cn, approval_id: result.id });
+        try {
+          mandatoryAudit({ action: 'v2_approval_create', status: 'ok', cn: ctx.cn, approval_id: result.id });
+        } catch (error) {
+          approvalBroker.rollbackCreation(identity, result.id);
+          throw error;
+        }
         send(res, 201, result);
         return true;
       }

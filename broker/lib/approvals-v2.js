@@ -99,6 +99,20 @@ export class ApprovalBroker {
     return publicApproval(record);
   }
 
+  rollbackCreation(identity, id) {
+    const record = this.records.get(id);
+    if (!record || !STATES.has(record.status)) {
+      throw new V2Error('not_found', 'approval request not found', 404);
+    }
+    if (!identity?.name || record.requester !== identity.name) {
+      throw new V2Error('forbidden', 'approval request access denied', 403);
+    }
+    if (record.status !== 'REQUESTED' || record.approvers.length !== 0) {
+      throw new V2Error('invalid_state', 'approval creation cannot be rolled back', 409);
+    }
+    this.records.delete(id);
+  }
+
   decide(identity, id, decision) {
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);

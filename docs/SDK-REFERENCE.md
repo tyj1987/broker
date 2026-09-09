@@ -47,6 +47,11 @@ operation, any waiting OTP task and its serialization lock are rolled back, and
 an unused approval claim is released. This rollback applies only before an
 executor or isolated browser worker has received the operation.
 
+Approval requests use the same publication boundary. A newly created request is
+returned only after its mandatory creation audit is accepted; otherwise the
+unpublished request is removed. The rollback is rejected once any approver has
+acted on the request.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

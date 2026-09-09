@@ -56,6 +56,14 @@ assert.throws(() => broker.create(requester, { ...input, account_ref: 'other' })
 assert.throws(() => broker.create(requester, { ...input, typed_parameters: {} }), expectCode('invalid_request'));
 assert.throws(() => broker.create(revokedRequester, input), expectCode('forbidden'));
 
+const unpublished = broker.create(requester, input);
+assert.throws(
+  () => broker.rollbackCreation({ ...requester, name: 'other-requester' }, unpublished.id),
+  expectCode('forbidden'),
+);
+broker.rollbackCreation(requester, unpublished.id);
+assert.throws(() => broker.rollbackCreation(requester, unpublished.id), expectCode('not_found'));
+
 const request = broker.create(requester, input);
 assert.equal(request.status, 'REQUESTED');
 assert.equal(request.required_approvals, 2);
@@ -85,6 +93,7 @@ assert.throws(() => broker.decide(approver('requester'), request.id, 'approve'),
 assert.throws(() => broker.decide(approver('developer-a', 'developer'), request.id, 'approve'), expectCode('forbidden'));
 assert.throws(() => broker.decide(approver('admin-a'), request.id, 'invalid'), expectCode('invalid_request'));
 assert.equal(broker.decide(approver('admin-a'), request.id, 'approve').status, 'REQUESTED');
+assert.throws(() => broker.rollbackCreation(requester, request.id), expectCode('invalid_state'));
 assert.throws(() => broker.decide(approver('admin-a'), request.id, 'approve'), expectCode('duplicate_approval'));
 assert.equal(broker.decide(approver('admin-b'), request.id, 'approve').status, 'APPROVED');
 assert.throws(

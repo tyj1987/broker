@@ -82,6 +82,9 @@ const handler = createV2Routes({
       calls.push(['approval-create', subject.name, input]);
       return { id: 'approval-id', status: 'REQUESTED' };
     },
+    rollbackCreation(subject, id) {
+      calls.push(['approval-create-rollback', subject.name, id]);
+    },
     list(subject) { return [{ id: 'approval-id', requester: subject.name }]; },
     decide(subject, id, decision) {
       calls.push(['approval-decision', subject.name, id, decision]);
@@ -261,6 +264,14 @@ auditFailure = true;
 assert.equal((await route('/api/v2/approvals')).value.error, 'audit_unavailable');
 assert.equal(calls.filter((item) => item[0] === 'approval-create').length, 1, 'mutation is blocked before audit intent');
 auditFailure = false;
+
+const approvalCreatesBeforeResultAuditFailure = calls.filter((item) => item[0] === 'approval-create').length;
+auditFailureAction = 'v2_approval_create';
+assert.equal((await route('/api/v2/approvals')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'approval-create').length, approvalCreatesBeforeResultAuditFailure + 1);
+assert.ok(calls.some((item) => item[0] === 'approval-create-rollback'
+  && item[1] === 'requester' && item[2] === 'approval-id'));
 
 identity = { clientName: 'admin-a', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
 body = { decision: 'approve' };

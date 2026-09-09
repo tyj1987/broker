@@ -55,6 +55,9 @@ const atomicBroker = new ApprovalBroker({
 });
 
 assert.throws(() => broker.create(null, input), expectCode('unauthorized'));
+const invalidPrincipal = { ...requester, name: 'invalid\0principal' };
+assert.throws(() => broker.create(invalidPrincipal, input), expectCode('unauthorized'));
+assert.throws(() => broker.list(invalidPrincipal), expectCode('unauthorized'));
 assert.throws(() => broker.create(requester, { ...input, operation_id: 'unapproved' }), expectCode('approval_not_required'));
 assert.throws(() => broker.create(requester, { ...input, account_ref: 'other' }), expectCode('forbidden'));
 assert.throws(() => broker.create(requester, { ...input, environment: 'invalid environment' }), expectCode('invalid_request'));
@@ -62,6 +65,10 @@ assert.throws(() => broker.create(requester, { ...input, typed_parameters: {} })
 assert.throws(() => broker.create(revokedRequester, input), expectCode('forbidden'));
 
 const unpublished = broker.create(requester, input);
+assert.throws(() => broker.rollbackCreation(invalidPrincipal, unpublished.id), expectCode('unauthorized'));
+assert.throws(() => broker.claimFor(invalidPrincipal, { ...input, approval_request_id: unpublished.id }), expectCode('unauthorized'));
+assert.throws(() => broker.cancel(invalidPrincipal, unpublished.id), expectCode('unauthorized'));
+assert.throws(() => broker.decide({ ...approver('invalid'), name: 'invalid\nprincipal' }, unpublished.id, 'approve'), expectCode('unauthorized'));
 assert.throws(
   () => broker.rollbackCreation({ ...requester, name: 'other-requester' }, unpublished.id),
   expectCode('forbidden'),

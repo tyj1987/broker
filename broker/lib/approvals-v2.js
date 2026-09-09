@@ -37,7 +37,8 @@ function validTimestamp(value) {
 }
 
 function validBoundedString(value, max = 256) {
-  return typeof value === 'string' && value.length > 0 && value.length <= max;
+  return typeof value === 'string' && value.length > 0 && value.length <= max
+    && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function validateStateRecord(value) {
@@ -186,7 +187,10 @@ export class ApprovalBroker {
     if (!record || !STATES.has(record.status)) {
       throw new V2Error('not_found', 'approval request not found', 404);
     }
-    if (!identity?.name || record.requester !== identity.name) {
+    if (!validBoundedString(identity?.name)) {
+      throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    }
+    if (record.requester !== identity.name) {
       throw new V2Error('forbidden', 'approval request access denied', 403);
     }
     if (record.status !== 'REQUESTED' || record.approvers.length !== 0) {
@@ -198,7 +202,10 @@ export class ApprovalBroker {
   decide(identity, id, decision) {
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
-    if (!identity?.name || !identity.context || identity.context.via !== 'session'
+    if (!validBoundedString(identity?.name)) {
+      throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    }
+    if (!identity.context || identity.context.via !== 'session'
       || !identity.context.authFactors?.includes('webauthn')) {
       throw new V2Error('step_up_required', 'approval requires a fresh WebAuthn session', 403);
     }
@@ -252,7 +259,7 @@ export class ApprovalBroker {
   }
 
   list(identity) {
-    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    if (!validBoundedString(identity?.name)) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     this.prune();
     const context = identity.context;
     const role = context?.client?.role;
@@ -268,7 +275,7 @@ export class ApprovalBroker {
   claimFor(identity, input) {
     const id = input?.approval_request_id;
     if (!id) return null;
-    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    if (!validBoundedString(identity?.name)) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const candidate = this.records.get(id);
     if (!candidate || !STATES.has(candidate.status)) throw new V2Error('not_found', 'approval request not found', 404);
     if (!apiKeyAllowsApproval(identity, candidate)) {
@@ -321,7 +328,7 @@ export class ApprovalBroker {
   }
 
   cancel(identity, id) {
-    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    if (!validBoundedString(identity?.name)) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
     const isAdmin = identity.context?.client?.role === 'admin';

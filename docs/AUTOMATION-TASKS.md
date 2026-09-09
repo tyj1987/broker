@@ -129,9 +129,12 @@ tombstone, idempotency and rate-limit state from an authenticated encrypted
 state file. Task creation is returned only after a `created` checkpoint;
 cancellation is returned only after a `cancelled` checkpoint. Execution is
 checkpointed before the adapter side effect and again after its terminal
-transition. If a creation or cancellation checkpoint fails, the corresponding
-task, idempotency binding and approval mutation are rolled back before an API
-success can be returned.
+transition. If a creation or cancellation checkpoint fails before file
+replacement, the corresponding task, idempotency binding and approval mutation
+are rolled back before an API success can be returned. A failure after atomic
+replacement is reported as `state_commit_indeterminate`; the matching in-memory
+mutation is retained for reconciliation, and an idempotent creation retry
+returns the original task instead of duplicating it.
 
 A restored `EXECUTING` task remains indeterminate and cannot be retried because
 the upstream side effect may already have occurred. The current file-backed

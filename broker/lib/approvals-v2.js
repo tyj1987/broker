@@ -248,6 +248,7 @@ export class ApprovalBroker {
     try {
       commitAudit(result);
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       if (!previous || this.records.get(id) !== record) {
         throw new V2Error('audit_rollback_failed', 'approval audit rollback failed', 503);
       }
@@ -369,6 +370,7 @@ export class ApprovalBroker {
     try {
       commitAudit(result);
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       if (!record || this.records.get(id) !== record) {
         throw new V2Error('audit_rollback_failed', 'approval audit rollback failed', 503);
       }

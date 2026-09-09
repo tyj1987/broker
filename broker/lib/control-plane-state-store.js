@@ -175,7 +175,7 @@ function parseEnvelope(serialized) {
 }
 
 export class EncryptedControlPlaneStateStore {
-  constructor({ path, key, coordinator } = {}) {
+  constructor({ path, key, coordinator, syncDirectory = syncParentDirectory } = {}) {
     if (typeof path !== 'string' || !isAbsolute(path) || basename(path).length < 1) {
       throw failure('state_path_invalid', 'control-plane state path must be absolute');
     }
@@ -188,6 +188,10 @@ export class EncryptedControlPlaneStateStore {
       throw failure('state_component_invalid', 'control-plane state coordinator is unavailable');
     }
     this.coordinator = coordinator;
+    if (typeof syncDirectory !== 'function') {
+      throw failure('state_component_invalid', 'control-plane directory sync is unavailable');
+    }
+    this.syncDirectory = syncDirectory;
     this.closed = false;
   }
 
@@ -217,6 +221,7 @@ export class EncryptedControlPlaneStateStore {
     const targetDirectory = dirname(this.path);
     const temporary = join(targetDirectory, `.${basename(this.path)}.${randomUUID()}.tmp`);
     let descriptor;
+    let replaced = false;
     try {
       descriptor = openSync(temporary, 'wx', 0o600);
       writeFileSync(descriptor, `${JSON.stringify(envelope)}\n`, 'utf8');
@@ -225,8 +230,9 @@ export class EncryptedControlPlaneStateStore {
       descriptor = undefined;
       chmodSync(temporary, 0o600);
       renameSync(temporary, this.path);
-      syncParentDirectory(targetDirectory);
+      replaced = true;
       this.coordinator.commitGeneration(snapshot.generation);
+      this.syncDirectory(targetDirectory);
       return { version: envelope.version, generation: envelope.generation };
     } catch {
       if (descriptor !== undefined) {
@@ -234,6 +240,13 @@ export class EncryptedControlPlaneStateStore {
       }
       if (existsSync(temporary)) {
         try { unlinkSync(temporary); } catch { /* best effort */ }
+      }
+      if (replaced) {
+        throw failure(
+          'state_commit_indeterminate',
+          'control-plane state may have been committed and requires reconciliation',
+          503,
+        );
       }
       throw failure('state_write_failed', 'control-plane state could not be committed', 503);
     }

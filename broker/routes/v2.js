@@ -358,6 +358,7 @@ export function createV2Routes(deps) {
           mandatoryAudit({ action: 'v2_approval_create', status: 'ok', cn: ctx.cn, approval_id: result.id });
           mandatoryCheckpoint('approval_created');
         } catch (error) {
+          if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
           approvalBroker.rollbackCreation(identity, result.id);
           throw error;
         }

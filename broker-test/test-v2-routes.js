@@ -10,6 +10,7 @@ let auditFailure = false;
 let auditFailureAction = null;
 let checkpointFailurePhase = null;
 let asyncCheckpointPhase = null;
+let indeterminateCheckpointPhase = null;
 const calls = [];
 const auditEvents = [];
 const handler = createV2Routes({
@@ -250,6 +251,9 @@ const handler = createV2Routes({
     calls.push(['checkpoint', phase]);
     if (phase === checkpointFailurePhase) throw new Error('state unavailable');
     if (phase === asyncCheckpointPhase) return Promise.resolve(true);
+    if (phase === indeterminateCheckpointPhase) {
+      throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+    }
     return true;
   },
 });
@@ -456,6 +460,15 @@ asyncCheckpointPhase = 'approval_created';
 assert.equal((await route('/api/v2/approvals')).value.error, 'checkpoint_invalid');
 asyncCheckpointPhase = null;
 assert.ok(calls.filter((item) => item[0] === 'approval-create-rollback').length >= 3);
+const rollbacksBeforeIndeterminateCreate = calls.filter((item) => item[0] === 'approval-create-rollback').length;
+indeterminateCheckpointPhase = 'approval_created';
+assert.equal((await route('/api/v2/approvals')).value.error, 'state_commit_indeterminate');
+indeterminateCheckpointPhase = null;
+assert.equal(
+  calls.filter((item) => item[0] === 'approval-create-rollback').length,
+  rollbacksBeforeIndeterminateCreate,
+  'an indeterminate durable create must not be rolled back in memory',
+);
 
 identity = { clientName: 'admin-a', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
 body = { decision: 'approve' };

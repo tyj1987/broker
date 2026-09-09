@@ -1103,6 +1103,34 @@ assert.equal(creationCheckpointBroker.tasks.size, 0);
 assert.equal(creationCheckpointBroker.idempotency.size, 0);
 assert.deepEqual(creationCheckpointApprovals.list(human), []);
 
+const indeterminateCreationApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const indeterminateCreationBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: indeterminateCreationApprovals, executors, now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'created') {
+      throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+    }
+  },
+});
+const indeterminateCreationInput = {
+  ...criticalInput, idempotency_key: 'checkpoint-create-unknown1',
+};
+await assert.rejects(
+  indeterminateCreationBroker.create(human, indeterminateCreationInput),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(indeterminateCreationBroker.tasks.size, 1);
+assert.equal(indeterminateCreationBroker.idempotency.size, 1);
+assert.equal(indeterminateCreationApprovals.list(human)[0].status, 'REQUESTED');
+assert.equal(
+  (await indeterminateCreationBroker.create(human, indeterminateCreationInput)).state,
+  'PENDING_APPROVAL',
+  'an idempotent retry reconciles an indeterminate create without duplicating it',
+);
+
 let failCancellationCheckpoint = true;
 const cancellationCheckpointApprovals = new ApprovalBroker({
   now: () => now,
@@ -1127,6 +1155,28 @@ assert.throws(
 assert.equal(cancellationCheckpointBroker.get(human, cancellationCheckpointTask.id).state, 'PENDING_APPROVAL');
 assert.equal(cancellationCheckpointApprovals.list(human)[0].status, 'REQUESTED');
 assert.equal(cancellationCheckpointBroker.cancel(human, cancellationCheckpointTask.id).state, 'CANCELLED');
+
+const indeterminateCancellationApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const indeterminateCancellationBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: indeterminateCancellationApprovals, executors, now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'cancelled') {
+      throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+    }
+  },
+});
+const indeterminateCancellationTask = await indeterminateCancellationBroker.create(human, {
+  ...criticalInput, idempotency_key: 'checkpoint-cancel-unknown1',
+});
+assert.throws(
+  () => indeterminateCancellationBroker.cancel(human, indeterminateCancellationTask.id),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(indeterminateCancellationBroker.get(human, indeterminateCancellationTask.id).state, 'CANCELLED');
+assert.equal(indeterminateCancellationApprovals.list(human)[0].status, 'CANCELLED');
 
 let checkpointExecutorCalls = 0;
 const unavailableCheckpointBroker = new AutomationTaskBroker({

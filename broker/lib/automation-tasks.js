@@ -391,6 +391,7 @@ export class AutomationTaskBroker {
       try {
         this.checkpoint(task, 'created');
       } catch (error) {
+        if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
         this.idempotency.delete(idempotencyKey);
         this.tasks.delete(task.id);
         if (task.approvalId) {
@@ -554,6 +555,7 @@ export class AutomationTaskBroker {
       this.checkpoint(task, 'cancelled');
       return publicTask(task);
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       this.tasks.set(task.id, previousTask);
       if (task.approvalId && previousApprovalStatus !== null) {
         try {

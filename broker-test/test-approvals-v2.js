@@ -90,6 +90,19 @@ assert.equal(
 );
 assert.equal(atomicBroker.decide(approver('admin-rollback'), decisionRollback.id, 'approve').status, 'REQUESTED');
 assert.equal(atomicBroker.cancel(requester, decisionRollback.id).status, 'CANCELLED');
+const indeterminateDecision = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.decideAndAudit(approver('admin-indeterminate'), indeterminateDecision.id, 'approve', () => {
+    throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+  }),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(
+  atomicBroker.list(requester).find((item) => item.id === indeterminateDecision.id).approvals.length,
+  1,
+  'an indeterminate durable commit must retain the matching in-memory decision',
+);
+assert.equal(atomicBroker.cancel(requester, indeterminateDecision.id).status, 'CANCELLED');
 const decisionWithoutAudit = atomicBroker.create(requester, input);
 assert.throws(
   () => atomicBroker.decideAndAudit(approver('admin-no-audit'), decisionWithoutAudit.id, 'approve'),
@@ -265,6 +278,18 @@ assert.equal(
   'a failed cancellation audit restores the active request',
 );
 assert.equal(atomicBroker.cancel(requester, cancellationRollback.id).status, 'CANCELLED');
+const indeterminateCancellation = atomicBroker.create(requester, input);
+assert.throws(
+  () => atomicBroker.cancelAndAudit(requester, indeterminateCancellation.id, () => {
+    throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+  }),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(
+  atomicBroker.list(requester).find((item) => item.id === indeterminateCancellation.id).status,
+  'CANCELLED',
+  'an indeterminate durable commit must retain the matching in-memory cancellation',
+);
 const auditedCancellation = atomicBroker.create(requester, input);
 let cancellationAuditCommitted = false;
 assert.equal(

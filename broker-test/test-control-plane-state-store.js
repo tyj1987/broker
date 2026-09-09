@@ -57,6 +57,7 @@ try {
   assert.throws(() => new EncryptedControlPlaneStateStore({ path: 'relative', key, coordinator }), code('state_path_invalid'));
   assert.throws(() => new EncryptedControlPlaneStateStore({ path: statePath, key: 'not-a-buffer', coordinator }), code('state_key_invalid'));
   assert.throws(() => new EncryptedControlPlaneStateStore({ path: statePath, key, coordinator: {} }), code('state_component_invalid'));
+  assert.throws(() => new EncryptedControlPlaneStateStore({ path: statePath, key, coordinator, syncDirectory: null }), code('state_component_invalid'));
 
   assert.equal(store.load({ required: false }), false);
   assert.throws(() => store.load(), code('state_unavailable'));
@@ -133,6 +134,32 @@ try {
     executionTokens: component({ version: 1, records: [] }),
     tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
   });
+  const indeterminatePath = join(directory, 'indeterminate.state');
+  const indeterminateApprovals = component({ version: 1, records: [{ id: 'approval-indeterminate' }] });
+  const indeterminateCoordinator = new ControlPlaneStateCoordinator({
+    approvals: indeterminateApprovals,
+    executionTokens: component({ version: 1, records: [] }),
+    tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+  });
+  const indeterminateStore = new EncryptedControlPlaneStateStore({
+    path: indeterminatePath, key, coordinator: indeterminateCoordinator,
+    syncDirectory: () => { throw new Error('directory fsync failed'); },
+  });
+  assert.throws(() => indeterminateStore.save(), code('state_commit_indeterminate'));
+  assert.equal(indeterminateCoordinator.generation, 1, 'a replaced state file advances the in-memory generation');
+  const recoveredApprovals = component({ version: 1, records: [] });
+  const recoveredStore = new EncryptedControlPlaneStateStore({
+    path: indeterminatePath, key,
+    coordinator: new ControlPlaneStateCoordinator({
+      approvals: recoveredApprovals,
+      executionTokens: component({ version: 1, records: [] }),
+      tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+    }),
+  });
+  assert.equal(recoveredStore.load(), true);
+  assert.deepEqual(recoveredApprovals.exportState().records, [{ id: 'approval-indeterminate' }]);
+  recoveredStore.close();
+  indeterminateStore.close();
   const invalidStatePath = join(directory, 'invalid.state');
   const invalidStore = new EncryptedControlPlaneStateStore({ path: invalidStatePath, key, coordinator: freshCoordinator });
   for (const envelope of [

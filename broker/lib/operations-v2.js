@@ -306,6 +306,14 @@ export class OperationBroker {
     return publicDevice(device);
   }
 
+  async suspendDevice(deviceId) {
+    const device = this.devices.get(deviceId);
+    if (!device || device.state !== 'active') {
+      throw new V2Error('device_denied', 'device is unavailable', 401);
+    }
+    return this.setDeviceState(device.owner, deviceId, 'suspended');
+  }
+
   verifyDeviceRequest(deviceId, signed) {
     const device = this.devices.get(deviceId);
     if (!device || device.state !== 'active') throw new V2Error('device_denied', 'device is unavailable', 401);

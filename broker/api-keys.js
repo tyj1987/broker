@@ -89,6 +89,10 @@ export function generateApiKey(name, client, opts = {}) {
   const id = fingerprint.slice(0, 16);  // 短 id
   const now = new Date();
   const ttlMs = opts.ttl_ms || DEFAULT_TTL_MS;
+  const expiresAtMs = opts.expires_at_ms == null ? now.getTime() + ttlMs : Number(opts.expires_at_ms);
+  if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= now.getTime()) {
+    throw new RangeError('API key expiration must be a future millisecond timestamp');
+  }
   const key_obj = {
     id,
     name: name || 'unnamed',
@@ -105,7 +109,7 @@ export function generateApiKey(name, client, opts = {}) {
     fingerprint_sha256: fingerprint,
     created_at: now.toISOString(),
     created_by: opts.created_by || client,
-    expires_at: new Date(now.getTime() + ttlMs).toISOString(),
+    expires_at: new Date(expiresAtMs).toISOString(),
     revoked_at: null,
     last_used_at: null,
     use_count: 0,
@@ -227,11 +231,15 @@ export function createChildKey(cfgKeys, master, name, opts = {}) {
   }));
 
   const requestedTtl = Number(opts.ttl_seconds || master.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS);
-  const parentRemaining = Math.floor((new Date(master.expires_at).getTime() - Date.now()) / 1000);
-  if (!Number.isSafeInteger(requestedTtl) || requestedTtl <= 0 || parentRemaining <= 0) {
+  const now = Date.now();
+  const parentExpiresAtMs = new Date(master.expires_at).getTime();
+  const requestedTtlMs = requestedTtl * 1000;
+  if (!Number.isSafeInteger(requestedTtl) || requestedTtl <= 0
+      || !Number.isSafeInteger(requestedTtlMs) || !Number.isFinite(parentExpiresAtMs)
+      || parentExpiresAtMs <= now) {
     return { ok: false, reason: 'invalid_child_ttl' };
   }
-  const childTtlSec = Math.min(requestedTtl, parentRemaining);
+  const childExpiresAtMs = Math.min(now + requestedTtlMs, parentExpiresAtMs);
 
   const { id, secret, key_obj } = generateApiKey(name, master.client, {
     scopes: childScopes,
@@ -243,7 +251,7 @@ export function createChildKey(cfgKeys, master, name, opts = {}) {
     allowed_environments: allowedEnvironments,
     rate_limit: childRate,
     ip_whitelist: childIp,
-    ttl_ms: childTtlSec * 1000,
+    expires_at_ms: childExpiresAtMs,
     parent_master_id: master.id,
     created_by: `master:${master.id}`,
   });

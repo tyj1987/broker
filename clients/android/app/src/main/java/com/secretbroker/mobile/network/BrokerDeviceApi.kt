@@ -130,6 +130,10 @@ class BrokerDeviceApi(
         signedRequest("POST", path, body)
     }
 
+    fun suspendDevice() {
+        signedRequest("POST", "/api/v2/devices/$deviceId/suspend", "{}")
+    }
+
     private fun signedRequest(method: String, path: String, body: String): String {
         val timestamp = System.currentTimeMillis()
         val nonce = UUID.randomUUID().toString()

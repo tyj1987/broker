@@ -311,6 +311,21 @@ export function createV2Routes(deps) {
         return true;
       }
 
+      const selfSuspendMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/suspend$/.exec(pathname);
+      if (method === 'POST' && selfSuspendMatch) {
+        const body = await readBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 0) {
+          throw new V2Error('invalid_request', 'device suspension body must be an empty object');
+        }
+        const deviceId = selfSuspendMatch[1];
+        operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryAudit({ action: 'v2_device_self_suspend_intent', status: 'authorized', device_id: deviceId });
+        const result = await operationBroker.suspendDevice(deviceId);
+        audit({ action: 'v2_device_self_suspend', status: 'ok', device_id: deviceId });
+        send(res, 200, result);
+        return true;
+      }
+
       const taskListMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/otp-tasks$/.exec(pathname);
       if (method === 'GET' && taskListMatch) {
         const deviceId = taskListMatch[1];

@@ -22,3 +22,10 @@ a changed subscription in an observed slot invalidates the previous binding.
 The app blocks screenshots and recent-task previews, masks the short-lived
 pairing challenge, and accepts a SIM binding only while a matching task is
 active.
+
+The paired device can immediately suspend its own Broker registration with a
+signed, replay-protected request. Suspension cancels its outstanding OTP work
+and persists across app restarts. It cannot reactivate itself: a strict
+administrator must use the separately approved device-state workflow, after
+which the operator can explicitly retry the connection. Removing the local
+pairing does not claim to revoke the server-side registration.

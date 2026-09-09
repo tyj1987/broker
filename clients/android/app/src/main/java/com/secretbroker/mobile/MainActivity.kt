@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private var enrollmentId by mutableStateOf("")
     private var enrollmentChallenge by mutableStateOf("")
     private var deviceId by mutableStateOf<String?>(null)
+    private var locallySuspended by mutableStateOf(false)
     private var state by mutableStateOf("not_paired")
     private var pendingTasks by mutableStateOf<List<PendingOtpTask>>(emptyList())
     private var observedSims by mutableStateOf<List<ObservedSim>>(emptyList())
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
         val preferences = getSharedPreferences("device-registration", Context.MODE_PRIVATE)
         endpoint = preferences.getString("endpoint", endpoint) ?: endpoint
         deviceId = preferences.getString("device_id", null)
+        locallySuspended = preferences.getBoolean("device_suspended", false)
         observedSims = SimBindings.observed(this)
         consent = SmsConsentCoordinator(this, requestConsent::launch) { state = it }
         capabilities = CapabilityProbe.inspect(this)
@@ -102,34 +104,42 @@ class MainActivity : ComponentActivity() {
                         }
                     } else {
                         Text("Paired device: ${deviceId!!.take(8)}…")
-                        Text("Pending OTP tasks: ${pendingTasks.size}")
-                        val expectedBindings = pendingTasks.map { it.simBinding }.distinct()
-                        if (expectedBindings.isNotEmpty()) Text("Expected SIM bindings: ${expectedBindings.joinToString()}")
-                        Button(onClick = { refreshObservedSims() }) { Text("Refresh observed SIMs") }
-                        if (observedSims.isEmpty()) {
-                            Text("No receiving SIM has been observed. Receive one test message, then refresh.")
-                        }
-                        observedSims.forEach { sim ->
-                            val slot = sim.slotIndex?.plus(1)?.toString() ?: "unknown"
-                            Text("SIM slot $slot · subscription ${sim.subscriptionId} · ${sim.binding ?: "not bound"}")
-                            OutlinedTextField(
-                                value = simBindingDrafts[sim.subscriptionId] ?: sim.binding.orEmpty(),
-                                onValueChange = { value ->
-                                    simBindingDrafts = simBindingDrafts + (sim.subscriptionId to value.trim())
-                                },
-                                label = { Text("Binding for SIM slot $slot") },
-                            )
-                            val draft = simBindingDrafts[sim.subscriptionId] ?: sim.binding.orEmpty()
-                            Button(
-                                onClick = { bindSim(sim.subscriptionId) },
-                                enabled = draft in expectedBindings,
-                            ) { Text("Bind this SIM") }
-                        }
-                        val consentSenders = pendingTasks.flatMap { it.senderAllowlist }.distinct()
-                        if (value?.googleServicesAvailable == true && consentSenders.size == 1) {
-                            Button(onClick = { consent.start(consentSenders.single()) }) {
-                                Text("Wait for one SMS with confirmation")
+                        if (locallySuspended) {
+                            Text("Automation is suspended at the Broker. An administrator must reactivate this device before it can reconnect.")
+                            Button(onClick = { retryAfterAdminReactivation(preferences) }) {
+                                Text("Check after administrator reactivation")
                             }
+                        } else {
+                            Text("Pending OTP tasks: ${pendingTasks.size}")
+                            val expectedBindings = pendingTasks.map { it.simBinding }.distinct()
+                            if (expectedBindings.isNotEmpty()) Text("Expected SIM bindings: ${expectedBindings.joinToString()}")
+                            Button(onClick = { refreshObservedSims() }) { Text("Refresh observed SIMs") }
+                            if (observedSims.isEmpty()) {
+                                Text("No receiving SIM has been observed. Receive one test message, then refresh.")
+                            }
+                            observedSims.forEach { sim ->
+                                val slot = sim.slotIndex?.plus(1)?.toString() ?: "unknown"
+                                Text("SIM slot $slot · subscription ${sim.subscriptionId} · ${sim.binding ?: "not bound"}")
+                                OutlinedTextField(
+                                    value = simBindingDrafts[sim.subscriptionId] ?: sim.binding.orEmpty(),
+                                    onValueChange = { value ->
+                                        simBindingDrafts = simBindingDrafts + (sim.subscriptionId to value.trim())
+                                    },
+                                    label = { Text("Binding for SIM slot $slot") },
+                                )
+                                val draft = simBindingDrafts[sim.subscriptionId] ?: sim.binding.orEmpty()
+                                Button(
+                                    onClick = { bindSim(sim.subscriptionId) },
+                                    enabled = draft in expectedBindings,
+                                ) { Text("Bind this SIM") }
+                            }
+                            val consentSenders = pendingTasks.flatMap { it.senderAllowlist }.distinct()
+                            if (value?.googleServicesAvailable == true && consentSenders.size == 1) {
+                                Button(onClick = { consent.start(consentSenders.single()) }) {
+                                    Text("Wait for one SMS with confirmation")
+                                }
+                            }
+                            Button(onClick = { suspendAutomation(preferences) }) { Text("Pause automation") }
                         }
                         Button(onClick = { unpair(preferences) }) { Text("Remove local pairing") }
                     }
@@ -179,6 +189,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startSync() {
         val id = deviceId ?: return
+        if (locallySuspended) return
         if (sync != null) return
         sync = OtpSyncController(
             lifecycleScope,
@@ -191,9 +202,10 @@ class MainActivity : ComponentActivity() {
     private fun unpair(preferences: android.content.SharedPreferences) {
         sync?.stop()
         sync = null
-        preferences.edit().remove("device_id").remove("endpoint").remove("last_cold_receive_ms").apply()
+        preferences.edit().remove("device_id").remove("endpoint").remove("device_suspended").remove("last_cold_receive_ms").apply()
         SimBindings.clear(this)
         deviceId = null
+        locallySuspended = false
         pendingTasks = emptyList()
         state = "not_paired"
     }
@@ -213,5 +225,38 @@ class MainActivity : ComponentActivity() {
                 refreshObservedSims()
             }
             .onFailure { state = "sim_binding_failed" }
+    }
+
+    private fun suspendAutomation(preferences: android.content.SharedPreferences) {
+        val id = deviceId ?: return
+        state = "suspending"
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { BrokerDeviceApi(endpoint, id, signer).suspendDevice() }
+            }.onSuccess {
+                sync?.stop()
+                sync = null
+                pendingTasks = emptyList()
+                locallySuspended = true
+                preferences.edit().putBoolean("device_suspended", true).apply()
+                state = "suspended"
+            }.onFailure { state = "suspension_failed" }
+        }
+    }
+
+    private fun retryAfterAdminReactivation(preferences: android.content.SharedPreferences) {
+        val id = deviceId ?: return
+        state = "checking_reactivation"
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { BrokerDeviceApi(endpoint, id, signer).pendingTasks() }
+            }.onSuccess { tasks ->
+                pendingTasks = tasks
+                locallySuspended = false
+                preferences.edit().putBoolean("device_suspended", false).apply()
+                state = "reactivated"
+                startSync()
+            }.onFailure { state = "still_suspended_or_offline" }
+        }
     }
 }

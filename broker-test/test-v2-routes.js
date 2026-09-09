@@ -20,6 +20,10 @@ const handler = createV2Routes({
       calls.push(['device-state', requester, deviceId, state, isAdmin]);
       return { id: deviceId, state };
     },
+    async suspendDevice(deviceId) {
+      calls.push(['device-self-suspend', deviceId]);
+      return { id: deviceId, state: 'suspended' };
+    },
     async createOperation(subject, input) {
       calls.push(['operation', subject.name, input, subject.context.approvalGrants || []]);
       return { id: 'operation-id', provider: input.provider, status: 'waiting' };
@@ -174,6 +178,29 @@ const signedHeaders = {
   'x-broker-device-nonce': 'route-nonce',
   'x-broker-device-signature': 'route-signature',
 };
+body = {};
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/suspend` });
+assert.equal(response.status, 200);
+assert.equal(response.value.state, 'suspended');
+assert.ok(calls.some((item) => item[0] === 'device-self-suspend'));
+const suspendVerify = calls.findLast((item) => item[0] === 'device-verify');
+assert.equal(suspendVerify[2].body, '{}');
+
+body = { state: 'active' };
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/suspend` });
+assert.equal(response.value.error, 'invalid_request');
+
+auditFailure = true;
+const suspensionsBeforeAuditFailure = calls.filter((item) => item[0] === 'device-self-suspend').length;
+body = {};
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/suspend` });
+assert.equal(response.value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'device-self-suspend').length, suspensionsBeforeAuditFailure);
+auditFailure = false;
+
 body = {};
 response = null;
 await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/claim` });

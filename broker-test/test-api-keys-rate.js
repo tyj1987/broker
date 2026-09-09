@@ -117,6 +117,14 @@ section('master key');
   ok('child rate cannot exceed parent', child.key_obj.rate_limit.hour === 100);
 }
 
+{
+  const { key_obj: master } = generateMasterKey('bounded', 'client', {
+    ttl_ms: 1_500, child_scopes: ['audit:read'],
+  });
+  const child = createChildKey([], master, 'bounded-child', { scopes: ['audit:read'], ttl_seconds: 60 });
+  ok('short parent uses exact absolute expiration', child.key_obj.expires_at === master.expires_at);
+}
+
 // === backward compat: ip_whitelist null = open ===
 section('backward compat');
 {

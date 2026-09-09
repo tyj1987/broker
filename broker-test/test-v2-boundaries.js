@@ -108,6 +108,18 @@ await assert.rejects(broker.setDeviceState('owner-1', 'missing', 'active'), expe
 await assert.rejects(broker.setDeviceState('other', device.id, 'suspended'), expectCode('forbidden'));
 await broker.setDeviceState('admin', device.id, 'active', true);
 
+const selfSuspend = await broker.suspendDevice(device.id);
+assert.equal(selfSuspend.state, 'suspended');
+await assert.rejects(broker.suspendDevice(device.id), expectCode('device_denied'));
+await broker.setDeviceState('admin', device.id, 'active', true);
+const failingPersistence = new OperationBroker({
+  now: () => now,
+  persistDevices: async () => { throw new Error('storage unavailable'); },
+});
+failingPersistence.hydrateDevices(broker.deviceRecords());
+await assert.rejects(failingPersistence.suspendDevice(device.id), expectCode('persistence_failed'));
+assert.equal(failingPersistence.listDevices('owner-1')[0].state, 'active', 'failed suspension rolls back');
+
 assert.throws(() => broker.verifyDeviceRequest('missing', {}), expectCode('device_denied'));
 assert.throws(() => broker.verifyDeviceRequest(device.id, { timestamp: 'bad' }), expectCode('stale_request'));
 assert.throws(() => broker.verifyDeviceRequest(device.id, {

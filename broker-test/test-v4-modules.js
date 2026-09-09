@@ -171,6 +171,7 @@ section('OpenAPI');
   ok('has >= 30 paths', Object.keys(OPENAPI_SPEC.paths).length >= 30);
   ok('has /health', !!OPENAPI_SPEC.paths['/health']);
   ok('has /api/v1/proxy/{service}', !!OPENAPI_SPEC.paths['/api/v1/proxy/{service}']);
+  ok('has signed device suspension', !!OPENAPI_SPEC.paths['/api/v2/devices/{device_id}/suspend']);
   ok('has ProxyRequest schema', !!OPENAPI_SPEC.components.schemas.ProxyRequest);
   ok('has LoginResponse schema', !!OPENAPI_SPEC.components.schemas.LoginResponse);
   ok('has mTLS security scheme', !!OPENAPI_SPEC.components.securitySchemes.mtls);

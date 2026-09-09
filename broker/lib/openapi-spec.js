@@ -319,6 +319,19 @@ const p = {
       responses: { 200: { description: 'Pending task metadata; never contains an OTP', content: { 'application/json': { schema: { type: 'object', required: ['tasks'], properties: { tasks: { type: 'array', items: ref('OtpTask') } } } } } }, 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
     },
   },
+  '/api/v2/devices/{device_id}/suspend': {
+    post: {
+      tags: ['devices-v2'], summary: 'Let a device immediately suspend itself with a signed empty request', security: [],
+      parameters: [
+        { in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } },
+        { in: 'header', name: 'X-Broker-Device-Timestamp', required: true, schema: { type: 'integer' } },
+        { in: 'header', name: 'X-Broker-Device-Nonce', required: true, schema: { type: 'string' } },
+        { in: 'header', name: 'X-Broker-Device-Signature', required: true, schema: { type: 'string' } },
+      ],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false } } } },
+      responses: { 200: jsonOK('Device'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 503: desc('Audit or persistence unavailable') },
+    },
+  },
   '/api/v2/devices/{device_id}/otp-tasks/{task_id}/submit': {
     post: {
       tags: ['devices-v2'], summary: 'Submit an OTP to a pre-existing bound task', security: [],

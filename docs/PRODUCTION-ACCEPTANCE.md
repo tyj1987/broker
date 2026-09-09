@@ -57,7 +57,19 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   operator explicitly binds that observed SIM to an opaque task binding, and a
   subscription change in a slot clears the old binding. The SMS body and OTP
   are never persisted. This change still requires CI and Xiaomi hardware
-  evidence before acceptance.
+  evidence before acceptance. CI run
+  [`34299709185`](https://github.com/tyj1987/broker/actions/runs/34299709185)
+  passed the complete workflow at `e63213d9e8dece7c5c9b761a10cb35a9aca2a541`,
+  including Android unit tests, lint and debug APK assembly.
+- A paired Android device can submit a signed, replay-protected empty request
+  to suspend itself. The server persists the downgrade, cancels pending OTP
+  work and requires the existing administrator WebAuthn plus two-person flow
+  for reactivation. The app retains the suspended state across restarts and
+  only clears it after a signed Broker check succeeds. Physical-device
+  behavior remains unverified.
+- Child API keys now receive an absolute expiration no later than their parent
+  rather than deriving a relative second count from two clock reads. The
+  millisecond boundary regression passed 20 consecutive local runs.
 - Windows desktop: the same run passed the TypeScript build, formatting,
   Clippy with warnings denied, Rust tests, native-host release build, RustSec
   vulnerability gate and unsigned NSIS build. RustSec reported no
@@ -105,6 +117,12 @@ validated all source and client jobs, rebuilt the pinned SOPS toolchain, checked
 the non-root/read-only production runtime, passed the HIGH/CRITICAL container
 vulnerability gate, and generated an SBOM. Registry publication and attestation
 were correctly skipped on the feature branch and therefore remain release gates.
+
+CI run [`34300658196`](https://github.com/tyj1987/broker/actions/runs/34300658196)
+at commit `36bc25b27f82b5e55345501c96dc8b03c7aa3078` completed successfully.
+It independently validated the Node and Go source/time policy enforcement,
+all client builds, CodeQL, dependency and secret-history scans, IaC checks,
+the production candidate image, SBOM generation and deployment-script tests.
 
 ## Gates still required
 

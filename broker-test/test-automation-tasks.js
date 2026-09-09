@@ -148,6 +148,37 @@ assert.deepEqual({
 });
 await assert.rejects(broker.run(human, low.id), expectCode('invalid_state'));
 
+const targetCanary = `ghp_${'A'.repeat(40)}`;
+const redactedTargetEvents = [];
+const redactedTargetTool = {
+  ...registry.findByName('broker.tools.inspect', '1.0.0'),
+  input_schema: {
+    ...registry.findByName('broker.tools.inspect', '1.0.0').input_schema,
+    properties: {
+      ...registry.findByName('broker.tools.inspect', '1.0.0').input_schema.properties,
+      resource_ref: { type: 'string' },
+    },
+  },
+};
+const redactedTargetBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === redactedTargetTool.name && version === redactedTargetTool.version
+        ? structuredClone(redactedTargetTool) : null;
+    },
+  },
+  authorize, approvalBroker: approvals, executors,
+  now: () => now, onEvent: (event) => redactedTargetEvents.push(event),
+});
+const redactedTargetTask = await redactedTargetBroker.create(human, {
+  ...lowInput,
+  idempotency_key: 'redacted-target-001',
+  parameters: { ...lowInput.parameters, resource_ref: targetCanary },
+});
+assert.equal((await redactedTargetBroker.run(human, redactedTargetTask.id)).state, 'SUCCEEDED');
+assert.ok(redactedTargetEvents.every((event) => !JSON.stringify(event).includes(targetCanary)));
+assert.ok(redactedTargetEvents.some((event) => event.target === 'ghp_***'));
+
 let concurrentAuthorizations = 0;
 const concurrentBroker = new AutomationTaskBroker({
   toolRegistry: registry,

@@ -25,6 +25,11 @@ target kind, risk, provider, operation, account, resource, environment,
 approval, source network, time and lifetime. A missing registration is a
 denial, not a compatibility fallback.
 
+The complete Broker configuration validator runs against a candidate before it
+replaces the active configuration. Startup and administrative reload therefore
+share the same policy-schema, identity, approval and strict-profile checks; a
+rejected reload leaves the prior in-memory configuration active.
+
 Risk levels have these minimum controls:
 
 | Risk | Minimum behavior |

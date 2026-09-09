@@ -181,6 +181,12 @@ export function validateBrokerConfig(config, opts = {}) {
   return { ok, errors, warnings };
 }
 
+export function requireValidBrokerConfig(config, opts = {}) {
+  const result = validateBrokerConfig(config, opts);
+  if (!result.ok) throw new Error(`broker configuration rejected:\n${formatValidationReport(result)}`);
+  return result;
+}
+
 /**
  * Preflight filesystem / env checks before listen.
  * @param {object} paths e.g. { configPath, auditDir, certDir, ageKey }

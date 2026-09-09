@@ -93,6 +93,7 @@ import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
+  requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
   runWithRequestContext,
@@ -353,6 +354,7 @@ async function loadConfig() {
   if (!cfg || typeof cfg !== 'object') throw new Error('Invalid broker.yaml');
   cfg.services = cfg.services || {};
   cfg.clients = cfg.clients || {};
+  requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
   toolRegistry.validateConfiguration(cfg);
   CONFIG = cfg;
   operationBroker.hydrateDevices(CONFIG.device_registry || []);

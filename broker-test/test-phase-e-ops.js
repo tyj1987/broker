@@ -1,6 +1,7 @@
 // broker-test/test-phase-e-ops.js
 import {
   validateBrokerConfig,
+  requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
 } from '../broker/lib/config-validate.js';
@@ -73,6 +74,20 @@ console.log('=== validateBrokerConfig ===');
     } } },
   });
   assert(unsupportedPolicySchema.ok === false, 'unenforced policy schema keyword fails closed');
+  let activeConfig = { marker: 'safe' };
+  try {
+    const candidate = {
+      clients: { admin: { role: 'admin' } },
+      operation_policies: { aliyun: { 'billing.read': {
+        parameter_schema: { type: 'object', properties: { resource_ref: { type: 'string', pattern: '.*' } } },
+      } } },
+    };
+    requireValidBrokerConfig(candidate);
+    activeConfig = candidate;
+  } catch (error) {
+    assert(error.message.includes('parameter_schema_invalid'), 'reload validation reports the rejected policy path');
+  }
+  assert(activeConfig.marker === 'safe', 'invalid reload candidate cannot replace active configuration');
 
   const invalidPolicyConditions = validateBrokerConfig({
     clients: { admin: { role: 'admin' } },

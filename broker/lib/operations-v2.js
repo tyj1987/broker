@@ -185,6 +185,10 @@ export class OperationBroker {
   }
 
   hydrateDevices(records = []) {
+    this.commitDeviceRegistry(this.prepareDeviceRegistry(records));
+  }
+
+  prepareDeviceRegistry(records = []) {
     if (!Array.isArray(records)) throw new V2Error('invalid_device_registry', 'device registry must be an array', 500);
     const next = new Map();
     for (const record of records) {
@@ -210,7 +214,12 @@ export class OperationBroker {
         createdAt, lastSeenAt,
       });
     }
-    this.devices = next;
+    return next;
+  }
+
+  commitDeviceRegistry(candidate) {
+    if (!(candidate instanceof Map)) throw new V2Error('invalid_device_registry', 'prepared device registry must be a map', 500);
+    this.devices = candidate;
   }
 
   deviceRecords() {

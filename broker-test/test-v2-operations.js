@@ -261,6 +261,10 @@ assert.equal(persistedRecords.length, 1);
 const restored = new OperationBroker();
 restored.hydrateDevices(persistedRecords);
 assert.equal(restored.listDevices({ name: 'owner-2' })[0].id, durableDevice.id);
+assert.throws(
+  () => restored.commitDeviceRegistry({}),
+  (error) => error instanceof V2Error && error.code === 'invalid_device_registry',
+);
 const restoredSnapshot = restored.deviceRecords();
 assert.throws(
   () => restored.hydrateDevices([...persistedRecords, { id: 'invalid-device' }]),

@@ -87,6 +87,7 @@ import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
 import { loadSecretCacheCandidate, replaceSecretCache } from './lib/secret-cache.js';
+import { reloadRuntimeAtomically } from './lib/runtime-reload.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
 import { buildAuditEvent, loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
@@ -343,7 +344,7 @@ function readApiRoutes() {
   return _readApi;
 }
 
-async function loadConfig() {
+async function prepareConfig() {
   // Dev mode: skip sops and read the file as-is (for local testing only).
   const skipSops = process.env.SOPS_SKIP === '1' || process.env.SOPS_SKIP === 'true';
   if (skipSops) {
@@ -360,15 +361,24 @@ async function loadConfig() {
   cfg.clients = cfg.clients || {};
   requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
   toolRegistry.validateConfiguration(cfg);
-  // Device hydration builds and validates a replacement map before swapping it.
-  // Keep CONFIG on the previous value until every candidate runtime dependency
-  // has accepted the new document.
-  operationBroker.hydrateDevices(cfg.device_registry || []);
-  CONFIG = cfg;
+  return { document: cfg, devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []) };
+}
+
+function applyConfig(prepared) {
+  operationBroker.commitDeviceRegistry(prepared.devices);
+  CONFIG = prepared.document;
+}
+
+function logConfigLoaded() {
   console.log(`[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`);
 }
 
-async function loadSecrets() {
+async function loadConfig() {
+  applyConfig(await prepareConfig());
+  logConfigLoaded();
+}
+
+async function prepareSecrets() {
   const loaded = await loadSecretCacheCandidate({
     structuredExists: existsSync(SECRETS_DETAIL_PATH),
     legacyExists: existsSync(SECRETS_PATH),
@@ -386,7 +396,14 @@ async function loadSecrets() {
     console.log(`[secrets] ${SECRETS_DETAIL_PATH} not found; migrating from ${SECRETS_PATH}...`);
     await persistSecretsDetail(loaded.cache);
   }
+  return loaded;
+}
+
+function applySecrets(loaded) {
   replaceSecretCache(SECRET_CACHE, loaded.cache);
+}
+
+function logSecretsLoaded(loaded) {
   if (loaded.source === 'structured') {
     console.log(`[secrets] Loaded ${SECRET_CACHE.size} structured secrets from ${SECRETS_DETAIL_PATH}`);
   } else if (loaded.source === 'legacy') {
@@ -394,6 +411,28 @@ async function loadSecrets() {
   } else {
     console.log('[secrets] No secrets found (neither structured nor legacy)');
   }
+}
+
+async function loadSecrets() {
+  const prepared = await prepareSecrets();
+  applySecrets(prepared);
+  logSecretsLoaded(prepared);
+}
+
+async function reloadRuntime() {
+  return reloadRuntimeAtomically({
+    prepareConfig,
+    prepareSecrets,
+    commit: ({ config, secrets }) => {
+      // Both candidates, including the device registry and any legacy secret
+      // persistence, have completed. The remaining map/reference swaps are
+      // synchronous and cannot expose a mixed configuration to another request.
+      applyConfig(config);
+      applySecrets(secrets);
+      logConfigLoaded();
+      logSecretsLoaded(secrets);
+    },
+  });
 }
 
 function normalizeSecretEntry(name, entry) {
@@ -3038,8 +3077,7 @@ async function handle(req, res) {
     const tok = url.searchParams.get('token') || req.headers['x-reload-token'];
     if (tok !== RELOAD_TOKEN) return jsonError(res, 401, 'Bad reload token');
     try {
-      await loadConfig();
-      await loadSecrets();
+      await reloadRuntime();
       audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
       return send(res, 200, { reloaded: true, services: Object.keys(CONFIG.services), secrets: SECRET_CACHE.size });
     } catch (err) {

@@ -438,6 +438,73 @@ class BrokerClient:
             raise BrokerError("unexpected operation response")
         return body
 
+    def create_task(
+        self,
+        tool: str,
+        tool_version: str,
+        account_ref: str,
+        environment: str,
+        parameters: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> Dict[str, Any]:
+        """Create one idempotent, policy-routed tool execution task."""
+        status, body = self._request("POST", "/api/v2/tasks", body={
+            "tool": tool,
+            "tool_version": tool_version,
+            "account_ref": account_ref,
+            "environment": environment,
+            "parameters": dict(parameters),
+            "idempotency_key": idempotency_key,
+        })
+        self._check(status, body, "create_task")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected task response")
+        return body
+
+    def get_task(self, task_id: str) -> Dict[str, Any]:
+        """Return the current redacted state of a visible task."""
+        if not task_id:
+            raise ValueError("task id must be provided")
+        status, body = self._request("GET", f"/api/v2/tasks/{urllib.parse.quote(task_id, safe='')}")
+        self._check(status, body, "get_task")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected task response")
+        return body
+
+    def run_task(self, task_id: str) -> Dict[str, Any]:
+        """Claim any required approval and run the registered adapter once."""
+        if not task_id:
+            raise ValueError("task id must be provided")
+        status, body = self._request(
+            "POST", f"/api/v2/tasks/{urllib.parse.quote(task_id, safe='')}/run", body={}
+        )
+        self._check(status, body, "run_task")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected task response")
+        return body
+
+    def task_events(self, task_id: str) -> Sequence[Mapping[str, Any]]:
+        """Return bounded credential-free transition events for a task."""
+        if not task_id:
+            raise ValueError("task id must be provided")
+        status, body = self._request("GET", f"/api/v2/tasks/{urllib.parse.quote(task_id, safe='')}/events")
+        self._check(status, body, "task_events")
+        if not isinstance(body, dict) or not isinstance(body.get("events"), list):
+            raise BrokerError("unexpected task events response")
+        return body["events"]
+
+    def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        """Terminally cancel a task before execution starts."""
+        if not task_id:
+            raise ValueError("task id must be provided")
+        status, body = self._request(
+            "POST", f"/api/v2/tasks/{urllib.parse.quote(task_id, safe='')}/cancel", body={}
+        )
+        self._check(status, body, "cancel_task")
+        if not isinstance(body, dict):
+            raise BrokerError("unexpected task response")
+        return body
+
     # ------------------------------------------------------------------
     # 3. exec — spawn subprocess with secrets in env
     # ------------------------------------------------------------------

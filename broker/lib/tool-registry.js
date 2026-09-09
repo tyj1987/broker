@@ -91,6 +91,11 @@ export class ToolRegistry {
     return tool ? publicTool(tool) : null;
   }
 
+  findByName(name, version) {
+    const tool = this.byName.get(`${name}@${version}`);
+    return tool ? publicTool(tool) : null;
+  }
+
   listFor(identity) {
     const role = identity?.context?.client?.role;
     if (!role) return [];

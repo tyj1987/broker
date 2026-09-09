@@ -86,6 +86,8 @@ nav:
   - Workload identity: WORKLOAD-IDENTITY.md
   - SSH proxy: SSH-PROXY.md
   - WebSocket: WEBSOCKET.md
+  - Automation tasks: AUTOMATION-TASKS.md
+  - Decision queue: DECISION_QUEUE.md
   - SDK reference: SDK-REFERENCE.md
   - FAQ: FAQ.md
 

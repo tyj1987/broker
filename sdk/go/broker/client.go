@@ -318,6 +318,37 @@ type Approval struct {
 	ExpiresAt         string           `json:"expires_at"`
 }
 
+// TaskRequest starts one idempotent, policy-routed tool execution.
+type TaskRequest struct {
+	Tool           string         `json:"tool"`
+	ToolVersion    string         `json:"tool_version"`
+	AccountRef     string         `json:"account_ref"`
+	Environment    string         `json:"environment"`
+	Parameters     map[string]any `json:"parameters"`
+	IdempotencyKey string         `json:"idempotency_key"`
+}
+
+// Task is the redacted state returned by the automation task broker.
+type Task struct {
+	ID          string         `json:"id"`
+	Owner       string         `json:"owner"`
+	Tool        string         `json:"tool"`
+	ToolVersion string         `json:"tool_version"`
+	RiskLevel   string         `json:"risk_level"`
+	State       string         `json:"state"`
+	ApprovalID  string         `json:"approval_id,omitempty"`
+	Result      map[string]any `json:"result,omitempty"`
+	Error       map[string]any `json:"error,omitempty"`
+}
+
+// TaskEvent is credential-free transition metadata for one task.
+type TaskEvent struct {
+	Sequence int    `json:"sequence"`
+	State    string `json:"state"`
+	Reason   string `json:"reason"`
+	At       string `json:"at"`
+}
+
 // CreateOperation requests one allowlisted provider operation.
 func (c *Client) CreateOperation(ctx context.Context, request OperationRequest) (*Operation, error) {
 	var operation Operation
@@ -338,6 +369,69 @@ func (c *Client) GetOperation(ctx context.Context, id string) (*Operation, error
 		return nil, err
 	}
 	return &operation, nil
+}
+
+// CreateTask creates an idempotent, versioned tool execution task.
+func (c *Client) CreateTask(ctx context.Context, request TaskRequest) (*Task, error) {
+	var task Task
+	if err := c.doAndCheck(ctx, "create_task", "POST", "/api/v2/tasks", request, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// GetTask returns the current redacted state of a task visible to the caller.
+func (c *Client) GetTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var task Task
+	path := "/api/v2/tasks/" + url.PathEscape(id)
+	if err := c.doAndCheck(ctx, "get_task", "GET", path, nil, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// RunTask claims any required approval and executes the registered adapter once.
+func (c *Client) RunTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var task Task
+	path := "/api/v2/tasks/" + url.PathEscape(id) + "/run"
+	if err := c.doAndCheck(ctx, "run_task", "POST", path, map[string]any{}, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// TaskEvents returns the bounded transition history without task parameters.
+func (c *Client) TaskEvents(ctx context.Context, id string) ([]TaskEvent, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var response struct {
+		Events []TaskEvent `json:"events"`
+	}
+	path := "/api/v2/tasks/" + url.PathEscape(id) + "/events"
+	if err := c.doAndCheck(ctx, "task_events", "GET", path, nil, nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Events, nil
+}
+
+// CancelTask terminally cancels a task before execution starts.
+func (c *Client) CancelTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var task Task
+	path := "/api/v2/tasks/" + url.PathEscape(id) + "/cancel"
+	if err := c.doAndCheck(ctx, "cancel_task", "POST", path, map[string]any{}, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
 }
 
 // CreateApproval requests human approval for one exact operation.

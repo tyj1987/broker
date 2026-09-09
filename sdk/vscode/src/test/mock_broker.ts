@@ -79,6 +79,21 @@ export async function startMockBroker(): Promise<{ port: number; certPath: strin
         } else if (url === '/api/v2/operations/00000000-0000-4000-8000-000000000001' && method === 'GET') {
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000001', provider: 'github', operation_id: 'repo.read', status: 'completed' }));
+        } else if (url === '/api/v2/tasks' && method === 'POST') {
+          res.writeHead(202, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', tool: 'broker.tools.inspect', state: 'READY', risk_level: 'LOW' }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003' && method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', state: 'SUCCEEDED', result: { name: 'github.repository.read' } }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003/events' && method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ events: [{ sequence: 1, state: 'REQUESTED', reason: 'task_created', at: '2026-09-09T00:00:00Z' }] }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003/run' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', state: 'SUCCEEDED', result: { name: 'github.repository.read' } }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003/cancel' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', state: 'CANCELLED' }));
         } else if (url === '/api/v2/approvals' && method === 'POST') {
           const parsed = JSON.parse(body || '{}');
           res.writeHead(201, { 'content-type': 'application/json' });

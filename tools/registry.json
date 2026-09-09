@@ -2,6 +2,24 @@
   "registry_version": 1,
   "tools": [
     {
+      "name": "broker.tools.inspect",
+      "version": "1.0.0",
+      "description": "Return the public registration for one explicitly named broker tool.",
+      "provider": "broker",
+      "operation_id": "tools.inspect",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "tool_name", "tool_version"], "properties": { "resource_ref": { "type": "string", "const": "tool-registry" }, "tool_name": { "type": "string" }, "tool_version": { "type": "string" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["name", "version", "provider", "operation_id", "risk_level", "agent_execution"], "properties": { "name": { "type": "string" }, "version": { "type": "string" }, "provider": { "type": "string" }, "operation_id": { "type": "string" }, "risk_level": { "type": "string" }, "agent_execution": { "type": "boolean" } } },
+      "required_role": "viewer",
+      "risk_level": "LOW",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "tool-registry", "resource_parameter": "resource_ref" },
+      "timeout_ms": 2000,
+      "rate_limit": { "requests": 60, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": [] },
+      "agent_execution": true
+    },
+    {
       "name": "broker.device.enroll",
       "version": "1.0.0",
       "description": "Enroll a hardware-bound broker device after strict dual control.",

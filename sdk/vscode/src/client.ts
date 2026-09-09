@@ -77,6 +77,34 @@ export interface OperationResponse {
   error?: Record<string, unknown>;
 }
 
+export interface TaskRequest {
+  tool: string;
+  tool_version: string;
+  account_ref: string;
+  environment: 'development' | 'staging' | 'production';
+  parameters: Record<string, unknown>;
+  idempotency_key: string;
+}
+
+export interface TaskResponse {
+  id: string;
+  owner?: string;
+  tool?: string;
+  tool_version?: string;
+  risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  state: 'REQUESTED' | 'PENDING_APPROVAL' | 'READY' | 'EXECUTING' | 'SUCCEEDED' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+  approval_id?: string;
+  result?: Record<string, unknown>;
+  error?: { code: string };
+}
+
+export interface TaskEvent {
+  sequence: number;
+  state: TaskResponse['state'];
+  reason: string;
+  at: string;
+}
+
 // ============================================================
 // Errors
 // ============================================================
@@ -266,6 +294,35 @@ export class BrokerClient {
       'get_operation', 'GET', `/api/v2/operations/${encodeURIComponent(id)}`
     );
     return r.body as OperationResponse;
+  }
+
+  async createTask(task: TaskRequest): Promise<TaskResponse> {
+    const r = await this.request<TaskResponse>('create_task', 'POST', '/api/v2/tasks', task);
+    return r.body as TaskResponse;
+  }
+
+  async getTask(id: string): Promise<TaskResponse> {
+    if (!id) throw new Error('task id must be provided');
+    const r = await this.request<TaskResponse>('get_task', 'GET', `/api/v2/tasks/${encodeURIComponent(id)}`);
+    return r.body as TaskResponse;
+  }
+
+  async runTask(id: string): Promise<TaskResponse> {
+    if (!id) throw new Error('task id must be provided');
+    const r = await this.request<TaskResponse>('run_task', 'POST', `/api/v2/tasks/${encodeURIComponent(id)}/run`, {});
+    return r.body as TaskResponse;
+  }
+
+  async taskEvents(id: string): Promise<TaskEvent[]> {
+    if (!id) throw new Error('task id must be provided');
+    const r = await this.request<{ events: TaskEvent[] }>('task_events', 'GET', `/api/v2/tasks/${encodeURIComponent(id)}/events`);
+    return (r.body as { events: TaskEvent[] }).events;
+  }
+
+  async cancelTask(id: string): Promise<TaskResponse> {
+    if (!id) throw new Error('task id must be provided');
+    const r = await this.request<TaskResponse>('cancel_task', 'POST', `/api/v2/tasks/${encodeURIComponent(id)}/cancel`, {});
+    return r.body as TaskResponse;
   }
 
   async createApproval(operation: OperationRequest): Promise<ApprovalResponse> {

@@ -80,8 +80,9 @@ import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
 import { createV2Routes } from './routes/v2.js';
-import { OperationBroker } from './lib/operations-v2.js';
+import { OperationBroker, V2Error } from './lib/operations-v2.js';
 import { ApprovalBroker } from './lib/approvals-v2.js';
+import { AutomationTaskBroker } from './lib/automation-tasks.js';
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
@@ -177,9 +178,24 @@ const operationBroker = new OperationBroker({
     await persistConfig();
   },
 });
+const taskExecutors = new Map([
+  ['broker.tools.inspect@1.0.0', async (parameters) => {
+    const tool = toolRegistry.findByName(parameters.tool_name, parameters.tool_version);
+    if (!tool) throw new V2Error('tool_unregistered', 'requested tool is not registered', 404);
+    return {
+      name: tool.name, version: tool.version, provider: tool.provider,
+      operation_id: tool.operation_id, risk_level: tool.risk_level,
+      agent_execution: tool.agent_execution,
+    };
+  }],
+]);
+const taskBroker = new AutomationTaskBroker({
+  toolRegistry, authorize: operationAuthorization, approvalBroker, executors: taskExecutors,
+  onEvent: (event) => audit({ action: 'v2_task_transition', status: event.state, ...event }),
+});
 const webAuthnService = new WebAuthnService({ getConfig: () => CONFIG, persist: () => persistConfig() });
 const v2Routes = createV2Routes({
-  operationBroker, approvalBroker, webAuthnService, toolRegistry, getIdentity, readBody, send, audit,
+  operationBroker, approvalBroker, taskBroker, webAuthnService, toolRegistry, getIdentity, readBody, send, audit,
   makeSession, sessionCookieHeader, authorizeApprovalRequest: approvalRequestAuthorization,
   consumeRateLimit: rateLimit,
   requireBrowserMutation: (req, ctx) => requireTrustedBrowserMutation(req, ctx, CONFIG?.webauthn?.rp_origin),

@@ -13,6 +13,8 @@ only approved business results; they do not receive long-lived credentials.
 - [Threat model](THREAT-MODEL.md) — assets, actors, attacks, implemented controls and open gaps.
 - [SDK reference](SDK-REFERENCE.md) — `/api/v2` typed-operation and approval clients.
 - [Tool registry](TOOL-REGISTRY.md) — versioned capability metadata and risk invariants.
+- [Automation tasks](AUTOMATION-TASKS.md) — policy-routed task lifecycle, APIs and current durability boundary.
+- [Decision queue](DECISION_QUEUE.md) — open high-impact choices and their required evidence.
 - [Verification](https://github.com/tyj1987/broker/blob/master/VERIFY.md) — reproducible local and CI checks.
 - [Production acceptance](PRODUCTION-ACCEPTANCE.md) — observed evidence, release blockers and remaining gates.
 - [Operations runbook](https://github.com/tyj1987/broker/blob/master/RUNBOOK.md) — deployment, rollback, rotation, incidents and disaster recovery.

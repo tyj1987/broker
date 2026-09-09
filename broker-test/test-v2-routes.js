@@ -76,6 +76,22 @@ const handler = createV2Routes({
       return { id, status: 'CANCELLED' };
     },
   },
+  taskBroker: {
+    async create(subject, input) {
+      calls.push(['task-create', subject.name, input]);
+      return { id: '00000000-0000-4000-8000-000000000010', state: 'READY', risk_level: 'LOW' };
+    },
+    async run(subject, id) {
+      calls.push(['task-run', subject.name, id]);
+      return { id, state: 'SUCCEEDED', result: { ok: true } };
+    },
+    cancel(subject, id) {
+      calls.push(['task-cancel', subject.name, id]);
+      return { id, state: 'CANCELLED' };
+    },
+    get(subject, id) { return { id, owner: subject.name, state: 'SUCCEEDED' }; },
+    eventsFor(_subject, id) { return [{ sequence: 1, task_id: id, state: 'REQUESTED' }]; },
+  },
   webAuthnService: {},
   toolRegistry: {
     listFor(subject) {
@@ -122,6 +138,28 @@ const patchRoute = async (pathname) => {
 identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
 assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repository.read');
 assert.ok(calls.some((item) => item[0] === 'tool-list'));
+body = {
+  tool: 'broker.tools.inspect', tool_version: '1.0.0', account_ref: 'control-plane',
+  environment: 'production', parameters: { resource_ref: 'tool-registry' }, idempotency_key: 'route-task-000001',
+};
+const taskCreated = await route('/api/v2/tasks');
+assert.equal(taskCreated.status, 202);
+const routeTaskId = taskCreated.value.id;
+body = {};
+assert.equal((await route(`/api/v2/tasks/${routeTaskId}/run`)).value.state, 'SUCCEEDED');
+assert.equal((await getRoute(`/api/v2/tasks/${routeTaskId}`)).value.state, 'SUCCEEDED');
+assert.equal((await getRoute(`/api/v2/tasks/${routeTaskId}/events`)).value.events.length, 1);
+assert.equal((await route(`/api/v2/tasks/${routeTaskId}/cancel`)).value.state, 'CANCELLED');
+assert.ok(calls.some((item) => item[0] === 'task-run'));
+const taskCreatesBeforeAuditFailure = calls.filter((item) => item[0] === 'task-create').length;
+auditFailure = true;
+body = {
+  tool: 'broker.tools.inspect', tool_version: '1.0.0', account_ref: 'control-plane',
+  environment: 'production', parameters: { resource_ref: 'tool-registry' }, idempotency_key: 'route-task-audit01',
+};
+assert.equal((await route('/api/v2/tasks')).value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'task-create').length, taskCreatesBeforeAuditFailure);
+auditFailure = false;
 body = { provider: 'aliyun' };
 assert.equal((await route('/api/v2/browser/otp/claim')).status, 403);
 
@@ -264,7 +302,7 @@ assert.equal(calls.filter((item) => item[0] === 'worker-claim').length, claimsBe
 auditFailure = false;
 
 const limitedHandler = createV2Routes({
-  operationBroker: {}, approvalBroker: {}, webAuthnService: {}, toolRegistry: {}, getIdentity: () => identity,
+  operationBroker: {}, approvalBroker: {}, taskBroker: {}, webAuthnService: {}, toolRegistry: {}, getIdentity: () => identity,
   readBody: async () => ({}), send: (_res, status, value) => { response = { status, value }; },
   audit: () => {}, makeSession: () => '', sessionCookieHeader: () => '',
   authorizeApprovalRequest: async () => ({ allow: true }), consumeRateLimit: () => false,

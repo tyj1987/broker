@@ -79,6 +79,10 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
             })
         if self.path == "/api/v2/approvals":
             return self._send_json(200, {"approvals": [{"id": "approval-123", "status": "APPROVED"}]})
+        if self.path == "/api/v2/tasks/task-123":
+            return self._send_json(200, {"id": "task-123", "state": "SUCCEEDED", "result": {"name": "github.repository.read"}})
+        if self.path == "/api/v2/tasks/task-123/events":
+            return self._send_json(200, {"events": [{"sequence": 1, "state": "REQUESTED", "reason": "task_created"}]})
         return self._send_json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -121,6 +125,12 @@ class MockBrokerHandler(BaseHTTPRequestHandler):
             return self._send_json(200, {"id": "approval-123", "status": body.get("decision", "approve") + "d"})
         if self.path == "/api/v2/approvals/approval-123/cancel":
             return self._send_json(200, {"id": "approval-123", "status": "CANCELLED"})
+        if self.path == "/api/v2/tasks":
+            return self._send_json(202, {"id": "task-123", "tool": body.get("tool"), "state": "READY", "request": body})
+        if self.path == "/api/v2/tasks/task-123/run":
+            return self._send_json(200, {"id": "task-123", "state": "SUCCEEDED", "result": {"name": "github.repository.read"}})
+        if self.path == "/api/v2/tasks/task-123/cancel":
+            return self._send_json(200, {"id": "task-123", "state": "CANCELLED"})
         if self.path == "/api/v1/ssh/exec":
             return self._send_json(200, {"ok": True, "exitCode": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 12})
         if self.path == "/api/v1/ssh/tunnel":
@@ -293,6 +303,23 @@ def test_bound_approval_workflow(mock_broker):
         c.decide_approval("approval-123", "approve")
     with pytest.raises(ValueError):
         c.decide_approval("approval-123", "maybe")
+
+
+def test_automation_task_loop(mock_broker):
+    port, cert_path, key_path = mock_broker
+    c = _client(f"https://127.0.0.1:{port}", cert_path, cert_path, key_path)
+    task = c.create_task(
+        "broker.tools.inspect", "1.0.0", "control-plane", "production",
+        {"resource_ref": "tool-registry"}, "python-sdk-task-0001",
+    )
+    assert task["state"] == "READY"
+    assert task["request"]["idempotency_key"] == "python-sdk-task-0001"
+    assert c.get_task(task["id"])["state"] == "SUCCEEDED"
+    assert c.task_events(task["id"])[0]["sequence"] == 1
+    assert c.run_task(task["id"])["state"] == "SUCCEEDED"
+    assert c.cancel_task(task["id"])["state"] == "CANCELLED"
+    with pytest.raises(ValueError):
+        c.get_task("")
 
 
 def test_proxy_403(mock_broker):

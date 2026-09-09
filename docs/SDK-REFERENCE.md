@@ -14,6 +14,11 @@ or long-lived credential.
 | Create approval request | `create_approval(...)` | `CreateApproval(...)` | `createApproval(...)` |
 | List visible approvals | `list_approvals()` | `ListApprovals(...)` | `listApprovals()` |
 | Cancel owned approval | `cancel_approval(id)` | `CancelApproval(...)` | `cancelApproval(id)` |
+| Create task | `create_task(...)` | `CreateTask(...)` | `createTask(...)` |
+| Read task | `get_task(id)` | `GetTask(...)` | `getTask(id)` |
+| Run task | `run_task(id)` | `RunTask(...)` | `runTask(id)` |
+| Read task events | `task_events(id)` | `TaskEvents(...)` | `taskEvents(id)` |
+| Cancel task | `cancel_task(id)` | `CancelTask(...)` | `cancelTask(id)` |
 | Health check | `health()` | `Health()` | `health()` |
 
 An operation request contains exactly:
@@ -41,6 +46,12 @@ An operation policy may additionally set `source_cidrs`, `not_before`, and
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted
 time windows, and requests outside the window are denied by both the Node
 transition layer and the Go policy service.
+
+For orchestrators, the task API wraps that policy decision in an idempotent
+state machine. A task refers to an exact `tool@version` from the registry and
+returns only output allowed by that tool's closed schema. High-risk tasks route
+through the approval lifecycle, and every run performs a fresh authorization
+check. See [Automation tasks](AUTOMATION-TASKS.md).
 
 ## Authentication
 

@@ -39,6 +39,8 @@ tags:
     description: Policy-bound typed operations
   - name: tools-v2
     description: Versioned, risk-classified tool registry
+  - name: tasks-v2
+    description: Policy-routed automation task lifecycle and state events
   - name: approvals-v2
     description: Bound, WebAuthn-stepped-up approvals with separation of duties
   - name: devices-v2
@@ -606,6 +608,148 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           description: Tool registry unavailable
+  /api/v2/tasks:
+    post:
+      tags:
+        - tasks-v2
+      summary: Create an idempotent, policy-routed automation task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCreate"
+      responses:
+        "202":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Idempotency conflict
+  /api/v2/tasks/{id}:
+    get:
+      tags:
+        - tasks-v2
+      summary: Read task state and its redacted terminal result
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v2/tasks/{id}/events:
+    get:
+      tags:
+        - tasks-v2
+      summary: Read ordered, credential-free task state events
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskEvents"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v2/tasks/{id}/run:
+    post:
+      tags:
+        - tasks-v2
+      summary: Run one ready task after a fresh policy and approval check
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              maxProperties: 0
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Task is not executable
+  /api/v2/tasks/{id}/cancel:
+    post:
+      tags:
+        - tasks-v2
+      summary: Cancel a task before execution starts
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              maxProperties: 0
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Task cannot be cancelled
   /api/v2/auth/webauthn/begin:
     post:
       tags:
@@ -1619,6 +1763,140 @@ components:
           type: object
         agent_execution:
           type: boolean
+    TaskCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - tool
+        - tool_version
+        - account_ref
+        - environment
+        - parameters
+        - idempotency_key
+      properties:
+        tool:
+          type: string
+          maxLength: 128
+        tool_version:
+          type: string
+          maxLength: 32
+        account_ref:
+          type: string
+          maxLength: 128
+        environment:
+          type: string
+          enum:
+            - development
+            - staging
+            - production
+        parameters:
+          type: object
+        idempotency_key:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: ^[A-Za-z0-9._:-]+$
+    Task:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - owner
+        - tool
+        - tool_version
+        - provider
+        - operation_id
+        - account_ref
+        - environment
+        - target
+        - risk_level
+        - state
+        - approval_id
+        - created_at
+        - updated_at
+        - expires_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner:
+          type: string
+        tool:
+          type: string
+        tool_version:
+          type: string
+        provider:
+          type: string
+        operation_id:
+          type: string
+        account_ref:
+          type: string
+        environment:
+          type: string
+        target:
+          type: string
+        risk_level:
+          type: string
+          enum:
+            - LOW
+            - MEDIUM
+            - HIGH
+            - CRITICAL
+        state:
+          type: string
+          enum:
+            - REQUESTED
+            - PENDING_APPROVAL
+            - READY
+            - EXECUTING
+            - SUCCEEDED
+            - FAILED
+            - EXPIRED
+            - CANCELLED
+        approval_id:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        result:
+          type: object
+        error:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    TaskEvents:
+      type: object
+      additionalProperties: false
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - sequence
+              - state
+              - reason
+              - at
+            properties:
+              sequence:
+                type: integer
+              state:
+                type: string
+              reason:
+                type: string
+              at:
+                type: string
+                format: date-time
     OperationCreate:
       type: object
       additionalProperties: false

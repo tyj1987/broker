@@ -51,7 +51,7 @@ function deviceStateApproval(deviceId, body) {
 
 export function createV2Routes(deps) {
   const {
-    operationBroker, approvalBroker, webAuthnService, toolRegistry, getIdentity, readBody, send, audit,
+    operationBroker, approvalBroker, taskBroker, webAuthnService, toolRegistry, getIdentity, readBody, send, audit,
     makeSession, sessionCookieHeader, authorizeApprovalRequest, consumeRateLimit,
     requireBrowserMutation,
   } = deps;
@@ -137,6 +137,58 @@ export function createV2Routes(deps) {
         const tools = toolRegistry.listFor(identity);
         audit({ action: 'v2_tool_list', status: 'ok', cn: ctx.cn, count: tools.length });
         send(res, 200, { registry_version: 1, tools });
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/api/v2/tasks') {
+        const ctx = getIdentity(req);
+        const identity = identityView(ctx);
+        if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
+        const taskBody = await readBody(req);
+        mandatoryAudit({ action: 'v2_task_create_intent', status: 'authorized', cn: ctx.cn, tool: taskBody?.tool });
+        const result = await taskBroker.create(identity, taskBody);
+        audit({ action: 'v2_task_create', status: result.state, cn: ctx.cn, task_id: result.id, risk_level: result.risk_level });
+        send(res, 202, result);
+        return true;
+      }
+
+      const taskEventsMatch = /^\/api\/v2\/tasks\/([a-f0-9-]+)\/events$/.exec(pathname);
+      if (method === 'GET' && taskEventsMatch) {
+        const ctx = getIdentity(req);
+        const identity = identityView(ctx);
+        if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
+        send(res, 200, { events: taskBroker.eventsFor(identity, taskEventsMatch[1]) });
+        return true;
+      }
+
+      const taskActionMatch = /^\/api\/v2\/tasks\/([a-f0-9-]+)\/(run|cancel)$/.exec(pathname);
+      if (method === 'POST' && taskActionMatch) {
+        const ctx = getIdentity(req);
+        const identity = identityView(ctx);
+        if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
+        const taskBody = await readBody(req);
+        if (!taskBody || typeof taskBody !== 'object' || Array.isArray(taskBody) || Object.keys(taskBody).length !== 0) {
+          throw new V2Error('invalid_request', 'task action body must be an empty object');
+        }
+        mandatoryAudit({ action: `v2_task_${taskActionMatch[2]}_intent`, status: 'authorized', cn: ctx.cn, task_id: taskActionMatch[1] });
+        const result = taskActionMatch[2] === 'run'
+          ? await taskBroker.run(identity, taskActionMatch[1])
+          : taskBroker.cancel(identity, taskActionMatch[1]);
+        audit({ action: `v2_task_${taskActionMatch[2]}`, status: result.state, cn: ctx.cn, task_id: result.id });
+        send(res, 200, result);
+        return true;
+      }
+
+      const taskMatch = /^\/api\/v2\/tasks\/([a-f0-9-]+)$/.exec(pathname);
+      if (method === 'GET' && taskMatch) {
+        const ctx = getIdentity(req);
+        const identity = identityView(ctx);
+        if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
+        send(res, 200, taskBroker.get(identity, taskMatch[1]));
         return true;
       }
 

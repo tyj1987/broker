@@ -47,6 +47,17 @@ test('mock broker supports health and typed V2 operations', async () => {
     });
     assert.equal(operation.status, 'waiting');
     assert.equal((await client.getOperation(operation.id)).status, 'completed');
+    const task = await client.createTask({
+      tool: 'broker.tools.inspect', tool_version: '1.0.0', account_ref: 'control-plane',
+      environment: 'production', parameters: { resource_ref: 'tool-registry' },
+      idempotency_key: 'vscode-sdk-task-0001',
+    });
+    assert.equal(task.state, 'READY');
+    assert.equal((await client.getTask(task.id)).state, 'SUCCEEDED');
+    assert.equal((await client.taskEvents(task.id))[0].sequence, 1);
+    assert.equal((await client.runTask(task.id)).state, 'SUCCEEDED');
+    assert.equal((await client.cancelTask(task.id)).state, 'CANCELLED');
+    await assert.rejects(client.getTask(''), /task id/);
     const approval = await client.createApproval({
       provider: 'github', operation_id: 'repo.read', account_ref: 'personal',
       environment: 'production', typed_parameters: { resource_ref: 'repository' },

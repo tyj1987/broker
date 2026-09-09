@@ -11,6 +11,7 @@ const expected = new Set([
   'cloudflare',
   'docker',
   'github',
+  'google_drive',
   'openai',
   'postgresql',
   'ssh',

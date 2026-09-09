@@ -198,6 +198,24 @@
       "approval_policy": { "mode": "none", "approvals_required": 0 },
       "audit_policy": { "required": true, "redact": ["password", "connection_string", "ssl_key", "sql", "rows"] },
       "agent_execution": true
+    },
+    {
+      "name": "google_drive.document.read",
+      "version": "1.0.0",
+      "description": "Export one explicitly authorized Google Workspace document through a mandatory content-release filter.",
+      "provider": "google_drive",
+      "operation_id": "document.read",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref"], "properties": { "resource_ref": { "type": "string", "minLength": 10, "maxLength": 128 } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["file_id", "mime_type", "content", "redactions"], "properties": { "file_id": { "type": "string" }, "mime_type": { "type": "string", "const": "text/plain" }, "content": { "type": "string", "maxLength": 1048576 }, "redactions": { "type": "integer" } } },
+      "required_role": "operator",
+      "risk_level": "MEDIUM",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "google-drive-file", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 30, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "access_token", "refresh_token", "document_content"] },
+      "agent_execution": true
     }
   ]
 }

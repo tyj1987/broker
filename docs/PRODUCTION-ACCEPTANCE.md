@@ -128,6 +128,14 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   adapter, output-schema and audit lifecycle in deterministic tests. The
   isolated runner, TLS/target authority, short-lived login issuer and live
   database escape tests remain open, so PostgreSQL is `contract_required`.
+- The Google Drive document-read adapter accepts only one exact file ID and a
+  fixed plain-text export. It requires the non-sensitive per-file `drive.file`
+  scope, a file-bound credential lease expiring within five minutes, pinned
+  HTTPS, redirect denial, a 1 MiB response limit and a mandatory content-release
+  filter before any text becomes a task result. Known-secret redaction runs
+  again after filtering. No production identity federation, file registry,
+  classifier or isolated-account contract has run, so Google Drive is
+  `contract_required`.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test
@@ -237,7 +245,8 @@ secret-history scanning and production candidate image validation.
   GHCR package permission and registry-backed attestations before release.
 - Container build, SBOM, signature, provenance, SAST/SCA, license and IaC reports must be retained as CI artifacts.
 - All production credentials potentially exposed before this audit must be rotated with evidence outside the repository.
-- Eight provider adapters require isolated-account, target or database contract tests before any production-ready status.
+- Nine provider manifests require isolated-account, target, database or file
+  contract tests before any production-ready status.
 - Xiaomi 12S Ultra dual-SIM, permission revocation, delayed/duplicate OTP, background restriction, and manual fallback tests must pass.
 - Windows installer signing/update verification, Ubuntu packaging, iOS
   compile/sign/device validation, isolated browser-worker production runtime,

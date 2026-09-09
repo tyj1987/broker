@@ -1,0 +1,30 @@
+manifest_version: 1
+id: google_drive
+display_name: Google Drive
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://developers.google.com/workspace/drive/api/reference/rest/v3/files/export
+  - https://developers.google.com/workspace/drive/api/guides/api-specific-auth
+  - https://developers.google.com/workspace/drive/api/guides/manage-downloads
+  - https://cloud.google.com/iam/docs/workload-identity-federation
+origins: [https://www.googleapis.com]
+authentication:
+  priority: [workload_identity_federation, service_account_with_exact_file_share, user_oauth]
+  inject: { Authorization: "Bearer {{file_bound_access_token}}" }
+  scope: https://www.googleapis.com/auth/drive.file
+  maximum_ttl_seconds: 300
+  rotation: Exchange an attested workload identity for a short-lived, file-bound access token.
+  revocation: Remove the exact file share and revoke the workload or OAuth grant.
+operations:
+  - id: document.read
+    method: GET
+    path_template: /drive/v3/files/{file_id}/export?mimeType=text%2Fplain
+    permission: drive.file
+    mutating: false
+    approval: none
+    parameters: { resource_ref: { type: string } }
+    maximum_response_bytes: 1048576
+    content_filter_required: true
+redaction: [Authorization, access_token, refresh_token, document_content]
+contract_test: { account: isolated_google_drive_file, required: true, last_result: not_run }

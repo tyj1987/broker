@@ -87,3 +87,19 @@ continue.
 - Current safe default: a dependency-injected fixed-query runner used only by
   deterministic tests. The strict adapter accepts no SQL or credentials and
   the provider remains `contract_required`.
+
+## DQ-007: Google Drive identity and content-release authority
+
+- Status: open
+- Needed before: any Google Drive capability is production-enabled
+- Decision: select the workload identity federation or OAuth authority, exact
+  file-sharing registry and isolated content-classification service. Define
+  tenant binding, file revocation, classifier policy/version ownership, data
+  retention, regional failover and human override boundaries.
+- Required evidence: wrong-file and cross-tenant denial, share and workload
+  revocation latency, token expiry, broad-scope rejection, export-size and
+  encoding limits, prompt-injection and sensitive-content handling, classifier
+  outage, audit/log leakage, cancellation and isolated-account contract tests.
+- Current safe default: dependency-injected token and content-filter
+  capabilities used only by deterministic tests. The adapter accepts only a
+  fixed plain-text export for one file and remains `contract_required`.

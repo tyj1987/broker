@@ -44,6 +44,12 @@ from the live connection.
   `CN=client.nginx-bridge`, but the effective configuration still contains
   `proxy_ssl_verify off`. A dedicated certificate name therefore does not
   close the server-authentication failure.
+- The active CA private key, an older CA private-key backup, and multiple
+  final-client private keys are co-located under the production application
+  tree. The deployed configuration has no `trusted_proxy_fingerprints` entry.
+  The complete trust domain must therefore be treated as potentially
+  compromised and replaced; rotating only the nginx certificate is
+  insufficient.
 - Active nginx is version 1.20.1. The loopback `8443` health endpoint returns
   only `{"status":"ok"}`.
 
@@ -55,6 +61,7 @@ environment files and credential values were not opened or printed.
 | Severity | Evidence | Required remediation |
 |---|---|---|
 | P0 | Effective nginx configuration uses `proxy_ssl_verify off` for Broker upstream locations. | Enable CA and hostname verification, deploy the dedicated nginx workload certificate, and regression-test forged headers and direct backend access. |
+| P0 | CA private keys and multiple final-client private keys are stored together on the Broker host, including an old CA backup; the deployed config has no trusted-proxy fingerprint allowlist. | Replace the full CA hierarchy through an offline ceremony, re-enroll every client, revoke the old trust domain, remove all CA/client private keys from the host, and verify old identities are rejected. |
 | P0 | Production still runs the pre-upgrade `master@450c3ed` Node boundary while the Go policy service is inactive. Current branch security fixes and decision enforcement are not deployed. | Complete staging and credential-rotation gates, then deploy one digest-addressed release with the Go policy service required and verify fail-closed behavior. |
 | P1 | `secret-broker.service` runs as `root`. | Run under a dedicated locked system account with only the required writable paths. |
 | P1 | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present. | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment. |

@@ -95,6 +95,27 @@ If the server key or CA is suspected compromised, stop credential operations,
 activate the incident plan, replace the trust chain, and require all clients to
 re-enroll. Do not attempt an in-place partial rotation.
 
+If a CA private key or any final-client private key is found on the Broker
+host, treat the complete trust domain as compromised even when file mode is
+`0600`. The recovery ceremony must:
+
+1. Preserve only public certificate fingerprints, serials and validity dates
+   as evidence; never copy private material into the incident record.
+2. Create a new offline root/intermediate hierarchy outside the Broker host
+   and outside CI. Keep the signing key non-exportable where supported.
+3. Issue a new Broker server certificate and one dedicated nginx workload
+   certificate. Configure the latter's exact SHA-256 fingerprint as the only
+   trusted proxy identity.
+4. Re-enroll every human, workload and device from independently verified
+   principals. Do not reuse or copy the old client private keys.
+5. Switch trust in staging, prove that forged proxy headers and every old
+   certificate fail, then perform the reviewed production cutover with a
+   rollback that does not reactivate the compromised CA.
+6. Remove all CA and final-client private keys and their backups from the
+   Broker host after the cutover. Verify absence using file metadata only.
+7. Revoke the old hierarchy wherever revocation is enforced and retain the
+   public rotation evidence outside the repository.
+
 ## Provider credential rotation
 
 Prefer OIDC, workload identity, and short-lived provider tokens. For a static
@@ -113,7 +134,8 @@ artifact is treated as compromised even after the file is deleted.
 
 ## Android OTP device incident
 
-- Suspending or revoking the device cancels waiting/received tasks.
+- Suspending or revoking the device cancels waiting, received and consuming
+  tasks; a late consumer result must not restore a revoked operation.
 - A SIM/subscription change requires a new binding before automatic matching.
 - Ambiguous sender, account, SIM, template, or challenge matches go to manual
   handling. Never choose the newest SMS as a fallback.

@@ -5,7 +5,10 @@ This procedure prepares an existing installation for non-root, atomic releases. 
 ## Preconditions
 
 - P0 proxy TLS verification has been fixed and tested in staging.
-- Potentially exposed credentials and the nginx workload certificate have been rotated.
+- The co-located CA and client keys have been replaced through an offline
+  full-hierarchy ceremony, every client has been re-enrolled, and potentially
+  exposed provider credentials have been rotated. Old-identity rejection
+  evidence exists outside the repository.
 - A filesystem or ECS snapshot and a copy of the current systemd/nginx configuration exist outside the release directory.
 - The operator has recorded the current application SHA-256, nginx configuration hash, service status, and public health response.
 - The `broker-deploy` account has its own SSH key; root SSH login is disabled after verification.

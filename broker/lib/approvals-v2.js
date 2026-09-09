@@ -100,10 +100,8 @@ export class ApprovalBroker {
   }
 
   decide(identity, id, decision) {
-    const record = this.getActive(id);
-    if (record.status !== 'REQUESTED') {
-      throw new V2Error('invalid_state', 'approval request is already decided', 409);
-    }
+    const record = this.records.get(id);
+    if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
     if (!identity?.name || !identity.context || identity.context.via !== 'session'
       || !identity.context.authFactors?.includes('webauthn')) {
       throw new V2Error('step_up_required', 'approval requires a fresh WebAuthn session', 403);
@@ -113,6 +111,10 @@ export class ApprovalBroker {
     }
     if (record.requester === identity.name) {
       throw new V2Error('separation_of_duties', 'requester cannot approve the request', 403);
+    }
+    this.getActive(id);
+    if (record.status !== 'REQUESTED') {
+      throw new V2Error('invalid_state', 'approval request is already decided', 409);
     }
     if (decision === 'reject') {
       record.status = 'DENIED';
@@ -184,9 +186,6 @@ export class ApprovalBroker {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status)) throw new V2Error('not_found', 'approval request not found', 404);
-    if (!['REQUESTED', 'APPROVED'].includes(record.status)) {
-      throw new V2Error('invalid_state', 'approval request cannot be cancelled', 409);
-    }
     const isAdmin = identity.context?.client?.role === 'admin';
     if (record.requester !== identity.name && !isAdmin) throw new V2Error('forbidden', 'identity cannot cancel this request', 403);
     if (record.requester !== identity.name
@@ -195,6 +194,9 @@ export class ApprovalBroker {
     }
     if (!apiKeyAllowsApproval(identity, record)) {
       throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
+    }
+    if (!['REQUESTED', 'APPROVED'].includes(record.status)) {
+      throw new V2Error('invalid_state', 'approval request cannot be cancelled', 409);
     }
     record.status = 'CANCELLED';
     return publicApproval(record);

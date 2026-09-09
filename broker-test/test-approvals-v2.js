@@ -78,6 +78,16 @@ assert.throws(() => broker.decide(approver('admin-a'), request.id, 'invalid'), e
 assert.equal(broker.decide(approver('admin-a'), request.id, 'approve').status, 'REQUESTED');
 assert.throws(() => broker.decide(approver('admin-a'), request.id, 'approve'), expectCode('duplicate_approval'));
 assert.equal(broker.decide(approver('admin-b'), request.id, 'approve').status, 'APPROVED');
+assert.throws(
+  () => broker.decide(approver('developer-terminal', 'developer'), request.id, 'approve'),
+  expectCode('forbidden'),
+  'an unauthorized role cannot use a terminal approval as a state oracle',
+);
+assert.throws(
+  () => broker.decide({ name: 'admin-unstepped', context: { via: 'session', authFactors: [], client: { role: 'admin' } } }, request.id, 'approve'),
+  expectCode('step_up_required'),
+  'a session without WebAuthn cannot use a terminal approval as a state oracle',
+);
 assert.throws(() => broker.decide(approver('admin-c'), request.id, 'approve'), expectCode('invalid_state'));
 
 assert.equal(broker.list(revokedRequester).length, 0, 'revoked API key cannot list its former approvals');
@@ -129,6 +139,16 @@ assert.throws(() => broker.cancel({ name: 'outsider', context: { client: { role:
 assert.throws(() => broker.cancel(revokedRequester, cancelled.id), expectCode('forbidden'));
 assert.equal(broker.list(requester).find((item) => item.id === cancelled.id).status, 'REQUESTED');
 assert.equal(broker.cancel(requester, cancelled.id).status, 'CANCELLED');
+assert.throws(
+  () => broker.cancel({ name: 'outsider-terminal', context: { client: { role: 'developer' } } }, cancelled.id),
+  expectCode('forbidden'),
+  'an unauthorized identity cannot use cancellation to probe terminal state',
+);
+assert.throws(
+  () => broker.cancel({ name: 'admin-terminal', context: { via: 'api_key', client: { role: 'admin' } } }, cancelled.id),
+  expectCode('step_up_required'),
+  'an admin without WebAuthn cannot use cancellation to probe terminal state',
+);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: cancelled.id }), expectCode('invalid_state'));
 const adminCancelled = broker.create(requester, input);
 assert.throws(() => broker.cancel({ name: 'admin-c', context: { via: 'api_key', client: { role: 'admin' } } }, adminCancelled.id), expectCode('step_up_required'));

@@ -98,6 +98,13 @@ function publicTask(task) {
   };
 }
 
+function canAdministerOtherTasks(identity) {
+  const context = identity?.context;
+  return context?.client?.role === 'admin'
+    && context.via === 'session'
+    && context.authFactors?.includes('webauthn');
+}
+
 export class AutomationTaskBroker {
   constructor({ toolRegistry, authorize, approvalBroker, executionTokens, executors = new Map(), now = () => Date.now(), onEvent = () => {}, maxTasks = MAX_TASKS } = {}) {
     this.toolRegistry = toolRegistry;
@@ -310,7 +317,9 @@ export class AutomationTaskBroker {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const task = this.tasks.get(id);
     if (!task) throw new V2Error('not_found', 'task not found', 404);
-    if (task.owner !== identity.name && !identity.isAdmin) throw new V2Error('forbidden', 'task is not visible', 403);
+    if (task.owner !== identity.name && !canAdministerOtherTasks(identity)) {
+      throw new V2Error('forbidden', 'task is not visible', 403);
+    }
     return task;
   }
 

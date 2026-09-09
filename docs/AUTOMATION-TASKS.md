@@ -51,6 +51,11 @@ never the bearer token or nonce. See [Single-use execution tokens](EXECUTION-TOK
 - `GET /api/v2/tasks/{id}/events` returns a bounded, ordered transition stream.
 - `POST /api/v2/tasks/{id}/cancel` terminally cancels a task before execution.
 
+Task status, events, execution and cancellation are owner-bound. Cross-owner
+administration requires an authenticated browser session for an administrator
+with a current WebAuthn factor; an API key, workload identity or unstepped-up
+session cannot acquire this authority merely by inheriting the `admin` role.
+
 Each transition emits credential-free audit metadata containing the actor,
 identity method, role, exact tool and target, environment, risk, policy
 decision, approval and execution identifiers, terminal outcome, latency and a

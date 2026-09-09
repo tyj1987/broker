@@ -255,8 +255,33 @@ await assert.rejects(broker.create(null, lowInput), expectCode('unauthorized'));
 await assert.rejects(broker.create(human, { ...lowInput, idempotency_key: 'invalid-request-01', unexpected: true }), expectCode('invalid_request'));
 assert.throws(() => broker.get(null, low.id), expectCode('unauthorized'));
 assert.throws(() => broker.get(human, '00000000-0000-4000-8000-000000000000'), expectCode('not_found'));
-assert.throws(() => broker.get({ ...human, name: 'other', isAdmin: false }, low.id), expectCode('forbidden'));
+assert.throws(
+  () => broker.get({
+    name: 'other',
+    isAdmin: false,
+    context: { via: 'session', authFactors: ['webauthn'], client: { role: 'developer' } },
+  }, low.id),
+  expectCode('forbidden'),
+);
 assert.equal(broker.get({ ...human, name: 'other', isAdmin: true }, low.id).id, low.id);
+const adminApiKey = {
+  name: 'other-admin-key',
+  isAdmin: true,
+  context: { via: 'api_key', client: { role: 'admin' }, apiKey: { scopes: ['operations:execute'] } },
+};
+assert.throws(() => broker.get(adminApiKey, low.id), expectCode('forbidden'));
+assert.throws(() => broker.eventsFor(adminApiKey, low.id), expectCode('forbidden'));
+assert.throws(() => broker.cancel(adminApiKey, low.id), expectCode('forbidden'));
+await assert.rejects(broker.run(adminApiKey, low.id), expectCode('forbidden'));
+assert.throws(
+  () => broker.get({
+    name: 'other-admin-session',
+    isAdmin: true,
+    context: { via: 'session', authFactors: [], client: { role: 'admin' } },
+  }, low.id),
+  expectCode('forbidden'),
+  'cross-owner administration requires WebAuthn step-up',
+);
 
 const deniedRegistry = {
   findByName(name, version) {

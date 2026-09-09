@@ -76,6 +76,35 @@ assert.equal(broker.get(human, low.id).result.version, '1.0.0');
 assert.deepEqual(broker.eventsFor(human, low.id).map((event) => event.state), [
   'REQUESTED', 'READY', 'EXECUTING', 'SUCCEEDED',
 ]);
+const sameOwnerApiKey = (overrides = {}) => ({
+  name: human.name,
+  context: {
+    via: 'api_key',
+    client: { role: 'admin' },
+    apiKey: {
+      scopes: ['operations:execute'],
+      allowed_services: ['broker'],
+      allowed_operations: ['broker:tools.inspect'],
+      allowed_accounts: ['control-plane'],
+      allowed_resources: ['tool-registry'],
+      allowed_environments: ['production'],
+      ...overrides,
+    },
+  },
+});
+assert.equal(broker.get(sameOwnerApiKey(), low.id).id, low.id);
+for (const revokedGrant of [
+  { allowed_services: [] },
+  { allowed_operations: [] },
+  { allowed_accounts: ['another-account'] },
+  { allowed_resources: ['another-resource'] },
+  { allowed_environments: ['staging'] },
+]) {
+  const revokedSameOwnerKey = sameOwnerApiKey(revokedGrant);
+  assert.throws(() => broker.get(revokedSameOwnerKey, low.id), expectCode('forbidden'));
+  assert.throws(() => broker.eventsFor(revokedSameOwnerKey, low.id), expectCode('forbidden'));
+  await assert.rejects(broker.create(revokedSameOwnerKey, lowInput), expectCode('forbidden'));
+}
 assert.ok(observed.every((event) => !JSON.stringify(event).includes('typed_parameters')));
 const completionAudit = observed.find((event) => event.task_id === low.id && event.state === 'SUCCEEDED');
 assert.deepEqual({

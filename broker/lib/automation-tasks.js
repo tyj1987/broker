@@ -126,6 +126,18 @@ export class AutomationTaskBroker {
       .filter((tool) => this.executors.has(`${tool.name}@${tool.version}`));
   }
 
+  apiKeyAllowsTask(identity, task) {
+    if (identity?.context?.via !== 'api_key') return true;
+    if (!this.toolRegistry || typeof this.toolRegistry.listFor !== 'function') return false;
+    const apiKey = identity.context.apiKey;
+    const toolVisible = this.toolRegistry.listFor(identity)
+      .some((candidate) => candidate.name === task.tool.name && candidate.version === task.tool.version);
+    return toolVisible
+      && apiKey.allowed_accounts?.includes(task.accountRef)
+      && apiKey.allowed_resources?.includes(task.parameters?.resource_ref)
+      && apiKey.allowed_environments?.includes(task.environment);
+  }
+
   async create(identity, input) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const allowedKeys = new Set(['tool', 'tool_version', 'account_ref', 'environment', 'parameters', 'idempotency_key']);
@@ -136,11 +148,16 @@ export class AutomationTaskBroker {
     if (!IDEMPOTENCY_RE.test(input.idempotency_key || '')) throw new V2Error('invalid_request', 'idempotency_key must contain 16 to 128 safe characters');
     const tool = this.toolRegistry?.findByName(input.tool, input.tool_version);
     if (!tool) throw new V2Error('tool_unregistered', 'tool and version are not registered', 404);
+    const parameters = structuredClone(input.parameters);
+    assertSchema(parameters, tool.input_schema, 'parameters');
+    if (!this.apiKeyAllowsTask(identity, {
+      tool, accountRef: input.account_ref, environment: input.environment, parameters,
+    })) {
+      throw new V2Error('forbidden', 'API key is not authorized for this task tool', 403);
+    }
     if (!this.executors.has(`${tool.name}@${tool.version}`)) {
       throw new V2Error('executor_unavailable', 'tool executor is not available', 503);
     }
-    const parameters = structuredClone(input.parameters);
-    assertSchema(parameters, tool.input_schema, 'parameters');
     const requestFingerprint = hash({ tool: tool.name, version: tool.version, account: input.account_ref, environment: input.environment, parameters });
     const idempotencyKey = `${identity.name}:${input.idempotency_key}`;
     this.prune();
@@ -319,6 +336,9 @@ export class AutomationTaskBroker {
     if (!task) throw new V2Error('not_found', 'task not found', 404);
     if (task.owner !== identity.name && !canAdministerOtherTasks(identity)) {
       throw new V2Error('forbidden', 'task is not visible', 403);
+    }
+    if (!this.apiKeyAllowsTask(identity, task)) {
+      throw new V2Error('forbidden', 'API key is not authorized for this task tool', 403);
     }
     return task;
   }

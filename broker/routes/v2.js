@@ -486,8 +486,9 @@ export function createV2Routes(deps) {
         const deviceId = workerClaimMatch[1];
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
         mandatoryAudit({ action: 'v2_browser_lease_claim_intent', status: 'authorized', device_id: deviceId });
-        const result = operationBroker.claimBrowserOperation(deviceId);
-        audit({ action: 'v2_browser_lease_claim', status: 'ok', device_id: deviceId, operation_id: result.operation.id });
+        const result = operationBroker.claimBrowserOperationAndAudit(deviceId, (lease) => {
+          mandatoryAudit({ action: 'v2_browser_lease_claim', status: 'ok', device_id: deviceId, operation_id: lease.operation.id });
+        });
         send(res, 200, result);
         return true;
       }

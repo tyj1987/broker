@@ -695,6 +695,8 @@ export class OperationBroker {
         ].join(':')))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     if (!operation) throw new V2Error('not_found', 'no browser operation is available', 404);
+    const previousStatus = operation.status;
+    const previousUpdatedAt = operation.updatedAt;
     operation.status = 'consuming';
     operation.updatedAt = new Date(this.now()).toISOString();
     const leaseId = randomUUID();
@@ -702,7 +704,7 @@ export class OperationBroker {
     const expiresAt = Math.min(new Date(operation.expiresAt).getTime(), this.now() + 60_000);
     this.browserLeases.set(leaseId, {
       id: leaseId, receiptHash: sha256Base64Url(receipt), deviceId, operationId: operation.id,
-      expiresAt, otpClaimed: false,
+      expiresAt, otpClaimed: false, previousStatus, previousUpdatedAt,
     });
     return {
       id: leaseId,
@@ -716,6 +718,27 @@ export class OperationBroker {
           ? this.otpTasks.get(operation.otpTaskId)?.status === 'received' : false,
       },
     };
+  }
+
+  claimBrowserOperationAndAudit(deviceId, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    const result = this.claimBrowserOperation(deviceId);
+    const lease = this.browserLeases.get(result.id);
+    const operation = lease ? this.operations.get(lease.operationId) : null;
+    try {
+      commitAudit(result);
+    } catch (error) {
+      if (!lease || this.browserLeases.get(result.id) !== lease || !operation) {
+        throw new V2Error('audit_rollback_failed', 'browser lease audit rollback failed', 503);
+      }
+      this.browserLeases.delete(result.id);
+      operation.status = lease.previousStatus;
+      operation.updatedAt = lease.previousUpdatedAt;
+      throw error;
+    }
+    return result;
   }
 
   claimBrowserOperationOtp(deviceId, leaseId, receipt) {

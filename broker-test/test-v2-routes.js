@@ -80,6 +80,11 @@ const handler = createV2Routes({
       calls.push(['worker-claim', deviceId]);
       return { id: '00000000-0000-4000-8000-000000000002', operation: { id: 'operation-id' } };
     },
+    claimBrowserOperationAndAudit(deviceId, commitAudit) {
+      const result = this.claimBrowserOperation(deviceId);
+      commitAudit(result);
+      return result;
+    },
     claimBrowserOperationOtp(deviceId, leaseId, receipt) {
       calls.push(['worker-otp', deviceId, leaseId, receipt]);
       return { code: '123456', expires_at: new Date().toISOString() };
@@ -414,6 +419,15 @@ const claimVerify = calls.findLast((item) => item[0] === 'device-verify');
 assert.equal(claimVerify[2].body, '{}');
 assert.equal(claimVerify[2].nonce, 'route-nonce');
 assert.ok(calls.some((item) => item[0] === 'worker-claim'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_browser_lease_claim'
+  && event.operation_id === 'operation-id'));
+const claimsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'worker-claim').length;
+auditFailureAction = 'v2_browser_lease_claim';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/claim` });
+auditFailureAction = null;
+assert.equal(response.value.error, 'audit_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'worker-claim').length, claimsBeforeResultAuditFailure + 1);
 
 response = null;
 await handler({ method: 'GET', headers: signedHeaders }, {}, { method: 'GET', pathname: `/api/v2/devices/${deviceId}/otp-tasks` });

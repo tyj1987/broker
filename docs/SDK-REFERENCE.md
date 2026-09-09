@@ -68,6 +68,10 @@ synchronous transition. If the audit commit fails, the OTP code, task state and
 operation state are restored to their pre-submission values; the device must use
 a fresh signed request nonce to retry.
 
+An isolated browser lease is not released to a worker until its mandatory claim
+audit succeeds. Audit failure deletes the unpublished receipt and lease, then
+restores the operation to its prior waiting or OTP-received state.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

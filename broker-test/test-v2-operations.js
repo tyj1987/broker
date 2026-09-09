@@ -365,7 +365,22 @@ const workerOperation = await workerBroker.createOperation({ name: 'owner-4' }, 
   typed_parameters: { resource_ref: 'summary' },
 });
 assert.equal(workerOperation.execution_mode, 'browser');
-const lease = workerBroker.claimBrowserOperation(workerDevice.id);
+assert.throws(
+  () => workerBroker.claimBrowserOperationAndAudit(workerDevice.id, () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(
+  workerBroker.getOperation({ name: 'owner-4' }, workerOperation.id).status,
+  'waiting',
+  'a failed lease audit restores the unpublished operation',
+);
+let leaseAuditCommitted = false;
+const lease = workerBroker.claimBrowserOperationAndAudit(workerDevice.id, () => {
+  leaseAuditCommitted = true;
+});
+assert.equal(leaseAuditCommitted, true);
 assert.equal(lease.operation.id, workerOperation.id);
 assert.equal(lease.operation.provider, 'aliyun');
 assert.equal(Object.hasOwn(lease.operation, 'owner'), false);

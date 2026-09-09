@@ -297,7 +297,13 @@ const p = {
     patch: {
       tags: ['devices-v2'], summary: 'Suspend or permanently revoke a device',
       parameters: [{ in: 'path', name: 'device_id', required: true, schema: { type: 'string', format: 'uuid' } }],
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['state'], properties: { state: { type: 'string', enum: ['active', 'suspended', 'revoked'] } } } } } },
+      requestBody: { required: true, content: { 'application/json': { schema: {
+        type: 'object', additionalProperties: false, required: ['state', 'approval_request_id'],
+        properties: {
+          state: { type: 'string', enum: ['active', 'suspended', 'revoked'] },
+          approval_request_id: { type: 'string', format: 'uuid', description: 'Two-person approval bound to this device and requested state' },
+        },
+      } } } },
       responses: { 200: jsonOK('Device'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 404: respRef('NotFound'), 409: desc('Invalid state transition') },
     },
   },
@@ -552,7 +558,7 @@ const s = {
     },
   },
   DeviceEnrollmentBegin: {
-    type: 'object', additionalProperties: false, required: ['label', 'platform'],
+    type: 'object', additionalProperties: false, required: ['label', 'platform', 'approval_request_id'],
     properties: {
       label: { type: 'string', maxLength: 80 },
       platform: { type: 'string', enum: ['android', 'windows', 'linux', 'ios', 'browser-worker'] },
@@ -560,6 +566,7 @@ const s = {
         type: 'array', items: { type: 'string' },
         description: 'Browser worker grants use browser.execute:<provider>:<operation>:<account>:<environment>.',
       },
+      approval_request_id: { type: 'string', format: 'uuid', description: 'Two-person approval bound to the complete enrollment request' },
     },
   },
   DeviceEnrollmentChallenge: {

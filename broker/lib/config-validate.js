@@ -130,6 +130,19 @@ export function validateBrokerConfig(config, opts = {}) {
           if (policy.execution_mode != null && !['adapter', 'browser'].includes(policy.execution_mode)) {
             errors.push({ level: 'error', path: `${path}.execution_mode`, message: 'must be adapter or browser' });
           }
+          if (provider === 'broker' && ['device.enroll', 'device.state'].includes(operationId)) {
+            const safeControlPolicy = policy.approval_required === true
+              && Number(policy.required_approvals) >= 2
+              && policy.roles?.includes('admin')
+              && policy.security_profiles?.includes('strict')
+              && policy.identity_methods?.includes('session');
+            if (!safeControlPolicy) {
+              errors.push({
+                level: 'error', path,
+                message: 'device control requires strict admin session policy and at least two approvals',
+              });
+            }
+          }
         }
       }
     }

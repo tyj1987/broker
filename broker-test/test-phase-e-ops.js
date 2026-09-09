@@ -60,6 +60,19 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(browserExecutionMode.ok === true, 'browser operation execution mode is accepted');
 
+  const weakDeviceControl = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: {
+      broker: {
+        'device.enroll': {
+          approval_required: true, required_approvals: 1, roles: ['admin'],
+          security_profiles: ['strict'], identity_methods: ['session'],
+        },
+      },
+    },
+  });
+  assert(weakDeviceControl.ok === false, 'device control policy cannot reduce two-person approval');
+
   const badUrl = validateBrokerConfig({
     clients: { a: { role: 'admin' } },
     services: { x: { base_url: 'not-a-url' } },

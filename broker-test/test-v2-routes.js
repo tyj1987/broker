@@ -16,6 +16,10 @@ const handler = createV2Routes({
       calls.push(['enroll-begin', owner, input]);
       return { enrollment_id: '00000000-0000-4000-8000-000000000099' };
     },
+    async setDeviceState(requester, deviceId, state, isAdmin) {
+      calls.push(['device-state', requester, deviceId, state, isAdmin]);
+      return { id: deviceId, state };
+    },
     async createOperation(subject, input) {
       calls.push(['operation', subject.name, input, subject.context.approvalGrants || []]);
       return { id: 'operation-id', provider: input.provider, status: 'waiting' };
@@ -52,7 +56,13 @@ const handler = createV2Routes({
       return { id, status: decision === 'approve' ? 'approved' : 'rejected' };
     },
     claimFor(_subject, input) {
-      return input.approval_request_id ? { id: input.approval_request_id, grants: [{ approved_by: 'admin-a' }] } : null;
+      if (!input.approval_request_id) return null;
+      const grants = input.approval_request_id === 'one-approval'
+        ? [{ approved_by: 'admin-b' }]
+        : input.provider === 'broker'
+        ? [{ approved_by: 'admin-b' }, { approved_by: 'admin-c' }]
+        : [{ approved_by: 'admin-a' }];
+      return { id: input.approval_request_id, grants };
     },
     consume(id) { calls.push(['approval-consume', id]); },
     release(id) { calls.push(['approval-release', id]); },
@@ -82,6 +92,11 @@ const route = async (pathname) => {
 const getRoute = async (pathname) => {
   response = null;
   await handler({ method: 'GET', headers: {} }, {}, { method: 'GET', pathname });
+  return response;
+};
+const patchRoute = async (pathname) => {
+  response = null;
+  await handler({ method: 'PATCH', headers: {} }, {}, { method: 'PATCH', pathname });
   return response;
 };
 
@@ -131,6 +146,11 @@ identity = {
   client: { role: 'admin', security_profile: 'strict' },
 };
 body = { label: 'isolated-worker', platform: 'browser-worker', capabilities: ['browser.execute:aliyun:billing.read:primary:production'] };
+assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'approval_required');
+body.approval_request_id = 'one-approval';
+assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'approval_required');
+assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, 0, 'one approval cannot mutate device enrollment');
+body.approval_request_id = 'device-enroll-approval';
 assert.equal((await route('/api/v2/devices/enroll/begin')).status, 201);
 assert.ok(calls.some((item) => item[0] === 'enroll-begin'));
 
@@ -138,6 +158,14 @@ identity = { clientName: 'operator-a', via: 'session', authFactors: ['webauthn']
 assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'step_up_required', 'non-admin cannot enroll browser workers');
 identity = { clientName: 'admin-a', via: 'session', authFactors: [], client: { role: 'admin', security_profile: 'strict' } };
 assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'step_up_required', 'browser worker enrollment requires WebAuthn');
+
+identity = {
+  clientName: 'admin-a', via: 'session', authFactors: ['webauthn'],
+  client: { role: 'admin', security_profile: 'strict' },
+};
+body = { state: 'revoked', approval_request_id: 'device-state-approval' };
+assert.equal((await patchRoute('/api/v2/devices/00000000-0000-4000-8000-000000000001')).status, 200);
+assert.ok(calls.some((item) => item[0] === 'device-state' && item[3] === 'revoked'));
 
 const deviceId = '00000000-0000-4000-8000-000000000001';
 const leaseId = '00000000-0000-4000-8000-000000000002';

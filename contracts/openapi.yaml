@@ -901,6 +901,7 @@ paths:
               additionalProperties: false
               required:
                 - state
+                - approval_request_id
               properties:
                 state:
                   type: string
@@ -908,6 +909,10 @@ paths:
                     - active
                     - suspended
                     - revoked
+                approval_request_id:
+                  type: string
+                  format: uuid
+                  description: Two-person approval bound to this device and requested state
       responses:
         "200":
           description: OK
@@ -1640,6 +1645,7 @@ components:
       required:
         - label
         - platform
+        - approval_request_id
       properties:
         label:
           type: string
@@ -1658,6 +1664,10 @@ components:
             type: string
           description: Browser worker grants use
             browser.execute:<provider>:<operation>:<account>:<environment>.
+        approval_request_id:
+          type: string
+          format: uuid
+          description: Two-person approval bound to the complete enrollment request
     DeviceEnrollmentChallenge:
       type: object
       required:

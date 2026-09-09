@@ -20,6 +20,35 @@ function signedRequest(req, routePath, body = null) {
   };
 }
 
+function claimDualControlApproval(approvalBroker, identity, input) {
+  const claim = approvalBroker.claimFor(identity, input);
+  const approvers = new Set((claim?.grants || []).map((grant) => grant?.approved_by).filter(Boolean));
+  if (!claim || approvers.size < 2 || approvers.has(identity.name)) {
+    if (claim) approvalBroker.release(claim.id);
+    throw new V2Error('approval_required', 'two independent approvals are required', 403);
+  }
+  return claim;
+}
+
+function deviceEnrollmentApproval(body) {
+  return {
+    provider: 'broker', operation_id: 'device.enroll', account_ref: 'control-plane', environment: 'production',
+    typed_parameters: {
+      resource_ref: 'device-registration', label: body?.label,
+      platform: body?.platform, capabilities: body?.capabilities || [],
+    },
+    approval_request_id: body?.approval_request_id,
+  };
+}
+
+function deviceStateApproval(deviceId, body) {
+  return {
+    provider: 'broker', operation_id: 'device.state', account_ref: 'control-plane', environment: 'production',
+    typed_parameters: { resource_ref: 'device-state', device_id: deviceId, state: body?.state },
+    approval_request_id: body?.approval_request_id,
+  };
+}
+
 export function createV2Routes(deps) {
   const {
     operationBroker, approvalBroker, webAuthnService, getIdentity, readBody, send, audit,
@@ -212,17 +241,24 @@ export function createV2Routes(deps) {
           throw new V2Error('step_up_required', 'device enrollment requires an interactive identity', 403);
         }
         const body = await readBody(req);
-        if (body?.platform === 'browser-worker'
-          && (!identity.isAdmin || ctx.client?.security_profile !== 'strict'
-            || !ctx.authFactors?.includes('webauthn'))) {
+        if (!identity.isAdmin || ctx.client?.security_profile !== 'strict'
+          || !ctx.authFactors?.includes('webauthn')) {
           throw new V2Error(
             'step_up_required',
-            'browser worker enrollment requires a strict administrator with WebAuthn step-up',
+            'device enrollment requires a strict administrator with WebAuthn step-up',
             403,
           );
         }
         mandatoryAudit({ action: 'v2_device_enroll_begin_intent', status: 'authorized', cn: ctx.cn, platform: body?.platform });
-        const result = operationBroker.beginEnrollment(identity.name, body);
+        const claim = claimDualControlApproval(approvalBroker, identity, deviceEnrollmentApproval(body));
+        let result;
+        try {
+          result = operationBroker.beginEnrollment(identity.name, body);
+          approvalBroker.consume(claim.id);
+        } catch (error) {
+          approvalBroker.release(claim.id);
+          throw error;
+        }
         audit({ action: 'v2_device_enroll_begin', status: 'ok', cn: ctx.cn, enrollment_id: result.enrollment_id });
         send(res, 201, result);
         return true;
@@ -256,8 +292,20 @@ export function createV2Routes(deps) {
           throw new V2Error('step_up_required', 'device state changes require an interactive identity', 403);
         }
         const body = await readBody(req);
+        if (!identity.isAdmin || ctx.client?.security_profile !== 'strict'
+          || !ctx.authFactors?.includes('webauthn')) {
+          throw new V2Error('step_up_required', 'device state changes require a strict administrator with WebAuthn step-up', 403);
+        }
         mandatoryAudit({ action: 'v2_device_state_intent', status: 'authorized', cn: ctx.cn, device_id: deviceMatch[1], device_state: body?.state });
-        const result = await operationBroker.setDeviceState(identity.name, deviceMatch[1], body?.state, identity.isAdmin);
+        const claim = claimDualControlApproval(approvalBroker, identity, deviceStateApproval(deviceMatch[1], body));
+        let result;
+        try {
+          result = await operationBroker.setDeviceState(identity.name, deviceMatch[1], body?.state, identity.isAdmin);
+          approvalBroker.consume(claim.id);
+        } catch (error) {
+          approvalBroker.release(claim.id);
+          throw error;
+        }
         audit({ action: 'v2_device_state', status: 'ok', cn: ctx.cn, device_id: result.id, device_state: result.state });
         send(res, 200, result);
         return true;

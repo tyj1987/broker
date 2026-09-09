@@ -53,6 +53,10 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   operation, account and environment. A production launcher, hardware-backed
   workload signer, provider adapters, container egress enforcement and real
   account tests are not implemented, so this is not production-ready.
+- Device enrollment and state changes now require a strict administrator with
+  WebAuthn step-up plus a request-bound approval from two other administrators.
+  This is source and unit-test evidence only; the three-operator ceremony has
+  not been exercised with physical security keys.
 - Supply chain: Gitleaks 8.29.1 (official release checksum verified) reports no
   unallowlisted findings in either the complete Git history or the staged
   upgrade. Node broker, VS Code and desktop dependency audits report no known

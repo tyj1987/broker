@@ -48,6 +48,58 @@ assert.throws(() => broker.issue({ ...binding, ttl_ms: 999 }), expectCode('inval
 const full = new ExecutionTokenBroker({ maxRecords: 0 });
 assert.throws(() => full.issue(binding), expectCode('capacity'));
 
+const restartNow = 1_910_000_000_000;
+const beforeRestart = new ExecutionTokenBroker({ now: () => restartNow });
+const consumedBeforeRestart = beforeRestart.issue(binding);
+beforeRestart.consume(consumedBeforeRestart.token, consumedBeforeRestart.nonce, binding);
+const revokedBeforeRestart = beforeRestart.issue(binding);
+beforeRestart.revoke(revokedBeforeRestart.execution_id);
+const activeBeforeRestart = beforeRestart.issue(binding);
+const durableState = beforeRestart.exportState();
+const serializedState = JSON.stringify(durableState);
+assert.equal(durableState.version, 1);
+assert.equal(durableState.records.length, 3);
+for (const capability of [consumedBeforeRestart, revokedBeforeRestart, activeBeforeRestart]) {
+  assert.ok(!serializedState.includes(capability.token), 'durable state must not contain bearer tokens');
+  assert.ok(!serializedState.includes(capability.nonce), 'durable state must not contain raw nonces');
+}
+
+const afterRestart = new ExecutionTokenBroker({ now: () => restartNow });
+afterRestart.restoreState(durableState);
+assert.throws(
+  () => afterRestart.consume(consumedBeforeRestart.token, consumedBeforeRestart.nonce, binding),
+  expectCode('execution_token_replay'),
+  'consumed-token tombstones must survive restart',
+);
+assert.throws(
+  () => afterRestart.consume(revokedBeforeRestart.token, revokedBeforeRestart.nonce, binding),
+  expectCode('execution_token_replay'),
+  'revoked-token tombstones must survive restart',
+);
+assert.equal(
+  afterRestart.consume(activeBeforeRestart.token, activeBeforeRestart.nonce, binding).execution_id,
+  activeBeforeRestart.execution_id,
+  'an unexpired bound capability can be recovered without weakening its binding',
+);
+
+const restoreGuard = new ExecutionTokenBroker({ now: () => restartNow });
+const guardCapability = restoreGuard.issue(binding);
+for (const corrupt of [
+  null,
+  { version: 2, records: [] },
+  { version: 1, records: 'not-an-array' },
+  { version: 1, records: [{ ...durableState.records[0], status: 'UNKNOWN' }] },
+  { version: 1, records: [durableState.records[0], durableState.records[0]] },
+  { ...durableState, unexpected: true },
+]) {
+  assert.throws(() => restoreGuard.restoreState(corrupt), expectCode('state_corrupt'));
+}
+assert.equal(
+  restoreGuard.consume(guardCapability.token, guardCapability.nonce, binding).execution_id,
+  guardCapability.execution_id,
+  'a rejected restore must not replace the last valid in-memory state',
+);
+
 now += 60_001;
 broker.prune();
 assert.ok(broker.records.size < 10, 'expired token tombstones are eventually pruned');

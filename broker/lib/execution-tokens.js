@@ -6,6 +6,14 @@ const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
 const MAX_TTL_MS = 60_000;
 const DEFAULT_TTL_MS = 30_000;
 const MAX_RECORDS = 10_000;
+const STATE_VERSION = 1;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
+const TOKEN_STATES = new Set(['ACTIVE', 'CONSUMED', 'REVOKED', 'EXPIRED']);
+const STATE_RECORD_KEYS = new Set([
+  'id', 'actor', 'tool', 'target', 'environment', 'requestBinding',
+  'tokenHash', 'nonceHash', 'status', 'issuedAt', 'expiresAt', 'consumedAt', 'revokedAt',
+]);
 
 function digest(value) {
   return createHash('sha256').update(value).digest('base64url');
@@ -35,6 +43,40 @@ function publicGrant(record) {
     issued_at: record.issuedAt,
     expires_at: record.expiresAt,
   };
+}
+
+function stateCorrupt(message) {
+  return new V2Error('state_corrupt', `execution token state is invalid: ${message}`, 500);
+}
+
+function validTimestamp(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function validateStateRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw stateCorrupt('record must be an object');
+  if (Object.keys(value).some((key) => !STATE_RECORD_KEYS.has(key))) throw stateCorrupt('record contains unknown fields');
+  for (const [field, max] of [['actor', 256], ['tool', 256], ['target', 256], ['environment', 32], ['requestBinding', 128]]) {
+    if (typeof value[field] !== 'string' || value[field].length < 1 || value[field].length > max) {
+      throw stateCorrupt(`${field} is invalid`);
+    }
+  }
+  if (!UUID_RE.test(value.id || '')) throw stateCorrupt('id is invalid');
+  if (!DIGEST_RE.test(value.tokenHash || '') || !DIGEST_RE.test(value.nonceHash || '')) {
+    throw stateCorrupt('digest is invalid');
+  }
+  if (!TOKEN_STATES.has(value.status)) throw stateCorrupt('status is invalid');
+  if (!validTimestamp(value.issuedAt) || !validTimestamp(value.expiresAt)) throw stateCorrupt('timestamp is invalid');
+  const lifetime = Date.parse(value.expiresAt) - Date.parse(value.issuedAt);
+  if (lifetime < 1_000 || lifetime > MAX_TTL_MS) throw stateCorrupt('lifetime is invalid');
+  if (value.status === 'CONSUMED') {
+    if (!validTimestamp(value.consumedAt) || Object.hasOwn(value, 'revokedAt')) throw stateCorrupt('consumption marker is invalid');
+  } else if (value.status === 'REVOKED') {
+    if (!validTimestamp(value.revokedAt) || Object.hasOwn(value, 'consumedAt')) throw stateCorrupt('revocation marker is invalid');
+  } else if (Object.hasOwn(value, 'consumedAt') || Object.hasOwn(value, 'revokedAt')) {
+    throw stateCorrupt('terminal marker conflicts with status');
+  }
+  return structuredClone(value);
 }
 
 export class ExecutionTokenBroker {
@@ -96,6 +138,34 @@ export class ExecutionTokenBroker {
     record.status = 'REVOKED';
     record.revokedAt = new Date(this.now()).toISOString();
     return publicGrant(record);
+  }
+
+  exportState() {
+    this.prune();
+    return {
+      version: STATE_VERSION,
+      records: [...this.records.values()].map((record) => structuredClone(record)),
+    };
+  }
+
+  restoreState(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
+      || Object.keys(snapshot).sort().join(',') !== 'records,version'
+      || snapshot.version !== STATE_VERSION || !Array.isArray(snapshot.records)) {
+      throw stateCorrupt('snapshot envelope is invalid');
+    }
+    if (snapshot.records.length > this.maxRecords) throw stateCorrupt('snapshot exceeds capacity');
+    const records = new Map();
+    const byId = new Map();
+    for (const candidate of snapshot.records) {
+      const record = validateStateRecord(candidate);
+      if (records.has(record.tokenHash) || byId.has(record.id)) throw stateCorrupt('snapshot contains duplicate records');
+      records.set(record.tokenHash, record);
+      byId.set(record.id, record.tokenHash);
+    }
+    this.records = records;
+    this.byId = byId;
+    this.prune();
   }
 
   prune() {

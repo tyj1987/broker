@@ -6,6 +6,7 @@ status: contract_required
 official_docs:
   - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
   - https://docs.github.com/en/rest/authentication
+  - https://docs.github.com/en/rest/repos/repos#get-a-repository
 origins: [https://api.github.com]
 authentication:
   priority: [github_app_installation_token, actions_oidc, fine_grained_pat]

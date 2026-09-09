@@ -16,6 +16,7 @@ only approved business results; they do not receive long-lived credentials.
 - [Automation tasks](AUTOMATION-TASKS.md) — policy-routed task lifecycle, APIs and current durability boundary.
 - [Execution tokens](EXECUTION-TOKENS.md) — short-lived, bound, single-use adapter capabilities.
 - [Audit integrity](AUDIT-INTEGRITY.md) — restart-safe hash chaining, migration boundary and external-anchor gate.
+- [GitHub adapter](GITHUB-ADAPTER.md) — fixed-origin repository metadata operation and credential lease boundary.
 - [Decision queue](DECISION_QUEUE.md) — open high-impact choices and their required evidence.
 - [Verification](https://github.com/tyj1987/broker/blob/master/VERIFY.md) — reproducible local and CI checks.
 - [Production acceptance](PRODUCTION-ACCEPTANCE.md) — observed evidence, release blockers and remaining gates.

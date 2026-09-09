@@ -266,7 +266,7 @@ export class AutomationTaskBroker {
         const timeoutMs = Math.min(task.tool.timeout_ms, remainingMs);
         const timeoutCode = remainingMs <= task.tool.timeout_ms ? 'task_expired' : 'executor_timeout';
         const result = await executeWithDeadline(executor, structuredClone(task.parameters), {
-          taskId: task.id, actor: identity.name, environment: task.environment,
+          taskId: task.id, actor: identity.name, accountRef: task.accountRef, environment: task.environment,
           execution: executionGrant,
         }, timeoutMs, timeoutCode);
         assertSchema(result, task.tool.output_schema, 'result');

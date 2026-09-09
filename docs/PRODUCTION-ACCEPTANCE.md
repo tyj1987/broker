@@ -81,7 +81,7 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   regression and Windows Tauri build/Clippy/test evidence has been obtained;
   Android CI and end-to-end physical-key ceremony remain open.
 - Node broker full regression suite: passed. The security-core coverage gate
-  reports 96.75% lines, 89.56% branches and 97.2% functions. Approval creation
+  reports 96.91% lines, 89.88% branches and 97.35% functions. Approval creation
   is pre-authorized by the same Node and Go policy path, and v2 state changes
   require a durable audit intent before mutation.
 - Production audit writes now enter restart-safe `audit-chain-*` files. Startup
@@ -89,6 +89,12 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   records; tests cover restart continuation, malformed input and tampering.
   Legacy unsealed logs remain outside the migration genesis, and the missing
   independent signed chain-head anchor remains a P1 acceptance blocker.
+- The GitHub repository-read adapter has a fixed origin, method, API version,
+  response limit and projection. Unit contracts enforce repository-scoped
+  installation-token leases, execution-target binding, redirect denial and
+  safe errors with 100% line/function and 95.52% branch coverage. No token
+  minter or isolated-account live contract has run, so the manifest remains
+  `contract_required` and this is not production-available evidence.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test

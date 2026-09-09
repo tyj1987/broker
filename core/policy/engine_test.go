@@ -15,7 +15,7 @@ func baseline() (Subject, Request, Rule) {
 	request := Request{
 		Provider: "github", Operation: "repo.read", Account: "personal",
 		Resource: "tyj1987/broker", Environment: "production", RequestedTTL: time.Minute,
-		At: time.Now().UTC(),
+		SourceIP: "203.0.113.42", At: time.Now().UTC(),
 	}
 	rule := Rule{
 		Enabled: true, Roles: []string{"automation"}, SecurityProfiles: []string{"strict"},
@@ -117,6 +117,47 @@ func TestEvaluateTimeWindow(t *testing.T) {
 	rule.NotAfter = &past
 	if decision := Evaluate(subject, request, rule); decision.Code != "outside_time_window" {
 		t.Fatalf("expected not-after denial, got %#v", decision)
+	}
+}
+
+func TestEvaluateSourceCIDRs(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		cidrs  []string
+		allow  bool
+		code   string
+	}{
+		{"ipv4", "203.0.113.42", []string{"203.0.113.0/24"}, true, "allowed"},
+		{"ipv4 mapped", "::ffff:203.0.113.42", []string{"203.0.113.0/24"}, true, "allowed"},
+		{"ipv6", "2001:db8::42", []string{"2001:db8::/32"}, true, "allowed"},
+		{"outside", "198.51.100.1", []string{"203.0.113.0/24"}, false, "source_ip_denied"},
+		{"missing", "", []string{"203.0.113.0/24"}, false, "source_ip_denied"},
+		{"invalid source", "not-an-ip", []string{"203.0.113.0/24"}, false, "source_ip_denied"},
+		{"invalid cidr", "203.0.113.42", []string{"203.0.113.0/24", "invalid"}, false, "invalid_rule"},
+		{"invalid mapped cidr", "203.0.113.42", []string{"::ffff:0:0/80"}, false, "invalid_rule"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			subject, request, rule := baseline()
+			request.SourceIP = test.source
+			rule.SourceCIDRs = test.cidrs
+			decision := Evaluate(subject, request, rule)
+			if decision.Allow != test.allow || decision.Code != test.code {
+				t.Fatalf("unexpected decision: %#v", decision)
+			}
+		})
+	}
+}
+
+func TestEvaluateRejectsInvertedTimeWindow(t *testing.T) {
+	subject, request, rule := baseline()
+	start := request.At.Add(time.Minute)
+	end := request.At
+	rule.NotBefore = &start
+	rule.NotAfter = &end
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_rule" {
+		t.Fatalf("expected invalid rule, got %#v", decision)
 	}
 }
 

@@ -72,6 +72,9 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
       maximum_ttl_ms: policyTTL,
       require_step_up: policy.step_up_required === true,
       required_approvals: requiredApprovals,
+      source_cidrs: policy.source_cidrs || [],
+      not_before: policy.not_before || '',
+      not_after: policy.not_after || '',
     },
   };
 }

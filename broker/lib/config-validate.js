@@ -2,6 +2,7 @@
 // Phase E. Not a full JSON Schema engine — critical invariants only.
 
 import { existsSync as nodeExistsSync } from 'node:fs';
+import { validatePolicyConditions } from './policy-conditions.js';
 
 /**
  * @typedef {{ level: 'error'|'warn', path: string, message: string }}
@@ -129,6 +130,10 @@ export function validateBrokerConfig(config, opts = {}) {
           }
           if (policy.execution_mode != null && !['adapter', 'browser'].includes(policy.execution_mode)) {
             errors.push({ level: 'error', path: `${path}.execution_mode`, message: 'must be adapter or browser' });
+          }
+          const conditions = validatePolicyConditions(policy);
+          if (!conditions.ok) {
+            errors.push({ level: 'error', path, message: conditions.reason });
           }
           if (provider === 'broker' && ['device.enroll', 'device.state'].includes(operationId)) {
             const safeControlPolicy = policy.approval_required === true

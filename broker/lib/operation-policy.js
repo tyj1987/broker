@@ -1,3 +1,5 @@
+import { evaluatePolicyConditions } from './policy-conditions.js';
+
 const SAFE_ID = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 
 function includes(list, value) {
@@ -66,6 +68,9 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   if (environment === 'production' && policy.contract_verified !== true) {
     return deny('contract_unverified');
   }
+
+  const conditions = evaluatePolicyConditions(policy, ctx.sourceIp, now);
+  if (!conditions.ok) return deny(conditions.reason);
 
   const serviceAllowed = includes(client.allowed_services, provider)
     || (client.allowed_proxy || []).some((entry) => entry?.service === provider);

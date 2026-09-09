@@ -2,6 +2,17 @@
 
 This document records observed evidence separately from planned controls. Passing source tests does not approve a production release.
 
+## Source and time policy enforcement
+
+Typed operations now enforce optional IPv4/IPv6 CIDR and absolute RFC 3339
+time-window conditions in the Node transition layer and independently in the
+Go policy core. The core wire contract carries the original trusted-proxy
+source address and exact policy bounds; missing or malformed inputs fail
+closed. Go policy tests cover native IPv4, IPv4-mapped IPv6, IPv6, outside
+networks, invalid rules, boundary time and inverted windows. This is source and
+automated-test evidence only; it does not close the live nginx trust-boundary
+findings below.
+
 ## Baseline
 
 - Source baseline: `master@450c3ed2e1ffafb6507b908fc5b94a980c9820b0`

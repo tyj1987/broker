@@ -20,13 +20,15 @@ func validPayload() map[string]any {
 		"request": map[string]any{
 			"provider": "github", "operation": "repo.read", "account": "primary",
 			"resource": "tyj1987/broker", "environment": "production",
-			"requested_ttl_ms": 60000, "at": "2026-09-09T00:00:00Z",
+			"requested_ttl_ms": 60000, "source_ip": "203.0.113.42", "at": "2026-09-09T00:00:00Z",
 		},
 		"rule": map[string]any{
 			"enabled": true, "roles": []string{"automation"}, "security_profiles": []string{"strict"},
 			"providers": []string{"github"}, "operations": []string{"repo.read"},
 			"accounts": []string{"primary"}, "resources": []string{"tyj1987/broker"},
 			"environments": []string{"production"}, "maximum_ttl_ms": 90000,
+			"source_cidrs": []string{"203.0.113.0/24"},
+			"not_before":   "2026-09-08T00:00:00Z", "not_after": "2026-09-10T00:00:00Z",
 		},
 	}
 }
@@ -78,6 +80,39 @@ func TestRejectsInvalidTime(t *testing.T) {
 	body, _ := json.Marshal(payload)
 	if status := request(t, http.MethodPost, "/v1/evaluate", body).Code; status != http.StatusBadRequest {
 		t.Fatalf("unexpected status %d", status)
+	}
+}
+
+func TestRejectsInvalidRuleTime(t *testing.T) {
+	for _, field := range []string{"not_before", "not_after"} {
+		t.Run(field, func(t *testing.T) {
+			payload := validPayload()
+			payload["rule"].(map[string]any)[field] = "not-a-time"
+			body, _ := json.Marshal(payload)
+			recorder := request(t, http.MethodPost, "/v1/evaluate", body)
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid_rule_time") {
+				t.Fatalf("unexpected response %d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestSourceAndTimeRuleDenials(t *testing.T) {
+	tests := map[string]func(map[string]any){
+		"source": func(payload map[string]any) { payload["request"].(map[string]any)["source_ip"] = "198.51.100.2" },
+		"window": func(payload map[string]any) { payload["rule"].(map[string]any)["not_after"] = "2026-09-09T00:00:00Z" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			payload := validPayload()
+			mutate(payload)
+			body, _ := json.Marshal(payload)
+			recorder := request(t, http.MethodPost, "/v1/evaluate", body)
+			var value response
+			if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &value) != nil || value.Allow {
+				t.Fatalf("unexpected response %d %s", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 

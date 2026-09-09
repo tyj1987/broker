@@ -33,6 +33,12 @@ are rejected by the operation schema. A completed response contains only the
 business result allowed by that operation; it must not contain injected
 credentials, cookies, signing material, internal paths, or browser state.
 
+An operation policy may additionally set `source_cidrs`, `not_before`, and
+`not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
+is exclusive. Missing source identity, malformed CIDRs, malformed or inverted
+time windows, and requests outside the window are denied by both the Node
+transition layer and the Go policy service.
+
 ## Authentication
 
 - Human control-plane access uses mTLS and WebAuthn. Strict profiles require

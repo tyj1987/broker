@@ -130,6 +130,30 @@ assert.equal(evaluateOperationPolicy({
   operation_policies: { aliyun: { 'billing.read': { ...policy, contract_verified: false, environments: ['staging'] } } },
 }, stagingBase, 1_000).allow, true, 'unverified adapters may be exercised outside production');
 
+
+const conditionedPolicy = {
+  ...policy,
+  source_cidrs: ['203.0.113.0/24', '2001:db8::/32'],
+  not_before: '2026-09-09T00:00:00Z',
+  not_after: '2026-09-10T00:00:00Z',
+};
+const conditionTime = Date.parse('2026-09-09T12:00:00Z');
+const conditionedContext = {
+  ...context,
+  sourceIp: '203.0.113.42',
+  approvalGrants: [{ ...context.approvalGrants[0], expires_at_ms: conditionTime + 60_000 }],
+};
+const conditionedRequest = { ...base, identity: { ...base.identity, context: conditionedContext } };
+const conditionedConfig = { operation_policies: { aliyun: { 'billing.read': conditionedPolicy } } };
+assert.equal(evaluateOperationPolicy(conditionedConfig, conditionedRequest, conditionTime).allow, true);
+assert.equal(evaluateOperationPolicy(conditionedConfig, {
+  ...conditionedRequest,
+  identity: { ...conditionedRequest.identity, context: { ...conditionedContext, sourceIp: '198.51.100.2' } },
+}, conditionTime).reason, 'source_ip_denied');
+assert.equal(evaluateOperationPolicy(
+  conditionedConfig, conditionedRequest, Date.parse('2026-09-10T00:00:00Z'),
+).reason, 'outside_time_window');
+
 const sessionContext = {
   ...context,
   via: 'mtls',

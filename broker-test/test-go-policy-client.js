@@ -17,6 +17,9 @@ const policy = {
   required_approvals: 2,
   contract_verified: true,
   parameter_schema: { type: 'object', properties: {} },
+  source_cidrs: ['127.0.0.0/8'],
+  not_before: '2026-09-09T00:00:00Z',
+  not_after: '2026-09-10T00:00:00Z',
 };
 const config = { operation_policies: { github: { 'repo.read': policy } } };
 const operation = {
@@ -43,6 +46,9 @@ const payload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_00
 assert.equal(payload.request.approval_count, 2);
 assert.equal(payload.request.step_up, true);
 assert.deepEqual(payload.subject.providers, ['github']);
+assert.deepEqual(payload.rule.source_cidrs, ['127.0.0.0/8']);
+assert.equal(payload.rule.not_before, policy.not_before);
+assert.equal(payload.rule.not_after, policy.not_after);
 const preflightPayload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_000 }, Date.now(), { ignoreApproval: true });
 assert.equal(preflightPayload.rule.required_approvals, 0);
 assert.equal(preflightPayload.subject.requires_two_persons, true);

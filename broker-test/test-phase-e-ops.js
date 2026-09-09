@@ -60,6 +60,21 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(browserExecutionMode.ok === true, 'browser operation execution mode is accepted');
 
+  const invalidPolicyConditions = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: { github: { 'repo.read': { source_cidrs: ['not-a-cidr'] } } },
+  });
+  assert(invalidPolicyConditions.ok === false, 'invalid network policy condition fails closed');
+
+  const validPolicyConditions = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: { github: { 'repo.read': {
+      source_cidrs: ['203.0.113.0/24', '2001:db8::/32'],
+      not_before: '2026-09-09T00:00:00Z', not_after: '2026-09-10T00:00:00Z',
+    } } },
+  });
+  assert(validPolicyConditions.ok === true, 'valid network and time policy conditions are accepted');
+
   const weakDeviceControl = validateBrokerConfig({
     clients: { admin: { role: 'admin' } },
     operation_policies: {

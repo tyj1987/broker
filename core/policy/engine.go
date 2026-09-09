@@ -6,6 +6,8 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"strings"
 	"time"
 )
 
@@ -48,6 +50,7 @@ type Rule struct {
 	MaximumTTL        time.Duration
 	RequireStepUp     bool
 	RequiredApprovals int
+	SourceCIDRs       []string
 	NotBefore         *time.Time
 	NotAfter          *time.Time
 }
@@ -100,9 +103,21 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 	if request.ApprovalCount < requiredApprovals {
 		return deny("approval_required")
 	}
+	if len(rule.SourceCIDRs) > 0 {
+		allowed, valid := sourceAllowed(request.SourceIP, rule.SourceCIDRs)
+		if !valid {
+			return deny("invalid_rule")
+		}
+		if !allowed {
+			return deny("source_ip_denied")
+		}
+	}
 	when := request.At
 	if when.IsZero() {
 		when = time.Now().UTC()
+	}
+	if rule.NotBefore != nil && rule.NotAfter != nil && !rule.NotBefore.Before(*rule.NotAfter) {
+		return deny("invalid_rule")
 	}
 	if rule.NotBefore != nil && when.Before(*rule.NotBefore) {
 		return deny("outside_time_window")
@@ -123,6 +138,40 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 		}
 	}
 	return Decision{Allow: true, TTL: ttl, Code: "allowed"}
+}
+
+func sourceAllowed(source string, cidrs []string) (bool, bool) {
+	address, err := netip.ParseAddr(strings.TrimSpace(source))
+	if err != nil {
+		return false, true
+	}
+	address = address.Unmap()
+	allowed := false
+	for _, raw := range cidrs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			return false, false
+		}
+		prefix, ok := normalizedPrefix(prefix)
+		if !ok {
+			return false, false
+		}
+		if prefix.Contains(address) {
+			allowed = true
+		}
+	}
+	return allowed, true
+}
+
+func normalizedPrefix(prefix netip.Prefix) (netip.Prefix, bool) {
+	address := prefix.Addr()
+	if !address.Is4In6() {
+		return prefix.Masked(), true
+	}
+	if prefix.Bits() < 96 {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(address.Unmap(), prefix.Bits()-96).Masked(), true
 }
 
 func ValidateDelegation(parent, child Subject) error {

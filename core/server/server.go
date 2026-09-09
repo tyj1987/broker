@@ -57,6 +57,9 @@ type wireRule struct {
 	MaximumTTLMS      int64    `json:"maximum_ttl_ms"`
 	RequireStepUp     bool     `json:"require_step_up"`
 	RequiredApprovals int      `json:"required_approvals"`
+	SourceCIDRs       []string `json:"source_cidrs"`
+	NotBefore         string   `json:"not_before"`
+	NotAfter          string   `json:"not_after"`
 }
 
 type evaluation struct {
@@ -96,6 +99,16 @@ func Handler() http.Handler {
 			writeJSON(writer, http.StatusBadRequest, response{Code: "invalid_time"})
 			return
 		}
+		notBefore, err := optionalTime(input.Rule.NotBefore)
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, response{Code: "invalid_rule_time"})
+			return
+		}
+		notAfter, err := optionalTime(input.Rule.NotAfter)
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, response{Code: "invalid_rule_time"})
+			return
+		}
 		decision := policy.Evaluate(
 			policy.Subject{
 				ID: input.Subject.ID, Role: input.Subject.Role, SecurityProfile: input.Subject.SecurityProfile,
@@ -115,12 +128,24 @@ func Handler() http.Handler {
 				Providers: input.Rule.Providers, Operations: input.Rule.Operations, Accounts: input.Rule.Accounts,
 				Resources: input.Rule.Resources, Environments: input.Rule.Environments,
 				MaximumTTL: milliseconds(input.Rule.MaximumTTLMS), RequireStepUp: input.Rule.RequireStepUp,
-				RequiredApprovals: input.Rule.RequiredApprovals,
+				RequiredApprovals: input.Rule.RequiredApprovals, SourceCIDRs: input.Rule.SourceCIDRs,
+				NotBefore: notBefore, NotAfter: notAfter,
 			},
 		)
 		writeJSON(writer, http.StatusOK, response{Allow: decision.Allow, TTLMS: decision.TTL.Milliseconds(), Code: decision.Code})
 	})
 	return mux
+}
+
+func optionalTime(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func Run(socketPath string) error {

@@ -88,6 +88,7 @@ import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
 import { loadSecretCacheCandidate, replaceSecretCache } from './lib/secret-cache.js';
 import { reloadRuntimeAtomically } from './lib/runtime-reload.js';
+import { isReloadTokenValid } from './lib/reload-auth.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
 import { buildAuditEvent, loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
@@ -3074,15 +3075,14 @@ async function handle(req, res) {
   // ----- POST /api/v1/reload (admin only) -----
   if (m === 'POST' && p === '/api/v1/reload') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const tok = url.searchParams.get('token') || req.headers['x-reload-token'];
-    if (tok !== RELOAD_TOKEN) return jsonError(res, 401, 'Bad reload token');
+    if (!isReloadTokenValid(req.headers, RELOAD_TOKEN)) return jsonError(res, 401, 'Bad reload token');
     try {
       await reloadRuntime();
       audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
       return send(res, 200, { reloaded: true, services: Object.keys(CONFIG.services), secrets: SECRET_CACHE.size });
-    } catch (err) {
-      audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'error', error: err.message });
-      return jsonError(res, 500, err.message);
+    } catch {
+      audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'error', error: 'reload_failed' });
+      return jsonError(res, 500, 'Reload failed');
     }
   }
 

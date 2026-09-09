@@ -22,7 +22,25 @@ const broker = new ApprovalBroker({
   now: () => now,
   getPolicy: (provider, operationId) => provider === 'aliyun' && operationId === 'billing.read' ? policy : null,
 });
-const requester = { name: 'requester', context: { via: 'api_key', client: { role: 'developer' } } };
+const requester = {
+  name: 'requester',
+  context: {
+    via: 'api_key',
+    client: { role: 'developer' },
+    apiKey: {
+      scopes: ['operations:execute'],
+      allowed_services: ['aliyun'],
+      allowed_operations: ['aliyun:billing.read'],
+      allowed_accounts: ['primary'],
+      allowed_environments: ['production'],
+      allowed_resources: ['billing-summary'],
+    },
+  },
+};
+const revokedRequester = {
+  ...requester,
+  context: { ...requester.context, apiKey: { ...requester.context.apiKey, allowed_operations: [] } },
+};
 const approver = (name, role = 'admin') => ({
   name,
   context: { via: 'session', authFactors: ['webauthn'], client: { role } },
@@ -36,6 +54,7 @@ assert.throws(() => broker.create(null, input), expectCode('unauthorized'));
 assert.throws(() => broker.create(requester, { ...input, operation_id: 'unapproved' }), expectCode('approval_not_required'));
 assert.throws(() => broker.create(requester, { ...input, account_ref: 'other' }), expectCode('forbidden'));
 assert.throws(() => broker.create(requester, { ...input, typed_parameters: {} }), expectCode('invalid_request'));
+assert.throws(() => broker.create(revokedRequester, input), expectCode('forbidden'));
 
 const request = broker.create(requester, input);
 assert.equal(request.status, 'REQUESTED');
@@ -61,6 +80,12 @@ assert.throws(() => broker.decide(approver('admin-a'), request.id, 'approve'), e
 assert.equal(broker.decide(approver('admin-b'), request.id, 'approve').status, 'APPROVED');
 assert.throws(() => broker.decide(approver('admin-c'), request.id, 'approve'), expectCode('invalid_state'));
 
+assert.equal(broker.list(revokedRequester).length, 0, 'revoked API key cannot list its former approvals');
+assert.throws(
+  () => broker.claimFor(revokedRequester, { ...input, approval_request_id: request.id }),
+  expectCode('forbidden'),
+);
+assert.equal(broker.list(requester).find((item) => item.id === request.id).status, 'APPROVED');
 assert.throws(() => broker.claimFor(requester, { ...input, account_ref: 'other', approval_request_id: request.id }), expectCode('approval_mismatch'));
 const claim = broker.claimFor(requester, { ...input, approval_request_id: request.id });
 assert.equal(claim.grants.length, 2);
@@ -101,6 +126,8 @@ assert.throws(() => broker.decide(approver('admin-a'), expiring.id, 'approve'), 
 
 const cancelled = broker.create(requester, input);
 assert.throws(() => broker.cancel({ name: 'outsider', context: { client: { role: 'developer' } } }, cancelled.id), expectCode('forbidden'));
+assert.throws(() => broker.cancel(revokedRequester, cancelled.id), expectCode('forbidden'));
+assert.equal(broker.list(requester).find((item) => item.id === cancelled.id).status, 'REQUESTED');
 assert.equal(broker.cancel(requester, cancelled.id).status, 'CANCELLED');
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: cancelled.id }), expectCode('invalid_state'));
 const adminCancelled = broker.create(requester, input);

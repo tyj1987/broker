@@ -30,6 +30,11 @@ new execution claim. Once a claim has atomically entered `EXECUTING`, concurrent
 replay or expiry checks cannot rewrite it; the bound task deadline owns the
 terminal success, failure or expiry transition.
 
+A requester API key must also retain the exact operation scope and provider,
+operation, account, environment and resource grants to list, cancel or claim an
+approval. A narrowed or revoked key is rejected before the approval state can
+change, so it cannot recover old metadata or poison an approved request.
+
 Every creation requires a caller-selected idempotency key. Reusing the key with
 the same request returns the original task; reusing it with different parameters
 is rejected. Execution and failure are terminal. The broker does not retry an

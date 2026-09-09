@@ -39,6 +39,19 @@ function requestHash(input) {
   }));
 }
 
+function apiKeyAllowsApproval(identity, record) {
+  const context = identity?.context;
+  if (context?.via !== 'api_key') return true;
+  const key = context.apiKey;
+  const exactScope = `operations:${record.provider}:${record.operationId}`;
+  return (key?.scopes?.includes('operations:execute') || key?.scopes?.includes(exactScope))
+    && key.allowed_services?.includes(record.provider)
+    && key.allowed_operations?.includes(`${record.provider}:${record.operationId}`)
+    && key.allowed_accounts?.includes(record.accountRef)
+    && key.allowed_environments?.includes(record.environment)
+    && key.allowed_resources?.includes(record.resourceRef);
+}
+
 export class ApprovalBroker {
   constructor({ now = () => Date.now(), getPolicy = () => null, maxRecords = 10_000 } = {}) {
     this.now = now;
@@ -61,6 +74,11 @@ export class ApprovalBroker {
     }
     const validation = validateTypedParameters(input.typed_parameters, policy.parameter_schema);
     if (!validation.ok) throw new V2Error('invalid_request', validation.reason);
+    if (!apiKeyAllowsApproval(identity, {
+      provider, operationId, accountRef, environment: input.environment, resourceRef,
+    })) {
+      throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
+    }
     if (!Array.isArray(policy.accounts) || !policy.accounts.includes(accountRef)
       || !Array.isArray(policy.environments) || !policy.environments.includes(input.environment)
       || (Array.isArray(policy.resources) && policy.resources.length > 0 && !policy.resources.includes(resourceRef))) {
@@ -117,14 +135,21 @@ export class ApprovalBroker {
     const canReviewOthers = context?.via === 'session'
       && context.authFactors?.includes('webauthn');
     return [...this.records.values()]
-      .filter((record) => record.requester === identity.name
-        || (canReviewOthers && record.approvalRoles.includes(role)))
+      .filter((record) => apiKeyAllowsApproval(identity, record)
+        && (record.requester === identity.name
+          || (canReviewOthers && record.approvalRoles.includes(role))))
       .map(publicApproval);
   }
 
   claimFor(identity, input) {
     const id = input?.approval_request_id;
     if (!id) return null;
+    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    const candidate = this.records.get(id);
+    if (!candidate || !STATES.has(candidate.status)) throw new V2Error('not_found', 'approval request not found', 404);
+    if (!apiKeyAllowsApproval(identity, candidate)) {
+      throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
+    }
     const record = this.getActive(id);
     if (record.status !== 'APPROVED' || record.requester !== identity?.name
       || record.requestHash !== requestHash(input)) {
@@ -167,6 +192,9 @@ export class ApprovalBroker {
     if (record.requester !== identity.name
       && (identity.context?.via !== 'session' || !identity.context?.authFactors?.includes('webauthn'))) {
       throw new V2Error('step_up_required', 'administrator cancellation requires a fresh WebAuthn session', 403);
+    }
+    if (!apiKeyAllowsApproval(identity, record)) {
+      throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
     }
     record.status = 'CANCELLED';
     return publicApproval(record);

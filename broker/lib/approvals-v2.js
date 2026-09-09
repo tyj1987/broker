@@ -4,12 +4,88 @@ import { validateTypedParameters } from './operation-policy.js';
 
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const STATES = new Set(['REQUESTED', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'DENIED', 'FAILED', 'EXPIRED', 'CANCELLED']);
+const STATE_VERSION = 1;
+const APPROVAL_TTL_MS = 5 * 60_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
+const STATE_RECORD_KEYS = new Set([
+  'id', 'requester', 'provider', 'operationId', 'accountRef', 'environment', 'resourceRef',
+  'requestHash', 'requiredApprovals', 'approvalRoles', 'approvers', 'status', 'createdAt', 'expiresAt',
+]);
+const APPROVER_KEYS = new Set(['name', 'approvedAt']);
 
 function requireId(value, field) {
   if (typeof value !== 'string' || !ID_RE.test(value)) {
     throw new V2Error('invalid_request', `${field} has an invalid format`);
   }
   return value;
+}
+
+function stateCorrupt(message) {
+  return new V2Error('state_corrupt', `approval state is invalid: ${message}`, 500);
+}
+
+function hasExactKeys(value, keys) {
+  const actual = Object.keys(value);
+  return actual.length === keys.size && actual.every((key) => keys.has(key));
+}
+
+function validTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function validBoundedString(value, max = 256) {
+  return typeof value === 'string' && value.length > 0 && value.length <= max;
+}
+
+function validateStateRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !hasExactKeys(value, STATE_RECORD_KEYS)) {
+    throw stateCorrupt('record fields are invalid');
+  }
+  if (!UUID_RE.test(value.id || '')) throw stateCorrupt('id is invalid');
+  if (!validBoundedString(value.requester)) throw stateCorrupt('requester is invalid');
+  for (const field of ['provider', 'operationId', 'accountRef', 'environment', 'resourceRef']) {
+    if (!ID_RE.test(value[field] || '')) throw stateCorrupt(`${field} is invalid`);
+  }
+  if (!DIGEST_RE.test(value.requestHash || '')) throw stateCorrupt('request hash is invalid');
+  if (!Number.isSafeInteger(value.requiredApprovals)
+    || value.requiredApprovals < 1 || value.requiredApprovals > 10) {
+    throw stateCorrupt('required approvals is invalid');
+  }
+  if (!Array.isArray(value.approvalRoles) || value.approvalRoles.length < 1
+    || value.approvalRoles.length > 20
+    || value.approvalRoles.some((role) => !ID_RE.test(role || ''))
+    || new Set(value.approvalRoles).size !== value.approvalRoles.length) {
+    throw stateCorrupt('approval roles are invalid');
+  }
+  if (!STATES.has(value.status)) throw stateCorrupt('status is invalid');
+  if (!validTimestamp(value.createdAt) || !validTimestamp(value.expiresAt)
+    || Date.parse(value.expiresAt) - Date.parse(value.createdAt) !== APPROVAL_TTL_MS) {
+    throw stateCorrupt('timestamps are invalid');
+  }
+  if (!Array.isArray(value.approvers) || value.approvers.length > 10) {
+    throw stateCorrupt('approvers are invalid');
+  }
+  const names = new Set();
+  for (const approver of value.approvers) {
+    if (!approver || typeof approver !== 'object' || Array.isArray(approver)
+      || !hasExactKeys(approver, APPROVER_KEYS) || !validBoundedString(approver.name)
+      || approver.name === value.requester || names.has(approver.name)
+      || !validTimestamp(approver.approvedAt)
+      || Date.parse(approver.approvedAt) < Date.parse(value.createdAt)
+      || Date.parse(approver.approvedAt) > Date.parse(value.expiresAt)) {
+      throw stateCorrupt('approver entry is invalid');
+    }
+    names.add(approver.name);
+  }
+  const quorumReached = value.approvers.length >= value.requiredApprovals;
+  if ((['REQUESTED', 'DENIED'].includes(value.status) && quorumReached)
+    || (['APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED'].includes(value.status) && !quorumReached)) {
+    throw stateCorrupt('status conflicts with approval quorum');
+  }
+  return structuredClone(value);
 }
 
 function publicApproval(record) {
@@ -61,12 +137,13 @@ export class ApprovalBroker {
   }
 
   create(identity, input) {
-    if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    if (!validBoundedString(identity?.name)) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     this.prune();
     if (this.records.size >= this.maxRecords) throw new V2Error('capacity', 'approval capacity reached', 503);
     const provider = requireId(input?.provider, 'provider');
     const operationId = requireId(input?.operation_id, 'operation_id');
     const accountRef = requireId(input?.account_ref, 'account_ref');
+    const environment = requireId(input?.environment, 'environment');
     const resourceRef = requireId(input?.typed_parameters?.resource_ref, 'resource_ref');
     const policy = this.getPolicy(provider, operationId);
     if (!policy || policy.enabled !== true || policy.approval_required !== true) {
@@ -75,12 +152,12 @@ export class ApprovalBroker {
     const validation = validateTypedParameters(input.typed_parameters, policy.parameter_schema);
     if (!validation.ok) throw new V2Error('invalid_request', validation.reason);
     if (!apiKeyAllowsApproval(identity, {
-      provider, operationId, accountRef, environment: input.environment, resourceRef,
+      provider, operationId, accountRef, environment, resourceRef,
     })) {
       throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
     }
     if (!Array.isArray(policy.accounts) || !policy.accounts.includes(accountRef)
-      || !Array.isArray(policy.environments) || !policy.environments.includes(input.environment)
+      || !Array.isArray(policy.environments) || !policy.environments.includes(environment)
       || (Array.isArray(policy.resources) && policy.resources.length > 0 && !policy.resources.includes(resourceRef))) {
       throw new V2Error('forbidden', 'approval request is outside policy', 403);
     }
@@ -88,12 +165,17 @@ export class ApprovalBroker {
     if (!Number.isSafeInteger(requiredApprovals) || requiredApprovals < 1 || requiredApprovals > 10) {
       throw new V2Error('invalid_policy', 'required_approvals must be an integer from 1 to 10', 500);
     }
+    const approvalRoles = [...new Set(policy.approval_roles || ['admin'])];
+    if (approvalRoles.length < 1 || approvalRoles.length > 20
+      || approvalRoles.some((role) => !ID_RE.test(role || ''))) {
+      throw new V2Error('invalid_policy', 'approval_roles must contain valid role identifiers', 500);
+    }
     const now = this.now();
     const record = {
       id: randomUUID(), requester: identity.name, provider, operationId, accountRef,
-      environment: input.environment, resourceRef, requestHash: requestHash(input), requiredApprovals,
-      approvalRoles: [...new Set(policy.approval_roles || ['admin'])], approvers: [], status: 'REQUESTED',
-      createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
+      environment, resourceRef, requestHash: requestHash(input), requiredApprovals,
+      approvalRoles, approvers: [], status: 'REQUESTED',
+      createdAt: new Date(now).toISOString(), expiresAt: new Date(now + APPROVAL_TTL_MS).toISOString(),
     };
     this.records.set(record.id, record);
     return publicApproval(record);
@@ -275,6 +357,31 @@ export class ApprovalBroker {
       throw error;
     }
     return result;
+  }
+
+  exportState() {
+    this.prune();
+    return {
+      version: STATE_VERSION,
+      records: [...this.records.values()].map((record) => structuredClone(record)),
+    };
+  }
+
+  restoreState(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
+      || !hasExactKeys(snapshot, new Set(['version', 'records']))
+      || snapshot.version !== STATE_VERSION || !Array.isArray(snapshot.records)) {
+      throw stateCorrupt('snapshot envelope is invalid');
+    }
+    if (snapshot.records.length > this.maxRecords) throw stateCorrupt('snapshot exceeds capacity');
+    const records = new Map();
+    for (const candidate of snapshot.records) {
+      const record = validateStateRecord(candidate);
+      if (records.has(record.id)) throw stateCorrupt('snapshot contains duplicate records');
+      records.set(record.id, record);
+    }
+    this.records = records;
+    this.prune();
   }
 
   getActive(id) {

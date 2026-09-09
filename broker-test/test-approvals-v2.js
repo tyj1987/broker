@@ -57,6 +57,7 @@ const atomicBroker = new ApprovalBroker({
 assert.throws(() => broker.create(null, input), expectCode('unauthorized'));
 assert.throws(() => broker.create(requester, { ...input, operation_id: 'unapproved' }), expectCode('approval_not_required'));
 assert.throws(() => broker.create(requester, { ...input, account_ref: 'other' }), expectCode('forbidden'));
+assert.throws(() => broker.create(requester, { ...input, environment: 'invalid environment' }), expectCode('invalid_request'));
 assert.throws(() => broker.create(requester, { ...input, typed_parameters: {} }), expectCode('invalid_request'));
 assert.throws(() => broker.create(revokedRequester, input), expectCode('forbidden'));
 
@@ -284,5 +285,140 @@ assert.throws(() => capped.create(requester, input), expectCode('capacity'));
 assert.equal(broker.claimFor(requester, input), null);
 const invalidPolicy = new ApprovalBroker({ getPolicy: () => ({ ...policy, required_approvals: 11 }) });
 assert.throws(() => invalidPolicy.create(requester, input), expectCode('invalid_policy'));
+const invalidRolePolicy = new ApprovalBroker({ getPolicy: () => ({ ...policy, approval_roles: [] }) });
+assert.throws(() => invalidRolePolicy.create(requester, input), expectCode('invalid_policy'));
+
+const restartNow = 1_920_000_000_000;
+const beforeRestart = new ApprovalBroker({
+  now: () => restartNow,
+  getPolicy: (provider, operationId) => provider === 'aliyun' && operationId === 'billing.read' ? policy : null,
+});
+const executingBeforeRestart = beforeRestart.create(requester, input);
+beforeRestart.decide(approver('restart-admin-a'), executingBeforeRestart.id, 'approve');
+beforeRestart.decide(approver('restart-admin-b'), executingBeforeRestart.id, 'approve');
+beforeRestart.claimFor(requester, { ...input, approval_request_id: executingBeforeRestart.id });
+const deniedBeforeRestart = beforeRestart.create(requester, input);
+beforeRestart.decide(approver('restart-admin-c'), deniedBeforeRestart.id, 'reject');
+const requestedBeforeRestart = beforeRestart.create(requester, input);
+const approvedBeforeRestart = beforeRestart.create(requester, input);
+beforeRestart.decide(approver('restart-admin-d'), approvedBeforeRestart.id, 'approve');
+beforeRestart.decide(approver('restart-admin-e'), approvedBeforeRestart.id, 'approve');
+const cancelledBeforeRestart = beforeRestart.create(requester, input);
+beforeRestart.cancel(requester, cancelledBeforeRestart.id);
+const succeededBeforeRestart = beforeRestart.create(requester, input);
+beforeRestart.decide(approver('restart-admin-f'), succeededBeforeRestart.id, 'approve');
+beforeRestart.decide(approver('restart-admin-g'), succeededBeforeRestart.id, 'approve');
+beforeRestart.claimFor(requester, { ...input, approval_request_id: succeededBeforeRestart.id });
+beforeRestart.markSucceeded(succeededBeforeRestart.id);
+const failedBeforeRestart = beforeRestart.create(requester, input);
+beforeRestart.decide(approver('restart-admin-h'), failedBeforeRestart.id, 'approve');
+beforeRestart.decide(approver('restart-admin-i'), failedBeforeRestart.id, 'approve');
+beforeRestart.claimFor(requester, { ...input, approval_request_id: failedBeforeRestart.id });
+beforeRestart.markFailed(failedBeforeRestart.id);
+let expiryNow = restartNow;
+const expiryBroker = new ApprovalBroker({
+  now: () => expiryNow,
+  getPolicy: (provider, operationId) => provider === 'aliyun' && operationId === 'billing.read' ? policy : null,
+});
+const expiredBeforeRestart = expiryBroker.create(requester, input);
+expiryNow += 5 * 60_000 + 1;
+assert.throws(() => expiryBroker.getActive(expiredBeforeRestart.id), expectCode('approval_expired'));
+const durableState = beforeRestart.exportState();
+durableState.records.push(...expiryBroker.exportState().records);
+assert.equal(durableState.version, 1);
+assert.equal(durableState.records.length, 8);
+
+const afterRestart = new ApprovalBroker({ now: () => restartNow });
+afterRestart.restoreState(durableState);
+assert.throws(
+  () => afterRestart.claimFor(requester, { ...input, approval_request_id: executingBeforeRestart.id }),
+  expectCode('approval_mismatch'),
+  'an in-flight approval must remain claimed after restart',
+);
+afterRestart.markSucceeded(executingBeforeRestart.id);
+assert.equal(
+  afterRestart.list(requester).find((item) => item.id === executingBeforeRestart.id).status,
+  'SUCCEEDED',
+);
+assert.throws(
+  () => afterRestart.claimFor(requester, { ...input, approval_request_id: deniedBeforeRestart.id }),
+  expectCode('invalid_state'),
+  'a denied approval tombstone must survive restart',
+);
+assert.equal(afterRestart.list(requester).find((item) => item.id === requestedBeforeRestart.id).status, 'REQUESTED');
+assert.equal(afterRestart.list(requester).find((item) => item.id === approvedBeforeRestart.id).status, 'APPROVED');
+for (const [approval, status] of [
+  [cancelledBeforeRestart, 'CANCELLED'],
+  [succeededBeforeRestart, 'SUCCEEDED'],
+  [failedBeforeRestart, 'FAILED'],
+  [expiredBeforeRestart, 'EXPIRED'],
+]) {
+  assert.equal(
+    afterRestart.list(requester).find((item) => item.id === approval.id).status,
+    status,
+    `${status} approval state must survive restart`,
+  );
+}
+
+const restoreGuard = new ApprovalBroker({
+  now: () => restartNow,
+  getPolicy: (provider, operationId) => provider === 'aliyun' && operationId === 'billing.read' ? policy : null,
+});
+const guardApproval = restoreGuard.create(requester, input);
+const validRecord = durableState.records[0];
+for (const corrupt of [
+  null,
+  { version: 2, records: [] },
+  { version: 1, records: 'not-an-array' },
+  { version: 1, records: [null] },
+  { version: 1, records: [[validRecord]] },
+  { version: 1, records: [{ ...validRecord, unexpected: true }] },
+  { version: 1, records: [{ ...validRecord, id: 'not-a-uuid' }] },
+  { version: 1, records: [{ ...validRecord, requester: '' }] },
+  { version: 1, records: [{ ...validRecord, provider: 'invalid provider' }] },
+  { version: 1, records: [{ ...validRecord, requestHash: 'not-a-digest' }] },
+  { version: 1, records: [{ ...validRecord, requiredApprovals: 0 }] },
+  { version: 1, records: [{ ...validRecord, approvalRoles: [] }] },
+  { version: 1, records: [{ ...validRecord, approvalRoles: ['admin', 'admin'] }] },
+  { version: 1, records: [{ ...validRecord, status: 'UNKNOWN' }] },
+  { version: 1, records: [validRecord, validRecord] },
+  { version: 1, records: [{ ...validRecord, status: 'REQUESTED' }] },
+  { version: 1, records: [{ ...validRecord, approvers: [] }] },
+  { version: 1, records: [{ ...validRecord, createdAt: 'not-a-timestamp' }] },
+  { version: 1, records: [{ ...validRecord, expiresAt: new Date(restartNow + 1_000).toISOString() }] },
+  { version: 1, records: [{ ...validRecord, approvers: 'not-an-array' }] },
+  { version: 1, records: [{ ...validRecord, approvers: [null] }] },
+  { version: 1, records: [{
+    ...validRecord,
+    approvers: [{ ...validRecord.approvers[0], unexpected: true }],
+  }] },
+  { version: 1, records: [{
+    ...validRecord,
+    approvers: [{ name: validRecord.requester, approvedAt: validRecord.createdAt }],
+  }] },
+  { version: 1, records: [{
+    ...validRecord,
+    approvers: [{ name: 'early-approver', approvedAt: new Date(restartNow - 1).toISOString() }],
+  }] },
+  {
+    version: 1,
+    records: [{
+      ...validRecord,
+      approvers: [validRecord.approvers[0], validRecord.approvers[0]],
+    }],
+  },
+  { ...durableState, unexpected: true },
+]) {
+  assert.throws(() => restoreGuard.restoreState(corrupt), expectCode('state_corrupt'));
+}
+assert.equal(
+  restoreGuard.cancel(requester, guardApproval.id).status,
+  'CANCELLED',
+  'a rejected restore must not replace the last valid in-memory state',
+);
+assert.throws(
+  () => new ApprovalBroker({ maxRecords: 0 }).restoreState({ version: 1, records: [validRecord] }),
+  expectCode('state_corrupt'),
+);
 
 console.log('v2 approvals: WebAuthn step-up, separation of duties, binding, expiry and one-time use passed');

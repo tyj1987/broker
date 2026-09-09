@@ -490,6 +490,9 @@ export class OperationBroker {
     }
     try {
       const result = await consumer(code);
+      if (task.status !== 'consuming' || operation?.status === 'revoked') {
+        throw new V2Error('operation_revoked', 'OTP operation was revoked while consuming', 409);
+      }
       task.status = 'completed';
       this.activeOtpLocks.delete(task.lockKey);
       if (operation) {
@@ -498,7 +501,10 @@ export class OperationBroker {
         operation.updatedAt = new Date(this.now()).toISOString();
       }
       return result;
-    } catch {
+    } catch (error) {
+      if (task.status === 'revoked' || operation?.status === 'revoked') {
+        throw new V2Error('operation_revoked', 'OTP operation was revoked while consuming', 409);
+      }
       task.status = 'failed';
       this.activeOtpLocks.delete(task.lockKey);
       if (operation) {
@@ -662,6 +668,10 @@ export class OperationBroker {
   }
 
   activeBrowserLease(deviceId, leaseId, receipt) {
+    const device = this.devices.get(deviceId);
+    if (!device || device.state !== 'active' || device.platform !== 'browser-worker') {
+      throw new V2Error('device_denied', 'active browser worker is required', 401);
+    }
     const lease = this.browserLeases.get(leaseId);
     const suppliedReceiptHash = typeof receipt === 'string' ? sha256Base64Url(receipt) : '';
     const receiptMatches = lease
@@ -679,13 +689,36 @@ export class OperationBroker {
   }
 
   cancelDeviceTasks(deviceId) {
+    const revokedAt = new Date(this.now()).toISOString();
     for (const task of this.otpTasks.values()) {
-      if (task.deviceId === deviceId && ['waiting', 'received'].includes(task.status)) {
+      if (task.deviceId === deviceId && ['waiting', 'received', 'consuming'].includes(task.status)) {
         task.code = null;
         task.status = 'revoked';
         this.activeOtpLocks.delete(task.lockKey);
         const operation = this.operations.get(task.operationId);
-        if (operation) operation.status = 'revoked';
+        if (operation && !['completed', 'failed'].includes(operation.status)) {
+          operation.status = 'revoked';
+          operation.error = 'device_revoked';
+          operation.updatedAt = revokedAt;
+        }
+      }
+    }
+    for (const [key, claim] of this.browserClaims) {
+      const task = this.otpTasks.get(claim.taskId);
+      if (task?.deviceId === deviceId) {
+        claim.code = null;
+        this.browserClaims.delete(key);
+      }
+    }
+    for (const [id, lease] of this.browserLeases) {
+      if (lease.deviceId === deviceId) {
+        this.browserLeases.delete(id);
+        const operation = this.operations.get(lease.operationId);
+        if (operation && !['completed', 'failed'].includes(operation.status)) {
+          operation.status = 'revoked';
+          operation.error = 'device_revoked';
+          operation.updatedAt = revokedAt;
+        }
       }
     }
   }

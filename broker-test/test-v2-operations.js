@@ -127,6 +127,40 @@ await assert.rejects(
   (error) => error instanceof V2Error && error.code === 'invalid_state',
 );
 
+const revokedInFlightOperation = await broker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun',
+  operation_id: 'console.login',
+  account_ref: 'secondary',
+  environment: 'production',
+  typed_parameters: {},
+});
+const revokedInFlightTask = broker.listDeviceOtpTasks(device.id)
+  .find((task) => task.id === revokedInFlightOperation.otp_task_id);
+broker.submitOtp(device.id, revokedInFlightTask.id, {
+  code: '628405', sim_binding: 'sim-primary', challenge: revokedInFlightTask.challenge,
+});
+let releaseConsumer;
+let markConsumerStarted;
+const consumerStarted = new Promise((resolve) => { markConsumerStarted = resolve; });
+const consumerGate = new Promise((resolve) => { releaseConsumer = resolve; });
+const inFlightConsumption = broker.consumeOtp(revokedInFlightTask.id, async () => {
+  markConsumerStarted();
+  await consumerGate;
+  return { status: 'must-not-commit' };
+});
+await consumerStarted;
+await broker.setDeviceState('owner-1', device.id, 'suspended');
+releaseConsumer();
+await assert.rejects(
+  inFlightConsumption,
+  (error) => error instanceof V2Error && error.code === 'operation_revoked',
+);
+assert.equal(
+  broker.getOperation({ name: 'owner-1' }, revokedInFlightOperation.id).status,
+  'revoked',
+);
+await broker.setDeviceState('owner-1', device.id, 'active');
+
 const browserOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
   operation_id: 'browser.otp.fill',
@@ -292,6 +326,23 @@ assert.throws(
     receipt: expiringLease.receipt, status: 'completed', result: {},
   }),
   (error) => error instanceof V2Error && error.code === 'invalid_lease',
+);
+
+const revokedWorkerOperation = await workerBroker.createOperation({ name: 'owner-4' }, {
+  provider: 'aliyun', operation_id: 'account.summary', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'summary' },
+});
+const revokedWorkerLease = workerBroker.claimBrowserOperation(workerDevice.id);
+await workerBroker.setDeviceState('worker-service', workerDevice.id, 'suspended');
+assert.equal(
+  workerBroker.getOperation({ name: 'owner-4' }, revokedWorkerOperation.id).status,
+  'revoked',
+);
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, revokedWorkerLease.id, {
+    receipt: revokedWorkerLease.receipt, status: 'completed', result: { status: 'must-not-commit' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'device_denied',
 );
 
 console.log('v2 operations: all tests passed');

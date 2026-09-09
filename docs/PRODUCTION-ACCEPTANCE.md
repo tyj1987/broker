@@ -71,10 +71,11 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   including Android unit tests, lint and debug APK assembly.
 - A paired Android device can submit a signed, replay-protected empty request
   to suspend itself. The server persists the downgrade, cancels pending OTP
-  work and requires the existing administrator WebAuthn plus two-person flow
-  for reactivation. The app retains the suspended state across restarts and
-  only clears it after a signed Broker check succeeds. Physical-device
-  behavior remains unverified.
+  work, clears in-memory browser claims, and rejects a late result from an OTP
+  consumer that was already in flight. Reactivation requires the existing
+  administrator WebAuthn plus two-person flow. The app retains the suspended
+  state across restarts and only clears it after a signed Broker check
+  succeeds. Physical-device behavior remains unverified.
 - Child API keys now receive an absolute expiration no later than their parent
   rather than deriving a relative second count from two clock reads. The
   millisecond boundary regression passed 20 consecutive local runs.
@@ -86,10 +87,13 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
 - Browser helper: JavaScript syntax, least-privilege manifest tests, native-host compilation, and native-host unit tests passed locally. Browser-to-production end-to-end fill remains unaccepted.
 - Isolated browser worker: typed input and output filtering, exact HTTPS-origin
   routing, disposable browser contexts, server-issued 60-second leases and
-  signed device requests are unit-tested. Worker grants bind provider,
-  operation, account and environment. A production launcher, hardware-backed
-  workload signer, provider adapters, container egress enforcement and real
-  account tests are not implemented, so this is not production-ready.
+  signed device requests are unit-tested. OTP claims are single-use, are
+  cancelled with the operation lifetime, and cannot be retried after an
+  uncertain exchange. Suspending a worker invalidates its active leases and
+  prevents late completion. Worker grants bind provider, operation, account
+  and environment. A production launcher, hardware-backed workload signer,
+  provider adapters, container egress enforcement and real account tests are
+  not implemented, so this is not production-ready.
 - Device enrollment and state changes now require a strict administrator with
   WebAuthn step-up plus a request-bound approval from two other administrators.
   This is source and unit-test evidence only; the three-operator ceremony has

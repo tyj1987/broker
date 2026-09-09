@@ -124,8 +124,18 @@ production-target contract required by the SSH provider manifest.
 
 ## Current production boundary
 
-The present task and approval stores are in-process and intentionally bounded.
-They provide a tested vertical slice, not durable or multi-node execution.
-Production scheduling remains blocked until the persistence and delivery
-semantics in the decision queue are resolved and implemented. A process restart
-must therefore be treated as cancellation of all in-flight tasks.
+The current single-process Broker restores task, approval, execution-token
+tombstone, idempotency and rate-limit state from an authenticated encrypted
+state file. Task creation is returned only after a `created` checkpoint;
+cancellation is returned only after a `cancelled` checkpoint. Execution is
+checkpointed before the adapter side effect and again after its terminal
+transition. If a creation or cancellation checkpoint fails, the corresponding
+task, idempotency binding and approval mutation are rolled back before an API
+success can be returned.
+
+A restored `EXECUTING` task remains indeterminate and cannot be retried because
+the upstream side effect may already have occurred. The current file-backed
+store has no external monotonic generation anchor, distributed lock or
+transactional audit outbox. Production scheduling and horizontal scaling
+therefore remain blocked by DQ-001 and DQ-002; this implementation is approved
+only for fail-closed recovery in one Broker process.

@@ -388,6 +388,20 @@ export class AutomationTaskBroker {
     try {
       const task = await pending;
       this.idempotency.set(idempotencyKey, { taskId: task.id, fingerprint: requestFingerprint });
+      try {
+        this.checkpoint(task, 'created');
+      } catch (error) {
+        this.idempotency.delete(idempotencyKey);
+        this.tasks.delete(task.id);
+        if (task.approvalId) {
+          try {
+            this.approvalBroker.rollbackCreation(identity, task.approvalId);
+          } catch {
+            throw new V2Error('state_rollback_failed', 'task creation rollback failed', 503);
+          }
+        }
+        throw error;
+      }
       return publicTask(task);
     } catch (error) {
       if (this.idempotency.get(idempotencyKey)?.promise === pending) this.idempotency.delete(idempotencyKey);
@@ -532,9 +546,24 @@ export class AutomationTaskBroker {
     const task = this.getOwned(identity, id);
     this.expire(task);
     if (task.running || !['REQUESTED', 'PENDING_APPROVAL', 'READY'].includes(task.state)) throw new V2Error('invalid_state', 'task cannot be cancelled', 409);
-    if (task.approvalId) this.approvalBroker.cancelForTask(task.approvalId);
-    this.transition(task, 'CANCELLED', 'caller_cancelled');
-    return publicTask(task);
+    const previousTask = structuredClone(task);
+    let previousApprovalStatus = null;
+    try {
+      if (task.approvalId) previousApprovalStatus = this.approvalBroker.cancelForTask(task.approvalId);
+      this.transition(task, 'CANCELLED', 'caller_cancelled');
+      this.checkpoint(task, 'cancelled');
+      return publicTask(task);
+    } catch (error) {
+      this.tasks.set(task.id, previousTask);
+      if (task.approvalId && previousApprovalStatus !== null) {
+        try {
+          this.approvalBroker.restoreTaskCancellation(task.approvalId, previousApprovalStatus);
+        } catch {
+          throw new V2Error('state_rollback_failed', 'task cancellation rollback failed', 503);
+        }
+      }
+      throw error;
+    }
   }
 
   getOwned(identity, id) {

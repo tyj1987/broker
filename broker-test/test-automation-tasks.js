@@ -443,7 +443,7 @@ const retryCancelTask = await retryCancelBroker.create(human, {
 });
 assert.throws(() => retryCancelBroker.cancel(human, retryCancelTask.id), /cancellation audit unavailable/);
 assert.equal(retryCancelBroker.get(human, retryCancelTask.id).state, 'PENDING_APPROVAL');
-assert.equal(retryCancelApprovals.list(human)[0].status, 'CANCELLED');
+assert.equal(retryCancelApprovals.list(human)[0].status, 'REQUESTED');
 assert.equal(retryCancelBroker.cancel(human, retryCancelTask.id).state, 'CANCELLED');
 
 const failureObserved = [];
@@ -1077,10 +1077,56 @@ const checkpointTask = await checkpointBroker.create(human, {
   ...lowInput, idempotency_key: 'checkpoint-success-0001',
 });
 await checkpointBroker.run(human, checkpointTask.id);
-assert.deepEqual(checkpointEvents.map(({ event }) => event.phase), ['pre_execute', 'terminal']);
-assert.equal(checkpointEvents[0].snapshot.tasks[0].state, 'EXECUTING');
-assert.equal(checkpointEvents[1].snapshot.tasks[0].state, 'SUCCEEDED');
+assert.deepEqual(checkpointEvents.map(({ event }) => event.phase), ['created', 'pre_execute', 'terminal']);
+assert.equal(checkpointEvents[0].snapshot.tasks[0].state, 'READY');
+assert.equal(checkpointEvents[1].snapshot.tasks[0].state, 'EXECUTING');
+assert.equal(checkpointEvents[2].snapshot.tasks[0].state, 'SUCCEEDED');
 assert.ok(!JSON.stringify(checkpointEvents).includes('et1.'), 'checkpoints never expose bearer capabilities');
+
+const creationCheckpointApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const creationCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: creationCheckpointApprovals, executors, now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'created') throw new Error('creation checkpoint unavailable');
+  },
+});
+await assert.rejects(
+  creationCheckpointBroker.create(human, {
+    ...criticalInput, idempotency_key: 'checkpoint-create-fail1',
+  }),
+  /creation checkpoint unavailable/,
+);
+assert.equal(creationCheckpointBroker.tasks.size, 0);
+assert.equal(creationCheckpointBroker.idempotency.size, 0);
+assert.deepEqual(creationCheckpointApprovals.list(human), []);
+
+let failCancellationCheckpoint = true;
+const cancellationCheckpointApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const cancellationCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: cancellationCheckpointApprovals, executors, now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'cancelled' && failCancellationCheckpoint) {
+      failCancellationCheckpoint = false;
+      throw new Error('cancellation checkpoint unavailable');
+    }
+  },
+});
+const cancellationCheckpointTask = await cancellationCheckpointBroker.create(human, {
+  ...criticalInput, idempotency_key: 'checkpoint-cancel-fail1',
+});
+assert.throws(
+  () => cancellationCheckpointBroker.cancel(human, cancellationCheckpointTask.id),
+  /cancellation checkpoint unavailable/,
+);
+assert.equal(cancellationCheckpointBroker.get(human, cancellationCheckpointTask.id).state, 'PENDING_APPROVAL');
+assert.equal(cancellationCheckpointApprovals.list(human)[0].status, 'REQUESTED');
+assert.equal(cancellationCheckpointBroker.cancel(human, cancellationCheckpointTask.id).state, 'CANCELLED');
 
 let checkpointExecutorCalls = 0;
 const unavailableCheckpointBroker = new AutomationTaskBroker({
@@ -1093,7 +1139,9 @@ const unavailableCheckpointBroker = new AutomationTaskBroker({
     };
   }]]),
   now: () => now,
-  onCheckpoint: () => { throw new Error('durable state unavailable'); },
+  onCheckpoint: (event) => {
+    if (event.phase === 'pre_execute') throw new Error('durable state unavailable');
+  },
 });
 const unavailableCheckpointTask = await unavailableCheckpointBroker.create(human, {
   ...lowInput, idempotency_key: 'checkpoint-failure-0001',
@@ -1116,7 +1164,7 @@ const asyncCheckpointBroker = new AutomationTaskBroker({
     asyncCheckpointExecutorCalls += 1;
     return {};
   }]]),
-  onCheckpoint: async () => {},
+  onCheckpoint: (event) => event.phase === 'pre_execute' ? Promise.resolve() : undefined,
 });
 const asyncCheckpointTask = await asyncCheckpointBroker.create(human, {
   ...lowInput, idempotency_key: 'checkpoint-async-000001',

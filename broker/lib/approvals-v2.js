@@ -319,12 +319,24 @@ export class ApprovalBroker {
   }
 
   cancelForTask(id) {
-    if (!id) return;
+    if (!id) return null;
     const record = this.records.get(id);
     if (!record || !['REQUESTED', 'APPROVED', 'CANCELLED'].includes(record.status)) {
       throw new V2Error('approval_mismatch', 'approval is unavailable', 409);
     }
+    const previousStatus = record.status;
     record.status = 'CANCELLED';
+    return previousStatus;
+  }
+
+  restoreTaskCancellation(id, previousStatus) {
+    if (!id) return;
+    const record = this.records.get(id);
+    if (!record || record.status !== 'CANCELLED'
+      || !['REQUESTED', 'APPROVED', 'CANCELLED'].includes(previousStatus)) {
+      throw new V2Error('state_rollback_failed', 'approval cancellation rollback failed', 503);
+    }
+    record.status = previousStatus;
   }
 
   cancel(identity, id) {

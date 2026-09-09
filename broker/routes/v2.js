@@ -177,7 +177,12 @@ export function createV2Routes(deps) {
         const result = taskActionMatch[2] === 'run'
           ? await taskBroker.run(identity, taskActionMatch[1])
           : taskBroker.cancel(identity, taskActionMatch[1]);
-        audit({ action: `v2_task_${taskActionMatch[2]}`, status: result.state, cn: ctx.cn, task_id: result.id });
+        audit({
+          action: `v2_task_${taskActionMatch[2]}`, status: result.state, cn: ctx.cn,
+          task_id: result.id, execution_id: result.execution_id, tool: result.tool,
+          target: result.target, environment: result.environment, risk_level: result.risk_level,
+          latency_ms: result.latency_ms, error: result.error?.code,
+        });
         send(res, 200, result);
         return true;
       }

@@ -20,6 +20,7 @@
 | Rotation → storage | failed encryption or false-success rotation | fail-closed persistence and critical alert | implemented and tested |
 | Build → production | mutable dependencies or unsigned artifact | lockfile, SAST/SCA, SBOM, signing/provenance, digest pinning | release pipeline evidence pending |
 | Broker → isolated browser worker | task theft, replay, cross-account/environment execution, or credential/result leakage | strict-admin WebAuthn enrollment with two independent approvers, signed nonce-bound requests, short one-time leases, exact workload capability, typed parameters and nested result filtering | protocol and unit tests implemented; physical-key ceremony, hardware-backed workload identity, runtime isolation and real adapters pending |
+| Broker → tool adapter | capability replay, actor/target/environment substitution, duplicate concurrent execution | opaque digest-only execution tokens bound to actor, exact tool version, target, environment, request fingerprint and nonce; 60-second maximum TTL, one-time consumption, revocation tombstone and per-task execution lock | local adapter protocol and attack tests implemented; durable multi-node token state remains pending |
 
 ## Residual assumptions
 

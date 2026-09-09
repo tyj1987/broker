@@ -1812,6 +1812,7 @@ components:
         - risk_level
         - state
         - approval_id
+        - execution_id
         - created_at
         - updated_at
         - expires_at
@@ -1858,6 +1859,14 @@ components:
             - type: string
               format: uuid
             - type: "null"
+        execution_id:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        latency_ms:
+          type: integer
+          minimum: 0
         result:
           type: object
         error:

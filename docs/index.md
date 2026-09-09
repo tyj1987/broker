@@ -14,6 +14,7 @@ only approved business results; they do not receive long-lived credentials.
 - [SDK reference](SDK-REFERENCE.md) — `/api/v2` typed-operation and approval clients.
 - [Tool registry](TOOL-REGISTRY.md) — versioned capability metadata and risk invariants.
 - [Automation tasks](AUTOMATION-TASKS.md) — policy-routed task lifecycle, APIs and current durability boundary.
+- [Execution tokens](EXECUTION-TOKENS.md) — short-lived, bound, single-use adapter capabilities.
 - [Decision queue](DECISION_QUEUE.md) — open high-impact choices and their required evidence.
 - [Verification](https://github.com/tyj1987/broker/blob/master/VERIFY.md) — reproducible local and CI checks.
 - [Production acceptance](PRODUCTION-ACCEPTANCE.md) — observed evidence, release blockers and remaining gates.

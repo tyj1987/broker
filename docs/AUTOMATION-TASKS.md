@@ -28,6 +28,11 @@ the same request returns the original task; reusing it with different parameters
 is rejected. Execution and failure are terminal. The broker does not retry an
 operation whose result is uncertain.
 
+After the final authorization check, the Broker issues and immediately consumes
+a short-lived capability bound to the actor, exact tool version, target,
+environment and request fingerprint. The adapter receives verified claims but
+never the bearer token or nonce. See [Single-use execution tokens](EXECUTION-TOKENS.md).
+
 ## API
 
 - `POST /api/v2/tasks` creates a task and returns `READY` or

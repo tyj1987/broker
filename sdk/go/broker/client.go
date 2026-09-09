@@ -337,8 +337,10 @@ type Task struct {
 	RiskLevel   string         `json:"risk_level"`
 	State       string         `json:"state"`
 	ApprovalID  string         `json:"approval_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
 	Result      map[string]any `json:"result,omitempty"`
 	Error       map[string]any `json:"error,omitempty"`
+	LatencyMs   int64          `json:"latency_ms,omitempty"`
 }
 
 // TaskEvent is credential-free transition metadata for one task.

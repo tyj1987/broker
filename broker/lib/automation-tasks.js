@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { V2Error, canonicalJson } from './operations-v2.js';
+import { ExecutionTokenBroker } from './execution-tokens.js';
 
 const STATES = new Set([
   'REQUESTED', 'PENDING_APPROVAL', 'READY', 'EXECUTING',
@@ -68,8 +69,10 @@ function publicTask(task) {
     risk_level: task.tool.risk_level,
     state: task.state,
     approval_id: task.approvalId || null,
+    execution_id: task.executionId || null,
     result: task.state === 'SUCCEEDED' ? structuredClone(task.result) : undefined,
     error: task.error ? { code: task.error } : undefined,
+    latency_ms: Number.isFinite(task.latencyMs) ? task.latencyMs : undefined,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
     expires_at: task.expiresAt,
@@ -77,10 +80,11 @@ function publicTask(task) {
 }
 
 export class AutomationTaskBroker {
-  constructor({ toolRegistry, authorize, approvalBroker, executors = new Map(), now = () => Date.now(), onEvent = () => {}, maxTasks = MAX_TASKS } = {}) {
+  constructor({ toolRegistry, authorize, approvalBroker, executionTokens, executors = new Map(), now = () => Date.now(), onEvent = () => {}, maxTasks = MAX_TASKS } = {}) {
     this.toolRegistry = toolRegistry;
     this.authorize = authorize;
     this.approvalBroker = approvalBroker;
+    this.executionTokens = executionTokens || new ExecutionTokenBroker({ now });
     this.executors = executors;
     this.now = now;
     this.onEvent = onEvent;
@@ -126,6 +130,8 @@ export class AutomationTaskBroker {
       const task = {
         id: randomUUID(), owner: identity.name, tool, accountRef: input.account_ref,
         environment: input.environment, parameters, requestFingerprint,
+        identityMethod: identity.context?.via || 'unknown', role: identity.context?.client?.role || 'unknown',
+        policyDecision: 'allow',
         state: null, events: [], nextSequence: 1, createdAt: new Date(timestamp).toISOString(),
         updatedAt: new Date(timestamp).toISOString(), expiresAt: new Date(timestamp + Math.min(Number(decision.ttlMs || 300_000), 900_000)).toISOString(),
       };
@@ -192,26 +198,56 @@ export class AutomationTaskBroker {
         accountRef: task.accountRef, environment: task.environment, typedParameters: structuredClone(task.parameters),
       });
       if (!decision?.allow) {
+        task.policyDecision = 'deny';
         if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
         this.fail(task, decision?.reason || 'policy_denied');
         return publicTask(task);
       }
+      task.policyDecision = 'allow';
       const executor = this.executors.get(`${task.tool.name}@${task.tool.version}`);
       if (typeof executor !== 'function') {
         if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
         this.fail(task, 'executor_unavailable');
         return publicTask(task);
       }
+      const remainingMs = Date.parse(task.expiresAt) - this.now();
+      if (remainingMs < 1_000) {
+        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
+        this.transition(task, 'EXPIRED', 'task_expired');
+        return publicTask(task);
+      }
+      const executionBinding = {
+        actor: identity.name,
+        tool: `${task.tool.name}@${task.tool.version}`,
+        target: task.parameters.resource_ref,
+        environment: task.environment,
+        request_binding: task.requestFingerprint,
+        ttl_ms: Math.min(30_000, remainingMs),
+      };
+      let executionGrant;
+      try {
+        const capability = this.executionTokens.issue(executionBinding);
+        executionGrant = this.executionTokens.consume(capability.token, capability.nonce, executionBinding);
+        task.executionId = executionGrant.execution_id;
+      } catch (error) {
+        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
+        this.fail(task, error instanceof V2Error ? error.code : 'execution_token_failed');
+        return publicTask(task);
+      }
       this.transition(task, 'EXECUTING', 'executor_started');
+      const startedAt = this.now();
       try {
         const result = await executor(structuredClone(task.parameters), {
           taskId: task.id, actor: identity.name, environment: task.environment,
+          execution: executionGrant,
         });
         assertSchema(result, task.tool.output_schema, 'result');
         task.result = structuredClone(result);
+        task.latencyMs = Math.max(0, this.now() - startedAt);
         if (approvalClaim) this.approvalBroker.markSucceeded(approvalClaim.id);
         this.transition(task, 'SUCCEEDED', 'executor_succeeded');
       } catch (error) {
+        task.latencyMs = Math.max(0, this.now() - startedAt);
         if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
         this.fail(task, error instanceof V2Error ? error.code : 'executor_failed');
       }
@@ -256,7 +292,13 @@ export class AutomationTaskBroker {
     const event = { sequence: task.nextSequence++, state, reason, at: timestamp };
     task.events.push(event);
     if (task.events.length > MAX_EVENTS) task.events.shift();
-    this.onEvent({ task_id: task.id, owner: task.owner, tool: task.tool.name, risk_level: task.tool.risk_level, ...event });
+    this.onEvent({
+      task_id: task.id, execution_id: task.executionId || null, owner: task.owner,
+      identity: task.identityMethod, role: task.role, policy_decision: task.policyDecision,
+      tool: task.tool.name, target: task.parameters.resource_ref, environment: task.environment,
+      risk_level: task.tool.risk_level, approval_id: task.approvalId || null,
+      latency_ms: task.latencyMs, ...event,
+    });
   }
 
   prune() {

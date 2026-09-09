@@ -87,6 +87,7 @@ nav:
   - SSH proxy: SSH-PROXY.md
   - WebSocket: WEBSOCKET.md
   - Automation tasks: AUTOMATION-TASKS.md
+  - Execution tokens: EXECUTION-TOKENS.md
   - Decision queue: DECISION_QUEUE.md
   - SDK reference: SDK-REFERENCE.md
   - FAQ: FAQ.md

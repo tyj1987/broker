@@ -94,8 +94,10 @@ export interface TaskResponse {
   risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   state: 'REQUESTED' | 'PENDING_APPROVAL' | 'READY' | 'EXECUTING' | 'SUCCEEDED' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
   approval_id?: string;
+  execution_id?: string;
   result?: Record<string, unknown>;
   error?: { code: string };
+  latency_ms?: number;
 }
 
 export interface TaskEvent {

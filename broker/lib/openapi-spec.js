@@ -601,7 +601,7 @@ const s = {
   },
   Task: {
     type: 'object', additionalProperties: false,
-    required: ['id', 'owner', 'tool', 'tool_version', 'provider', 'operation_id', 'account_ref', 'environment', 'target', 'risk_level', 'state', 'approval_id', 'created_at', 'updated_at', 'expires_at'],
+    required: ['id', 'owner', 'tool', 'tool_version', 'provider', 'operation_id', 'account_ref', 'environment', 'target', 'risk_level', 'state', 'approval_id', 'execution_id', 'created_at', 'updated_at', 'expires_at'],
     properties: {
       id: { type: 'string', format: 'uuid' }, owner: { type: 'string' }, tool: { type: 'string' },
       tool_version: { type: 'string' }, provider: { type: 'string' }, operation_id: { type: 'string' },
@@ -609,6 +609,8 @@ const s = {
       risk_level: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
       state: { type: 'string', enum: ['REQUESTED', 'PENDING_APPROVAL', 'READY', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'EXPIRED', 'CANCELLED'] },
       approval_id: { oneOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }] },
+      execution_id: { oneOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }] },
+      latency_ms: { type: 'integer', minimum: 0 },
       result: { type: 'object' }, error: { type: 'object' },
       created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
       expires_at: { type: 'string', format: 'date-time' },

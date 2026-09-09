@@ -9,6 +9,7 @@ const expectCode = (code) => (error) => error instanceof V2Error && error.code =
 const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'));
 let now = 1_900_000_000_000;
 const observed = [];
+const executorContexts = [];
 const criticalPolicy = {
   enabled: true, approval_required: true, required_approvals: 2, approval_roles: ['admin'],
   accounts: ['control-plane'], environments: ['production'], resources: ['device-state'],
@@ -28,7 +29,8 @@ const authorize = async (operation, options = {}) => {
   return { allow: true, ttlMs: 60_000 };
 };
 const executors = new Map([
-  ['broker.tools.inspect@1.0.0', async (parameters) => {
+  ['broker.tools.inspect@1.0.0', async (parameters, context) => {
+    executorContexts.push(context);
     const tool = registry.findByName(parameters.tool_name, parameters.tool_version);
     return {
       name: tool.name, version: tool.version, provider: tool.provider,
@@ -61,6 +63,10 @@ await assert.rejects(broker.create(human, {
 const completed = await broker.run(human, low.id);
 assert.equal(completed.state, 'SUCCEEDED');
 assert.equal(completed.result.name, 'github.repository.read');
+assert.match(completed.execution_id, /^[a-f0-9-]{36}$/);
+assert.equal(completed.latency_ms, 0);
+assert.equal(executorContexts[0].execution.execution_id, completed.execution_id);
+assert.ok(!JSON.stringify(executorContexts[0]).includes('et1.'), 'executor receives verified claims, not the bearer capability');
 assert.equal(broker.get(human, low.id).result.version, '1.0.0');
 assert.deepEqual(broker.eventsFor(human, low.id).map((event) => event.state), [
   'REQUESTED', 'READY', 'EXECUTING', 'SUCCEEDED',
@@ -230,6 +236,13 @@ assert.ok(!JSON.stringify(thrownResult).includes('canary'));
 const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });
 assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code, 'schema_mismatch');
+
+const tokenFailureBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals, executors,
+  executionTokens: { issue() { throw new V2Error('execution_token_failed', 'unavailable', 503); } },
+});
+const tokenFailure = await tokenFailureBroker.create(human, { ...lowInput, idempotency_key: 'token-failure-task1' });
+assert.equal((await tokenFailureBroker.run(human, tokenFailure.id)).error.code, 'execution_token_failed');
 
 const capacityBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals, executors, maxTasks: 1,

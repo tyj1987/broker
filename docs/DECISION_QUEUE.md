@@ -70,3 +70,20 @@ continue.
   tests. No host address, credential, certificate signer or free-form command is
   available through the strict adapter, and the provider remains
   `contract_required`.
+
+## DQ-006: PostgreSQL runner and authorization authority
+
+- Status: open
+- Needed before: any PostgreSQL capability is production-enabled
+- Decision: select the isolated query-runner workload, authoritative database
+  target registry, short-lived login issuer and per-query privilege ownership.
+  Define TLS trust, RLS policy ownership, connection pooling, revocation,
+  cancellation, audit and regional failover boundaries.
+- Required evidence: wrong-target and wrong-database denial, read/write and DDL
+  escape attempts, function and foreign-data side effects, RLS bypass,
+  privileged-role detection, session revocation, timeout and cancellation,
+  pool state reset, output bounds, log redaction and isolated-database contract
+  tests.
+- Current safe default: a dependency-injected fixed-query runner used only by
+  deterministic tests. The strict adapter accepts no SQL or credentials and
+  the provider remains `contract_required`.

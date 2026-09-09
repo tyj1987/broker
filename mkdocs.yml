@@ -94,6 +94,7 @@ nav:
       - GitHub: GITHUB-ADAPTER.md
       - Cloudflare: CLOUDFLARE-ADAPTER.md
       - Docker: DOCKER-ADAPTER.md
+      - PostgreSQL: POSTGRESQL-ADAPTER.md
   - Decision queue: DECISION_QUEUE.md
   - SDK reference: SDK-REFERENCE.md
   - FAQ: FAQ.md

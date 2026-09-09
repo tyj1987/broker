@@ -180,6 +180,24 @@
       "approval_policy": { "mode": "none", "approvals_required": 0 },
       "audit_policy": { "required": true, "redact": ["authorization", "security_token"] },
       "agent_execution": true
+    },
+    {
+      "name": "postgresql.database.inspect",
+      "version": "1.0.0",
+      "description": "Read bounded server metadata through a fixed-query, least-privilege PostgreSQL runner.",
+      "provider": "postgresql",
+      "operation_id": "database.inspect",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref"], "properties": { "resource_ref": { "type": "string" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["target_ref", "database", "server_version_num", "in_recovery", "current_user", "read_only_enforced"], "properties": { "target_ref": { "type": "string" }, "database": { "type": "string" }, "server_version_num": { "type": "integer" }, "in_recovery": { "type": "boolean" }, "current_user": { "type": "string" }, "read_only_enforced": { "type": "boolean", "const": true } } },
+      "required_role": "operator",
+      "risk_level": "MEDIUM",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "postgresql-database", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 30, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["password", "connection_string", "ssl_key", "sql", "rows"] },
+      "agent_execution": true
     }
   ]
 }

@@ -121,6 +121,13 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   five minutes, denies redirects and projects at most 100 validated tags over
   the pinned HTTPS transport. No real token exchange or isolated Docker Hub
   account contract has run, so Docker remains `contract_required`.
+- The PostgreSQL database-inspection adapter accepts no SQL, expressions,
+  connection information or credentials. It binds one opaque target to a fixed
+  query ID, requires read-only transaction and unprivileged-role attestation,
+  projects one bounded metadata row, and crosses the policy, execution-token,
+  adapter, output-schema and audit lifecycle in deterministic tests. The
+  isolated runner, TLS/target authority, short-lived login issuer and live
+  database escape tests remain open, so PostgreSQL is `contract_required`.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test
@@ -230,7 +237,7 @@ secret-history scanning and production candidate image validation.
   GHCR package permission and registry-backed attestations before release.
 - Container build, SBOM, signature, provenance, SAST/SCA, license and IaC reports must be retained as CI artifacts.
 - All production credentials potentially exposed before this audit must be rotated with evidence outside the repository.
-- Seven provider adapters require isolated-account or isolated-target contract tests before any production-ready status.
+- Eight provider adapters require isolated-account, target or database contract tests before any production-ready status.
 - Xiaomi 12S Ultra dual-SIM, permission revocation, delayed/duplicate OTP, background restriction, and manual fallback tests must pass.
 - Windows installer signing/update verification, Ubuntu packaging, iOS
   compile/sign/device validation, isolated browser-worker production runtime,

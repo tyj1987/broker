@@ -12,7 +12,44 @@ assert.equal(registry.find('github', 'repo.read').name, 'github.repository.read'
 const admin = { name: 'admin-a', context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } } };
 assert.ok(registry.listFor(admin).some((tool) => tool.risk_level === 'CRITICAL'));
 const agent = { name: 'agent-a', context: { via: 'api_key', client: { role: 'admin' } } };
-assert.ok(registry.listFor(agent).every((tool) => tool.agent_execution === true));
+assert.deepEqual(registry.listFor(agent), [], 'an API-key identity without key constraints fails closed');
+const githubAgent = {
+  name: 'agent-github',
+  context: {
+    via: 'api_key',
+    client: { role: 'admin' },
+    apiKey: {
+      scopes: ['operations:github:repo.read'],
+      allowed_services: ['github'],
+      allowed_operations: ['github:repo.read'],
+      allowed_accounts: ['repository-main'],
+      allowed_resources: ['repository-main'],
+      allowed_environments: ['production'],
+    },
+  },
+};
+assert.deepEqual(
+  registry.listFor(githubAgent).map((tool) => tool.name),
+  ['github.repository.read'],
+  'tool discovery cannot exceed API-key operation constraints',
+);
+for (const field of [
+  'scopes',
+  'allowed_services',
+  'allowed_operations',
+  'allowed_accounts',
+  'allowed_resources',
+  'allowed_environments',
+]) {
+  const restricted = structuredClone(githubAgent);
+  restricted.context.apiKey[field] = [];
+  assert.deepEqual(registry.listFor(restricted), [], `${field} is enforced during discovery`);
+}
+const workloadAgent = {
+  name: 'workload-a',
+  context: { via: 'workload_identity', client: { role: 'admin' } },
+};
+assert.ok(registry.listFor(workloadAgent).every((tool) => tool.agent_execution === true));
 
 const allowed = { allow: true, reason: 'allowed' };
 assert.equal(registry.evaluate({

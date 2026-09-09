@@ -67,6 +67,20 @@ function isAgentIdentity(identity) {
   return context?.via !== 'session' || AGENT_IDENTITY_METHODS.has(context?.via);
 }
 
+function apiKeyAllowsDiscovery(identity, tool) {
+  const context = identity?.context;
+  const apiKey = context?.apiKey;
+  if (!apiKey) return context?.via !== 'api_key';
+  const operation = `${tool.provider}:${tool.operation_id}`;
+  const operationScope = `operations:${tool.provider}:${tool.operation_id}`;
+  return (apiKey.scopes?.includes('operations:execute') || apiKey.scopes?.includes(operationScope))
+    && apiKey.allowed_services?.includes(tool.provider)
+    && apiKey.allowed_operations?.includes(operation)
+    && Array.isArray(apiKey.allowed_accounts) && apiKey.allowed_accounts.length > 0
+    && Array.isArray(apiKey.allowed_resources) && apiKey.allowed_resources.length > 0
+    && apiKey.allowed_environments?.some((environment) => tool.environments.includes(environment));
+}
+
 export class ToolRegistry {
   constructor(document) {
     assertObject(document, 'tool registry must be an object');
@@ -101,7 +115,8 @@ export class ToolRegistry {
     if (!role) return [];
     return [...this.byOperation.values()]
       .filter((tool) => (role === 'admin' || role === tool.required_role)
-        && (!isAgentIdentity(identity) || tool.agent_execution === true))
+        && (!isAgentIdentity(identity) || tool.agent_execution === true)
+        && apiKeyAllowsDiscovery(identity, tool))
       .map(publicTool);
   }
 

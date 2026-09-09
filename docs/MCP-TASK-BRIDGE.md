@@ -12,12 +12,14 @@ workload, have a short absolute lifetime and be rotated outside the Agent
 process. Optional client certificate, private-key and CA files enable mTLS to
 the Broker without placing their values in arguments or logs.
 
-`tools/list` is derived from the running Broker's executable-tool view. Each
-entry receives a stable MCP name and a closed input schema containing the
-registered typed parameters plus `account_ref`, `environment` and an explicit
-idempotency key. Calling an entry creates a task. A `READY` task is run once;
-an approval-gated task is returned without bypassing approval. Separate MCP
-controls read, run, cancel or inspect events for an existing task.
+`tools/list` is derived from the running Broker's executable-tool view. For an
+API-key identity, that view is intersected with the key's scopes, services,
+operations and environments, and requires non-empty account and resource
+constraints; missing key metadata fails closed. Each entry receives a stable MCP name and a closed input schema
+containing the registered typed parameters plus `account_ref`, `environment`
+and an explicit idempotency key. Calling an entry creates a task. A `READY` task
+is run once; an approval-gated task is returned without bypassing approval.
+Separate MCP controls read, run, cancel or inspect events for an existing task.
 
 The local MCP listener binds only to loopback, rejects every request carrying a
 browser `Origin`, validates the `Host` header, emits no CORS permission, accepts

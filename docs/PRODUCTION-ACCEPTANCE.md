@@ -99,6 +99,12 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   private key. No production KMS/HSM signer, account binding or isolated-account
   live contract has run, so the manifest remains `contract_required` and this
   is not production-available evidence.
+- The Cloudflare zones-list adapter binds the execution, credential and API
+  query to one exact account ID, accepts only bounded filters and pagination,
+  and returns a minimal zone projection. The composed executor uses the pinned
+  HTTPS transport. Unit and integration coverage is 100% line/function and
+  96.77% branch. No production token resolver or isolated-account contract has
+  run, so Cloudflare also remains `contract_required`.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test

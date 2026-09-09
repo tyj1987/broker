@@ -86,8 +86,13 @@ nav:
   - Workload identity: WORKLOAD-IDENTITY.md
   - SSH proxy: SSH-PROXY.md
   - WebSocket: WEBSOCKET.md
+  - Tool registry: TOOL-REGISTRY.md
   - Automation tasks: AUTOMATION-TASKS.md
   - Execution tokens: EXECUTION-TOKENS.md
+  - Audit integrity: AUDIT-INTEGRITY.md
+  - Provider adapters:
+      - GitHub: GITHUB-ADAPTER.md
+      - Cloudflare: CLOUDFLARE-ADAPTER.md
   - Decision queue: DECISION_QUEUE.md
   - SDK reference: SDK-REFERENCE.md
   - FAQ: FAQ.md

@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const GENESIS_HASH = '0'.repeat(64);
@@ -72,22 +72,50 @@ export function verifyChain(events) {
   return { ok: true, count: events.length };
 }
 
+function chainFiles(auditDir, chainOnly = false) {
+  const files = readdirSync(auditDir)
+    .filter(f => f.startsWith('audit-chain-') && f.endsWith('.jsonl'))
+    .sort();
+  if (files.length > 0 || chainOnly) return files;
+  return readdirSync(auditDir)
+    .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
+    .sort();
+}
+
+function parseLines(content, file) {
+  const events = [];
+  for (const [index, line] of content.split('\n').entries()) {
+    if (!line) continue;
+    try { events.push(JSON.parse(line)); } catch {
+      throw new Error(`invalid audit JSON in ${file} at line ${index + 1}`);
+    }
+  }
+  return events;
+}
+
+export function loadAuditChainStateSync(auditDir, { chainOnly = false } = {}) {
+  const files = chainFiles(auditDir, chainOnly);
+  const events = files.flatMap(file => parseLines(readFileSync(join(auditDir, file), 'utf8'), file));
+  const result = verifyChain(events);
+  if (!result.ok) throw new Error(`audit chain verification failed: ${result.reason}`);
+  return {
+    files: files.length,
+    count: events.length,
+    lastHash: events.length > 0 ? events.at(-1).hash : GENESIS_HASH,
+  };
+}
+
 /**
  * Read all audit files in a directory and verify the chain.
  * @param {string} auditDir
  * @returns {Promise<{ ok: boolean, count: number, broken_at?: number, reason?: string, files: number }>}
  */
 export async function verifyAuditDir(auditDir) {
-  const files = readdirSync(auditDir)
-    .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
-    .sort(); // oldest first
+  const files = chainFiles(auditDir);
   const all = [];
   for (const f of files) {
     const content = await readFile(join(auditDir, f), 'utf8');
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      try { all.push(JSON.parse(line)); } catch { continue; }
-    }
+    all.push(...parseLines(content, f));
   }
   const result = verifyChain(all);
   return { ...result, files: files.length };

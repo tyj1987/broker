@@ -80,11 +80,15 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   browser and never receive its session or approval authority. Source, Node
   regression and Windows Tauri build/Clippy/test evidence has been obtained;
   Android CI and end-to-end physical-key ceremony remain open.
-- Node broker full regression suite: passed. The typed-operation, approval,
-  authorization and outbound-policy coverage gate reports 95.52% lines,
-  91.94% branches and 96.1% functions. Approval creation is pre-authorized by
+- Node broker full regression suite: passed. The security-core coverage gate
+  reports 96.34% lines, 89.04% branches and 96.87% functions. Approval creation is pre-authorized by
   the same Node and Go policy path, and v2 state changes require a durable audit
   intent before mutation.
+- Production audit writes now enter restart-safe `audit-chain-*` files. Startup
+  strictly verifies the retained chain and refuses malformed or modified
+  records; tests cover restart continuation, malformed input and tampering.
+  Legacy unsealed logs remain outside the migration genesis, and the missing
+  independent signed chain-head anchor remains a P1 acceptance blocker.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test

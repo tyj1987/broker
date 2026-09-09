@@ -88,6 +88,7 @@ import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
+import { loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -737,19 +738,22 @@ AUDIT_BUS.setMaxListeners(0);  // unbounded; one listener per SSE connection
 
 function auditFilePath() {
   const d = new Date().toISOString().slice(0, 10);
-  return join(AUDIT_DIR, `audit-${d}.jsonl`);
+  return join(AUDIT_DIR, `audit-chain-${d}.jsonl`);
 }
 
-let auditBytes = 0;
+let auditBytes = existsSync(auditFilePath()) ? statSync(auditFilePath()).size : 0;
+let auditLastHash = loadAuditChainStateSync(AUDIT_DIR, { chainOnly: true }).lastHash;
 function audit(event, options = {}) {
-  const e = redactDeep({
+  const base = redactDeep({
     ts: new Date().toISOString(),
     id: randomUUID(),
     ...event,
   });
+  const e = sealEvent(base, auditLastHash);
   const line = JSON.stringify(e) + '\n';
   try {
     appendFileSync(auditFilePath(), line, { encoding: 'utf8' });
+    auditLastHash = e.hash;
     auditBytes += Buffer.byteLength(line, 'utf8');
     // rotate at 50MB
     if (auditBytes > 50 * 1024 * 1024) {

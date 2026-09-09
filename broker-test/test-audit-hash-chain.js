@@ -23,6 +23,7 @@ import {
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainStateSync,
   GENESIS_HASH,
 } from '../broker/lib/audit-hash-chain.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -185,6 +186,30 @@ section('13. verifyAuditDir works on real files');
   ok('ok=true', r.ok === true);
   ok('count=3', r.count === 3);
   ok('files=1', r.files === 1);
+}
+
+section('14. production chain resumes and rejects corruption');
+
+{
+  const WORK = mkdtempSync(join(tmpdir(), 'broker-chain-state-'));
+  process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
+  writeFileSync(join(WORK, 'audit-legacy.jsonl'), JSON.stringify({ action: 'legacy' }) + '\n');
+  const empty = loadAuditChainStateSync(WORK, { chainOnly: true });
+  ok('legacy unsealed log is outside the new chain boundary', empty.count === 0 && empty.lastHash === GENESIS_HASH);
+  const e1 = sealEvent({ action: 'one' }, empty.lastHash);
+  const e2 = sealEvent({ action: 'two' }, e1.hash);
+  const chainFile = join(WORK, 'audit-chain-2026-09-09.jsonl');
+  writeFileSync(chainFile, `${JSON.stringify(e1)}\n${JSON.stringify(e2)}\n`);
+  const resumed = loadAuditChainStateSync(WORK, { chainOnly: true });
+  ok('restart resumes the last committed hash', resumed.count === 2 && resumed.lastHash === e2.hash);
+  writeFileSync(chainFile, `${JSON.stringify(e1)}\nnot-json\n`);
+  let malformed = false;
+  try { loadAuditChainStateSync(WORK, { chainOnly: true }); } catch (error) { malformed = /invalid audit JSON/.test(error.message); }
+  ok('malformed chained log fails closed', malformed);
+  writeFileSync(chainFile, `${JSON.stringify(e1)}\n${JSON.stringify({ ...e2, action: 'tampered' })}\n`);
+  let tampered = false;
+  try { loadAuditChainStateSync(WORK, { chainOnly: true }); } catch (error) { tampered = /verification failed/.test(error.message); }
+  ok('tampered chained log fails closed', tampered);
 }
 
 // ---------- summary ----------

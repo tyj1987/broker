@@ -419,6 +419,24 @@ export class OperationBroker {
     return publicOperation(operation);
   }
 
+  rollbackOperationCreation(identity, id) {
+    const operation = this.operations.get(id);
+    if (!operation) throw new V2Error('not_found', 'operation not found', 404);
+    if (operation.owner !== identity?.name) throw new V2Error('forbidden', 'operation access denied', 403);
+    if (operation.status !== 'waiting' || operation.browserLeaseId) {
+      throw new V2Error('invalid_state', 'operation creation cannot be rolled back', 409);
+    }
+    if (operation.otpTaskId) {
+      const task = this.otpTasks.get(operation.otpTaskId);
+      if (!task || task.status !== 'waiting') {
+        throw new V2Error('invalid_state', 'operation OTP task cannot be rolled back', 409);
+      }
+      this.activeOtpLocks.delete(task.lockKey);
+      this.otpTasks.delete(task.id);
+    }
+    this.operations.delete(id);
+  }
+
   getOperation(identity, id) {
     const operation = this.operations.get(id);
     if (!operation) throw new V2Error('not_found', 'operation not found', 404);

@@ -88,6 +88,28 @@ await assert.rejects(
   (error) => error instanceof V2Error && error.code === 'forbidden',
 );
 
+const rollbackOperation = await broker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun',
+  operation_id: 'console.login',
+  account_ref: 'primary',
+  environment: 'production',
+  typed_parameters: { requested_action: 'rollback-test' },
+});
+assert.throws(
+  () => broker.rollbackOperationCreation({ name: 'another-owner' }, rollbackOperation.id),
+  (error) => error instanceof V2Error && error.code === 'forbidden',
+);
+broker.rollbackOperationCreation({ name: 'owner-1' }, rollbackOperation.id);
+assert.throws(
+  () => broker.getOperation({ name: 'owner-1' }, rollbackOperation.id),
+  (error) => error instanceof V2Error && error.code === 'not_found',
+);
+assert.equal(broker.listDeviceOtpTasks(device.id).length, 0, 'rollback removes the unpublished OTP task and lock');
+assert.throws(
+  () => broker.rollbackOperationCreation({ name: 'owner-1' }, rollbackOperation.id),
+  (error) => error instanceof V2Error && error.code === 'not_found',
+);
+
 const operation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
   operation_id: 'console.login',
@@ -133,6 +155,11 @@ assert.throws(
 const submitted = broker.submitOtp(device.id, operation.otp_task_id, body);
 assert.equal(submitted.status, 'received');
 assert.equal(JSON.stringify(submitted).includes(body.code), false);
+assert.throws(
+  () => broker.rollbackOperationCreation({ name: 'owner-1' }, operation.id),
+  (error) => error instanceof V2Error && error.code === 'invalid_state',
+  'a published or progressing operation cannot use the creation rollback path',
+);
 
 let consumedCode = null;
 const result = await broker.consumeOtp(operation.otp_task_id, async (code) => {

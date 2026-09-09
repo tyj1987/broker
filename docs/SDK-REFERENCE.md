@@ -41,6 +41,12 @@ are rejected by the operation schema. A completed response contains only the
 business result allowed by that operation; it must not contain injected
 credentials, cookies, signing material, internal paths, or browser state.
 
+An accepted operation is not published to the caller until its creation audit
+has been durably accepted. If that mandatory audit fails, the unpublished
+operation, any waiting OTP task and its serialization lock are rolled back, and
+an unused approval claim is released. This rollback applies only before an
+executor or isolated browser worker has received the operation.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

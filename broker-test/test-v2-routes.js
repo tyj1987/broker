@@ -7,6 +7,7 @@ let identity = null;
 let body = {};
 let response = null;
 let auditFailure = false;
+let auditFailureAction = null;
 const calls = [];
 const auditEvents = [];
 const handler = createV2Routes({
@@ -34,6 +35,9 @@ const handler = createV2Routes({
     async createOperation(subject, input) {
       calls.push(['operation', subject.name, input, subject.context.approvalGrants || []]);
       return { id: 'operation-id', provider: input.provider, status: 'waiting' };
+    },
+    rollbackOperationCreation(subject, id) {
+      calls.push(['operation-rollback', subject.name, id]);
     },
     getOperation(subject, id) {
       calls.push(['operation-get', subject.name, subject.context.via, subject.context.authFactors || []]);
@@ -94,6 +98,7 @@ const handler = createV2Routes({
     },
     markSucceeded(id) { calls.push(['approval-succeeded', id]); },
     markFailed(id) { calls.push(['approval-failed', id]); },
+    releaseClaim(id) { calls.push(['approval-released', id]); },
     cancel(subject, id) {
       calls.push(['approval-cancel', subject.name, id]);
       return { id, status: 'CANCELLED' };
@@ -131,7 +136,7 @@ const handler = createV2Routes({
   send: (_res, status, value) => { response = { status, value }; },
   audit: (event, options) => {
     auditEvents.push(event);
-    if (auditFailure && options?.mandatory) throw new Error('disk unavailable');
+    if ((auditFailure || event.action === auditFailureAction) && options?.mandatory) throw new Error('disk unavailable');
   },
   makeSession: () => '',
   sessionCookieHeader: () => '',
@@ -281,6 +286,15 @@ body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary
 assert.equal((await route('/api/v2/operations')).status, 202);
 assert.equal(calls.find((item) => item[0] === 'operation')[3].length, 1);
 assert.ok(calls.some((item) => item[0] === 'approval-succeeded'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_operation_create' && event.status === 'ok'));
+
+const operationsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'operation').length;
+auditFailureAction = 'v2_operation_create';
+assert.equal((await route('/api/v2/operations')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'operation').length, operationsBeforeResultAuditFailure + 1);
+assert.ok(calls.some((item) => item[0] === 'operation-rollback' && item[2] === 'operation-id'));
+assert.ok(calls.some((item) => item[0] === 'approval-released' && item[1] === 'approval-id'));
 
 identity = {
   clientName: 'admin-a', via: 'session', authFactors: ['webauthn'],

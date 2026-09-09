@@ -220,12 +220,18 @@ export function createV2Routes(deps) {
         let result;
         try {
           result = await operationBroker.createOperation(authorizedIdentity, body);
-          if (claim) approvalBroker.markSucceeded(claim.id);
         } catch (error) {
           if (claim) approvalBroker.markFailed(claim.id);
           throw error;
         }
-        audit({ action: 'v2_operation_create', status: 'ok', cn: ctx.cn, operation_id: result.id, provider: result.provider });
+        try {
+          mandatoryAudit({ action: 'v2_operation_create', status: 'ok', cn: ctx.cn, operation_id: result.id, provider: result.provider });
+        } catch (error) {
+          operationBroker.rollbackOperationCreation(identity, result.id);
+          if (claim) approvalBroker.releaseClaim(claim.id);
+          throw error;
+        }
+        if (claim) approvalBroker.markSucceeded(claim.id);
         send(res, 202, result);
         return true;
       }

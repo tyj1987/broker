@@ -35,6 +35,12 @@ new execution claim. Once a claim has atomically entered `EXECUTING`, concurrent
 replay or expiry checks cannot rewrite it; the bound task deadline owns the
 terminal success, failure or expiry transition.
 
+An unused task approval is cancelled when task creation rolls back, the caller
+cancels the task or its absolute deadline expires. A mandatory audit outage
+before adapter invocation releases the approval claim and any reserved execution
+rate slot, so the same task can be retried after recovery without bypassing the
+registered limit. No reservation is released after adapter invocation.
+
 A requester API key must also retain the exact operation scope and provider,
 operation, account, environment and resource grants to list, cancel or claim an
 approval. A narrowed or revoked key is rejected before the approval state can

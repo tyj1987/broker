@@ -277,27 +277,19 @@ export class AutomationTaskBroker {
       }
       if (!decision?.allow) {
         task.policyDecision = 'deny';
-        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
-        this.fail(task, decision?.reason || 'policy_denied');
-        return publicTask(task);
+        return this.completePreExecutionFailure(task, approvalClaim, decision?.reason || 'policy_denied');
       }
       task.policyDecision = 'allow';
       const executor = this.executors.get(`${task.tool.name}@${task.tool.version}`);
       if (typeof executor !== 'function') {
-        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
-        this.fail(task, 'executor_unavailable');
-        return publicTask(task);
+        return this.completePreExecutionFailure(task, approvalClaim, 'executor_unavailable');
       }
       const remainingMs = Date.parse(task.expiresAt) - this.now();
       if (remainingMs < 1_000) {
-        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
-        this.transition(task, 'EXPIRED', 'task_expired');
-        return publicTask(task);
+        return this.completePreExecutionFailure(task, approvalClaim, 'task_expired', { state: 'EXPIRED' });
       }
       if (!this.consumeExecutionRateLimit(task)) {
-        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
-        this.fail(task, 'tool_rate_limited');
-        return publicTask(task);
+        return this.completePreExecutionFailure(task, approvalClaim, 'tool_rate_limited');
       }
       const executionBinding = {
         actor: identity.name,
@@ -313,14 +305,18 @@ export class AutomationTaskBroker {
         executionGrant = this.executionTokens.consume(capability.token, capability.nonce, executionBinding);
         task.executionId = executionGrant.execution_id;
       } catch (error) {
-        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
-        this.fail(task, error instanceof V2Error ? error.code : 'execution_token_failed');
-        return publicTask(task);
+        return this.completePreExecutionFailure(
+          task,
+          approvalClaim,
+          error instanceof V2Error ? error.code : 'execution_token_failed',
+          { rateLimitConsumed: true },
+        );
       }
       try {
         this.transition(task, 'EXECUTING', 'executor_started');
       } catch (error) {
         if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+        this.releaseExecutionRateLimit(task);
         throw error;
       }
       const startedAt = this.now();
@@ -383,13 +379,29 @@ export class AutomationTaskBroker {
 
   expire(task) {
     if (!task.running && !TERMINAL.has(task.state) && Date.parse(task.expiresAt) <= this.now()) {
+      const wasExecuting = task.state === 'EXECUTING';
+      if (task.approvalId && !wasExecuting) this.approvalBroker.cancelForTask(task.approvalId);
       this.transition(task, 'EXPIRED', 'task_expired');
+      if (task.approvalId && wasExecuting) this.approvalBroker.markFailed(task.approvalId);
     }
   }
 
   fail(task, code) {
     this.transition(task, 'FAILED', code);
     task.error = code;
+  }
+
+  completePreExecutionFailure(task, approvalClaim, code, { state = 'FAILED', rateLimitConsumed = false } = {}) {
+    try {
+      if (state === 'EXPIRED') this.transition(task, 'EXPIRED', code);
+      else this.fail(task, code);
+    } catch (error) {
+      if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+      if (rateLimitConsumed) this.releaseExecutionRateLimit(task);
+      throw error;
+    }
+    if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
+    return publicTask(task);
   }
 
   consumeExecutionRateLimit(task) {
@@ -404,6 +416,12 @@ export class AutomationTaskBroker {
     if (bucket.count >= task.tool.rate_limit.requests) return false;
     bucket.count += 1;
     return true;
+  }
+
+  releaseExecutionRateLimit(task) {
+    const key = `${task.owner}\0${task.tool.name}@${task.tool.version}\0${task.environment}`;
+    const bucket = this.executionRateLimits.get(key);
+    if (bucket?.count > 0) bucket.count -= 1;
   }
 
   transition(task, state, reason) {

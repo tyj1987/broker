@@ -294,9 +294,16 @@ assert.equal(broker.cancel(human, pendingCancellation.id).state, 'CANCELLED');
 assert.equal(approvals.list(human).find((item) => item.id === pendingCancellation.approval_id).status, 'CANCELLED');
 
 const expiring = await broker.create(human, { ...lowInput, idempotency_key: 'inspect-task-expire' });
+const expiringCritical = await broker.create(human, { ...criticalInput, idempotency_key: 'critical-expire-001' });
 now += 60_001;
 assert.equal(broker.get(human, expiring.id).state, 'EXPIRED');
 await assert.rejects(broker.run(human, expiring.id), expectCode('invalid_state'));
+assert.equal(broker.get(human, expiringCritical.id).state, 'EXPIRED');
+assert.equal(
+  approvals.list(human).find((item) => item.id === expiringCritical.approval_id).status,
+  'CANCELLED',
+  'task expiry revokes its unused approval',
+);
 
 await assert.rejects(broker.create(human, { ...lowInput, tool: 'missing.tool', idempotency_key: 'missing-tool-0001' }), expectCode('tool_unregistered'));
 await assert.rejects(broker.create(human, { ...lowInput, idempotency_key: 'short' }), expectCode('invalid_request'));
@@ -597,8 +604,17 @@ const retryableApprovals = new ApprovalBroker({
   now: () => now,
   getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
 });
+const singleAttemptCritical = {
+  ...registry.findByName('broker.device.state', '1.0.0'),
+  rate_limit: { requests: 1, window_seconds: 3600 },
+};
 const approvedAuditFailureBroker = new AutomationTaskBroker({
-  toolRegistry: registry,
+  toolRegistry: {
+    findByName(name, version) {
+      return name === singleAttemptCritical.name && version === singleAttemptCritical.version
+        ? structuredClone(singleAttemptCritical) : null;
+    },
+  },
   authorize,
   approvalBroker: retryableApprovals,
   executors: new Map([['broker.device.state@1.0.0', async (parameters) => {
@@ -674,6 +690,37 @@ assert.equal(
 );
 assert.equal((await policyRecoveryBroker.run(human, policyRecoveryTask.id)).state, 'SUCCEEDED');
 assert.equal(policyRecoveryExecutions, 1);
+
+let denyAuditOutage = true;
+const denialAuditApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const denialAuditBroker = new AutomationTaskBroker({
+  toolRegistry: registry,
+  authorize: async (_operation, options = {}) => options.ignoreApproval === true
+    ? { allow: true, ttlMs: 60_000 }
+    : { allow: false, reason: 'policy_revoked' },
+  approvalBroker: denialAuditApprovals,
+  executors,
+  now: () => now,
+  onEvent(event) {
+    if (event.state === 'FAILED' && denyAuditOutage) {
+      denyAuditOutage = false;
+      throw new Error('denial audit unavailable');
+    }
+  },
+});
+const denialAuditTask = await denialAuditBroker.create(human, {
+  ...criticalInput, idempotency_key: 'deny-audit-000001',
+});
+denialAuditApprovals.decide(approver('admin-n'), denialAuditTask.approval_id, 'approve');
+denialAuditApprovals.decide(approver('admin-o'), denialAuditTask.approval_id, 'approve');
+await assert.rejects(denialAuditBroker.run(human, denialAuditTask.id), /denial audit unavailable/);
+assert.equal(denialAuditBroker.get(human, denialAuditTask.id).state, 'READY');
+assert.equal(denialAuditApprovals.list(human)[0].status, 'APPROVED');
+assert.equal((await denialAuditBroker.run(human, denialAuditTask.id)).state, 'FAILED');
+assert.equal(denialAuditApprovals.list(human)[0].status, 'FAILED');
 
 const terminalAuditApprovals = new ApprovalBroker({
   now: () => now,

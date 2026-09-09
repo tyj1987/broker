@@ -3,7 +3,7 @@
 # Declare variables to be passed into your templates.
 
 # -- Number of broker replicas
-replicaCount: 2
+replicaCount: 1
 
 image:
   # -- Image repository
@@ -99,7 +99,7 @@ autoscaling:
   maxReplicas: 5
   targetCPUUtilizationPercentage: 80
 
-# -- Persistent volume for SOPS-encrypted secrets
+# -- Persistent volume for encrypted broker data and control-plane state
 persistence:
   enabled: true
   # -- PVC size
@@ -153,6 +153,8 @@ secrets:
   configSecretName: ""
   # -- Existing secret containing tls.crt, tls.key and ca.crt.
   tlsSecretName: ""
+  # -- Existing secret containing a 32-byte control-plane-state.key.
+  stateKeySecretName: ""
 
 # -- Liveness/metrics probes
 probes:

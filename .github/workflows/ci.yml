@@ -335,7 +335,12 @@ jobs:
           node-version: '24.20.0'
           cache: npm
           cache-dependency-path: clients/desktop/package-lock.json
-      - run: sudo apt-get update
+      - name: Refresh only the Ubuntu package index
+        run: >-
+          sudo apt-get update
+          -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+          -o Dir::Etc::sourceparts=-
+          -o APT::Get::List-Cleanup=0
       - run: sudo apt-get install --yes libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
       - run: rustup default 1.98.1
@@ -385,12 +390,14 @@ jobs:
           helm lint deploy/helm/broker
           --set secrets.configSecretName=broker-config
           --set secrets.tlsSecretName=broker-tls
+          --set secrets.stateKeySecretName=broker-state-key
           --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
       - name: Render Helm chart
         run: >-
           helm template broker deploy/helm/broker
           --set secrets.configSecretName=broker-config
           --set secrets.tlsSecretName=broker-tls
+          --set secrets.stateKeySecretName=broker-state-key
           --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
           > /tmp/broker-rendered.yaml
       - run: bash -n deploy/bin/secret-broker-deploy

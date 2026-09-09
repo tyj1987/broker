@@ -1,3 +1,9 @@
+{{- if not .Values.persistence.enabled }}
+{{- fail "persistence.enabled must be true for durable control-plane state" }}
+{{- end }}
+{{- if or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1) }}
+{{- fail "the file-backed control-plane state supports exactly one replica; external coordination is required before scaling" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,6 +63,10 @@ spec:
               value: 127.0.0.1:9080
             - name: BROKER_CORE_SOCKET
               value: /run/secret-broker/core.sock
+            - name: CONTROL_PLANE_STATE_PATH
+              value: /var/lib/broker/control-plane-state.enc
+            - name: CONTROL_PLANE_STATE_KEY_FILE
+              value: /etc/broker/state/control-plane-state.key
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -95,6 +105,9 @@ spec:
               readOnly: true
             - name: tls
               mountPath: /etc/broker/tls
+              readOnly: true
+            - name: state-key
+              mountPath: /etc/broker/state
               readOnly: true
             {{- if .Values.persistence.enabled }}
             - name: data
@@ -148,6 +161,13 @@ spec:
           secret:
             secretName: {{ required "secrets.tlsSecretName is required" .Values.secrets.tlsSecretName }}
             defaultMode: 0400
+        - name: state-key
+          secret:
+            secretName: {{ required "secrets.stateKeySecretName is required" .Values.secrets.stateKeySecretName }}
+            defaultMode: 0400
+            items:
+              - key: control-plane-state.key
+                path: control-plane-state.key
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:

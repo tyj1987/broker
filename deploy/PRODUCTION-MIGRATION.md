@@ -30,7 +30,21 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/usr/local/sbin/secret-broker-deploy` | `root:root`, `0755` | Validated atomic deployment helper |
 | `/run/secret-broker/core.sock` | `broker-core:broker`, `0660` | Local-only Go policy decision channel |
 
-Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it.
+Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it. The service uses systemd credentials, so verify that the host supports `LoadCredential=` and the `%d` credential-directory specifier before the maintenance window.
+
+Before the first hardened start, create `/etc/secret-broker/control-plane-state.key` from 32 cryptographically random bytes, owned by `root:root` with mode `0600`. Never pass this key on a command line or store it in Git, a unit file, a deployment log, or Helm values. With the Broker stopped, initialize the state exactly once using the same protected credential and the persistent state path:
+
+```sh
+sudo systemd-run --unit=secret-broker-state-init --wait --pipe --collect \
+  --property=User=broker --property=Group=broker \
+  --property=LoadCredential=control-plane-state.key:/etc/secret-broker/control-plane-state.key \
+  --setenv=CONTROL_PLANE_STATE_PATH=/var/lib/secret-broker/control-plane-state.enc \
+  --setenv=CONTROL_PLANE_STATE_KEY_FILE=/run/credentials/secret-broker-state-init.service/control-plane-state.key \
+  --working-directory=/opt/secret-broker/broker \
+  /usr/bin/node bin/control-plane-state-init.js
+```
+
+The initializer refuses to overwrite an existing state file. Back up the encrypted state and its key through separate protected channels. If the file later disappears, is corrupted, or cannot be authenticated, production startup must fail closed; do not rerun initialization as an availability workaround. Cold-start rollback detection still requires the external monotonic anchor recorded in DQ-001, so the file-backed mode is not approved for production scheduling.
 
 ## Migration sequence
 
@@ -39,7 +53,7 @@ Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-p
 3. Copy—not move—the currently deployed application to a versioned release directory named by its verified commit. Refuse to invent a commit when provenance is unknown; use a quarantine label and do not enable CI deployment.
 4. Copy encrypted data and only the runtime PKI files listed above to the target paths without printing them. The CA private key and all client private keys must remain offline and must not exist on the Broker host. Verify ownership and permissions with metadata-only commands.
 5. Replace `/opt/secret-broker/broker` with a relative symlink to the versioned release.
-6. Install and start both hardened systemd units. Verify that the policy socket is owned by `broker-core:broker`, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. A missing policy core must make production operations fail closed.
+6. Install and start both hardened systemd units. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. A missing policy core or unavailable control-plane state must make production operations fail closed.
 7. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
 8. Install the deploy helper and sudoers fragment. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command.
 9. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.

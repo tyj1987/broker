@@ -9,15 +9,21 @@ Kubernetes deployment chart for [Secret Broker V4](https://github.com/tyj1987/br
 kubectl create namespace broker
 
 # 2. Provision secrets through the cluster's approved secret controller.
-# The referenced objects must expose broker.yaml and tls.crt/tls.key/ca.crt.
+# The referenced objects must expose broker.yaml, tls.crt/tls.key/ca.crt,
+# and a separate 32-byte control-plane-state.key.
 
 # 3. Install
 helm install broker ./deploy/helm/broker \
   --namespace broker \
   --set secrets.configSecretName=broker-config \
   --set secrets.tlsSecretName=broker-tls \
+  --set secrets.stateKeySecretName=broker-state-key \
   --set image.digest=sha256:RELEASE_DIGEST
 ```
+
+Before creating the Deployment, initialize `control-plane-state.enc` exactly once on the bound PVC with `npm run state:init` and the same mounted key. The initializer refuses to overwrite existing state. Do not pass the key value through `--set` or commit it to values. Keep the encrypted state and key in separately protected backups; never automatically initialize a missing production state during pod startup.
+
+The current file-backed state store intentionally supports one Broker replica. The chart rejects horizontal autoscaling or `replicaCount > 1` until an externally coordinated state backend and monotonic generation anchor are implemented.
 
 ## Verify
 
@@ -38,7 +44,7 @@ helm test broker --namespace broker
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `replicaCount` | `2` | Number of broker pods |
+| `replicaCount` | `1` | Broker pods; file-backed control-plane state requires exactly one |
 | `image.repository` | `ghcr.io/tyj1987/broker` | Container image |
 | `image.tag` | (chart appVersion) | Image tag |
 | `image.digest` | (empty) | Immutable production image digest |
@@ -50,6 +56,7 @@ helm test broker --namespace broker
 | `config.workloadIdentity.enabled` | `false` | Enable K8s/ECS/GKE OIDC |
 | `secrets.configSecretName` | required | Existing Secret containing `broker.yaml` |
 | `secrets.tlsSecretName` | required | Existing Secret containing `tls.crt`, `tls.key`, and `ca.crt` |
+| `secrets.stateKeySecretName` | required | Existing Secret containing a 32-byte `control-plane-state.key` |
 | `tests.enabled` | `false` | Render the mTLS chart test pod |
 | `tests.clientCertificateSecret` | (empty) | Dedicated Kubernetes TLS secret for the chart test identity |
 | `tests.tlsServerName` | `broker.local` | DNS SAN verified on the Broker server certificate |

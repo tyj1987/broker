@@ -13,7 +13,10 @@ continue.
   idempotency records and audit outbox events.
 - Required evidence: encrypted backup/restore, failover, concurrent claim,
   revocation race, audit-write failure and disaster-recovery tests.
-- Current safe default: bounded in-process storage; no production scheduling.
+- Current safe default: encrypted, atomic file-backed restart recovery for one
+  Broker process. It fails closed on missing or unauthenticated state, but has
+  no external monotonic generation anchor and cannot prove cold-start rollback;
+  no production scheduling or horizontal scaling.
 
 ## DQ-002: worker delivery semantics
 

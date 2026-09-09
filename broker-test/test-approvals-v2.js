@@ -130,6 +130,16 @@ broker.markSucceeded(retryClaim.id);
 broker.releaseClaim(null);
 assert.throws(() => broker.releaseClaim(retryClaim.id), expectCode('approval_mismatch'));
 
+const taskBound = broker.create(requester, input);
+broker.decide(approver('admin-a'), taskBound.id, 'approve');
+broker.decide(approver('admin-b'), taskBound.id, 'approve');
+broker.cancelForTask(taskBound.id);
+broker.cancelForTask(taskBound.id);
+assert.equal(broker.list(requester).find((item) => item.id === taskBound.id).status, 'CANCELLED');
+assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: taskBound.id }), expectCode('invalid_state'));
+broker.cancelForTask(null);
+assert.throws(() => broker.cancelForTask(retryClaim.id), expectCode('approval_mismatch'));
+
 const executingAcrossExpiry = broker.create(requester, input);
 broker.decide(approver('admin-a'), executingAcrossExpiry.id, 'approve');
 broker.decide(approver('admin-b'), executingAcrossExpiry.id, 'approve');

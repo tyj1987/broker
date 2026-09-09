@@ -192,6 +192,15 @@ export class ApprovalBroker {
     record.status = 'APPROVED';
   }
 
+  cancelForTask(id) {
+    if (!id) return;
+    const record = this.records.get(id);
+    if (!record || !['REQUESTED', 'APPROVED', 'CANCELLED'].includes(record.status)) {
+      throw new V2Error('approval_mismatch', 'approval is unavailable', 409);
+    }
+    record.status = 'CANCELLED';
+  }
+
   cancel(identity, id) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const record = this.records.get(id);

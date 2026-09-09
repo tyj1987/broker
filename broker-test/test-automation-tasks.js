@@ -356,6 +356,52 @@ await assert.rejects(approvalFailureBroker.create(human, {
 assert.equal(approvalFailureBroker.tasks.size, 0);
 assert.equal(approvalFailureBroker.idempotency.size, 0);
 
+const orphanSafeApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const orphanSafeBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: orphanSafeApprovals, executors,
+  now: () => now,
+  onEvent(event) {
+    if (event.state === 'PENDING_APPROVAL') throw new Error('pending audit unavailable');
+  },
+});
+await assert.rejects(orphanSafeBroker.create(human, {
+  ...criticalInput, idempotency_key: 'orphan-safe-00001',
+}), /pending audit unavailable/);
+assert.equal(orphanSafeBroker.tasks.size, 0);
+assert.equal(orphanSafeBroker.idempotency.size, 0);
+const orphanedApproval = orphanSafeApprovals.list(human)[0];
+assert.equal(orphanedApproval.status, 'CANCELLED', 'failed task creation revokes its otherwise orphaned approval');
+assert.throws(
+  () => orphanSafeApprovals.claimFor(human, { ...criticalInput, approval_request_id: orphanedApproval.id }),
+  expectCode('invalid_state'),
+);
+
+let failCancellationAudit = true;
+const retryCancelApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const retryCancelBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: retryCancelApprovals, executors,
+  now: () => now,
+  onEvent(event) {
+    if (event.state === 'CANCELLED' && failCancellationAudit) {
+      failCancellationAudit = false;
+      throw new Error('cancellation audit unavailable');
+    }
+  },
+});
+const retryCancelTask = await retryCancelBroker.create(human, {
+  ...criticalInput, idempotency_key: 'retry-cancel-0001',
+});
+assert.throws(() => retryCancelBroker.cancel(human, retryCancelTask.id), /cancellation audit unavailable/);
+assert.equal(retryCancelBroker.get(human, retryCancelTask.id).state, 'PENDING_APPROVAL');
+assert.equal(retryCancelApprovals.list(human)[0].status, 'CANCELLED');
+assert.equal(retryCancelBroker.cancel(human, retryCancelTask.id).state, 'CANCELLED');
+
 const failureObserved = [];
 const failureBroker = (executor) => new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals,

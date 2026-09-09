@@ -202,7 +202,12 @@ export class AutomationTaskBroker {
           environment: task.environment, typed_parameters: structuredClone(parameters),
         });
         task.approvalId = approval.id;
-        this.transition(task, 'PENDING_APPROVAL', 'approval_requested');
+        try {
+          this.transition(task, 'PENDING_APPROVAL', 'approval_requested');
+        } catch (error) {
+          this.approvalBroker.cancelForTask(approval.id);
+          throw error;
+        }
       } else {
         this.transition(task, 'READY', 'policy_allowed');
       }
@@ -358,7 +363,7 @@ export class AutomationTaskBroker {
     const task = this.getOwned(identity, id);
     this.expire(task);
     if (task.running || !['REQUESTED', 'PENDING_APPROVAL', 'READY'].includes(task.state)) throw new V2Error('invalid_state', 'task cannot be cancelled', 409);
-    if (task.approvalId) this.approvalBroker.cancel(identity, task.approvalId);
+    if (task.approvalId) this.approvalBroker.cancelForTask(task.approvalId);
     this.transition(task, 'CANCELLED', 'caller_cancelled');
     return publicTask(task);
   }

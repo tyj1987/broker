@@ -267,6 +267,17 @@ export class OperationBroker {
   }
 
   async completeEnrollment(owner, input) {
+    return this.completeEnrollmentInternal(owner, input, null);
+  }
+
+  async completeEnrollmentAndAudit(owner, input, commitAudit) {
+    if (typeof commitAudit !== 'function') {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    return this.completeEnrollmentInternal(owner, input, commitAudit);
+  }
+
+  async completeEnrollmentInternal(owner, input, commitAudit) {
     const enrollment = this.enrollments.get(input?.enrollment_id);
     if (!enrollment || (owner && enrollment.owner !== owner) || enrollment.expiresAt <= this.now()) {
       throw new V2Error('invalid_enrollment', 'enrollment is invalid or expired', 401);
@@ -291,7 +302,6 @@ export class OperationBroker {
       valid = false;
     }
     if (!valid) throw new V2Error('invalid_signature', 'device proof of possession failed', 401);
-    this.enrollments.delete(enrollment.id);
     const device = {
       id: randomUUID(),
       owner: enrollment.owner,
@@ -304,6 +314,8 @@ export class OperationBroker {
       createdAt: new Date(this.now()).toISOString(),
       lastSeenAt: null,
     };
+    if (commitAudit) commitAudit({ device_id: device.id, platform: device.platform });
+    this.enrollments.delete(enrollment.id);
     this.devices.set(device.id, device);
     try {
       await this.persistDevices(this.deviceRecords());

@@ -430,7 +430,12 @@ export function createV2Routes(deps) {
         // device separately proves possession of its generated private key.
         const body = await readBody(req);
         mandatoryAudit({ action: 'v2_device_enroll_finish_intent', status: 'authorized', enrollment_id: body?.enrollment_id });
-        const result = await operationBroker.completeEnrollment(null, body);
+        const result = await operationBroker.completeEnrollmentAndAudit(null, body, (verified) => {
+          mandatoryAudit({
+            action: 'v2_device_enroll_verified', status: 'ok',
+            device_id: verified.device_id, platform: verified.platform,
+          });
+        });
         audit({ action: 'v2_device_enroll_finish', status: 'ok', device_id: result.id, platform: result.platform });
         send(res, 201, result);
         return true;

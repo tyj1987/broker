@@ -331,6 +331,35 @@ await assert.rejects(
 );
 
 let persistedRecords = null;
+const auditedEnrollmentBroker = new OperationBroker();
+const auditedEnrollment = auditedEnrollmentBroker.beginEnrollment('owner-audited', {
+  label: 'audited-device', platform: 'android', capabilities: ['otp.receive'],
+});
+const auditedEnrollmentMessage = Buffer.from(
+  `secret-broker-device-enrollment-v1\n${auditedEnrollment.enrollment_id}\n${auditedEnrollment.challenge}`,
+);
+const auditedEnrollmentInput = {
+  enrollment_id: auditedEnrollment.enrollment_id,
+  public_key_pem: publicKeyPem,
+  signature: sign(null, auditedEnrollmentMessage, privateKey).toString('base64url'),
+};
+await assert.rejects(
+  auditedEnrollmentBroker.completeEnrollmentAndAudit(null, auditedEnrollmentInput, () => {
+    throw new Error('audit unavailable');
+  }),
+  /audit unavailable/,
+);
+assert.equal(auditedEnrollmentBroker.listDevices({ name: 'owner-audited' }).length, 0);
+let deviceEnrollmentAudited = false;
+const auditedDevice = await auditedEnrollmentBroker.completeEnrollmentAndAudit(
+  null,
+  auditedEnrollmentInput,
+  () => { deviceEnrollmentAudited = true; },
+);
+assert.equal(deviceEnrollmentAudited, true);
+assert.ok(auditedDevice.id);
+assert.equal(auditedEnrollmentBroker.listDevices({ name: 'owner-audited' }).length, 1);
+
 const durable = new OperationBroker({ persistDevices: async (records) => { persistedRecords = structuredClone(records); } });
 const durableEnrollment = durable.beginEnrollment('owner-2', {
   label: 'android-backup', platform: 'android', capabilities: ['otp.receive'],

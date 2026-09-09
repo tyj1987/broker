@@ -23,6 +23,15 @@ const handler = createV2Routes({
     rollbackEnrollment(owner, enrollmentId) {
       calls.push(['enroll-rollback', owner, enrollmentId]);
     },
+    async completeEnrollment(_owner, input) {
+      calls.push(['enroll-finish', input]);
+      return { id: 'device-id', platform: 'android' };
+    },
+    async completeEnrollmentAndAudit(owner, input, commitAudit) {
+      const result = await this.completeEnrollment(owner, input);
+      commitAudit({ device_id: result.id, platform: result.platform });
+      return result;
+    },
     async setDeviceState(requester, deviceId, state, isAdmin) {
       calls.push(['device-state', requester, deviceId, state, isAdmin]);
       return { id: deviceId, state };
@@ -495,6 +504,16 @@ assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, enrollme
 assert.ok(calls.some((item) => item[0] === 'enroll-rollback'
   && item[1] === 'admin-a' && item[2] === '00000000-0000-4000-8000-000000000099'));
 assert.ok(calls.some((item) => item[0] === 'approval-released' && item[1] === 'device-enroll-approval'));
+
+body = { enrollment_id: 'registration-flow', public_key_pem: 'public-key', signature: 'signature' };
+assert.equal((await route('/api/v2/devices/enroll/finish')).status, 201);
+assert.ok(auditEvents.some((event) => event.action === 'v2_device_enroll_verified'
+  && event.device_id === 'device-id'));
+const deviceFinishesBeforeAuditFailure = calls.filter((item) => item[0] === 'enroll-finish').length;
+auditFailureAction = 'v2_device_enroll_verified';
+assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'enroll-finish').length, deviceFinishesBeforeAuditFailure + 1);
 
 identity = { clientName: 'operator-a', via: 'session', authFactors: ['webauthn'], client: { role: 'operator', security_profile: 'strict' } };
 assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'step_up_required', 'non-admin cannot enroll browser workers');

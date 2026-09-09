@@ -106,6 +106,11 @@ credential is added to the client configuration. Audit failure consumes the
 one-time ceremony but leaves the credential set unchanged, requiring a new
 registration challenge.
 
+Device proof of possession is likewise mandatorily audited before the verified
+device is added to the registry. If the audit commit fails, the pairing
+challenge remains valid for its original bounded lifetime and no device record
+is created.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

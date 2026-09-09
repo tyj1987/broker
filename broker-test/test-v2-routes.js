@@ -77,6 +77,10 @@ const handler = createV2Routes({
     },
   },
   taskBroker: {
+    listTools(subject) {
+      calls.push(['tool-list', subject.name]);
+      return [{ name: 'github.repository.read', version: '1.0.0' }];
+    },
     async create(subject, input) {
       calls.push(['task-create', subject.name, input]);
       return { id: '00000000-0000-4000-8000-000000000010', state: 'READY', risk_level: 'LOW' };

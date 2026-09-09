@@ -23,7 +23,6 @@ const MAX_EVENTS = 64;
 function hash(value) {
   return createHash('sha256').update(canonicalJson(value)).digest('base64url');
 }
-
 async function executeWithDeadline(executor, parameters, context, timeoutMs, timeoutCode) {
   const controller = new AbortController();
   let timer;
@@ -114,6 +113,12 @@ export class AutomationTaskBroker {
     this.executionRateLimits = new Map();
   }
 
+  listTools(identity) {
+    if (!this.toolRegistry || typeof this.toolRegistry.listFor !== 'function') return [];
+    return this.toolRegistry.listFor(identity)
+      .filter((tool) => this.executors.has(`${tool.name}@${tool.version}`));
+  }
+
   async create(identity, input) {
     if (!identity?.name) throw new V2Error('unauthorized', 'authenticated identity required', 401);
     const allowedKeys = new Set(['tool', 'tool_version', 'account_ref', 'environment', 'parameters', 'idempotency_key']);
@@ -124,6 +129,9 @@ export class AutomationTaskBroker {
     if (!IDEMPOTENCY_RE.test(input.idempotency_key || '')) throw new V2Error('invalid_request', 'idempotency_key must contain 16 to 128 safe characters');
     const tool = this.toolRegistry?.findByName(input.tool, input.tool_version);
     if (!tool) throw new V2Error('tool_unregistered', 'tool and version are not registered', 404);
+    if (!this.executors.has(`${tool.name}@${tool.version}`)) {
+      throw new V2Error('executor_unavailable', 'tool executor is not available', 503);
+    }
     const parameters = structuredClone(input.parameters);
     assertSchema(parameters, tool.input_schema, 'parameters');
     const requestFingerprint = hash({ tool: tool.name, version: tool.version, account: input.account_ref, environment: input.environment, parameters });

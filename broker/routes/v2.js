@@ -8,7 +8,6 @@ function identityView(ctx) {
     context: ctx,
   };
 }
-
 function signedRequest(req, routePath, body = null) {
   return {
     timestamp: req.headers['x-broker-device-timestamp'],
@@ -51,7 +50,7 @@ function deviceStateApproval(deviceId, body) {
 
 export function createV2Routes(deps) {
   const {
-    operationBroker, approvalBroker, taskBroker, webAuthnService, toolRegistry, getIdentity, readBody, send, audit,
+    operationBroker, approvalBroker, taskBroker, webAuthnService, getIdentity, readBody, send, audit,
     makeSession, sessionCookieHeader, authorizeApprovalRequest, consumeRateLimit,
     requireBrowserMutation,
   } = deps;
@@ -131,10 +130,10 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        if (!toolRegistry || typeof toolRegistry.listFor !== 'function') {
-          throw new V2Error('tool_registry_unavailable', 'tool registry is unavailable', 503);
+        if (!taskBroker || typeof taskBroker.listTools !== 'function') {
+          throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
         }
-        const tools = toolRegistry.listFor(identity);
+        const tools = taskBroker.listTools(identity);
         audit({ action: 'v2_tool_list', status: 'ok', cn: ctx.cn, count: tools.length });
         send(res, 200, { registry_version: 1, tools });
         return true;

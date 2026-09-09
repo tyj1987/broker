@@ -72,6 +72,12 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
 
 ## Local evidence obtained on the upgrade branch
 
+- Tool discovery now exposes only capabilities with an executor registered in
+  the running Broker. Task creation rejects a catalog-only tool before state or
+  an idempotency reservation is allocated, and execution checks again so a
+  removed executor fails terminally without an upstream call. Provider
+  manifests and unit-test adapters can no longer be mistaken for live runtime
+  availability.
 - The management console now exposes a bound approval workbench. Decisions
   require an exact same-origin request from a WebAuthn-authenticated browser
   session; missing or cross-site Origin, API-key identity, unknown decision

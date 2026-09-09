@@ -68,6 +68,13 @@ The Go, Python and TypeScript SDKs expose the same five operations. The initial
 runnable adapter, `broker.tools.inspect@1.0.0`, returns only public tool-registry
 metadata and provides a credential-free end-to-end acceptance path.
 
+Tool discovery returns only adapters that have an executor registered in the
+running Broker process. Task creation also rejects an unavailable executor
+before allocating state or reserving an idempotency key. The execution path
+checks again immediately before use, so an executor removed after task creation
+fails terminally without issuing an upstream request. A catalog or provider
+manifest therefore cannot be mistaken for a runnable capability.
+
 The strict `ssh.host.inspect@1.0.0` test path also crosses this full lifecycle:
 policy authorization, schema validation, a target-bound single-use execution
 grant, the credential-isolated runner, output-schema validation and terminal

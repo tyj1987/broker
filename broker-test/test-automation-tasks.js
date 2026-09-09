@@ -53,6 +53,11 @@ const lowInput = {
   parameters: { resource_ref: 'tool-registry', tool_name: 'github.repository.read', tool_version: '1.0.0' },
 };
 
+assert.deepEqual(
+  broker.listTools(human).map((tool) => tool.name),
+  ['broker.tools.inspect', 'broker.device.state'],
+);
+
 const low = await broker.create(human, lowInput);
 assert.equal(low.state, 'READY');
 assert.equal(low.risk_level, 'LOW');
@@ -243,8 +248,22 @@ const failureBroker = (executor) => new AutomationTaskBroker({
   now: () => now, onEvent: (event) => failureObserved.push(event),
 });
 const unavailableBroker = failureBroker();
-const unavailable = await unavailableBroker.create(human, { ...lowInput, idempotency_key: 'task-case-missing1' });
-assert.equal((await unavailableBroker.run(human, unavailable.id)).error.code, 'executor_unavailable');
+await assert.rejects(
+  unavailableBroker.create(human, { ...lowInput, idempotency_key: 'task-case-missing1' }),
+  expectCode('executor_unavailable'),
+);
+assert.equal(unavailableBroker.tasks.size, 0);
+assert.equal(unavailableBroker.idempotency.size, 0);
+
+const disappearingExecutorBroker = failureBroker(async () => ({}));
+const disappearingExecutorTask = await disappearingExecutorBroker.create(human, {
+  ...lowInput, idempotency_key: 'task-case-removed01',
+});
+disappearingExecutorBroker.executors.clear();
+assert.equal(
+  (await disappearingExecutorBroker.run(human, disappearingExecutorTask.id)).error.code,
+  'executor_unavailable',
+);
 
 const throwingBroker = failureBroker(async () => { throw new Error('canary must never escape'); });
 const throwing = await throwingBroker.create(human, { ...lowInput, idempotency_key: 'task-case-throws01' });
@@ -403,6 +422,7 @@ const schemaTool = {
 const schemaBroker = new AutomationTaskBroker({
   toolRegistry: { findByName: (name, version) => name === schemaTool.name && version === schemaTool.version ? schemaTool : null },
   authorize, approvalBroker: approvals,
+  executors: new Map([[`${schemaTool.name}@${schemaTool.version}`, async () => ({})]]),
 });
 const validSchemaParameters = {
   resource_ref: 'schema', items: ['a'], count: 1, ratio: 0.5, enabled: true, mode: 'safe', label: 'ok',

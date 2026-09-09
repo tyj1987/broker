@@ -19,7 +19,6 @@ function jsonOKList(schemaName) {
     content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: ref(schemaName) } } } } },
   };
 }
-
 const p = {
   '/health': {
     get: { tags: ['health'], summary: 'Public liveness (fingerprint-free)', security: [], responses: { 200: desc('{ status: ok }') } },
@@ -204,15 +203,15 @@ const p = {
   '/api/v2/tools': {
     get: {
       tags: ['tools-v2'],
-      summary: 'List registered tools available to the authenticated identity',
-      responses: { 200: jsonOK('ToolList'), 401: respRef('Unauthorized'), 503: desc('Tool registry unavailable') },
+      summary: 'List executable tools available to the authenticated identity',
+      responses: { 200: jsonOK('ToolList'), 401: respRef('Unauthorized'), 503: desc('Task broker unavailable') },
     },
   },
   '/api/v2/tasks': {
     post: {
       tags: ['tasks-v2'], summary: 'Create an idempotent, policy-routed automation task',
       requestBody: { required: true, content: { 'application/json': { schema: ref('TaskCreate') } } },
-      responses: { 202: jsonOK('Task'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 409: desc('Idempotency conflict') },
+      responses: { 202: jsonOK('Task'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 409: desc('Idempotency conflict'), 503: desc('Tool executor unavailable') },
     },
   },
   '/api/v2/tasks/{id}': {

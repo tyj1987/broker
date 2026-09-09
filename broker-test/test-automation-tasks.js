@@ -260,6 +260,49 @@ const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });
 assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code, 'schema_mismatch');
 
+let rateNow = 2_000_000_000_000;
+let rateExecutorCalls = 0;
+const rateTool = {
+  ...registry.findByName('broker.tools.inspect', '1.0.0'),
+  input_schema: {
+    ...registry.findByName('broker.tools.inspect', '1.0.0').input_schema,
+    properties: {
+      ...registry.findByName('broker.tools.inspect', '1.0.0').input_schema.properties,
+      resource_ref: { type: 'string' },
+    },
+  },
+  rate_limit: { requests: 1, window_seconds: 60 },
+};
+const rateBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === rateTool.name && version === rateTool.version ? structuredClone(rateTool) : null;
+    },
+  },
+  authorize, approvalBroker: approvals, now: () => rateNow,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => {
+    rateExecutorCalls += 1;
+    return {
+      name: 'github.repository.read', version: '1.0.0', provider: 'github',
+      operation_id: 'repo.read', risk_level: 'LOW', agent_execution: true,
+    };
+  }]]),
+});
+const rateOne = await rateBroker.create(human, { ...lowInput, idempotency_key: 'rate-task-000000001' });
+assert.equal((await rateBroker.run(human, rateOne.id)).state, 'SUCCEEDED');
+const rateTwo = await rateBroker.create(human, {
+  ...lowInput, idempotency_key: 'rate-task-000000002',
+  parameters: { ...lowInput.parameters, resource_ref: 'different-target' },
+});
+const limitedResult = await rateBroker.run(human, rateTwo.id);
+assert.equal(limitedResult.state, 'FAILED');
+assert.deepEqual(limitedResult.error, { code: 'tool_rate_limited' });
+assert.equal(rateExecutorCalls, 1, 'changing target cannot bypass the per-tool execution limit');
+rateNow += 60_000;
+const rateThree = await rateBroker.create(human, { ...lowInput, idempotency_key: 'rate-task-000000003' });
+assert.equal((await rateBroker.run(human, rateThree.id)).state, 'SUCCEEDED');
+assert.equal(rateExecutorCalls, 2, 'a new fixed window restores the registered execution quota');
+
 let timeoutSignalAborted = false;
 const timeoutTool = { ...registry.findByName('broker.tools.inspect', '1.0.0'), timeout_ms: 100 };
 const timeoutBroker = new AutomationTaskBroker({

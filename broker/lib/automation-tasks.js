@@ -111,6 +111,7 @@ export class AutomationTaskBroker {
     this.maxTasks = maxTasks;
     this.tasks = new Map();
     this.idempotency = new Map();
+    this.executionRateLimits = new Map();
   }
 
   async create(identity, input) {
@@ -236,6 +237,11 @@ export class AutomationTaskBroker {
         this.transition(task, 'EXPIRED', 'task_expired');
         return publicTask(task);
       }
+      if (!this.consumeExecutionRateLimit(task)) {
+        if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
+        this.fail(task, 'tool_rate_limited');
+        return publicTask(task);
+      }
       const executionBinding = {
         actor: identity.name,
         tool: `${task.tool.name}@${task.tool.version}`,
@@ -309,6 +315,20 @@ export class AutomationTaskBroker {
     this.transition(task, 'FAILED', code);
   }
 
+  consumeExecutionRateLimit(task) {
+    const now = this.now();
+    const windowMs = task.tool.rate_limit.window_seconds * 1_000;
+    const key = `${task.owner}\0${task.tool.name}@${task.tool.version}\0${task.environment}`;
+    let bucket = this.executionRateLimits.get(key);
+    if (!bucket || now >= bucket.expiresAt) {
+      bucket = { startedAt: now, expiresAt: now + windowMs, count: 0 };
+      this.executionRateLimits.set(key, bucket);
+    }
+    if (bucket.count >= task.tool.rate_limit.requests) return false;
+    bucket.count += 1;
+    return true;
+  }
+
   transition(task, state, reason) {
     if (!STATES.has(state)) throw new V2Error('invalid_state', 'unknown task state', 500);
     if (!TRANSITIONS.get(task.state)?.has(state)) throw new V2Error('invalid_state', `task cannot transition from ${task.state || 'NEW'} to ${state}`, 409);
@@ -332,5 +352,7 @@ export class AutomationTaskBroker {
   prune() {
     const cutoff = this.now() - 60 * 60_000;
     for (const [id, task] of this.tasks) if (TERMINAL.has(task.state) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);
+    const now = this.now();
+    for (const [key, bucket] of this.executionRateLimits) if (now >= bucket.expiresAt) this.executionRateLimits.delete(key);
   }
 }

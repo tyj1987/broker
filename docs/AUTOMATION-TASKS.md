@@ -57,6 +57,13 @@ decision, approval and execution identifiers, terminal outcome, latency and a
 safe error code. The production audit envelope adds the current validated
 request ID and seals the redacted event into the hash chain.
 
+The registered Tool rate limit is enforced again at execution time using an
+in-process fixed window keyed by actor, exact tool version and environment.
+Changing task IDs, idempotency keys, accounts or targets cannot create a fresh
+execution bucket. Rate-limited tasks fail terminally before an execution token
+is issued or an adapter is invoked. Durable, distributed rate limiting remains
+part of DQ-001 and is required before multi-node production scheduling.
+
 The Go, Python and TypeScript SDKs expose the same five operations. The initial
 runnable adapter, `broker.tools.inspect@1.0.0`, returns only public tool-registry
 metadata and provides a credential-free end-to-end acceptance path.

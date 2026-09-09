@@ -31,6 +31,8 @@ for (const host of ['localhost', 'metadata.google.internal', '127.0.0.1', '169.2
 ok('accepts named public destination', assertPublicDestination('api.github.com') === 'api.github.com');
 ok('accepts public resolved address', assertPublicResolvedAddress('8.8.8.8') === '8.8.8.8');
 ok('rejects DNS rebinding address', denied(() => assertPublicResolvedAddress('192.168.1.2')));
+ok('rejects IPv4-mapped loopback', denied(() => assertPublicResolvedAddress('::ffff:127.0.0.1')));
+ok('rejects NAT64-mapped loopback', denied(() => assertPublicResolvedAddress('64:ff9b::7f00:1')));
 ok('accepts public IPv6 resolution', assertPublicResolvedAddress('2606:4700:4700::1111') === '2606:4700:4700::1111');
 ok('rejects invalid resolved address', denied(() => assertPublicResolvedAddress('not-an-ip')));
 for (const upstream of [

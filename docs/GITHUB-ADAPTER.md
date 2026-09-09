@@ -27,10 +27,13 @@ match that request. Account bindings must also match the requested environment
 and repository.
 
 The signer receives only the JWT signing input and binding metadata. It must
-return signature bytes; the provider has no private-key loading API. Production
-KMS/HSM signer, account configuration and pinned network transport are not yet
-included. Adding a private key to source, ordinary configuration, logs or an
-Agent response is prohibited.
+return signature bytes; the provider has no private-key loading API. The shared
+HTTPS transport resolves and validates every destination address, pins one
+validated address into the socket lookup, preserves TLS hostname verification,
+denies redirects and bounds request/response sizes and time. Production KMS/HSM
+signer, account configuration and runtime wiring are not yet included. Adding a
+private key to source, ordinary configuration, logs or an Agent response is
+prohibited.
 
 ## Verification status
 
@@ -39,9 +42,9 @@ tampering, App/account/environment/repository binding, JWT claims and algorithm,
 invalid signer results, exact token permissions, missing/wrong/expired/overlong
 leases, redirect denial, upstream status mapping, invalid and oversized
 responses, bounded projection and error redaction. The provider manifest
-remains `contract_required` until a production-grade signer and pinned transport
-are configured and an isolated GitHub App account passes a real request and
-revocation test.
+remains `contract_required` until a production-grade signer and account binding
+are configured, the transport is wired into the runtime, and an isolated GitHub
+App account passes a real request and revocation test.
 
 Official references checked on 2026-09-09:
 

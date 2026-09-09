@@ -237,6 +237,57 @@ const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });
 assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code, 'schema_mismatch');
 
+let timeoutSignalAborted = false;
+const timeoutTool = { ...registry.findByName('broker.tools.inspect', '1.0.0'), timeout_ms: 100 };
+const timeoutBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === timeoutTool.name && version === timeoutTool.version ? structuredClone(timeoutTool) : null;
+    },
+  },
+  authorize, approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async (_parameters, context) => new Promise((resolve) => {
+    context.signal.addEventListener('abort', () => {
+      timeoutSignalAborted = true;
+      resolve({
+        name: 'too-late', version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect',
+        risk_level: 'LOW', agent_execution: true,
+      });
+    }, { once: true });
+  })]]),
+});
+const timedOut = await timeoutBroker.create(human, { ...lowInput, idempotency_key: 'timeout-task-0000001' });
+const timedOutResult = await timeoutBroker.run(human, timedOut.id);
+assert.equal(timedOutResult.state, 'FAILED');
+assert.deepEqual(timedOutResult.error, { code: 'executor_timeout' });
+assert.equal(timeoutSignalAborted, true, 'deadline aborts the adapter signal');
+assert.equal(timeoutBroker.get(human, timedOut.id).result, undefined, 'late adapter output cannot commit');
+
+let expirySignalAborted = false;
+const expiryTool = { ...timeoutTool, timeout_ms: 2_000 };
+const expiryBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === expiryTool.name && version === expiryTool.version ? structuredClone(expiryTool) : null;
+    },
+  },
+  authorize: async () => ({ allow: true, ttlMs: 1_000 }), approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async (_parameters, context) => new Promise((resolve) => {
+    context.signal.addEventListener('abort', () => {
+      expirySignalAborted = true;
+      resolve({
+        name: 'too-late', version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect',
+        risk_level: 'LOW', agent_execution: true,
+      });
+    }, { once: true });
+  })]]),
+});
+const expiresDuringRun = await expiryBroker.create(human, { ...lowInput, idempotency_key: 'expiry-task-00000001' });
+const expiredDuringRun = await expiryBroker.run(human, expiresDuringRun.id);
+assert.equal(expiredDuringRun.state, 'EXPIRED');
+assert.equal(expiredDuringRun.error, undefined);
+assert.equal(expirySignalAborted, true, 'absolute task expiry aborts the adapter signal');
+
 const tokenFailureBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals, executors,
   executionTokens: { issue() { throw new V2Error('execution_token_failed', 'unavailable', 503); } },

@@ -25,3 +25,16 @@ continue.
   duplicate delivery, cancellation race and replay tests.
 - Current safe default: explicit caller-triggered execution in one Broker
   process; terminal failure is never retried automatically.
+
+## DQ-003: independent audit anchor
+
+- Status: open
+- Needed before: production acceptance
+- Decision: select the independently administered immutable store and KMS or
+  HSM identity used to sign retained audit-chain heads. The signing identity
+  must not be available to the Broker application process.
+- Required evidence: signed-head verification, suffix and full-chain deletion
+  detection, signer revocation, clock rollback, storage outage, retention-lock
+  enforcement and disaster-recovery tests.
+- Current safe default: restart-safe local chain verification; no claim of
+  independent non-repudiation.

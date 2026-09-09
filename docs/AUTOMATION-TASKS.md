@@ -28,6 +28,13 @@ the same request returns the original task; reusing it with different parameters
 is rejected. Execution and failure are terminal. The broker does not retry an
 operation whose result is uncertain.
 
+Execution is bounded by the smaller of the registered tool timeout and the
+task's absolute remaining lifetime. At the deadline the task becomes
+`FAILED/executor_timeout` or `EXPIRED`, the adapter receives an aborted
+`AbortSignal`, and late output cannot commit. In-process cancellation is
+cooperative; production adapters still require an isolated worker that can be
+terminated at the process boundary.
+
 After the final authorization check, the Broker issues and immediately consumes
 a short-lived capability bound to the actor, exact tool version, target,
 environment and request fingerprint. The adapter receives verified claims but

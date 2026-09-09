@@ -24,6 +24,26 @@ function hash(value) {
   return createHash('sha256').update(canonicalJson(value)).digest('base64url');
 }
 
+async function executeWithDeadline(executor, parameters, context, timeoutMs, timeoutCode) {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new V2Error(timeoutCode, timeoutCode === 'task_expired' ? 'task expired during execution' : 'executor timed out', 504);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => executor(parameters, { ...context, signal: controller.signal })),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function assertSchema(value, schema, path = 'value') {
   if (schema.const !== undefined && value !== schema.const) throw new V2Error('schema_mismatch', `${path} does not match its fixed value`);
   if (schema.enum && !schema.enum.includes(value)) throw new V2Error('schema_mismatch', `${path} is not an allowed value`);
@@ -237,10 +257,12 @@ export class AutomationTaskBroker {
       this.transition(task, 'EXECUTING', 'executor_started');
       const startedAt = this.now();
       try {
-        const result = await executor(structuredClone(task.parameters), {
+        const timeoutMs = Math.min(task.tool.timeout_ms, remainingMs);
+        const timeoutCode = remainingMs <= task.tool.timeout_ms ? 'task_expired' : 'executor_timeout';
+        const result = await executeWithDeadline(executor, structuredClone(task.parameters), {
           taskId: task.id, actor: identity.name, environment: task.environment,
           execution: executionGrant,
-        });
+        }, timeoutMs, timeoutCode);
         assertSchema(result, task.tool.output_schema, 'result');
         task.result = structuredClone(result);
         task.latencyMs = Math.max(0, this.now() - startedAt);
@@ -249,7 +271,11 @@ export class AutomationTaskBroker {
       } catch (error) {
         task.latencyMs = Math.max(0, this.now() - startedAt);
         if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
-        this.fail(task, error instanceof V2Error ? error.code : 'executor_failed');
+        if (error instanceof V2Error && error.code === 'task_expired') {
+          this.transition(task, 'EXPIRED', 'task_expired');
+        } else {
+          this.fail(task, error instanceof V2Error ? error.code : 'executor_failed');
+        }
       }
       return publicTask(task);
     } finally {

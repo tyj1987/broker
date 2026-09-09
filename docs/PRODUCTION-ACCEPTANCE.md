@@ -81,9 +81,9 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   regression and Windows Tauri build/Clippy/test evidence has been obtained;
   Android CI and end-to-end physical-key ceremony remain open.
 - Node broker full regression suite: passed. The security-core coverage gate
-  reports 96.34% lines, 89.04% branches and 96.87% functions. Approval creation is pre-authorized by
-  the same Node and Go policy path, and v2 state changes require a durable audit
-  intent before mutation.
+  reports 96.39% lines, 89.15% branches and 96.89% functions. Approval creation
+  is pre-authorized by the same Node and Go policy path, and v2 state changes
+  require a durable audit intent before mutation.
 - Production audit writes now enter restart-safe `audit-chain-*` files. Startup
   strictly verifies the retained chain and refuses malformed or modified
   records; tests cover restart continuation, malformed input and tampering.

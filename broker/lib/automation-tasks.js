@@ -132,9 +132,10 @@ export class AutomationTaskBroker {
   }
 
   apiKeyAllowsTask(identity, task) {
-    if (identity?.context?.via !== 'api_key') return true;
+    const context = identity?.context;
+    const apiKey = context?.apiKey;
+    if (!apiKey) return context?.via !== 'api_key';
     if (!this.toolRegistry || typeof this.toolRegistry.listFor !== 'function') return false;
-    const apiKey = identity.context.apiKey;
     const toolVisible = this.toolRegistry.listFor(identity)
       .some((candidate) => candidate.name === task.tool.name && candidate.version === task.tool.version);
     return toolVisible

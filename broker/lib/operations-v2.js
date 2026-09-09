@@ -95,8 +95,8 @@ function canAdministerOtherOwners(identity) {
 
 function apiKeyAllowsOperation(identity, operation) {
   const context = identity?.context;
-  if (context?.via !== 'api_key') return true;
-  const key = context.apiKey;
+  const key = context?.apiKey;
+  if (!key) return context?.via !== 'api_key';
   const exactScope = `operations:${operation.provider}:${operation.operationId}`;
   return (key?.scopes?.includes('operations:execute') || key?.scopes?.includes(exactScope))
     && key.allowed_services?.includes(operation.provider)

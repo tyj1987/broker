@@ -334,6 +334,17 @@ const operationReader = (overrides = {}) => ({
   },
 });
 assert.equal(workerBroker.getOperation(operationReader(), workerOperation.id).id, workerOperation.id);
+assert.throws(
+  () => workerBroker.getOperation({
+    name: 'owner-4',
+    context: {
+      via: 'session', authFactors: ['webauthn'], client: { role: 'admin' },
+      apiKey: operationReader({ allowed_resources: ['other'] }).context.apiKey,
+    },
+  }, workerOperation.id),
+  (error) => error instanceof V2Error && error.code === 'forbidden',
+  'a bearer key narrows a simultaneous interactive identity',
+);
 for (const revokedGrant of [
   { scopes: [] },
   { allowed_services: [] },

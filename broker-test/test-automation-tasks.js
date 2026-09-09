@@ -93,6 +93,27 @@ const sameOwnerApiKey = (overrides = {}) => ({
   },
 });
 assert.equal(broker.get(sameOwnerApiKey(), low.id).id, low.id);
+const narrowedSession = {
+  ...human,
+  context: {
+    ...human.context,
+    apiKey: sameOwnerApiKey({ allowed_resources: ['another-resource'] }).context.apiKey,
+  },
+};
+assert.throws(
+  () => broker.get(narrowedSession, low.id),
+  expectCode('forbidden'),
+  'a bearer key narrows a simultaneous session identity',
+);
+await assert.rejects(
+  broker.create(narrowedSession, { ...lowInput, idempotency_key: 'narrowed-session-task1' }),
+  expectCode('forbidden'),
+);
+assert.equal(
+  broker.listTools(narrowedSession).some((tool) => tool.name === 'broker.tools.inspect'),
+  true,
+  'tool discovery remains visible when the key has at least one allowed resource',
+);
 for (const revokedGrant of [
   { allowed_services: [] },
   { allowed_operations: [] },

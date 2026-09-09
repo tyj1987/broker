@@ -83,6 +83,7 @@ import { createV2Routes } from './routes/v2.js';
 import { OperationBroker, V2Error } from './lib/operations-v2.js';
 import { ApprovalBroker } from './lib/approvals-v2.js';
 import { AutomationTaskBroker } from './lib/automation-tasks.js';
+import { createControlPlaneStateRuntime } from './lib/control-plane-state-runtime.js';
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { loadToolRegistry } from './lib/tool-registry.js';
@@ -173,6 +174,24 @@ async function approvalRequestAuthorization(request) {
 const approvalBroker = new ApprovalBroker({
   getPolicy: (provider, operationId) => CONFIG?.operation_policies?.[provider]?.[operationId],
 });
+let controlPlaneStateRuntime = null;
+
+function checkpointControlPlaneState() {
+  if (controlPlaneStateRuntime?.enabled) return controlPlaneStateRuntime.checkpoint();
+  if (process.env.NODE_ENV === 'production') {
+    throw new V2Error('state_unavailable', 'durable control-plane state is unavailable', 503);
+  }
+  return false;
+}
+
+function closeControlPlaneState() {
+  if (!controlPlaneStateRuntime?.enabled) return;
+  try {
+    controlPlaneStateRuntime.checkpoint();
+  } finally {
+    controlPlaneStateRuntime.close();
+  }
+}
 
 const operationBroker = new OperationBroker({
   authorize: operationAuthorization,
@@ -195,6 +214,7 @@ const taskExecutors = new Map([
 ]);
 const taskBroker = new AutomationTaskBroker({
   toolRegistry, authorize: operationAuthorization, approvalBroker, executors: taskExecutors,
+  onCheckpoint: checkpointControlPlaneState,
   onEvent: (event) => audit(
     { action: 'v2_task_transition', status: event.state, ...event },
     { mandatory: true },
@@ -3336,7 +3356,7 @@ function start() {
   // Phase E: graceful shutdown (SIGTERM/SIGINT drain)
   const _shutdownCtl = installGracefulShutdown({
     server,
-    onShutdown: [() => stopCronLoop()],
+    onShutdown: [() => stopCronLoop(), closeControlPlaneState],
   });
   globalThis.__brokerShuttingDown = _shutdownCtl.shuttingDown;
 
@@ -3357,6 +3377,14 @@ function start() {
     // requires tls module work. Simpler: pre-resolve any *upstream hostname
     // we route to, then re-issue the call. See `resolveHostname()` below.
     await loadConfig();
+    controlPlaneStateRuntime = createControlPlaneStateRuntime({
+      approvals: approvalBroker,
+      executionTokens: taskBroker.executionTokens,
+      tasks: taskBroker,
+    });
+    if (controlPlaneStateRuntime.enabled) {
+      console.log(`[state] encrypted control-plane state ready (generation=${controlPlaneStateRuntime.generation}, restored=${controlPlaneStateRuntime.loaded})`);
+    }
     await loadSecrets();
     // Phase E: config validation
     try {

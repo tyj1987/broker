@@ -27,6 +27,18 @@ const broker = new OperationBroker({
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
+const unpublishedEnrollment = broker.beginEnrollment('owner-1', {
+  label: 'unpublished-device', platform: 'android', capabilities: ['otp.receive'],
+});
+assert.throws(
+  () => broker.rollbackEnrollment('other-owner', unpublishedEnrollment.enrollment_id),
+  (error) => error instanceof V2Error && error.code === 'forbidden',
+);
+broker.rollbackEnrollment('owner-1', unpublishedEnrollment.enrollment_id);
+assert.throws(
+  () => broker.rollbackEnrollment('owner-1', unpublishedEnrollment.enrollment_id),
+  (error) => error instanceof V2Error && error.code === 'not_found',
+);
 const enrollment = broker.beginEnrollment('owner-1', {
   label: 'xiaomi-12s-ultra',
   platform: 'android',

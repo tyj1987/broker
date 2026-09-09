@@ -58,6 +58,11 @@ fails, the exact prior status and approver set are restored before the caller ca
 observe success. A durable multi-node implementation remains gated on the state
 store transaction decision in DQ-001.
 
+Device enrollment challenges are likewise unpublished until their mandatory
+creation audit succeeds. An audit failure deletes the unused challenge and
+releases the dual-control approval claim, so a caller cannot receive an
+unaudited pairing capability.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

@@ -376,12 +376,18 @@ export function createV2Routes(deps) {
         let result;
         try {
           result = operationBroker.beginEnrollment(identity.name, body);
-          approvalBroker.markSucceeded(claim.id);
         } catch (error) {
           approvalBroker.markFailed(claim.id);
           throw error;
         }
-        audit({ action: 'v2_device_enroll_begin', status: 'ok', cn: ctx.cn, enrollment_id: result.enrollment_id });
+        try {
+          mandatoryAudit({ action: 'v2_device_enroll_begin', status: 'ok', cn: ctx.cn, enrollment_id: result.enrollment_id });
+        } catch (error) {
+          operationBroker.rollbackEnrollment(identity.name, result.enrollment_id);
+          approvalBroker.releaseClaim(claim.id);
+          throw error;
+        }
+        approvalBroker.markSucceeded(claim.id);
         send(res, 201, result);
         return true;
       }

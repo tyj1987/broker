@@ -20,6 +20,9 @@ const handler = createV2Routes({
       calls.push(['enroll-begin', owner, input]);
       return { enrollment_id: '00000000-0000-4000-8000-000000000099' };
     },
+    rollbackEnrollment(owner, enrollmentId) {
+      calls.push(['enroll-rollback', owner, enrollmentId]);
+    },
     async setDeviceState(requester, deviceId, state, isAdmin) {
       calls.push(['device-state', requester, deviceId, state, isAdmin]);
       return { id: deviceId, state };
@@ -341,6 +344,15 @@ assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, 0, 'one 
 body.approval_request_id = 'device-enroll-approval';
 assert.equal((await route('/api/v2/devices/enroll/begin')).status, 201);
 assert.ok(calls.some((item) => item[0] === 'enroll-begin'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_device_enroll_begin' && event.status === 'ok'));
+const enrollmentsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'enroll-begin').length;
+auditFailureAction = 'v2_device_enroll_begin';
+assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, enrollmentsBeforeResultAuditFailure + 1);
+assert.ok(calls.some((item) => item[0] === 'enroll-rollback'
+  && item[1] === 'admin-a' && item[2] === '00000000-0000-4000-8000-000000000099'));
+assert.ok(calls.some((item) => item[0] === 'approval-released' && item[1] === 'device-enroll-approval'));
 
 identity = { clientName: 'operator-a', via: 'session', authFactors: ['webauthn'], client: { role: 'operator', security_profile: 'strict' } };
 assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'step_up_required', 'non-admin cannot enroll browser workers');

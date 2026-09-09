@@ -259,6 +259,13 @@ export class OperationBroker {
     };
   }
 
+  rollbackEnrollment(owner, enrollmentId) {
+    const enrollment = this.enrollments.get(enrollmentId);
+    if (!enrollment) throw new V2Error('not_found', 'device enrollment not found', 404);
+    if (enrollment.owner !== owner) throw new V2Error('forbidden', 'device enrollment access denied', 403);
+    this.enrollments.delete(enrollmentId);
+  }
+
   async completeEnrollment(owner, input) {
     const enrollment = this.enrollments.get(input?.enrollment_id);
     if (!enrollment || (owner && enrollment.owner !== owner) || enrollment.expiresAt <= this.now()) {

@@ -116,6 +116,8 @@ continue.
   replay, process restart, revocation latency, issuer outage, mTLS rotation,
   local listener DNS-rebinding and browser-origin tests, and secret-free crash,
   error and audit logs.
-- Current safe default: loopback-only MCP with a pre-provisioned scoped API key
-  loaded from a file. Master keys, environment credentials, secret resolution,
-  arbitrary proxying and external MCP healthcheck execution are denied.
+- Current safe default: loopback-only MCP with separate file-loaded capabilities
+  for the local listener and a pre-provisioned scoped Broker API key. The two
+  values cannot be reused. Master keys, environment credentials, secret
+  resolution, arbitrary proxying and external MCP healthcheck execution are
+  denied.

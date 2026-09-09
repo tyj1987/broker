@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 
 import { createMcpTaskBridge, MCP_CONTROL_TOOLS } from '../broker/lib/mcp-task-bridge.js';
 import {
+  boot,
   createBrokerClient,
   createMcpHttpServer,
   normalizeBrokerOrigin,
@@ -13,6 +14,7 @@ import {
 
 const TASK_ID = '00000000-0000-4000-8000-000000000010';
 const API_KEY = `mb_test_${'A'.repeat(32)}`;
+const LISTENER_TOKEN = 'B'.repeat(43);
 const executable = {
   name: 'google_drive.document.read',
   version: '1.0.0',
@@ -30,15 +32,19 @@ const executable = {
 assert.deepEqual(parseArgs(['node', 'mcp', '--port', '3001']), { port: '3001' });
 assert.throws(() => parseArgs(['node', 'mcp', 'value']), /positional/);
 assert.throws(() => parseArgs(['node', 'mcp', '--port']), /Missing/);
+assert.throws(() => parseArgs(['node', 'mcp', '--port', '1', '--port', '2']), /duplicate/);
+assert.throws(() => parseArgs(['node', 'mcp', '--', 'value']), /duplicate/);
 assert.equal(normalizeBrokerOrigin('https://broker.example:8443'), 'https://broker.example:8443');
 for (const value of [
   'http://broker.example',
   'https://user@broker.example',
   'https://broker.example/path',
   'https://broker.example?token=x',
+  'https://broker.example#fragment',
 ]) {
   assert.throws(() => normalizeBrokerOrigin(value), /HTTPS origin/);
 }
+assert.throws(() => normalizeBrokerOrigin('not a url'), /invalid/);
 
 const calls = [];
 let createState = 'READY';
@@ -174,22 +180,120 @@ assert.throws(
   () => createBrokerClient({ origin: 'https://broker.example', apiKey: 'mb_live_master' }),
   /valid scoped/,
 );
+assert.throws(
+  () => createBrokerClient({ origin: 'https://broker.example', apiKey: API_KEY, requestImpl: 1 }),
+  /implementation/,
+);
+for (const timeoutMs of [99, 60_001, 100.5]) {
+  assert.throws(
+    () => createBrokerClient({ origin: 'https://broker.example', apiKey: API_KEY, timeoutMs }),
+    /timeout/,
+  );
+}
+assert.throws(
+  () => createBrokerClient({ origin: 'https://broker.example', apiKey: API_KEY, cert: 'cert' }),
+  /configured together/,
+);
+await assert.rejects(client('/api/v2/tools', { method: 'DELETE' }), /method/);
+await assert.rejects(client('/api/v2/tools', { body: {} }), /GET request body/);
+await assert.rejects(
+  client('/api/v2/tasks', { method: 'POST', body: { value: 'x'.repeat(1024 * 1024) } }),
+  /too large/,
+);
+
+function brokerClientForResponse({
+  statusCode = 200,
+  chunks = ['{}'],
+  responseError,
+  requestError,
+}) {
+  return createBrokerClient({
+    origin: 'https://broker.example',
+    apiKey: API_KEY,
+    requestImpl: (_options, callback) => {
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = () => {};
+      request.end = () => {
+        if (requestError) {
+          queueMicrotask(() => request.emit('error', new Error('sensitive upstream detail')));
+          return;
+        }
+        const response = new EventEmitter();
+        response.statusCode = statusCode;
+        response.destroy = () => {};
+        queueMicrotask(() => {
+          callback(response);
+          for (const chunk of chunks) response.emit('data', chunk);
+          if (responseError) response.emit('error', new Error('sensitive response detail'));
+          else response.emit('end');
+        });
+      };
+      return request;
+    },
+  });
+}
+await assert.rejects(
+  brokerClientForResponse({ statusCode: 403, chunks: ['{"error":{"code":"policy_denied"}}'] })(
+    '/api/v2/tools',
+  ),
+  /403, policy_denied/,
+);
+await assert.rejects(
+  brokerClientForResponse({ statusCode: 500, chunks: ['not-json'] })('/api/v2/tools'),
+  /500, broker_request_failed/,
+);
+await assert.rejects(
+  brokerClientForResponse({ chunks: ['not-json'] })('/api/v2/tools'),
+  /invalid JSON/,
+);
+await assert.rejects(
+  brokerClientForResponse({ responseError: true })('/api/v2/tools'),
+  /response failed/,
+);
+await assert.rejects(
+  brokerClientForResponse({ requestError: true })('/api/v2/tools'),
+  /request failed/,
+);
+await assert.rejects(
+  brokerClientForResponse({ chunks: [Buffer.alloc(1024 * 1024 + 1)] })('/api/v2/tools'),
+  /response is too large/,
+);
+const throwingClient = createBrokerClient({
+  origin: 'https://broker.example',
+  apiKey: API_KEY,
+  requestImpl: () => {
+    throw new Error('sensitive request detail');
+  },
+});
+await assert.rejects(throwingClient('/api/v2/tools'), /request failed/);
 
 let httpHandler;
 createMcpHttpServer({
   bridge,
+  listenerToken: LISTENER_TOKEN,
   port: 3001,
   createServerImpl: (handler) => {
     httpHandler = handler;
     return { listen() {} };
   },
 });
-async function httpRequest({ host = '127.0.0.1:3001', origin, body = '{}', url = '/mcp' } = {}) {
+async function httpRequest({
+  host = '127.0.0.1:3001',
+  origin,
+  authorization = `Bearer ${LISTENER_TOKEN}`,
+  body = '{}',
+  url = '/mcp',
+  method = 'POST',
+  contentType = 'application/json',
+} = {}) {
   const request = new EventEmitter();
-  request.method = 'POST';
+  request.method = method;
   request.url = url;
-  request.headers = { host, 'content-type': 'application/json' };
+  request.headers = { host, 'content-type': contentType };
+  request.destroy = () => {};
   if (origin) request.headers.origin = origin;
+  if (authorization) request.headers.authorization = authorization;
   const observed = { headers: null, status: null, body: null };
   const response = {
     writeHead(status, headers) {
@@ -210,6 +314,47 @@ async function httpRequest({ host = '127.0.0.1:3001', origin, body = '{}', url =
 }
 assert.equal((await httpRequest({ origin: 'https://attacker.invalid' })).status, 403);
 assert.equal((await httpRequest({ host: 'attacker.invalid:3001' })).status, 403);
+assert.equal((await httpRequest({ authorization: null })).status, 401);
+assert.equal((await httpRequest({ authorization: 'Basic local' })).status, 401);
+assert.equal((await httpRequest({ authorization: `Bearer ${'C'.repeat(43)}` })).status, 401);
+assert.equal((await httpRequest({ authorization: 'Bearer short' })).status, 401);
+assert.equal((await httpRequest({ method: 'GET', url: '/health' })).status, 200);
+assert.equal((await httpRequest({ method: 'GET', url: '/mcp' })).status, 404);
+assert.equal((await httpRequest({ url: '/other' })).status, 404);
+assert.equal((await httpRequest({ contentType: 'text/plain' })).status, 404);
+assert.equal((await httpRequest({ body: 'not-json' })).status, 400);
+assert.equal((await httpRequest({ body: '[]' })).status, 400);
+assert.equal((await httpRequest({ body: JSON.stringify(Array(33).fill({})) })).status, 400);
+assert.equal(
+  (
+    await httpRequest({
+      body: JSON.stringify([
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', id: 2, method: 'ping' },
+      ]),
+    })
+  ).status,
+  200,
+);
+assert.equal(
+  (
+    await httpRequest({
+      body: JSON.stringify([{ jsonrpc: '2.0', method: 'notifications/initialized' }]),
+    })
+  ).status,
+  204,
+);
+assert.equal(
+  (await httpRequest({ body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'initialize' }) }))
+    .status,
+  200,
+);
+assert.equal(
+  (await httpRequest({ body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'unknown' }) }))
+    .status,
+  200,
+);
+assert.equal((await httpRequest({ body: '{}' })).status, 200);
 const rpc = await httpRequest({
   body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
 });
@@ -218,6 +363,125 @@ assert.equal(Object.hasOwn(rpc.headers, 'Access-Control-Allow-Origin'), false);
 assert.equal(
   JSON.parse(rpc.body).result.tools.some((tool) => tool.name === driveTool.name),
   true,
+);
+const rpcCall = await httpRequest({
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'tools/call',
+    params: { name: 'broker_task_get', arguments: { task_id: TASK_ID } },
+  }),
+});
+assert.equal(JSON.parse(rpcCall.body).result.isError, false);
+const rpcCallFailure = await httpRequest({
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 6,
+    method: 'tools/call',
+    params: { name: 'list_secrets', arguments: {} },
+  }),
+});
+assert.equal(JSON.parse(rpcCallFailure.body).result.isError, true);
+const tooLargeBody = await httpRequest({ body: JSON.stringify('x'.repeat(1024 * 1024)) });
+assert.equal(tooLargeBody.status, 400);
+assert.throws(() => createMcpHttpServer({ bridge, listenerToken: 'short' }), /listener token/);
+assert.throws(() => createMcpHttpServer({ listenerToken: LISTENER_TOKEN }), /bridge/);
+for (const port of [0, 65_536, 1.5]) {
+  assert.throws(() => createMcpHttpServer({ bridge, listenerToken: LISTENER_TOKEN, port }), /port/);
+}
+
+let bootListen;
+const bootFiles = new Map([
+  ['api-key', API_KEY],
+  ['listener-token', LISTENER_TOKEN],
+  ['cert', 'certificate'],
+  ['key', 'private-key'],
+  ['ca', 'certificate-authority'],
+]);
+const bootServer = await boot(
+  [
+    'node',
+    'mcp',
+    '--api-key-file',
+    'api-key',
+    '--listener-token-file',
+    'listener-token',
+    '--client-cert-file',
+    'cert',
+    '--client-key-file',
+    'key',
+    '--ca-file',
+    'ca',
+    '--broker',
+    'https://broker.example',
+    '--port',
+    '3002',
+    '--host',
+    '::1',
+  ],
+  {},
+  {
+    readFileImpl: (path) => {
+      if (!bootFiles.has(path)) throw new Error('missing');
+      return Buffer.from(bootFiles.get(path));
+    },
+    requestImpl,
+    createServerImpl: () => ({
+      listen(port, host, callback) {
+        bootListen = { port, host };
+        callback();
+      },
+    }),
+  },
+);
+assert.equal(typeof bootServer.listen, 'function');
+assert.deepEqual(bootListen, { port: 3002, host: '::1' });
+await assert.rejects(boot(['node', 'mcp', '--master-key', 'value'], {}), /not supported/);
+await assert.rejects(boot(['node', 'mcp'], { MCP_MASTER_KEY: 'value' }), /not supported/);
+await assert.rejects(
+  boot(
+    ['node', 'mcp', '--api-key-file', 'missing'],
+    {},
+    {
+      readFileImpl: () => {
+        throw new Error('missing');
+      },
+    },
+  ),
+  /could not be read/,
+);
+await assert.rejects(
+  boot(
+    ['node', 'mcp', '--api-key-file', 'api'],
+    {},
+    { readFileImpl: () => Buffer.from('invalid') },
+  ),
+  /API key file is invalid/,
+);
+await assert.rejects(
+  boot(
+    ['node', 'mcp', '--api-key-file', 'api', '--listener-token-file', 'listener'],
+    {},
+    { readFileImpl: (path) => Buffer.from(path === 'api' ? API_KEY : 'invalid') },
+  ),
+  /listener token file is invalid/,
+);
+await assert.rejects(
+  boot(
+    [
+      'node',
+      'mcp',
+      '--api-key-file',
+      'api',
+      '--listener-token-file',
+      'listener',
+      '--host',
+      '0.0.0.0',
+    ],
+    {},
+    { readFileImpl: (path) => Buffer.from(path === 'api' ? API_KEY : LISTENER_TOKEN) },
+  ),
+  /loopback/,
 );
 
 const source = readFileSync(new URL('../broker/mcp-server.js', import.meta.url), 'utf8');

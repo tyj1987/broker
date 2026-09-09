@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -9,6 +10,7 @@ import { redact } from './lib/redact.js';
 const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const API_KEY_RE = /^mb_(?:live|test)_[0-9A-Za-z]{32}$/;
+const LISTENER_TOKEN_RE = /^[A-Za-z0-9_-]{43,128}$/;
 const TASK_PATH_RE = /^\/api\/v2\/(?:tools|tasks(?:\/[a-f0-9-]+(?:\/(?:run|cancel|events))?)?)$/;
 const SERVER_INFO = Object.freeze({
   name: 'secret-broker-mcp-server',
@@ -225,6 +227,13 @@ function allowedHost(value, port) {
   return allowed.has(String(value || '').toLowerCase());
 }
 
+function authorizedListenerRequest(header, listenerToken) {
+  if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+  const candidate = Buffer.from(header.slice(7));
+  const expected = Buffer.from(listenerToken);
+  return candidate.byteLength === expected.byteLength && timingSafeEqual(candidate, expected);
+}
+
 function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -245,11 +254,15 @@ function readRequestBody(request) {
 
 export function createMcpHttpServer({
   bridge,
+  listenerToken,
   port = 3001,
   createServerImpl = createHttpServer,
 } = {}) {
   if (!bridge || typeof bridge.listTools !== 'function' || typeof bridge.callTool !== 'function') {
     throw new TypeError('MCP bridge is invalid');
+  }
+  if (!LISTENER_TOKEN_RE.test(listenerToken || '')) {
+    throw new TypeError('MCP listener token is invalid');
   }
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
     throw new TypeError('MCP port is invalid');
@@ -265,6 +278,10 @@ export function createMcpHttpServer({
     };
     if (!allowedHost(request.headers.host, port) || request.headers.origin) {
       send(403, { error: 'request_origin_denied' });
+      return;
+    }
+    if (!authorizedListenerRequest(request.headers.authorization, listenerToken)) {
+      send(401, { error: 'listener_unauthorized' });
       return;
     }
     if (request.method === 'GET' && request.url === '/health') {
@@ -304,37 +321,59 @@ export function createMcpHttpServer({
   });
 }
 
-function readCredential(path, label) {
+function readCredential(path, label, readFileImpl = readFileSync) {
   if (typeof path !== 'string' || !path) throw new Error(`${label} file is required`);
   try {
-    return readFileSync(path);
+    return readFileImpl(path);
   } catch {
     throw new Error(`${label} file could not be read`);
   }
 }
 
-export async function boot(argv = process.argv, environment = process.env) {
+export async function boot(
+  argv = process.argv,
+  environment = process.env,
+  {
+    readFileImpl = readFileSync,
+    requestImpl = httpsRequest,
+    createServerImpl = createHttpServer,
+  } = {},
+) {
   const args = parseArgs(argv);
   if (args['master-key'] || args['master-key-file'] || environment.MCP_MASTER_KEY) {
     throw new Error('MCP master keys are not supported');
   }
-  const apiKey = readCredential(args['api-key-file'], 'Broker API key').toString('utf8').trim();
+  const apiKey = readCredential(args['api-key-file'], 'Broker API key', readFileImpl)
+    .toString('utf8')
+    .trim();
   if (!API_KEY_RE.test(apiKey)) throw new Error('Broker API key file is invalid');
+  const listenerToken = readCredential(
+    args['listener-token-file'],
+    'MCP listener token',
+    readFileImpl,
+  )
+    .toString('utf8')
+    .trim();
+  if (!LISTENER_TOKEN_RE.test(listenerToken) || listenerToken === apiKey) {
+    throw new Error('MCP listener token file is invalid');
+  }
   const origin = normalizeBrokerOrigin(args.broker || 'https://127.0.0.1:18443');
   const port = Number(args.port || 3001);
   const host = args.host || '127.0.0.1';
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('MCP must bind to a loopback address');
 
   const cert = args['client-cert-file']
-    ? readCredential(args['client-cert-file'], 'Broker client certificate')
+    ? readCredential(args['client-cert-file'], 'Broker client certificate', readFileImpl)
     : undefined;
   const key = args['client-key-file']
-    ? readCredential(args['client-key-file'], 'Broker client key')
+    ? readCredential(args['client-key-file'], 'Broker client key', readFileImpl)
     : undefined;
-  const ca = args['ca-file'] ? readCredential(args['ca-file'], 'Broker CA') : undefined;
-  const callBroker = createBrokerClient({ origin, apiKey, cert, key, ca });
+  const ca = args['ca-file']
+    ? readCredential(args['ca-file'], 'Broker CA', readFileImpl)
+    : undefined;
+  const callBroker = createBrokerClient({ origin, apiKey, cert, key, ca, requestImpl });
   const bridge = createMcpTaskBridge({ callBroker });
-  const server = createMcpHttpServer({ bridge, port });
+  const server = createMcpHttpServer({ bridge, listenerToken, port, createServerImpl });
   await bridge.listTools();
   server.listen(port, host, () => {
     console.error(`[mcp] ready on ${host}:${port}; typed Broker tasks only`);

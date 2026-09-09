@@ -21,7 +21,11 @@ controls read, run, cancel or inspect events for an existing task.
 
 The local MCP listener binds only to loopback, rejects every request carrying a
 browser `Origin`, validates the `Host` header, emits no CORS permission, accepts
-JSON only, limits bodies and batches, and returns no upstream error body. The
+JSON only, limits bodies and batches, and returns no upstream error body. Every
+request also requires an independent high-entropy bearer capability loaded from
+`--listener-token-file`; it is compared in constant time and cannot equal the
+Broker API key. This prevents another local process from silently borrowing the
+MCP workload's Broker authority. The
 Broker client permits only fixed `/api/v2/tools` and `/api/v2/tasks` paths,
 always verifies TLS and bounds requests, responses and time.
 

@@ -49,9 +49,48 @@ function deviceStateApproval(deviceId, body) {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DEVICE_PLATFORMS = new Set(['android', 'windows', 'linux', 'ios', 'browser-worker']);
+const DEVICE_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'p256-sha256']);
+
+function isRecord(body) {
+  return body !== null && typeof body === 'object' && !Array.isArray(body);
+}
+
+function hasOnlyKeys(body, required, optional = []) {
+  const keys = Object.keys(body);
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => Object.hasOwn(body, key))
+    && keys.every((key) => allowed.has(key));
+}
+
+function validatedDeviceEnrollmentBeginBody(body) {
+  if (!isRecord(body)
+    || !hasOnlyKeys(body, ['label', 'platform', 'approval_request_id'], ['capabilities'])
+    || typeof body.label !== 'string' || body.label.length === 0 || body.label.length > 80
+    || !DEVICE_PLATFORMS.has(body.platform)
+    || typeof body.approval_request_id !== 'string' || !UUID_RE.test(body.approval_request_id)
+    || (Object.hasOwn(body, 'capabilities')
+      && (!Array.isArray(body.capabilities)
+        || body.capabilities.some((capability) => typeof capability !== 'string')))) {
+    throw new V2Error('invalid_request', 'device enrollment request does not match the published schema');
+  }
+  return body;
+}
+
+function validatedDeviceEnrollmentFinishBody(body) {
+  if (!isRecord(body)
+    || !hasOnlyKeys(body, ['enrollment_id', 'signature_algorithm', 'public_key_pem', 'signature'])
+    || typeof body.enrollment_id !== 'string' || !UUID_RE.test(body.enrollment_id)
+    || !DEVICE_SIGNATURE_ALGORITHMS.has(body.signature_algorithm)
+    || typeof body.public_key_pem !== 'string'
+    || typeof body.signature !== 'string') {
+    throw new V2Error('invalid_request', 'device enrollment proof does not match the published schema');
+  }
+  return body;
+}
 
 function validatedDeviceStateBody(body) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)
+  if (!isRecord(body)
     || Object.keys(body).sort().join(',') !== 'approval_request_id,state'
     || !['active', 'suspended', 'revoked'].includes(body.state)
     || typeof body.approval_request_id !== 'string' || !UUID_RE.test(body.approval_request_id)) {
@@ -407,7 +446,7 @@ export function createV2Routes(deps) {
         if (!['mtls', 'session'].includes(ctx.via)) {
           throw new V2Error('step_up_required', 'device enrollment requires an interactive identity', 403);
         }
-        const body = await readBody(req);
+        const rawBody = await readBody(req);
         if (!identity.isAdmin || ctx.client?.security_profile !== 'strict'
           || !ctx.authFactors?.includes('webauthn')) {
           throw new V2Error(
@@ -416,6 +455,7 @@ export function createV2Routes(deps) {
             403,
           );
         }
+        const body = validatedDeviceEnrollmentBeginBody(rawBody);
         mandatoryAudit({ action: 'v2_device_enroll_begin_intent', status: 'authorized', cn: ctx.cn, platform: body?.platform });
         const claim = claimDualControlApproval(approvalBroker, identity, deviceEnrollmentApproval(body));
         let result;
@@ -440,7 +480,7 @@ export function createV2Routes(deps) {
       if (method === 'POST' && pathname === '/api/v2/devices/enroll/finish') {
         // The high-entropy challenge is a five-minute pairing secret, and the
         // device separately proves possession of its generated private key.
-        const body = await readBody(req);
+        const body = validatedDeviceEnrollmentFinishBody(await readBody(req));
         mandatoryAudit({ action: 'v2_device_enroll_finish_intent', status: 'authorized', enrollment_id: body?.enrollment_id });
         const result = await operationBroker.completeEnrollmentAndAudit(null, body, (verified) => {
           mandatoryAudit({

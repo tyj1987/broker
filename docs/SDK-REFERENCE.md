@@ -111,6 +111,13 @@ device is added to the registry. If the audit commit fails, the pairing
 challenge remains valid for its original bounded lifetime and no device record
 is created.
 
+Both device enrollment endpoints enforce their closed OpenAPI request shapes
+before approval lookup, intent audit, proof verification, or registry mutation.
+Unknown fields, unsupported platforms or signature algorithms, and malformed
+approval or enrollment identifiers are rejected without publishing a challenge
+or attempting a device proof. Public keys and proof signatures are never copied
+into audit events.
+
 Device state changes enforce the closed OpenAPI request shape before intent
 audit or approval lookup. Only `state` and a UUID `approval_request_id` are
 accepted, and `state` is limited to `active`, `suspended`, or `revoked`.

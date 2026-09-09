@@ -143,7 +143,7 @@ const handler = createV2Routes({
     },
     claimFor(_subject, input) {
       if (!input.approval_request_id) return null;
-      const grants = input.approval_request_id === 'one-approval'
+      const grants = input.approval_request_id === '00000000-0000-4000-8000-000000000011'
         ? [{ approved_by: 'admin-b' }]
         : input.provider === 'broker'
         ? [{ approved_by: 'admin-b' }, { approved_by: 'admin-c' }]
@@ -488,12 +488,36 @@ identity = {
   client: { role: 'admin', security_profile: 'strict' },
 };
 body = { label: 'isolated-worker', platform: 'browser-worker', capabilities: ['browser.execute:aliyun:billing.read:primary:production'] };
+const enrollmentsBeforeInvalidBegin = calls.filter((item) => item[0] === 'enroll-begin').length;
+assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'invalid_request');
+for (const invalidBody of [
+  { label: 'worker', platform: 'unknown', approval_request_id: '00000000-0000-4000-8000-000000000022' },
+  { label: 'worker', platform: 'android', approval_request_id: 'not-a-uuid' },
+  { label: 'worker', platform: 'android', capabilities: 'otp.receive', approval_request_id: '00000000-0000-4000-8000-000000000022' },
+  { label: 'x'.repeat(81), platform: 'android', approval_request_id: '00000000-0000-4000-8000-000000000022' },
+]) {
+  body = invalidBody;
+  assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'invalid_request');
+}
+assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, enrollmentsBeforeInvalidBegin);
+body = { label: 'isolated-worker', platform: 'browser-worker', capabilities: ['browser.execute:aliyun:billing.read:primary:production'] };
+body.approval_request_id = '00000000-0000-4000-8000-000000000011';
 assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'approval_required');
-body.approval_request_id = 'one-approval';
-assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'approval_required');
-assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, 0, 'one approval cannot mutate device enrollment');
-body.approval_request_id = 'device-enroll-approval';
+assert.equal(
+  calls.filter((item) => item[0] === 'enroll-begin').length,
+  enrollmentsBeforeInvalidBegin,
+  'one approval cannot mutate device enrollment',
+);
+body.approval_request_id = '00000000-0000-4000-8000-000000000022';
+body.ignored = true;
+assert.equal((await route('/api/v2/devices/enroll/begin')).value.error, 'invalid_request');
+body = {
+  label: 'isolated-worker', platform: 'browser-worker',
+  capabilities: ['browser.execute:aliyun:billing.read:primary:production'],
+  approval_request_id: '00000000-0000-4000-8000-000000000022',
+};
 assert.equal((await route('/api/v2/devices/enroll/begin')).status, 201);
+assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, enrollmentsBeforeInvalidBegin + 1);
 assert.ok(calls.some((item) => item[0] === 'enroll-begin'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_device_enroll_begin' && event.status === 'ok'));
 const enrollmentsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'enroll-begin').length;
@@ -503,10 +527,32 @@ auditFailureAction = null;
 assert.equal(calls.filter((item) => item[0] === 'enroll-begin').length, enrollmentsBeforeResultAuditFailure + 1);
 assert.ok(calls.some((item) => item[0] === 'enroll-rollback'
   && item[1] === 'admin-a' && item[2] === '00000000-0000-4000-8000-000000000099'));
-assert.ok(calls.some((item) => item[0] === 'approval-released' && item[1] === 'device-enroll-approval'));
+assert.ok(calls.some((item) => item[0] === 'approval-released' && item[1] === '00000000-0000-4000-8000-000000000022'));
 
-body = { enrollment_id: 'registration-flow', public_key_pem: 'public-key', signature: 'signature' };
+const deviceFinishesBeforeInvalidBody = calls.filter((item) => item[0] === 'enroll-finish').length;
+body = {
+  enrollment_id: '00000000-0000-4000-8000-000000000099', signature_algorithm: 'ed25519',
+  public_key_pem: 'public-key', signature: 'signature', ignored: true,
+};
+assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'invalid_request');
+body = {
+  enrollment_id: 'not-a-uuid', signature_algorithm: 'ed25519',
+  public_key_pem: 'public-key', signature: 'signature',
+};
+assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'invalid_request');
+body = {
+  enrollment_id: '00000000-0000-4000-8000-000000000099', signature_algorithm: 'rsa',
+  public_key_pem: 'public-key', signature: 'signature',
+};
+assert.equal((await route('/api/v2/devices/enroll/finish')).value.error, 'invalid_request');
+assert.equal(calls.filter((item) => item[0] === 'enroll-finish').length, deviceFinishesBeforeInvalidBody);
+body = {
+  enrollment_id: '00000000-0000-4000-8000-000000000099', signature_algorithm: 'ed25519',
+  public_key_pem: 'public-key', signature: 'signature',
+};
 assert.equal((await route('/api/v2/devices/enroll/finish')).status, 201);
+assert.equal(JSON.stringify(auditEvents).includes('public-key'), false, 'device proof material must not enter audit');
+assert.equal(JSON.stringify(auditEvents).includes('signature'), false, 'device signature must not enter audit');
 assert.ok(auditEvents.some((event) => event.action === 'v2_device_enroll_verified'
   && event.device_id === 'device-id'));
 const deviceFinishesBeforeAuditFailure = calls.filter((item) => item[0] === 'enroll-finish').length;

@@ -122,6 +122,11 @@ Device state changes enforce the closed OpenAPI request shape before intent
 audit or approval lookup. Only `state` and a UUID `approval_request_id` are
 accepted, and `state` is limited to `active`, `suspended`, or `revoked`.
 
+Mutation intent events contain only server-derived action and identity
+metadata. Unvalidated tool, provider, account, resource, and parameter values
+are omitted; validated values appear only in the policy and state-transition
+audit records.
+
 An operation policy may additionally set `source_cidrs`, `not_before`, and
 `not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
 is exclusive. Missing source identity, malformed CIDRs, malformed or inverted

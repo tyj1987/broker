@@ -223,7 +223,7 @@ export function createV2Routes(deps) {
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
         const taskBody = await readBody(req);
-        mandatoryAudit({ action: 'v2_task_create_intent', status: 'attempt', cn: ctx.cn, tool: taskBody?.tool });
+        mandatoryAudit({ action: 'v2_task_create_intent', status: 'attempt', cn: ctx.cn });
         const result = await taskBroker.create(identity, taskBody);
         audit({ action: 'v2_task_create', status: result.state, cn: ctx.cn, task_id: result.id, risk_level: result.risk_level });
         send(res, 202, result);
@@ -283,7 +283,7 @@ export function createV2Routes(deps) {
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         const body = await readBody(req);
-        mandatoryAudit({ action: 'v2_operation_create_intent', status: 'authorized', cn: ctx.cn, provider: body?.provider });
+        mandatoryAudit({ action: 'v2_operation_create_intent', status: 'authorized', cn: ctx.cn });
         const claim = approvalBroker.claimFor(identity, body);
         const authorizedIdentity = claim ? {
           ...identity,
@@ -330,7 +330,7 @@ export function createV2Routes(deps) {
         if (!authorization?.allow) {
           throw new V2Error('forbidden', authorization?.reason || 'policy_denied', 403);
         }
-        mandatoryAudit({ action: 'v2_approval_create_intent', status: 'authorized', cn: ctx.cn, provider: body?.provider });
+        mandatoryAudit({ action: 'v2_approval_create_intent', status: 'authorized', cn: ctx.cn });
         const result = approvalBroker.create(identity, body);
         try {
           mandatoryAudit({ action: 'v2_approval_create', status: 'ok', cn: ctx.cn, approval_id: result.id });
@@ -413,7 +413,7 @@ export function createV2Routes(deps) {
         if (ctx.via !== 'api_key') throw new V2Error('identity_denied', 'browser bridge API key required', 403);
         if (!ctx.apiKey?.scopes?.includes('browser:otp:fill')) throw new V2Error('scope_denied', 'browser bridge scope required', 403);
         const body = await readBody(req);
-        mandatoryAudit({ action: 'v2_browser_otp_claim_intent', status: 'authorized', cn: ctx.cn, provider: body?.provider });
+        mandatoryAudit({ action: 'v2_browser_otp_claim_intent', status: 'authorized', cn: ctx.cn });
         const result = operationBroker.claimBrowserOtpAndAudit(identity, body, (claim) => {
           mandatoryAudit({ action: 'v2_browser_otp_claim', status: 'ok', cn: ctx.cn, provider: claim.provider, operation_id: claim.operation_id });
         });

@@ -691,6 +691,41 @@ assert.equal(response.value.error, 'audit_unavailable');
 assert.equal(calls.filter((item) => item[0] === 'worker-claim').length, claimsBeforeAuditFailure, 'audit intent blocks lease mutation');
 auditFailure = false;
 
+const untrustedAuditCanary = 'opaque-unvalidated-field-742639';
+const taskCreatesBeforeCanary = calls.filter((item) => item[0] === 'task-create').length;
+const approvalCreatesBeforeCanary = calls.filter((item) => item[0] === 'approval-create').length;
+const operationsBeforeCanary = calls.filter((item) => item[0] === 'operation').length;
+const claimsBeforeCanary = calls.filter((item) => item[0] === 'claim').length;
+identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
+body = {
+  tool: untrustedAuditCanary, tool_version: '1.0.0', account_ref: 'control-plane',
+  environment: 'production', parameters: { resource_ref: 'tool-registry' }, idempotency_key: 'route-task-canary01',
+};
+auditFailureAction = 'v2_task_create_intent';
+assert.equal((await route('/api/v2/tasks')).value.error, 'audit_unavailable');
+identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
+body = {
+  provider: untrustedAuditCanary, operation_id: 'billing.read', account_ref: 'primary',
+  environment: 'production', typed_parameters: { resource_ref: 'summary' },
+};
+auditFailureAction = 'v2_approval_create_intent';
+assert.equal((await route('/api/v2/approvals')).value.error, 'audit_unavailable');
+auditFailureAction = 'v2_operation_create_intent';
+assert.equal((await route('/api/v2/operations')).value.error, 'audit_unavailable');
+identity = {
+  clientName: 'browser-bridge', via: 'api_key', client: { role: 'operator' },
+  apiKey: { scopes: ['browser:otp:fill'] },
+};
+body = { provider: untrustedAuditCanary };
+auditFailureAction = 'v2_browser_otp_claim_intent';
+assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'task-create').length, taskCreatesBeforeCanary);
+assert.equal(calls.filter((item) => item[0] === 'approval-create').length, approvalCreatesBeforeCanary);
+assert.equal(calls.filter((item) => item[0] === 'operation').length, operationsBeforeCanary);
+assert.equal(calls.filter((item) => item[0] === 'claim').length, claimsBeforeCanary);
+assert.equal(JSON.stringify(auditEvents).includes(untrustedAuditCanary), false, 'unvalidated fields must not enter intent audit');
+
 const limitedHandler = createV2Routes({
   operationBroker: {}, approvalBroker: {}, taskBroker: {}, webAuthnService: {}, toolRegistry: {}, getIdentity: () => identity,
   readBody: async () => ({}), send: (_res, status, value) => { response = { status, value }; },

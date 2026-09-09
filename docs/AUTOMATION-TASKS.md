@@ -68,6 +68,13 @@ The Go, Python and TypeScript SDKs expose the same five operations. The initial
 runnable adapter, `broker.tools.inspect@1.0.0`, returns only public tool-registry
 metadata and provides a credential-free end-to-end acceptance path.
 
+The strict `ssh.host.inspect@1.0.0` test path also crosses this full lifecycle:
+policy authorization, schema validation, a target-bound single-use execution
+grant, the credential-isolated runner, output-schema validation and terminal
+audit events. The runner receives no bearer grant, command or credential. This
+is deterministic integration evidence only; it does not replace the isolated
+production-target contract required by the SSH provider manifest.
+
 ## Current production boundary
 
 The present task and approval stores are in-process and intentionally bounded.

@@ -110,6 +110,24 @@
       "agent_execution": true
     },
     {
+      "name": "ssh.host.inspect",
+      "version": "1.0.0",
+      "description": "Read bounded health metadata from one registered SSH target through an isolated runner.",
+      "provider": "ssh",
+      "operation_id": "host.inspect",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref"], "properties": { "resource_ref": { "type": "string" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["target_ref", "hostname", "uptime_seconds", "load_1m", "disk_used_percent", "service_state"], "properties": { "target_ref": { "type": "string" }, "hostname": { "type": "string" }, "uptime_seconds": { "type": "integer" }, "load_1m": { "type": "number" }, "disk_used_percent": { "type": "number" }, "service_state": { "type": "string" } } },
+      "required_role": "operator",
+      "risk_level": "MEDIUM",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "ssh-target", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 30, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["private_key", "certificate", "stdout", "stderr"] },
+      "agent_execution": true
+    },
+    {
       "name": "docker.repository.tags.list",
       "version": "1.0.0",
       "description": "List tags for one explicitly authorized container repository.",

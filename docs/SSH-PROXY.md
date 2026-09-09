@@ -1,5 +1,39 @@
 # SSH proxy compatibility interface
 
+## Strict typed capability
+
+`ssh.host.inspect@1.0.0` is the first strict replacement for the compatibility
+proxy. Its only caller-controlled field is an opaque registered `resource_ref`.
+The adapter does not accept a hostname, port, login name, command, shell input,
+private key, certificate or arbitrary environment value.
+
+The Broker passes a bound request to an isolated runner capability containing
+only the operation ID, account reference, environment, target reference and
+cancellation signal. The runner returns a closed, bounded health record:
+hostname, uptime, one-minute load, disk-use percentage and service state. Any
+unexpected field, wrong target, malformed value or runner error fails closed;
+raw stdout, stderr and credential material are never returned to the caller.
+
+Production remains disabled until an isolated target contract proves all of
+the following:
+
+- the target registry resolves the opaque reference to one fixed host, port,
+  principal and allowed operation;
+- `StrictHostKeyChecking=yes` uses an independently verified host key or host
+  certificate authority; first-use acceptance is forbidden;
+- a short-lived user certificate or hardware-backed agent is restricted to a
+  forced inspection command, with all forwarding disabled;
+- the runner is separately isolated, has bounded output and time, redacts its
+  logs, and cannot return credential handles or raw process output;
+- revocation, wrong target, wrong principal, host-key change, timeout and
+  concurrent execution tests pass.
+
+OpenSSH documents that strict host-key checking refuses unknown or changed
+keys, `IdentitiesOnly` restricts offered identities, and server-side
+`ForceCommand` must be paired with `DisableForwarding` when other channels are
+not allowed. The exact production CA, registry and runner ownership is tracked
+in the decision queue.
+
 The v1 SSH proxy is a compatibility feature. It accepts a free-form remote
 command and therefore is **disabled for strict-profile identities**. It is not
 a substitute for `/api/v2` typed operations and must not be exposed to AI in a

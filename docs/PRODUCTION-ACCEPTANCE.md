@@ -105,6 +105,16 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
   HTTPS transport. Unit and integration coverage is 100% line/function and
   96.77% branch. No production token resolver or isolated-account contract has
   run, so Cloudflare also remains `contract_required`.
+- The strict SSH host-inspection adapter accepts one opaque target reference,
+  validates execution-token target and environment binding, and delegates to an
+  injected runner without accepting a command or credential. It projects only
+  bounded health fields and rejects wrong-target, malformed or unexpected
+  runner output without exposing runner errors. Its integration test crosses
+  the automation task policy, schema, single-use grant, execution, result and
+  audit lifecycle and rejects replay and command injection before the runner.
+  The production target registry,
+  verified host-key authority, short-lived certificate signer, isolated runner
+  and target contract test remain open, so SSH is `contract_required`.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
 - Go SDK: test/vet/build passed.
 - Python SDK: 30 tests passed with `cryptography==50.0.1`; the fixed test
@@ -214,7 +224,7 @@ secret-history scanning and production candidate image validation.
   GHCR package permission and registry-backed attestations before release.
 - Container build, SBOM, signature, provenance, SAST/SCA, license and IaC reports must be retained as CI artifacts.
 - All production credentials potentially exposed before this audit must be rotated with evidence outside the repository.
-- Six provider adapters require isolated-account contract tests before any production-ready status.
+- Seven provider adapters require isolated-account or isolated-target contract tests before any production-ready status.
 - Xiaomi 12S Ultra dual-SIM, permission revocation, delayed/duplicate OTP, background restriction, and manual fallback tests must pass.
 - Windows installer signing/update verification, Ubuntu packaging, iOS
   compile/sign/device validation, isolated browser-worker production runtime,

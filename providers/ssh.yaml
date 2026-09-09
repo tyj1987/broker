@@ -1,0 +1,28 @@
+manifest_version: 1
+id: ssh
+display_name: OpenSSH
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://man.openbsd.org/ssh
+  - https://man.openbsd.org/ssh_config
+  - https://man.openbsd.org/sshd_config
+origins: []
+authentication:
+  priority: [short_lived_user_certificate, hardware_backed_agent, isolated_identity_file]
+  inject: { capability: isolated_runner }
+  maximum_ttl_seconds: 300
+  rotation: Mint a target- and principal-bound user certificate for each bounded operation.
+  revocation: Revoke the certificate authority or serial and disable the restricted target principal.
+  signer_boundary: The Broker receives a typed runner capability and never receives a private key.
+operations:
+  - id: host.inspect
+    method: EXEC
+    path_template: /capabilities/host.inspect
+    permission: restricted-observer
+    mutating: false
+    approval: none
+    parameters: { resource_ref: { type: string } }
+    maximum_response_bytes: 4096
+redaction: [private_key, certificate, identity_agent, stdout, stderr]
+contract_test: { account: isolated_ssh_target, required: true, last_result: not_run }

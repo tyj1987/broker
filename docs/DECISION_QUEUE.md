@@ -53,3 +53,20 @@ continue.
   outage behavior and isolated-account contract tests.
 - Current safe default: dependency-injected signer and account resolver used
   only by deterministic tests; every provider remains `contract_required`.
+
+## DQ-005: SSH target, host-key and certificate authority
+
+- Status: open
+- Needed before: any SSH-backed capability is production-enabled
+- Decision: select the authoritative target registry, independently verified
+  host-key or host-certificate store, short-lived user-certificate signer and
+  isolated runner workload. Define principal restrictions, forced commands,
+  revocation, regional failover and emergency ownership.
+- Required evidence: unknown and changed host-key denial, wrong target and
+  principal denial, expired and revoked certificate denial, forced-command and
+  forwarding escape attempts, signer outage, runner compromise containment,
+  output redaction and isolated-target contract tests.
+- Current safe default: a dependency-injected runner used only by deterministic
+  tests. No host address, credential, certificate signer or free-form command is
+  available through the strict adapter, and the provider remains
+  `contract_required`.

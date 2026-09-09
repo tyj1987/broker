@@ -6,7 +6,7 @@ const require = createRequire(new URL('../broker/package.json', import.meta.url)
 const { parse } = require('yaml');
 
 const providerDir = resolve(import.meta.dirname, '../providers');
-const expected = new Set(['aliyun', 'cloudflare', 'docker', 'github', 'openai', 'tencent']);
+const expected = new Set(['aliyun', 'cloudflare', 'docker', 'github', 'openai', 'ssh', 'tencent']);
 const manifests = readdirSync(providerDir).filter((name) => name.endsWith('.yaml'));
 const ids = new Set();
 

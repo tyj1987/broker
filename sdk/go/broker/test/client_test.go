@@ -271,8 +271,8 @@ func TestTypedOperationAndApproval(t *testing.T) {
 	if approvals, err := client.ListApprovals(ctx); err != nil || len(approvals) != 1 {
 		t.Fatalf("list approvals: %#v %v", approvals, err)
 	}
-	if decided, err := client.DecideApproval(ctx, approval.ID, "approve"); err != nil || decided.Status != "approved" {
-		t.Fatalf("decide approval: %#v %v", decided, err)
+	if decided, err := client.DecideApproval(ctx, approval.ID, "approve"); decided != nil || !errors.Is(err, broker.ErrBrowserOnly) {
+		t.Fatalf("expected browser-only decision error, got %#v %v", decided, err)
 	}
 	if _, err := client.DecideApproval(ctx, approval.ID, "invalid"); !errors.Is(err, broker.ErrInvalidArg) {
 		t.Fatalf("expected invalid decision error, got %v", err)

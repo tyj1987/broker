@@ -409,15 +409,12 @@ class BrokerClient:
         return body["approvals"]
 
     def decide_approval(self, approval_id: str, decision: str) -> Dict[str, Any]:
-        """Approve or reject using an already WebAuthn-stepped-up session."""
-        if decision not in ("approve", "reject"):
-            raise ValueError("decision must be approve or reject")
-        path = f"/api/v2/approvals/{urllib.parse.quote(approval_id, safe='')}/decision"
-        status, body = self._request("POST", path, body={"decision": decision})
-        self._check(status, body, "decide_approval")
-        if not isinstance(body, dict):
-            raise BrokerError("unexpected approval response")
-        return body
+        """Fail closed: decisions require the same-origin WebAuthn workbench."""
+        if not approval_id or decision not in ("approve", "reject"):
+            raise ValueError("approval id and decision must be provided")
+        raise BrokerError(
+            "approval decisions require the WebAuthn browser workbench; no request was sent"
+        )
 
     def get_operation(self, operation_id: str) -> Dict[str, Any]:
         """Read only the redacted result allowed by the operation policy."""

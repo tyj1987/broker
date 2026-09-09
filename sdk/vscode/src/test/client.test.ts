@@ -53,7 +53,7 @@ test('mock broker supports health and typed V2 operations', async () => {
     });
     assert.equal(approval.status, 'pending');
     assert.equal((await client.listApprovals())[0].id, approval.id);
-    assert.equal((await client.decideApproval(approval.id, 'approve')).status, 'approved');
+    await assert.rejects(client.decideApproval(approval.id, 'approve'), /WebAuthn browser workbench/);
   } finally {
     await mock.stop();
   }

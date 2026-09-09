@@ -286,10 +286,10 @@ export class BrokerClient {
   }
 
   async decideApproval(id: string, decision: 'approve' | 'reject'): Promise<ApprovalResponse> {
-    const r = await this.request<ApprovalResponse>(
-      'decide_approval', 'POST', `/api/v2/approvals/${encodeURIComponent(id)}/decision`, { decision }
-    );
-    return r.body as ApprovalResponse;
+    if (!id || (decision !== 'approve' && decision !== 'reject')) {
+      throw new Error('approval id and decision must be provided');
+    }
+    throw new Error('approval decisions require the WebAuthn browser workbench; no request was sent');
   }
 
   async sshExec(target: string, command: string, secretName = 'ssh.connection'): Promise<SSHExecResult> {

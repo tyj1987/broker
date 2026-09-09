@@ -11,6 +11,8 @@ or long-lived credential.
 |---|---|---|---|
 | Create operation | `create_operation(...)` | `CreateOperation(...)` | `createOperation(...)` |
 | Read redacted state/result | `get_operation(id)` | `GetOperation(id)` | `getOperation(id)` |
+| Create approval request | `create_approval(...)` | `CreateApproval(...)` | `createApproval(...)` |
+| List visible approvals | `list_approvals()` | `ListApprovals(...)` | `listApprovals()` |
 | Health check | `health()` | `Health()` | `health()` |
 
 An operation request contains exactly:
@@ -53,6 +55,12 @@ transition layer and the Go policy service.
   lists deny typed operations.
 - TLS verification is enabled by default. Disabling it is not a supported
   production configuration.
+
+Approval decisions are intentionally absent from the network-capable SDK
+surface. The compatibility methods `decide_approval`, `DecideApproval`, and
+`decideApproval` fail locally without sending a request. A human must use the
+same-origin `/approvals` browser workbench so the Broker can verify a fresh
+WebAuthn factor and the configured HTTPS origin.
 
 ## Legacy API surface
 

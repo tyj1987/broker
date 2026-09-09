@@ -360,17 +360,14 @@ func (c *Client) ListApprovals(ctx context.Context) ([]Approval, error) {
 	return response.Approvals, nil
 }
 
-// DecideApproval requires the caller to already hold a WebAuthn-stepped-up session.
-func (c *Client) DecideApproval(ctx context.Context, id, decision string) (*Approval, error) {
+// DecideApproval is retained for source compatibility. Approval decisions are
+// browser-only so the Broker can verify the same-origin WebAuthn session.
+// This method never sends a network request.
+func (c *Client) DecideApproval(_ context.Context, id, decision string) (*Approval, error) {
 	if id == "" || (decision != "approve" && decision != "reject") {
 		return nil, fmt.Errorf("%w: approval id and valid decision required", ErrInvalidArg)
 	}
-	var approval Approval
-	path := "/api/v2/approvals/" + url.PathEscape(id) + "/decision"
-	if err := c.doAndCheck(ctx, "decide_approval", "POST", path, map[string]string{"decision": decision}, nil, &approval); err != nil {
-		return nil, err
-	}
-	return &approval, nil
+	return nil, ErrBrowserOnly
 }
 
 // ============================================================

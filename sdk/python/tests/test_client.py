@@ -285,7 +285,9 @@ def test_bound_approval_workflow(mock_broker):
     )
     assert approval["status"] == "pending"
     assert c.list_approvals()[0]["id"] == "approval-123"
-    assert c.decide_approval("approval-123", "approve")["status"] == "approved"
+    c._request = lambda *args, **kwargs: pytest.fail("decision attempted a network request")
+    with pytest.raises(BrokerError, match="WebAuthn browser workbench"):
+        c.decide_approval("approval-123", "approve")
     with pytest.raises(ValueError):
         c.decide_approval("approval-123", "maybe")
 

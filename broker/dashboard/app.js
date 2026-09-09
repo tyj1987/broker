@@ -306,6 +306,7 @@ let _pendingG = false;
 let _gTimeout = null;
 const KEY_MAP = {
   'h': 'home',
+  'r': 'approvals',
   'a': 'actions',
   's': 'secrets',
   'u': 'audit',
@@ -792,6 +793,7 @@ async function boot() {
   // 身份事件立刻显示 admin Tab；不要再轮询 #identity 文本（30s 窗口会漏掉登录）。
   emitBrokerIdentity(ident);
   showApp();
+  if (location.pathname === '/approvals') switchTab('approvals');
 }
 
 boot();

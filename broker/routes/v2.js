@@ -53,6 +53,7 @@ export function createV2Routes(deps) {
   const {
     operationBroker, approvalBroker, webAuthnService, getIdentity, readBody, send, audit,
     makeSession, sessionCookieHeader, authorizeApprovalRequest, consumeRateLimit,
+    requireBrowserMutation,
   } = deps;
   const mandatoryAudit = (event) => {
     try {
@@ -192,7 +193,15 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (typeof requireBrowserMutation !== 'function') {
+          throw new V2Error('browser_origin_unavailable', 'trusted browser enforcement is unavailable', 503);
+        }
+        requireBrowserMutation(req, ctx);
         const body = await readBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).length !== 1 || !['approve', 'reject'].includes(body.decision)) {
+          throw new V2Error('invalid_request', 'decision body must contain only approve or reject');
+        }
         mandatoryAudit({ action: 'v2_approval_decision_intent', status: 'authorized', cn: ctx.cn, approval_id: approvalMatch[1] });
         const result = approvalBroker.decide(identity, approvalMatch[1], body?.decision);
         audit({ action: 'v2_approval_decision', status: result.status, cn: ctx.cn, approval_id: result.id });

@@ -764,3 +764,5 @@ kbd {
 .data-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.9em; }
 .data-table th, .data-table td { padding: 6px 8px; border-bottom: 1px solid #1f2530; text-align: left; }
 .data-table th { color: #9aa0a6; font-weight: normal; }
+.approval-actions { display: flex; gap: 0.4rem; align-items: center; }
+.table-scroll { overflow-x: auto; }

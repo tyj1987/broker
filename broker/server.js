@@ -85,6 +85,7 @@ import { ApprovalBroker } from './lib/approvals-v2.js';
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 import { WebAuthnService } from './lib/webauthn-service.js';
+import { requireTrustedBrowserMutation } from './lib/browser-request.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -171,6 +172,7 @@ const v2Routes = createV2Routes({
   operationBroker, approvalBroker, webAuthnService, getIdentity, readBody, send, audit,
   makeSession, sessionCookieHeader, authorizeApprovalRequest: approvalRequestAuthorization,
   consumeRateLimit: rateLimit,
+  requireBrowserMutation: (req, ctx) => requireTrustedBrowserMutation(req, ctx, CONFIG?.webauthn?.rp_origin),
 });
 
 console.log('============================================');

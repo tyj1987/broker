@@ -2,6 +2,7 @@ use reqwest::{Client, StatusCode, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
+use tauri_plugin_opener::OpenerExt;
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_ORIGIN: &str = "https://broker.52trz.com";
@@ -99,6 +100,14 @@ async fn broker_health() -> Result<Health, String> {
 }
 
 #[tauri::command]
+fn open_approvals(app: tauri::AppHandle) -> Result<(), String> {
+    let url = broker_url("/approvals")?;
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|_| "approval_browser_unavailable".to_string())
+}
+
+#[tauri::command]
 fn store_api_key(mut secret: String) -> Result<(), String> {
     store_credential(ACCOUNT, &mut secret)
 }
@@ -188,8 +197,10 @@ async fn get_operation(operation_id: String) -> Result<Value, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             broker_health,
+            open_approvals,
             store_api_key,
             delete_api_key,
             store_browser_bridge_key,
@@ -225,5 +236,13 @@ mod tests {
         assert!(validated_origin("http://broker.example.com").is_err());
         assert!(validated_origin("https://user@broker.example.com").is_err());
         assert!(validated_origin("https://broker.example.com/path").is_err());
+        assert_eq!(
+            validated_origin("https://broker.example.com")
+                .unwrap()
+                .join("/approvals")
+                .unwrap()
+                .as_str(),
+            "https://broker.example.com/approvals"
+        );
     }
 }

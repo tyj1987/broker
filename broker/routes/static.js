@@ -9,11 +9,13 @@ import { securityHeaders } from '../lib/security-headers.js';
 const STATIC_MAP = {
   '/': 'index.html',
   '/index.html': 'index.html',
+  '/approvals': 'index.html',
   '/app.js': 'app.js',
   '/style.css': 'style.css',
   '/home.js': 'home.js',
   '/me.html': 'me.html',
   '/me.js': 'me.js',
+  '/approvals.js': 'approvals.js',
   '/api-keys.html': 'api-keys.html',
   '/api-keys.js': 'api-keys.js',
   '/admin/secrets.js': 'admin/secrets.js',
@@ -62,7 +64,7 @@ function loadBody(f, meta) {
 }
 
 function isHtmlPath(pathname) {
-  return pathname === '/' || pathname.endsWith('.html');
+  return pathname === '/' || pathname === '/approvals' || pathname.endsWith('.html');
 }
 
 // HTTP allows multiple ETags in If-None-Match (comma-separated, may be `*`).

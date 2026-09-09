@@ -38,6 +38,8 @@ class BrokerDeviceApi(
         require(it.query == null && it.fragment == null)
         }
 
+        fun approvalUrl(endpoint: String): String = validateOrigin(endpoint).resolve("/approvals").toString()
+
         fun finishEnrollment(
             endpoint: String,
             enrollmentId: String,

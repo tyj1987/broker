@@ -6,6 +6,11 @@ const value = (id: string) => el<HTMLInputElement | HTMLSelectElement>(id).value
 const show = (message: string) => { el<HTMLPreElement>('result').textContent = message; };
 let lastOperationID = '';
 
+el<HTMLButtonElement>('approvals').onclick = async () => {
+  try { await invoke('open_approvals'); show('Approval workbench opened in the default browser.'); }
+  catch { show('The approval workbench could not be opened.'); }
+};
+
 el<HTMLButtonElement>('health').onclick = async () => {
   try {
     const response = await invoke<{ status: string }>('broker_health');

@@ -37,9 +37,17 @@ Production remains **not approved**. No deployment was attempted because P0/P1 g
 
 ## Local evidence obtained on the upgrade branch
 
+- The management console now exposes a bound approval workbench. Decisions
+  require an exact same-origin request from a WebAuthn-authenticated browser
+  session; missing or cross-site Origin, API-key identity, unknown decision
+  fields and non-WebAuthn sessions fail closed before mutation. Desktop and
+  Android clients only open the fixed `/approvals` entrypoint in the system
+  browser and never receive its session or approval authority. Source, Node
+  regression and Windows Tauri build/Clippy/test evidence has been obtained;
+  Android CI and end-to-end physical-key ceremony remain open.
 - Node broker full regression suite: passed. The typed-operation, approval,
-  authorization and outbound-policy coverage gate reports 97.51% lines,
-  93.1% branches and 96.87% functions. Approval creation is pre-authorized by
+  authorization and outbound-policy coverage gate reports 95.52% lines,
+  91.94% branches and 96.1% functions. Approval creation is pre-authorized by
   the same Node and Go policy path, and v2 state changes require a durable audit
   intent before mutation.
 - Go policy core: test/vet/build passed; statement coverage 95.1%. Windows race instrumentation is unavailable and remains a Linux CI gate.
@@ -123,6 +131,12 @@ at commit `36bc25b27f82b5e55345501c96dc8b03c7aa3078` completed successfully.
 It independently validated the Node and Go source/time policy enforcement,
 all client builds, CodeQL, dependency and secret-history scans, IaC checks,
 the production candidate image, SBOM generation and deployment-script tests.
+
+CI run [`34301716336`](https://github.com/tyj1987/broker/actions/runs/34301716336)
+at commit `d6271af21f95211f4c1f443628fa572034e0a35e` completed successfully.
+All 22 jobs passed, including the Android self-suspension path, exact child-key
+expiration boundary, Windows and Ubuntu desktop packages, iOS, CodeQL,
+secret-history scanning and production candidate image validation.
 
 ## Gates still required
 

@@ -57,6 +57,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-tab="home">🏠 首页 / Home</button>
       <button class="tab-btn" data-tab="me">👤 我的资料 / Me <span class="badge-new">新</span></button>
+      <button class="tab-btn" data-tab="approvals">✅ 审批 / Approvals</button>
       <button class="tab-btn" data-tab="api-keys">🔑 API Keys</button>
       <button class="tab-btn" data-tab="actions">⚡ 动作 / Actions</button>
       <button class="tab-btn" data-tab="audit">📋 审计 / Audit</button>
@@ -301,6 +302,23 @@
             <tbody></tbody>
           </table>
         </section>
+      </section>
+
+      <section id="tab-approvals" class="tab-content">
+        <div class="card">
+          <h2>Bound approvals</h2>
+          <p class="hint">Review only the bound provider, operation, account, environment and resource. Approval requires this browser's WebAuthn session; API keys and paired devices cannot decide.</p>
+          <div class="filter-row">
+            <button id="btn-refresh-approvals" type="button" class="btn">Refresh</button>
+            <span id="approval-status" class="status"></span>
+          </div>
+          <div class="table-scroll">
+            <table id="approvals-table" class="data-table">
+              <thead><tr><th>Provider</th><th>Operation</th><th>Account</th><th>Environment</th><th>Resource</th><th>Requester</th><th>Approvals</th><th>Status</th><th>Decision</th></tr></thead>
+              <tbody><tr><td colspan="9" class="muted">Open this tab to load approvals.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- ===== API Keys tab (v3.0 M2-C) ===== -->
@@ -787,6 +805,7 @@ secret-broker get github.pat</code></pre>
   <script src="app.js?v=4.1.5"></script>
   <script src="home.js?v=4.1.5"></script>
   <script src="me.js?v=4.1.5"></script>
+  <script src="approvals.js?v=4.2.0"></script>
   <script src="api-keys.js?v=4.1.5"></script>
   <script src="admin/secrets.js?v=4.1.5"></script>
   <script src="admin/services.js?v=4.1.5"></script>

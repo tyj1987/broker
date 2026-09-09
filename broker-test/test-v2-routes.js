@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createV2Routes } from '../broker/routes/v2.js';
+import { requireTrustedBrowserMutation } from '../broker/lib/browser-request.js';
 
 let identity = null;
 let body = {};
@@ -85,6 +86,10 @@ const handler = createV2Routes({
     return operation.provider === 'denied' ? { allow: false, reason: 'service_denied' } : { allow: true };
   },
   consumeRateLimit: () => true,
+  requireBrowserMutation: (req, ctx) => {
+    calls.push(['browser-mutation', req.headers.origin, ctx.via]);
+    requireTrustedBrowserMutation(req, ctx, 'https://broker.test');
+  },
 });
 
 const request = { method: 'POST', headers: {} };
@@ -137,7 +142,17 @@ auditFailure = false;
 
 identity = { clientName: 'admin-a', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
 body = { decision: 'approve' };
+request.headers.origin = 'https://broker.test';
 assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000001/decision')).value.status, 'approved');
+assert.ok(calls.some((item) => item[0] === 'browser-mutation'));
+const decisionsBeforeDenials = calls.filter((item) => item[0] === 'approval-decision').length;
+request.headers.origin = 'https://attacker.test';
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000002/decision')).value.error, 'origin_denied');
+request.headers.origin = 'https://broker.test';
+body = { decision: 'approve', ignored: true };
+assert.equal((await route('/api/v2/approvals/00000000-0000-4000-8000-000000000002/decision')).value.error, 'invalid_request');
+assert.equal(calls.filter((item) => item[0] === 'approval-decision').length, decisionsBeforeDenials);
+delete request.headers.origin;
 
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' }, approval_request_id: 'approval-id' };
@@ -236,6 +251,7 @@ const limitedHandler = createV2Routes({
   readBody: async () => ({}), send: (_res, status, value) => { response = { status, value }; },
   audit: () => {}, makeSession: () => '', sessionCookieHeader: () => '',
   authorizeApprovalRequest: async () => ({ allow: true }), consumeRateLimit: () => false,
+  requireBrowserMutation: () => {},
 });
 response = null;
 await limitedHandler(request, {}, { method: 'POST', pathname: '/api/v2/operations' });

@@ -2,6 +2,8 @@ package com.secretbroker.mobile
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -80,6 +82,10 @@ class MainActivity : ComponentActivity() {
                     Text(if (value?.unattendedOtpPossible == true) "Automatic OTP capability available" else "Automatic OTP unavailable; confirmation or manual input is required")
                     Text(if (value?.googleServicesAvailable == true) "SMS User Consent fallback available (confirmation required)" else "Google SMS consent fallback unavailable")
                     Text("State: $state")
+                    Button(onClick = { openApprovalConsole() }) {
+                        Text("Open WebAuthn approval console")
+                    }
+                    Text("Approval opens the fixed Broker origin in your default browser. This app never receives the browser session or approval authority.")
 
                     if (value?.receiveSmsGranted != true) {
                         Button(onClick = { requestSms.launch(Manifest.permission.RECEIVE_SMS) }) {
@@ -257,6 +263,18 @@ class MainActivity : ComponentActivity() {
                 state = "reactivated"
                 startSync()
             }.onFailure { state = "still_suspended_or_offline" }
+        }
+    }
+
+    private fun openApprovalConsole() {
+        runCatching {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(BrokerDeviceApi.approvalUrl(endpoint)))
+            require(intent.resolveActivity(packageManager) != null) { "No browser is available" }
+            startActivity(intent)
+        }.onSuccess {
+            state = "approval_console_opened"
+        }.onFailure {
+            state = "approval_console_unavailable"
         }
     }
 }

@@ -7,6 +7,7 @@
   "platforms": ["windows", "linux"],
   "permissions": [
     "allow-broker-health",
+    "allow-open-approvals",
     "allow-store-api-key",
     "allow-delete-api-key",
     "allow-store-browser-bridge-key",

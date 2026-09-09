@@ -35,6 +35,7 @@ export function createReadApiRoutes(deps) {
       client_name: ctx.clientName,
       cert_subject: ctx.certSubject,
       via: ctx.via,
+      auth_factors: Array.isArray(ctx.authFactors) ? [...new Set(ctx.authFactors)] : [],
     });
     return true;
   }

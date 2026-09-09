@@ -114,6 +114,7 @@ section('1. Identity endpoint');
     clientName: 'client.alice',
     certSubject: { CN: 'client.alice' },
     via: 'mtls',
+    authFactors: ['webauthn', 'webauthn'],
   };
   const res = fakeRes();
   const handled = await r.dispatch(req({ method: 'GET' }), res, { method: 'GET', pathname: '/api/v1/identity' }, ctx);
@@ -123,6 +124,7 @@ section('1. Identity endpoint');
   ok('body.fingerprint_sha256 matches', res.body?.fingerprint_sha256 === 'AB:CD');
   ok('body.role matches', res.body?.role === 'developer');
   ok('body.via matches', res.body?.via === 'mtls');
+  ok('body auth factors are deduplicated', res.body?.auth_factors?.join(',') === 'webauthn');
 }
 
 section('2. Services endpoint (admin sees all + secret_health)');

@@ -1,7 +1,8 @@
 # Secret Broker for Android
 
-The current Android milestone is a device-bound OTP receiver. Approval UI is
-not implemented yet. The app does not read message history, request SMS
+The current Android milestone is a device-bound OTP receiver. It can open the
+fixed Broker approval workbench in the system browser, but it cannot approve
+with the device signing key or receive the browser session. The app does not read message history, request SMS
 sending, contacts, notification access, accessibility access, or store message
 bodies.
 

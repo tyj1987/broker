@@ -2,9 +2,17 @@ package com.secretbroker.mobile.network
 
 import com.secretbroker.mobile.security.DeviceSigner
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class EndpointPolicyTest {
+    @Test fun approvalUrlIsPinnedToTheValidatedBrokerOrigin() {
+        assertEquals("https://broker.example/approvals", BrokerDeviceApi.approvalUrl("https://broker.example"))
+        assertThrows(IllegalArgumentException::class.java) {
+            BrokerDeviceApi.approvalUrl("https://broker.example/redirect?to=https://evil.invalid")
+        }
+    }
+
     @Test fun rejectsNonHttpsUserInfoIpLiteralAndCustomPort() {
         val signer = DeviceSigner("test-only")
         assertThrows(IllegalArgumentException::class.java) { BrokerDeviceApi("http://broker.example", "d", signer) }

@@ -54,8 +54,20 @@ const browserIdentity = {
 
 assert.equal(device.state, 'active');
 assert.equal(Object.hasOwn(device, 'owner'), false);
-assert.equal(broker.listDevices('owner-1').length, 1);
-assert.equal(broker.listDevices('another-owner').length, 0);
+assert.equal(broker.listDevices({ name: 'owner-1' }).length, 1);
+assert.equal(broker.listDevices({ name: 'another-owner' }).length, 0);
+assert.equal(broker.listDevices({
+  name: 'admin-key',
+  context: { via: 'api_key', client: { role: 'admin' } },
+}).length, 0);
+assert.equal(broker.listDevices({
+  name: 'admin-session',
+  context: { via: 'session', authFactors: [], client: { role: 'admin' } },
+}).length, 0);
+assert.equal(broker.listDevices({
+  name: 'admin-session',
+  context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } },
+}).length, 1);
 
 await assert.rejects(
   broker.createOperation({ name: 'owner-1' }, {
@@ -240,7 +252,7 @@ const durableDevice = await durable.completeEnrollment(null, {
 assert.equal(persistedRecords.length, 1);
 const restored = new OperationBroker();
 restored.hydrateDevices(persistedRecords);
-assert.equal(restored.listDevices('owner-2')[0].id, durableDevice.id);
+assert.equal(restored.listDevices({ name: 'owner-2' })[0].id, durableDevice.id);
 
 const failing = new OperationBroker({ persistDevices: async () => { throw new Error('disk unavailable'); } });
 const failingEnrollment = failing.beginEnrollment('owner-3', {
@@ -257,7 +269,7 @@ await assert.rejects(
   }),
   (error) => error instanceof V2Error && error.code === 'persistence_failed',
 );
-assert.equal(failing.listDevices('owner-3').length, 0);
+assert.equal(failing.listDevices({ name: 'owner-3' }).length, 0);
 
 const workerBroker = new OperationBroker({
   now: () => now,

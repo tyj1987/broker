@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createV2Routes } from '../broker/routes/v2.js';
 import { requireTrustedBrowserMutation } from '../broker/lib/browser-request.js';
+import { V2Error } from '../broker/lib/operations-v2.js';
 
 let identity = null;
 let body = {};
@@ -28,6 +29,23 @@ const handler = createV2Routes({
     async createOperation(subject, input) {
       calls.push(['operation', subject.name, input, subject.context.approvalGrants || []]);
       return { id: 'operation-id', provider: input.provider, status: 'waiting' };
+    },
+    getOperation(subject, id) {
+      calls.push(['operation-get', subject.name, subject.context.via, subject.context.authFactors || []]);
+      if (subject.name !== 'owner-1'
+        && !(subject.context.via === 'session'
+          && subject.context.client?.role === 'admin'
+          && subject.context.authFactors?.includes('webauthn'))) {
+        throw new V2Error('forbidden', 'operation access denied', 403);
+      }
+      return { id, status: 'waiting' };
+    },
+    listDevices(subject) {
+      calls.push(['device-list', subject.name, subject.context.via, subject.context.authFactors || []]);
+      const crossOwner = subject.context.via === 'session'
+        && subject.context.client?.role === 'admin'
+        && subject.context.authFactors?.includes('webauthn');
+      return [{ id: crossOwner ? 'all-devices' : `${subject.name}-device` }];
     },
     claimBrowserOtp(subject, input) {
       calls.push(['claim', subject.name, input]);
@@ -142,6 +160,22 @@ const patchRoute = async (pathname) => {
 identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
 assert.equal((await getRoute('/api/v2/tools')).value.tools[0].name, 'github.repository.read');
 assert.ok(calls.some((item) => item[0] === 'tool-list'));
+assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).status, 200);
+assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'owner-1-device');
+
+identity = { clientName: 'admin-key', via: 'api_key', client: { role: 'admin' } };
+assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).value.error, 'forbidden');
+assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'admin-key-device');
+
+identity = { clientName: 'admin-session', via: 'session', authFactors: [], client: { role: 'admin' } };
+assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).value.error, 'forbidden');
+assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'admin-session-device');
+
+identity = { clientName: 'admin-session', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
+assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).status, 200);
+assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'all-devices');
+
+identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
 body = {
   tool: 'broker.tools.inspect', tool_version: '1.0.0', account_ref: 'control-plane',
   environment: 'production', parameters: { resource_ref: 'tool-registry' }, idempotency_key: 'route-task-000001',

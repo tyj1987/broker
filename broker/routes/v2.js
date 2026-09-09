@@ -374,7 +374,7 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
-        send(res, 200, { devices: operationBroker.listDevices(identity.name, identity.isAdmin) });
+        send(res, 200, { devices: operationBroker.listDevices(identity) });
         return true;
       }
 

@@ -86,6 +86,13 @@ function publicDevice(device, includeOwner = true) {
   return result;
 }
 
+function canAdministerOtherOwners(identity) {
+  const context = identity?.context;
+  return context?.client?.role === 'admin'
+    && context.via === 'session'
+    && context.authFactors?.includes('webauthn');
+}
+
 function validatedDeviceKey(publicKeyPem, requestedAlgorithm = null) {
   if (typeof publicKeyPem !== 'string' || !publicKeyPem.includes('BEGIN PUBLIC KEY')) {
     throw new V2Error('invalid_request', 'device public key is invalid');
@@ -278,9 +285,9 @@ export class OperationBroker {
     return publicDevice(device, false);
   }
 
-  listDevices(owner, isAdmin = false) {
+  listDevices(identity) {
     return [...this.devices.values()]
-      .filter((device) => isAdmin || device.owner === owner)
+      .filter((device) => device.owner === identity?.name || canAdministerOtherOwners(identity))
       .map(publicDevice);
   }
 
@@ -391,7 +398,7 @@ export class OperationBroker {
   getOperation(identity, id) {
     const operation = this.operations.get(id);
     if (!operation) throw new V2Error('not_found', 'operation not found', 404);
-    if (operation.owner !== identity?.name && !identity?.isAdmin) {
+    if (operation.owner !== identity?.name && !canAdministerOtherOwners(identity)) {
       throw new V2Error('forbidden', 'operation access denied', 403);
     }
     this.expireOperation(operation);

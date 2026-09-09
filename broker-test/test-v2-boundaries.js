@@ -118,7 +118,7 @@ const failingPersistence = new OperationBroker({
 });
 failingPersistence.hydrateDevices(broker.deviceRecords());
 await assert.rejects(failingPersistence.suspendDevice(device.id), expectCode('persistence_failed'));
-assert.equal(failingPersistence.listDevices('owner-1')[0].state, 'active', 'failed suspension rolls back');
+assert.equal(failingPersistence.listDevices({ name: 'owner-1' })[0].state, 'active', 'failed suspension rolls back');
 
 assert.throws(() => broker.verifyDeviceRequest('missing', {}), expectCode('device_denied'));
 assert.throws(() => broker.verifyDeviceRequest(device.id, { timestamp: 'bad' }), expectCode('stale_request'));
@@ -150,7 +150,20 @@ const plain = await broker.createOperation({ name: 'owner-1' }, {
 assert.equal(plain.otp_task_id, null);
 assert.throws(() => broker.getOperation({ name: 'owner-1' }, 'missing'), expectCode('not_found'));
 assert.throws(() => broker.getOperation({ name: 'other' }, plain.id), expectCode('forbidden'));
-assert.equal(broker.getOperation({ name: 'admin', isAdmin: true }, plain.id).id, plain.id);
+assert.throws(() => broker.getOperation({
+  name: 'admin-key',
+  isAdmin: true,
+  context: { via: 'api_key', client: { role: 'admin' } },
+}, plain.id), expectCode('forbidden'));
+assert.throws(() => broker.getOperation({
+  name: 'admin-session',
+  isAdmin: true,
+  context: { via: 'session', authFactors: [], client: { role: 'admin' } },
+}, plain.id), expectCode('forbidden'));
+assert.equal(broker.getOperation({
+  name: 'admin-session',
+  context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } },
+}, plain.id).id, plain.id);
 
 const noCapacity = new OperationBroker({ ...policy, maxRecords: 0 });
 await assert.rejects(noCapacity.createOperation({ name: 'owner-1' }, {

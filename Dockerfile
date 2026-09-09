@@ -54,17 +54,28 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
 CMD ["node", "server.js"]
 
 # ============================================================
-# Stage 3: verified SOPS binary
+# Stage 3: SOPS built from a verified source archive and patched dependencies
 # ============================================================
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS sops
+FROM golang:1.27.1-alpine3.24@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS sops-build
 ARG SOPS_VERSION=3.13.3
-ARG SOPS_SHA256=e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
-RUN apk add --no-cache ca-certificates curl \
+ARG SOPS_SOURCE_SHA256=49811c5ed80f6b4d4e98cef98e3f7378406aa692fd773dfb72ad1b4dfb940448
+RUN apk add --no-cache ca-certificates curl tar \
     && curl --fail --location --proto '=https' --tlsv1.2 \
-      "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
-      --output /usr/local/bin/sops \
-    && echo "${SOPS_SHA256}  /usr/local/bin/sops" | sha256sum -c - \
-    && chmod 0755 /usr/local/bin/sops
+      "https://github.com/getsops/sops/archive/refs/tags/v${SOPS_VERSION}.tar.gz" \
+      --output /tmp/sops.tar.gz \
+    && echo "${SOPS_SOURCE_SHA256}  /tmp/sops.tar.gz" | sha256sum -c - \
+    && mkdir /src \
+    && tar -xzf /tmp/sops.tar.gz --strip-components=1 -C /src \
+    && rm /tmp/sops.tar.gz
+WORKDIR /src
+# The upstream v3.13.3 binaries predate these security releases. Build the
+# signed tag with patched direct dependencies and the repository's pinned Go.
+RUN go mod edit \
+      -require=golang.org/x/crypto@v0.55.0 \
+      -require=google.golang.org/grpc@v1.83.1 \
+    && CGO_ENABLED=0 go build -mod=mod -trimpath -buildvcs=false \
+      -ldflags='-s -w' -o /out/sops ./cmd/sops \
+    && /out/sops --version
 
 # ============================================================
 # Stage 4: Go policy core
@@ -83,13 +94,20 @@ FROM node:24.20.0-alpine3.24@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b64130
 
 WORKDIR /app
 
+# Apply Alpine security fixes available for the pinned release and remove the
+# package-manager toolchain, which is unnecessary at runtime.
+RUN apk upgrade --no-cache libcrypto3 libssl3 \
+    && rm -rf /usr/local/lib/node_modules/npm /opt/yarn-* \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
 # Copy production node_modules from deps stage
 COPY --from=deps /build/node_modules ./node_modules
-COPY --from=sops /usr/local/bin/sops /usr/local/bin/sops
+COPY --from=sops-build /out/sops /usr/local/bin/sops
 COPY --from=core-build /out/secret-broker-policy /app/bin/secret-broker-policy
 
 # Copy broker source
 COPY broker/ ./
+RUN rm -f package-lock.json
 
 ENV NODE_ENV=production \
     PKI_DIR=/run/secrets/broker/pki \

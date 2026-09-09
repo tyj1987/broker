@@ -356,8 +356,11 @@ async function loadConfig() {
   cfg.clients = cfg.clients || {};
   requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
   toolRegistry.validateConfiguration(cfg);
+  // Device hydration builds and validates a replacement map before swapping it.
+  // Keep CONFIG on the previous value until every candidate runtime dependency
+  // has accepted the new document.
+  operationBroker.hydrateDevices(cfg.device_registry || []);
   CONFIG = cfg;
-  operationBroker.hydrateDevices(CONFIG.device_registry || []);
   console.log(`[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`);
 }
 

@@ -257,6 +257,12 @@ assert.equal(persistedRecords.length, 1);
 const restored = new OperationBroker();
 restored.hydrateDevices(persistedRecords);
 assert.equal(restored.listDevices({ name: 'owner-2' })[0].id, durableDevice.id);
+const restoredSnapshot = restored.deviceRecords();
+assert.throws(
+  () => restored.hydrateDevices([...persistedRecords, { id: 'invalid-device' }]),
+  (error) => error instanceof V2Error && error.code === 'invalid_request',
+);
+assert.deepEqual(restored.deviceRecords(), restoredSnapshot, 'failed hydration preserves the active device registry');
 
 const failing = new OperationBroker({ persistDevices: async () => { throw new Error('disk unavailable'); } });
 const failingEnrollment = failing.beginEnrollment('owner-3', {

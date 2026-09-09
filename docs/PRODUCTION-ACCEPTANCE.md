@@ -23,13 +23,41 @@ findings below.
 
 No credential values, private keys, environment files, or secret configuration were read during this observation.
 
+## Production read-only revalidation
+
+The host was rechecked on 2026-09-09 through the IP identity already present in
+the operator's `known_hosts`. The DNS name itself had no saved ED25519 host-key
+entry and was therefore rejected under strict checking; no key was learned
+from the live connection.
+
+- Git blob hashes for the deployed `server.js`, `package.json`, and
+  `package-lock.json` exactly match `master@450c3ed2e1ffafb6507b908fc5b94a980c9820b0`.
+  They do not match the upgrade branch. The deployed `server.js` SHA-256 is
+  `bd09f039c40d10049b2fbb8106ab7d74fe93ccc6ee24b7652920f712a628a4d1`.
+- `secret-broker.service` is active as `root`; `secret-broker-policy.service`
+  is inactive. `/opt/secret-broker/broker` is a directory owned by
+  `mysql:mysql`, not a release symlink, and no deployed-release record exists.
+- nginx listens publicly on `443`; Broker listens only on
+  `127.0.0.1:8443`. Nothing listens on the expected loopback health port
+  `9080`.
+- nginx presents a dedicated upstream workload certificate with
+  `CN=client.nginx-bridge`, but the effective configuration still contains
+  `proxy_ssl_verify off`. A dedicated certificate name therefore does not
+  close the server-authentication failure.
+- Active nginx is version 1.20.1. The loopback `8443` health endpoint returns
+  only `{"status":"ok"}`.
+
+This was metadata-only verification. Certificate private keys, Broker secrets,
+environment files and credential values were not opened or printed.
+
 ## Production blockers observed
 
 | Severity | Evidence | Required remediation |
 |---|---|---|
 | P0 | Effective nginx configuration uses `proxy_ssl_verify off` for Broker upstream locations. | Enable CA and hostname verification, deploy the dedicated nginx workload certificate, and regression-test forged headers and direct backend access. |
+| P0 | Production still runs the pre-upgrade `master@450c3ed` Node boundary while the Go policy service is inactive. Current branch security fixes and decision enforcement are not deployed. | Complete staging and credential-rotation gates, then deploy one digest-addressed release with the Go policy service required and verify fail-closed behavior. |
 | P1 | `secret-broker.service` runs as `root`. | Run under a dedicated locked system account with only the required writable paths. |
-| P1 | `/opt/secret-broker/broker` is not a managed release symlink and no `deployed-release` baseline was present. | Perform a reviewed one-time migration to versioned releases before enabling atomic CI deployment. |
+| P1 | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present. | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment. |
 | P1 | nginx 1.20.1 is the active production version. | Move to a vendor-supported security-maintained release and record the package provenance. |
 | P2 | Broker listens only on `127.0.0.1:8443`, which prevents direct public access, but it has no separate observed `9080` health listener in the live configuration. | Deploy and verify the loopback-only health listener used by the hardened workflow. |
 

@@ -324,7 +324,7 @@
       <!-- ===== API Keys tab (v3.0 M2-C) ===== -->
       <section id="tab-api-keys" class="tab-content">
         <h2>🔑 API Key 管理 / API Key Management</h2>
-        <p class="muted">v3.0 M2 · 短命 Bearer Token · 适用于 Web 端 AI 客户端（无需 mTLS）</p>
+        <p class="muted">短期、可撤销、精确约束的工作负载凭据。MCP/Codex 应只使用类型化操作权限。</p>
 
         <!-- 顶部安全提示 banner -->
         <div class="me-section" style="border-left: 3px solid #d4a849;">
@@ -336,7 +336,7 @@
         <!-- 创建表单 -->
         <section class="me-section">
           <h3>创建新 API Key / Create New Key</h3>
-          <p class="muted">请填 label（标签）+ scope（权限）+ expires-in（有效期）。提交后会弹窗显示完整 key。</p>
+          <p class="muted">操作型 Key 必须同时绑定服务、操作、账户、资源和环境；任何一项缺失都会失败关闭。</p>
           <form id="form-create-key" autocomplete="off">
             <label>Label / 标签
               <input type="text" name="name" id="ak-name" required maxlength="64"
@@ -347,21 +347,47 @@
             <fieldset style="border:1px solid #1f2530;border-radius:4px;padding:8px 14px;margin:8px 0;">
               <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Scope / 权限（至少一项）</legend>
               <label style="display:block;margin:4px 0;">
-                <input type="checkbox" name="scope_resolve" id="ak-scope-resolve" value="secrets:resolve" checked />
-                <code>secrets:resolve</code> — 允许拉取密钥（白名单内）
+                <input type="checkbox" name="scope_operations" id="ak-scope-operations" value="operations:execute" checked />
+                <code>operations:execute</code> — MCP/Codex 类型化任务（推荐）
               </label>
               <label style="display:block;margin:4px 0;">
-                <input type="checkbox" name="scope_proxy" id="ak-scope-proxy" value="services:proxy" checked />
-                <code>services:proxy</code> — 允许代理外部服务调用
+                <input type="checkbox" name="scope_proxy" id="ak-scope-proxy" value="services:proxy" />
+                <code>services:proxy</code> — 旧版固定服务代理（兼容用途）
+              </label>
+              <label style="display:block;margin:4px 0;">
+                <input type="checkbox" name="scope_resolve" id="ak-scope-resolve" value="secrets:resolve" />
+                <code>secrets:resolve</code> — 明文导出（不应用于 AI/MCP）
+              </label>
+            </fieldset>
+
+            <fieldset id="ak-operation-constraints" style="border:1px solid #1f2530;border-radius:4px;padding:8px 14px;margin:8px 0;">
+              <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Typed operation constraints / 类型化操作边界</legend>
+              <p class="hint">每行或逗号分隔；禁止 <code>*</code>。值必须与 Broker 已登记策略完全一致。</p>
+              <label>Services / 服务
+                <textarea name="allowed_services" id="ak-allowed-services" rows="2" placeholder="github"></textarea>
+              </label>
+              <label>Operations / 操作
+                <textarea name="allowed_operations" id="ak-allowed-operations" rows="3" placeholder="github:repository.read"></textarea>
+              </label>
+              <label>Accounts / 账户引用
+                <textarea name="allowed_accounts" id="ak-allowed-accounts" rows="2" placeholder="52trz-github"></textarea>
+              </label>
+              <label>Resources / 资源引用
+                <textarea name="allowed_resources" id="ak-allowed-resources" rows="3" placeholder="tyj1987/52trz"></textarea>
+              </label>
+              <label>Environments / 环境
+                <textarea name="allowed_environments" id="ak-allowed-environments" rows="2" placeholder="development, staging"></textarea>
+              </label>
+              <label>Secret refs / 密钥引用（仅需要凭据的操作）
+                <textarea name="allowed_secrets" id="ak-allowed-secrets" rows="2" placeholder="GITHUB_APP"></textarea>
               </label>
             </fieldset>
 
             <label>有效期 / Expires-in
               <select name="ttl_seconds" id="ak-ttl" required>
+                <option value="3600">1 小时 / 1 hour</option>
                 <option value="86400">24 小时 / 24 hours</option>
                 <option value="604800" selected>7 天 / 7 days (推荐 / recommended)</option>
-                <option value="2592000">30 天 / 30 days</option>
-                <option value="0">永久（不推荐） / Never (not recommended)</option>
               </select>
             </label>
 

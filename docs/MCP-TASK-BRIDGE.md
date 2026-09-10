@@ -35,6 +35,15 @@ messages and all other upstream body fields are discarded, so an orchestrator
 can route retry or approval handling without receiving provider details or
 credential material.
 
+For Codex and other local clients that support MCP STDIO, start the bridge with
+`--transport stdio`. STDIO mode does not open a listening socket and does not
+use a listener token; each JSON-RPC message is one bounded line on stdin and
+responses are written only to stdout. Diagnostics remain on stderr. The same
+file-loaded scoped Broker API key, optional mTLS files, fixed Broker paths,
+TLS verification and response redaction apply to both transports. HTTP remains
+the default for clients that require Streamable HTTP and still requires a
+separate `--listener-token-file` capability.
+
 The old `healthcheck.upstream: mcp_server` setting is rejected. Credential
 health checks remain inside the Broker's controlled local implementation until
 a typed, provider-specific health operation is registered. This prevents a

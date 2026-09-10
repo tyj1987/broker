@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { stdin as processStdin, stdout as processStdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createMcpTaskBridge } from './lib/mcp-task-bridge.js';
@@ -17,6 +18,12 @@ const SERVER_INFO = Object.freeze({
   version: '4.2.0',
   protocolVersion: '2025-06-18',
 });
+const SERVER_INSTRUCTIONS = [
+  'Use only the typed Broker tools returned by tools/list.',
+  'Never request, print, store or infer credentials.',
+  'Respect PENDING_APPROVAL and do not retry an uncertain execution.',
+  'Use a fresh idempotency_key for each new intent and reuse it only for an exact retry.',
+].join(' ');
 
 export function parseArgs(argv) {
   const args = {};
@@ -197,6 +204,7 @@ async function handleRpc(bridge, request) {
       protocolVersion: SERVER_INFO.protocolVersion,
       serverInfo: { name: SERVER_INFO.name, version: SERVER_INFO.version },
       capabilities: { tools: {} },
+      instructions: SERVER_INSTRUCTIONS,
     });
   }
   if (request.method === 'ping') return rpcResult(request.id, {});
@@ -222,6 +230,71 @@ async function handleRpc(bridge, request) {
     }
   }
   return rpcError(request.id, -32601, 'Method not found');
+}
+
+export function createMcpStdioServer({ bridge, input = processStdin, output = processStdout } = {}) {
+  if (!bridge || typeof bridge.listTools !== 'function' || typeof bridge.callTool !== 'function') {
+    throw new TypeError('MCP bridge is invalid');
+  }
+  if (!input || typeof input.on !== 'function' || !output || typeof output.write !== 'function') {
+    throw new TypeError('MCP stdio streams are invalid');
+  }
+
+  let buffer = Buffer.alloc(0);
+  let stopped = false;
+  let pending = Promise.resolve();
+  const write = (message) => output.write(`${JSON.stringify(message)}\n`);
+  const processLine = async (line) => {
+    if (!line.trim()) return;
+    let request;
+    try {
+      request = JSON.parse(line);
+    } catch {
+      write(rpcError(null, -32700, 'Parse error'));
+      return;
+    }
+    if (Array.isArray(request)) {
+      write(rpcError(null, -32600, 'Invalid JSON-RPC request'));
+      return;
+    }
+    const response = await handleRpc(bridge, request);
+    if (response !== null) write(response);
+  };
+  const stopOversizedInput = () => {
+    if (stopped) return;
+    stopped = true;
+    buffer = Buffer.alloc(0);
+    write(rpcError(null, -32700, 'MCP message is too large'));
+    input.pause?.();
+  };
+
+  input.on('data', (chunk) => {
+    if (stopped) return;
+    buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
+    if (buffer.byteLength > MAX_HTTP_BODY_BYTES) {
+      stopOversizedInput();
+      return;
+    }
+    let newline;
+    while ((newline = buffer.indexOf(0x0a)) >= 0) {
+      const line = buffer.subarray(0, newline).toString('utf8').replace(/\r$/, '');
+      buffer = buffer.subarray(newline + 1);
+      pending = pending.then(() => processLine(line)).catch(() => {
+        write(rpcError(null, -32603, 'Internal error'));
+      });
+    }
+  });
+  input.on('end', () => {
+    if (stopped || buffer.byteLength === 0) return;
+    const line = buffer.toString('utf8').replace(/\r$/, '');
+    buffer = Buffer.alloc(0);
+    pending = pending.then(() => processLine(line)).catch(() => {
+      write(rpcError(null, -32603, 'Internal error'));
+    });
+  });
+  return Object.freeze({
+    get pending() { return pending; },
+  });
 }
 
 function allowedHost(value, port) {
@@ -339,6 +412,8 @@ export async function boot(
     readFileImpl = readFileSync,
     requestImpl = httpsRequest,
     createServerImpl = createHttpServer,
+    input = processStdin,
+    output = processStdout,
   } = {},
 ) {
   const args = parseArgs(argv);
@@ -349,20 +424,9 @@ export async function boot(
     .toString('utf8')
     .trim();
   if (!API_KEY_RE.test(apiKey)) throw new Error('Broker API key file is invalid');
-  const listenerToken = readCredential(
-    args['listener-token-file'],
-    'MCP listener token',
-    readFileImpl,
-  )
-    .toString('utf8')
-    .trim();
-  if (!LISTENER_TOKEN_RE.test(listenerToken) || listenerToken === apiKey) {
-    throw new Error('MCP listener token file is invalid');
-  }
+  const transport = args.transport || 'http';
+  if (!['http', 'stdio'].includes(transport)) throw new Error('MCP transport is invalid');
   const origin = normalizeBrokerOrigin(args.broker || 'https://127.0.0.1:18443');
-  const port = Number(args.port || 3001);
-  const host = args.host || '127.0.0.1';
-  if (!['127.0.0.1', '::1'].includes(host)) throw new Error('MCP must bind to a loopback address');
 
   const cert = args['client-cert-file']
     ? readCredential(args['client-cert-file'], 'Broker client certificate', readFileImpl)
@@ -375,6 +439,28 @@ export async function boot(
     : undefined;
   const callBroker = createBrokerClient({ origin, apiKey, cert, key, ca, requestImpl });
   const bridge = createMcpTaskBridge({ callBroker });
+  if (transport === 'stdio') {
+    if (args['listener-token-file'] || args.host || args.port) {
+      throw new Error('HTTP listener options are not allowed with stdio transport');
+    }
+    await bridge.listTools();
+    const server = createMcpStdioServer({ bridge, input, output });
+    console.error('[mcp] ready on stdio; typed Broker tasks only');
+    return server;
+  }
+  const listenerToken = readCredential(
+    args['listener-token-file'],
+    'MCP listener token',
+    readFileImpl,
+  )
+    .toString('utf8')
+    .trim();
+  if (!LISTENER_TOKEN_RE.test(listenerToken) || listenerToken === apiKey) {
+    throw new Error('MCP listener token file is invalid');
+  }
+  const port = Number(args.port || 3001);
+  const host = args.host || '127.0.0.1';
+  if (!['127.0.0.1', '::1'].includes(host)) throw new Error('MCP must bind to a loopback address');
   const server = createMcpHttpServer({ bridge, listenerToken, port, createServerImpl });
   await bridge.listTools();
   server.listen(port, host, () => {

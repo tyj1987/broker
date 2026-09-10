@@ -12,6 +12,10 @@
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  const parseList = (value) => [...new Set(String(value || '')
+    .split(/[\r\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean))];
 
   // ---- 加载列表 ----
   async function loadKeys() {
@@ -73,11 +77,33 @@
 
     const name = (form.name.value || '').trim();
     const scopes = [];
+    if (form.scope_operations.checked) scopes.push('operations:execute');
     if (form.scope_resolve.checked) scopes.push('secrets:resolve');
     if (form.scope_proxy.checked) scopes.push('services:proxy');
     if (scopes.length === 0) {
       setStatus('#create-key-status', '❌ 至少勾选一个 scope', 'err');
       return;
+    }
+    const operationConstraints = {
+      allowed_services: parseList(form.allowed_services.value),
+      allowed_operations: parseList(form.allowed_operations.value),
+      allowed_accounts: parseList(form.allowed_accounts.value),
+      allowed_resources: parseList(form.allowed_resources.value),
+      allowed_environments: parseList(form.allowed_environments.value),
+      allowed_secrets: parseList(form.allowed_secrets.value),
+    };
+    if (scopes.includes('operations:execute')) {
+      const missing = Object.entries(operationConstraints)
+        .filter(([field, values]) => field !== 'allowed_secrets' && values.length === 0)
+        .map(([field]) => field);
+      if (missing.length > 0) {
+        setStatus('#create-key-status', `❌ 类型化操作缺少边界: ${missing.join(', ')}`, 'err');
+        return;
+      }
+      if (Object.values(operationConstraints).flat().includes('*')) {
+        setStatus('#create-key-status', '❌ 不允许通配符；请填写精确服务、操作、账户、资源和环境', 'err');
+        return;
+      }
     }
     const verify = (form.verify.value || '').trim();
     if (!verify) {
@@ -85,7 +111,7 @@
       return;
     }
     const ttlRaw = form.ttl_seconds.value;
-    const body = { name, scopes, verify };
+    const body = { name, scopes, verify, ...operationConstraints };
     if (ttlRaw !== '0') body.ttl_seconds = parseInt(ttlRaw, 10);
 
     try {
@@ -96,8 +122,9 @@
       form.reset();
       // TTL 回到默认 7d
       $('#ak-ttl').value = '604800';
-      $('#ak-scope-resolve').checked = true;
-      $('#ak-scope-proxy').checked = true;
+      $('#ak-scope-operations').checked = true;
+      $('#ak-scope-resolve').checked = false;
+      $('#ak-scope-proxy').checked = false;
       $('#ak-verify').value = '';  // 安全: 清空 verify 字段
       await loadKeys();
     } catch (ex) {

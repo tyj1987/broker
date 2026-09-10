@@ -63,6 +63,15 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   assert(clientsUi.includes('⚠ 证书副本缺失'), 'writable PKI mode still warns when its certificate copy is missing');
   assert(html.includes('Broker 只保存已授权证书指纹，不保存客户端私钥'), 'read-only PKI banner explains the production trust boundary');
   assert(!html.includes('scripts/issue-client-cert.sh'), 'dashboard does not recommend a missing production script');
+  const apiKeysUi = readFileSync(join(root, 'api-keys.js'), 'utf8');
+  assert(html.includes('id="ak-scope-operations"'), 'API key form offers typed operation scope');
+  assert(!html.includes('id="ak-scope-resolve" value="secrets:resolve" checked'), 'plaintext resolve is not selected by default');
+  for (const field of ['allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_resources', 'allowed_environments']) {
+    assert(html.includes(`name="${field}"`), `API key form includes ${field}`);
+    assert(apiKeysUi.includes(`${field}: parseList`), `API key request includes ${field}`);
+  }
+  assert(apiKeysUi.includes("includes('*')"), 'API key form rejects wildcard grants');
+  assert(apiKeysUi.includes("scopes.push('operations:execute')"), 'API key request uses typed operation scope');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

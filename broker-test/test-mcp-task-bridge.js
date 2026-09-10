@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 
 import { createMcpTaskBridge, MCP_CONTROL_TOOLS } from '../broker/lib/mcp-task-bridge.js';
 import {
   boot,
   createBrokerClient,
   createMcpHttpServer,
+  createMcpStdioServer,
   normalizeBrokerOrigin,
   parseArgs,
 } from '../broker/mcp-server.js';
@@ -402,6 +403,28 @@ for (const port of [0, 65_536, 1.5]) {
   assert.throws(() => createMcpHttpServer({ bridge, listenerToken: LISTENER_TOKEN, port }), /port/);
 }
 
+const stdioInput = new PassThrough();
+const stdioOutput = new PassThrough();
+let stdioText = '';
+stdioOutput.on('data', (chunk) => { stdioText += chunk.toString('utf8'); });
+const stdioServer = createMcpStdioServer({ bridge, input: stdioInput, output: stdioOutput });
+stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'initialize' })}\n`);
+stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/list' })}\n`);
+await stdioServer.pending;
+const stdioMessages = stdioText.trim().split('\n').map((line) => JSON.parse(line));
+assert.deepEqual(stdioMessages.map((message) => message.id), [11, 12]);
+assert.match(stdioMessages[0].result.instructions, /Never request, print, store or infer credentials/);
+assert.equal(stdioMessages[1].result.tools.some((tool) => tool.name === driveTool.name), true);
+stdioText = '';
+stdioInput.write('not-json\n');
+stdioInput.write('[]\n');
+await stdioServer.pending;
+const stdioErrors = stdioText.trim().split('\n').map((line) => JSON.parse(line));
+assert.deepEqual(stdioErrors.map((message) => message.error.code), [-32700, -32600]);
+assert.throws(() => createMcpStdioServer({ input: stdioInput, output: stdioOutput }), /bridge/);
+assert.throws(() => createMcpStdioServer({ bridge, input: {}, output: stdioOutput }), /streams/);
+
 let bootListen;
 const bootFiles = new Map([
   ['api-key', API_KEY],
@@ -448,6 +471,35 @@ const bootServer = await boot(
 );
 assert.equal(typeof bootServer.listen, 'function');
 assert.deepEqual(bootListen, { port: 3002, host: '::1' });
+const bootStdioInput = new PassThrough();
+const bootStdioOutput = new PassThrough();
+const bootStdio = await boot(
+  ['node', 'mcp', '--api-key-file', 'api-key', '--transport', 'stdio'],
+  {},
+  {
+    readFileImpl: (path) => Buffer.from(bootFiles.get(path)),
+    requestImpl,
+    input: bootStdioInput,
+    output: bootStdioOutput,
+  },
+);
+assert.equal(typeof bootStdio.pending.then, 'function');
+await assert.rejects(
+  boot(
+    ['node', 'mcp', '--api-key-file', 'api-key', '--transport', 'stdio', '--port', '3001'],
+    {},
+    { readFileImpl: (path) => Buffer.from(bootFiles.get(path)), requestImpl },
+  ),
+  /not allowed with stdio/,
+);
+await assert.rejects(
+  boot(
+    ['node', 'mcp', '--api-key-file', 'api-key', '--transport', 'invalid'],
+    {},
+    { readFileImpl: (path) => Buffer.from(bootFiles.get(path)), requestImpl },
+  ),
+  /transport is invalid/,
+);
 await assert.rejects(boot(['node', 'mcp', '--master-key', 'value'], {}), /not supported/);
 await assert.rejects(boot(['node', 'mcp'], { MCP_MASTER_KEY: 'value' }), /not supported/);
 await assert.rejects(

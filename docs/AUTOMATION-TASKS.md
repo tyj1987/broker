@@ -5,6 +5,30 @@ agents. A caller names a registered tool and supplies schema-checked parameters;
 it cannot supply a URL, authentication header, credential, command or adapter
 implementation.
 
+## Implementation and rollout status
+
+The task model, lifecycle, typed MCP bridge, risk routing, approval binding,
+single-use execution capability, durable single-node checkpoint and structured
+transition audit are implemented, regression-tested and deployed in
+`master@fdf0ada1976c5762f7373725f3b0502c76ecdf2b`. The deployed executable
+catalog is intentionally smaller than the source registry: a registered
+manifest is not visible until a runtime executor and reviewed policy are both
+available.
+
+The current safe acceptance operation is
+`broker.tools.inspect@1.0.0`. The next rollout checkpoint is a seven-day,
+file-delivered MCP key constrained to that one operation, the `control-plane`
+account, the `tool-registry` resource and the production environment, followed
+by live `initialize`, `tools/list`, allowed execution and wrong
+account/resource/environment denial tests. Provider operations remain disabled
+until their isolated account binding and real contract evidence are available.
+
+This changes the active implementation plan from building another task model
+to validating the deployed orchestration boundary, then enabling providers one
+bounded read-only operation at a time. It does not authorize a second task API,
+an arbitrary proxy compatibility route, a remote MCP listener, or bulk provider
+activation.
+
 This typed boundary supersedes the early `/api/v1/tools/:name/invoke`
 placeholder in the P0 tracking issue. The unrestricted compatibility route is
 intentionally not implemented.

@@ -2,6 +2,39 @@
 
 This document records observed evidence separately from planned controls. Passing source tests does not approve a production release.
 
+## Current rollout checkpoint (2026-09-11)
+
+The current source and deployed release baseline is
+`master@fdf0ada1976c5762f7373725f3b0502c76ecdf2b`. GitHub Actions run
+`34523649436` completed the required source, security, coverage, client,
+container, SBOM and provenance jobs for that commit. Deploy run `34525032701`
+then completed successfully without rebuilding dependencies on the host.
+
+An independent, strictly host-key-verified read-only check observed the active
+release symlink at that exact commit, both Broker services active, and the
+loopback readiness response reporting loaded configuration and SOPS state.
+The public health endpoint also returned its minimal healthy response. No
+credential, private key or decrypted configuration value was read for this
+check.
+
+The deployment helper now rejects a candidate before switching the active
+symlink when its packaged audit verifier is missing or when the current audit
+chain cannot be validated as the Broker service account. Candidate extraction
+is staged and renamed atomically. Candidate and rollback health checks use the
+readiness endpoint; a rollback that cannot restore both required services and
+readiness fails explicitly. This behavior is covered by the Node verification
+suite at commit `df1d0f05b28257ee07d6d80dd5bb78128c598a1d`, which was squash
+merged into the baseline above.
+
+This checkpoint proves the running release identity and the repaired
+deployment path. It does not approve the whole product for production. In
+particular, independent audit anchoring, provider contract evidence, workload
+identity for MCP, physical-device tests, credential-rotation evidence and the
+disaster-recovery rehearsal remain open. The 2026-09-09 baseline and blockers
+below are retained as historical evidence; statements that the host still runs
+`450c3ed` are superseded by this checkpoint, while any blocker without explicit
+closure evidence remains open.
+
 ## Source and time policy enforcement
 
 Typed operations now enforce optional IPv4/IPv6 CIDR and absolute RFC 3339

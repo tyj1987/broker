@@ -132,7 +132,10 @@ continue.
   for the local listener and a pre-provisioned scoped Broker API key. The two
   values cannot be reused. Master keys, environment credentials, secret
   resolution, arbitrary proxying and external MCP healthcheck execution are
-  denied.
+  denied. The deployed STDIO bridge is being accepted first with a seven-day
+  key constrained to `broker:tools.inspect`, `control-plane`, `tool-registry`
+  and `production`; this proves the boundary but does not close this decision
+  or authorize remotely reachable MCP execution.
 
 ## DQ-009: production trust-domain cutover
 

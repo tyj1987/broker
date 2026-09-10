@@ -93,6 +93,18 @@ also has deterministic success, per-gate failure and output non-disclosure
 tests. This is source and read-only runtime evidence; it is not a migration or
 release approval.
 
+### 2026-09-10 生产 CD 触发条件（当前执行规则）
+
+当前分支已保留“发布前安全前置条件”与“CI 先于 CD”链路：
+
+- `CI` 触发源：`push` 到 `master`（仅当变更路径包含代码/流程文件时触发）；`pull_request` 仍触发 CI；`workflow_dispatch` 为手工补充执行；
+- `Deploy ECS` 仅在 `CI` 运行成功后通过 `workflow_run` 回调触发；
+- `Deploy ECS` 需要 `production-aliyun` 环境审批；
+- 部署脚本强制校验 `release` 压缩包 SHA-256、`provenance`、SSH 主机指纹与固定部署路径；
+- 生产阻断项（见“生产阻断项”章节）未清零前，不应将任何 `master` 变更视为“可发布”。
+
+结论：只有当阻断项清单经过一次真实生产前置校验通过，且目标提交的 CI 为完整成功绿灯后，才属于“可实际 CD”状态。
+
 ## Local evidence obtained on the upgrade branch
 
 - Tool discovery now exposes only capabilities with an executor registered in

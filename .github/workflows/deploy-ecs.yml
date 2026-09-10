@@ -54,7 +54,8 @@ jobs:
       - working-directory: broker
         run: rm -rf node_modules/.bin
       - name: Build Go policy core
-        run: go build -trimpath -buildvcs=true -ldflags='-s -w' -o broker/bin/secret-broker-policy ./core/cmd/policy-server
+        working-directory: core
+        run: go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-policy ./cmd/policy-server
       - name: Create immutable payload and checksum
         run: |
           cp -R tools broker/tools

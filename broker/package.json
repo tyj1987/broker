@@ -33,7 +33,7 @@
     "test:can-proxy-policy": "node ../broker-test/test-can-proxy-policy-engine.js",
     "test:read-api": "node ../broker-test/test-read-api.js",
     "test:audit-async": "node ../broker-test/test-audit-async.js",
-    "test:audit-hash-chain": "node ../broker-test/test-audit-hash-chain.js",
+    "test:audit-hash-chain": "node ../broker-test/test-audit-hash-chain.js && node ../broker-test/test-audit-chain-check-cli.js",
     "test:fuzz-parsers": "node ../broker-test/test-fuzz-parsers.js",
     "test:log": "node ../broker-test/test-log.js",
     "test:webauthn": "node ../broker-test/test-webauthn.js",

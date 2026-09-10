@@ -3326,8 +3326,10 @@ function start() {
             jsonError(res, 404, `Not found: ${route.method} ${route.pathname}`);
           }
         },
-      }).catch((e) => {
-        console.warn('[broker] local health listener failed:', e.message);
+      }).catch(() => {
+        console.error('[broker] required local health listener failed; terminating');
+        server.close(() => process.exit(1));
+        setTimeout(() => process.exit(1), 5_000).unref();
       });
     }
 

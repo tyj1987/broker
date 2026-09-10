@@ -11,6 +11,7 @@ const nginx = read('../deploy/nginx/broker.52trz.com.conf');
 const workflow = read('../.github/workflows/ci.yml');
 const deployWorkflow = read('../.github/workflows/deploy-ecs.yml');
 const dockerfile = read('../Dockerfile');
+const server = read('../broker/server.js');
 
 assert.match(service, /LoadCredential=control-plane-state\.key:/);
 assert.match(service, /CONTROL_PLANE_STATE_KEY_FILE=%d\/control-plane-state\.key/);
@@ -41,11 +42,20 @@ assert.match(service, /Environment=TLS_KEY=\/etc\/secret-broker\/pki\/server\/se
 assert.match(migration, /`root:broker`, `0750`/);
 assert.match(migration, /Separately extract the verified candidate artifact/);
 assert.match(deployHelper, /readonly NODE_RUNTIME=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
+assert.match(deployHelper, /readonly HEALTH_URL=http:\/\/127\.0\.0\.1:9080\/ready/);
 assert.match(deployHelper, /chown -R root:broker/);
-assert.match(deployHelper, /find "\$RELEASE" -type d -exec chmod 0550/);
+assert.match(deployHelper, /find "\$PAYLOAD" -type d -exec chmod 0550/);
 assert.match(deployHelper, /for _ in \{1\.\.20\}/);
-assert.match(deployHelper, /-f "\$RELEASE\/tools\/registry\.json"/);
+assert.match(deployHelper, /-f "\$PAYLOAD\/tools\/registry\.json"/);
+assert.match(deployHelper, /\.failed-\$RELEASE_SHA-/);
+assert.match(deployHelper, /runuser -u broker -- env AUDIT_DIR=/);
+assert.match(deployHelper, /candidate cannot read the current audit chain/);
+assert.match(deployHelper, /rollback failed readiness verification/);
+assert.match(deployHelper, /exit 71/);
 assert.doesNotMatch(deployHelper, /chown -R broker:broker/);
+assert.match(server, /required local health listener failed; terminating/);
+assert.match(server, /server\.close\(\(\) => process\.exit\(1\)\)/);
+assert.doesNotMatch(server, /local health listener failed:', e\.message/);
 assert.match(deployWorkflow, /cp -R tools broker\/tools/);
 assert.match(
   deployWorkflow,

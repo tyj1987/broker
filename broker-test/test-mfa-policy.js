@@ -56,14 +56,15 @@ section('calcRiskScore basics');
 }
 {
   // all factors combined
-  const old = Date.now() - 40 * 86400_000;
+  const riskNow = new Date(2026, 8, 1, 3, 0, 0);  // local 3 AM
+  const old = riskNow.getTime() - 40 * 86400_000;
   const r = calcRiskScore({
     source_ip: '8.8.8.8',
     client: { ip_whitelist: ['10.0.0.0/8'] },
     last_login_at: old,
     action: 'rotate-cert',
     user_agent: 'A', last_user_agent: 'B',
-    now: new Date(2026, 8, 1, 3, 0, 0),  // local 3 AM
+    now: riskNow,
   });
   ok('combined = 30+20+25+10+15 = 100 (capped)', r.score === 100 && r.factors.length === 5);
 }

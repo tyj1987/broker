@@ -1,6 +1,6 @@
 # GitHub repository adapter
 
-The GitHub provider currently implements two credential-isolated, read-only
+The GitHub provider currently implements three credential-isolated, read-only
 operations:
 
 - `github.repository.read@1.0.0` calls `GET /repos/{owner}/{repo}` and returns
@@ -9,6 +9,12 @@ operations:
   `GET /repos/{owner}/{repo}/branches` and returns at most 100 branch names,
   commit identifiers and protection flags. Pagination and the optional
   protection filter are typed and bounded.
+- `github.commits.list@1.0.0` calls
+  `GET /repos/{owner}/{repo}/commits` and returns at most 100 commit identifiers,
+  commit times, signature-verification flags and optional GitHub login names.
+  Branch/SHA, path, author, committer and time filters are typed and bounded.
+  Commit messages, email addresses, signatures and signed payloads are excluded
+  from the Agent-visible result.
 
 The adapter fixes the origin to `https://api.github.com`, the method to `GET`,
 redirect handling to manual denial, the response limit to 1 MiB and the API
@@ -30,9 +36,9 @@ resolver and a non-exportable RS256 signer. The provider creates a short App
 JWT and requests a token for exactly one repository. Its required permissions
 are fixed when the provider is constructed, accept explicit read-only grants
 only, and are checked exactly in the GitHub response and returned lease.
-Repository metadata uses only `Metadata: read`; branch listing uses only
-`Contents: read`. Account bindings must also match the requested environment
-and repository.
+Repository metadata uses only `Metadata: read`; branch and commit listing use
+only `Contents: read`. Account bindings must also match the requested
+environment and repository.
 
 The signer receives only the JWT signing input and binding metadata. It must
 return signature bytes; the provider has no private-key loading API. The shared
@@ -46,7 +52,7 @@ prohibited.
 ## Verification status
 
 Unit contract tests cover path and target injection, typed pagination and
-filtering, bounded branch projection, execution-binding
+filtering, bounded branch and commit projections, execution-binding
 tampering, App/account/environment/repository binding, JWT claims and algorithm,
 invalid signer results, fixed read-only token permissions, missing/wrong/expired/overlong
 leases, redirect denial, upstream status mapping, invalid and oversized
@@ -63,3 +69,4 @@ Official references checked on 2026-09-10:
 - [Authenticate as a GitHub App installation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
 - [Choose GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)
 - [List branches](https://docs.github.com/en/rest/branches/branches#list-branches)
+- [List commits](https://docs.github.com/en/rest/commits/commits#list-commits)

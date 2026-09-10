@@ -10,6 +10,7 @@ official_docs:
   - https://docs.github.com/en/rest/authentication
   - https://docs.github.com/en/rest/repos/repos#get-a-repository
   - https://docs.github.com/en/rest/branches/branches#list-branches
+  - https://docs.github.com/en/rest/commits/commits#list-commits
 origins: [https://api.github.com]
 authentication:
   priority: [github_app_installation_token, actions_oidc, fine_grained_pat]
@@ -34,6 +35,14 @@ operations:
     mutating: false
     approval: none
     parameters: { owner: { type: string }, repo: { type: string }, protected: { type: boolean }, page: { type: integer }, per_page: { type: integer, maximum: 100 } }
+    maximum_response_bytes: 1048576
+  - id: commits.list
+    method: GET
+    path_template: /repos/{owner}/{repo}/commits
+    permission: contents:read
+    mutating: false
+    approval: none
+    parameters: { owner: { type: string }, repo: { type: string }, sha: { type: string }, path: { type: string }, author: { type: string }, committer: { type: string }, since: { type: string }, until: { type: string }, page: { type: integer }, per_page: { type: integer, maximum: 100 } }
     maximum_response_bytes: 1048576
 redaction: [Authorization, installation_token, app_private_key, jwt]
 contract_test: { account: isolated_github_app, required: true, last_result: not_run }

@@ -128,6 +128,24 @@
       "agent_execution": true
     },
     {
+      "name": "github.commits.list",
+      "version": "1.0.0",
+      "description": "List bounded commit metadata through a repository-scoped GitHub App installation.",
+      "provider": "github",
+      "operation_id": "commits.list",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "owner", "repo"], "properties": { "resource_ref": { "type": "string" }, "owner": { "type": "string" }, "repo": { "type": "string" }, "sha": { "type": "string" }, "path": { "type": "string" }, "author": { "type": "string" }, "committer": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" }, "page": { "type": "integer" }, "per_page": { "type": "integer" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["commits", "page", "per_page", "has_more"], "properties": { "commits": { "type": "array" }, "page": { "type": "integer" }, "per_page": { "type": "integer" }, "has_more": { "type": "boolean" } } },
+      "required_role": "developer",
+      "risk_level": "LOW",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "github-repository", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 60, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "installation_token", "message", "email", "signature", "payload"] },
+      "agent_execution": true
+    },
+    {
       "name": "cloudflare.zones.list",
       "version": "1.0.0",
       "description": "List Cloudflare zones visible to a scoped service token.",

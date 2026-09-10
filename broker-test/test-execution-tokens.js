@@ -84,12 +84,17 @@ assert.equal(
 
 const restoreGuard = new ExecutionTokenBroker({ now: () => restartNow });
 const guardCapability = restoreGuard.issue(binding);
+const validDurableRecord = durableState.records[0];
 for (const corrupt of [
   null,
   { version: 2, records: [] },
   { version: 1, records: 'not-an-array' },
-  { version: 1, records: [{ ...durableState.records[0], status: 'UNKNOWN' }] },
-  { version: 1, records: [durableState.records[0], durableState.records[0]] },
+  { version: 1, records: [{ ...validDurableRecord, actor: 42 }] },
+  { version: 1, records: [{ ...validDurableRecord, id: 'not-a-uuid' }] },
+  { version: 1, records: [{ ...validDurableRecord, tokenHash: 'not-a-digest' }] },
+  { version: 1, records: [{ ...validDurableRecord, status: 'UNKNOWN' }] },
+  { version: 1, records: [{ ...validDurableRecord, status: 'ACTIVE', consumedAt: restartNow }] },
+  { version: 1, records: [validDurableRecord, validDurableRecord] },
   { ...durableState, unexpected: true },
 ]) {
   assert.throws(() => restoreGuard.restoreState(corrupt), expectCode('state_corrupt'));

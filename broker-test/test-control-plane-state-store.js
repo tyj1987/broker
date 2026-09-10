@@ -109,7 +109,9 @@ try {
   assert.deepEqual(approvals.exportState(), beforeFailure, 'failed restore must roll back earlier components');
 
   const tampered = JSON.parse(serialized);
-  tampered.ciphertext = `${tampered.ciphertext.slice(0, -1)}${tampered.ciphertext.endsWith('A') ? 'B' : 'A'}`;
+  const tamperedCiphertext = Buffer.from(tampered.ciphertext, 'base64url');
+  tamperedCiphertext[0] ^= 0x01;
+  tampered.ciphertext = tamperedCiphertext.toString('base64url');
   writeFileSync(statePath, JSON.stringify(tampered));
   assert.throws(() => store.load(), code('state_decrypt_failed'));
   assert.deepEqual(approvals.exportState(), beforeFailure, 'tampered disk state must not alter memory');

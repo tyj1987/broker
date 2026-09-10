@@ -50,7 +50,11 @@ strict deployment.
 
 The implementation validates `user@host[:port]`, bounds command and output
 sizes, starts OpenSSH without a local shell, writes temporary key material with
-mode `0600`, and removes it in a `finally` path. These controls reduce local
+mode `0600`, and removes it in a `finally` path. The selected `ssh_connection`
+must also bind the requested host, port and username and contain an
+independently verified OpenSSH `known_hosts` entry. The compatibility runner
+uses `StrictHostKeyChecking=yes`; unknown or changed host keys fail closed and
+first-use acceptance is forbidden. These controls reduce local
 injection and leakage risk, but they do not make an arbitrary remote command
 safe: OpenSSH sends the command to the remote login shell, where shell syntax
 can be interpreted.
@@ -85,8 +89,8 @@ operation is enabled until its isolated-target contract test has passed.
 
 ## Verification
 
-`broker-test/test-ssh-proxy.js` covers compatibility parsing, executor argument
-construction, output handling, temporary-file cleanup, tunnel lifecycle and
-credential non-disclosure. Passing those tests validates the compatibility
-implementation only; it does not approve the feature for a strict profile or
-for production.
+`broker-test/test-ssh-proxy.js` covers compatibility parsing, strict host-key
+pinning, secret-bound targets, executor argument construction, output handling,
+temporary-file cleanup, tunnel lifecycle and credential non-disclosure.
+Passing those tests validates the compatibility implementation only; it does
+not approve the feature for a strict profile or for production.

@@ -219,6 +219,9 @@ export const TYPE_SCHEMAS = {
         help: '默认 22，留空使用默认' },
       { name: 'username', label: '用户名', kind: 'text', required: true,
         placeholder: 'root' },
+      { name: 'known_hosts', label: '受信任主机密钥', kind: 'textarea', required: true,
+        placeholder: '[192.168.2.30]:22 ssh-ed25519 AAAA...',
+        help: '必须通过独立可信渠道核验后填入OpenSSH known_hosts完整条目；SSH代理强制匹配，禁止首次连接自动接受。' },
       { name: 'auth_method', label: '认证方式', kind: 'select', required: true, default: 'private_key',
         options: [
           { value: 'private_key', label: '私钥 / Private Key' },

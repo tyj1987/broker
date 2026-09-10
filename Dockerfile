@@ -73,7 +73,7 @@ WORKDIR /src
 # signed tag with patched direct dependencies and the repository's pinned Go.
 RUN go mod edit \
       -require=golang.org/x/crypto@v0.55.0 \
-      -require=google.golang.org/grpc@v1.83.1 \
+      -require=google.golang.org/grpc@v1.83.2 \
     && CGO_ENABLED=0 go build -mod=mod -trimpath -buildvcs=false \
       -ldflags='-s -w' -o /out/sops ./cmd/sops \
     && /out/sops --version

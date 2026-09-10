@@ -102,9 +102,10 @@ continue.
   isolated OpenAI project contract remain required before activation. Tencent
   Cloud CVM inventory now has a source-only adapter with a fixed API 3.0
   endpoint, execution-bound payload hash, temporary-token requirement and a
-  network-address-free response projection. The isolated TC3 signer protocol,
-  CAM role authority, runtime registration and account contract test remain
-  required before activation.
+  network-address-free response projection. Its runtime is gated on an
+  explicitly verified policy and an ownership-checked local signer socket, and
+  fails startup when either is missing. The isolated TC3 signer service, CAM
+  role authority and account contract test remain required before activation.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

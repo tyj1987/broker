@@ -16,9 +16,10 @@ region and zone. Network addresses, login settings, image identifiers, tags,
 request IDs and upstream error details are not released.
 
 This is not a production activation. The manifest remains `contract_required`.
-Runtime registration requires an independently isolated TC3 signer, exact
-account/region/resource policy bindings and a successful isolated CAM-role
-contract test.
+The runtime registers the adapter only for an explicitly verified policy and
+after probing a fixed, ownership-checked local signer socket. Activation still
+requires an independently isolated TC3 signer, exact account/region/resource
+policy bindings and a successful isolated CAM-role contract test.
 
 Official references checked on 2026-09-11:
 

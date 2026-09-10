@@ -118,6 +118,10 @@ import {
   prepareOpenAIRuntimeExecutors,
 } from './adapters/openai-runtime.js';
 import {
+  commitTencentRuntimeExecutors,
+  prepareTencentRuntimeExecutors,
+} from './adapters/tencent-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -413,6 +417,7 @@ async function prepareConfig() {
   const aliyunExecutors = await prepareAliyunRuntimeExecutors({ config: cfg });
   const deepseekExecutors = await prepareDeepSeekRuntimeExecutors({ config: cfg });
   const openaiExecutors = await prepareOpenAIRuntimeExecutors({ config: cfg });
+  const tencentExecutors = await prepareTencentRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
@@ -422,6 +427,7 @@ async function prepareConfig() {
     aliyunExecutors,
     deepseekExecutors,
     openaiExecutors,
+    tencentExecutors,
   };
 }
 
@@ -433,6 +439,7 @@ function applyConfig(prepared) {
   commitAliyunRuntimeExecutors(taskExecutors, prepared.aliyunExecutors);
   commitDeepSeekRuntimeExecutors(taskExecutors, prepared.deepseekExecutors);
   commitOpenAIRuntimeExecutors(taskExecutors, prepared.openaiExecutors);
+  commitTencentRuntimeExecutors(taskExecutors, prepared.tencentExecutors);
   CONFIG = prepared.document;
 }
 

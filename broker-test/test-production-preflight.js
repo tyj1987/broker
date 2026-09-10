@@ -23,12 +23,13 @@ const readySnapshot = {
   controlPlaneStatePresent: true,
   controlPlaneStateKeyProtected: true,
   policySocketProtected: true,
+  githubSignerSocketProtected: true,
   loopbackHealth: true,
 };
 
 const ready = evaluateProductionReadiness(readySnapshot);
 assert.equal(ready.ready, true);
-assert.equal(ready.checks.length, 15);
+assert.equal(ready.checks.length, 16);
 assert.ok(ready.checks.every((check) => check.passed));
 assert.match(renderProductionReadiness(ready), /production_cd_ready=yes\n$/);
 
@@ -47,6 +48,7 @@ for (const [field, unsafeValue] of [
   ['controlPlaneStatePresent', false],
   ['controlPlaneStateKeyProtected', false],
   ['policySocketProtected', false],
+  ['githubSignerSocketProtected', false],
   ['loopbackHealth', false],
 ]) {
   const result = evaluateProductionReadiness({ ...readySnapshot, [field]: unsafeValue });
@@ -71,6 +73,8 @@ const fakePaths = {
   controlPlaneState: '/state',
   controlPlaneStateKey: '/state-key',
   policySocket: '/policy.sock',
+  githubSignerDirectory: '/signer',
+  githubSignerSocket: '/signer/github.sock',
   forbiddenKeyRoots: ['/offline-ca', '/offline-clients'],
 };
 const fakeStats = new Map([
@@ -78,28 +82,45 @@ const fakeStats = new Map([
   ['/state', { isFile: () => true, isSymbolicLink: () => false }],
   ['/state-key', { isFile: () => true, isSymbolicLink: () => false, uid: 0, mode: 0o100600 }],
   ['/policy.sock', { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660 }],
+  ['/signer', { isDirectory: () => true, isSymbolicLink: () => false, uid: 2001, gid: 1002, mode: 0o040750 }],
+  ['/signer/github.sock', { isSocket: () => true, isSymbolicLink: () => false, uid: 2001, gid: 1002, mode: 0o140660 }],
 ]);
 const command = (name, args) => {
   const invocation = `${name} ${args.join(' ')}`;
   if (invocation.includes('-p User')) return { ok: true, stdout: 'broker' };
   if (invocation.includes('-p Group')) return { ok: true, stdout: 'broker' };
   if (name === 'nginx') return { ok: true, stdout: '  proxy_ssl_verify on;\n' };
+  if (name === 'id' && args[0] === '-u') return { ok: true, stdout: '1001' };
+  if (name === 'id' && args[0] === '-G') return { ok: true, stdout: '1001 1002' };
   return { ok: true, stdout: name === 'getent' ? 'broker-deploy:x:1002:1002::/nonexistent:/bin/bash' : '' };
 };
-const collected = await collectProductionSnapshot({
+const collectWithStats = (stats) => collectProductionSnapshot({
   command,
   paths: fakePaths,
-  pathInfoImpl: async (path) => fakeStats.get(path) ?? null,
+  pathInfoImpl: async (path) => stats.get(path) ?? null,
   isExecutableImpl: async () => true,
   countPrivateKeysImpl: async () => 0,
   loopbackHealthImpl: async () => true,
 });
+const collected = await collectWithStats(fakeStats);
 assert.equal(evaluateProductionReadiness(collected).ready, true);
 assert.equal(collected.nginxVerifyOnCount, 1);
 assert.equal(collected.nginxVerifyOffCount, 0);
+for (const [path, replacement] of [
+  ['/signer', { ...fakeStats.get('/signer'), gid: 9999 }],
+  ['/signer', { ...fakeStats.get('/signer'), mode: 0o040740 }],
+  ['/signer/github.sock', { ...fakeStats.get('/signer/github.sock'), uid: 2002 }],
+  ['/signer/github.sock', { ...fakeStats.get('/signer/github.sock'), gid: 9999 }],
+  ['/signer/github.sock', { ...fakeStats.get('/signer/github.sock'), mode: 0o140640 }],
+]) {
+  const unsafeStats = new Map(fakeStats);
+  unsafeStats.set(path, replacement);
+  const unsafe = await collectWithStats(unsafeStats);
+  assert.equal(unsafe.githubSignerSocketProtected, false, `${path} boundary must fail closed`);
+}
 assert.equal(isDirectExecution('-', 'file:///irrelevant'), true);
 const scriptPath = fileURLToPath(new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url));
 assert.equal(isDirectExecution(scriptPath, new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url).href), true);
 assert.equal(isDirectExecution('/tmp/other.mjs', 'file:///tmp/preflight.mjs'), false);
 
-console.log('production preflight: 15 fail-closed deployment gates passed');
+console.log('production preflight: 16 fail-closed deployment gates passed');

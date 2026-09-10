@@ -56,7 +56,10 @@ continue.
   rotation overlap, revocation latency, store rollback detection, regional
   outage behavior and isolated-account contract tests.
 - Current safe default: dependency-injected signer and account resolver used
-  only by deterministic tests; every provider remains `contract_required`.
+  by deterministic tests plus a fixed, signature-only Unix-socket client. The
+  Broker runtime registers verified GitHub operations only after the socket and
+  metadata bindings pass preflight. No signer workload or KMS/HSM authority has
+  been selected, and every provider remains `contract_required`.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

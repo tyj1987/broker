@@ -36,6 +36,7 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/usr/local/sbin/secret-broker-deploy` | `root:root`, `0755` | Validated atomic deployment helper |
 | `/usr/local/sbin/secret-broker-production-preflight.mjs` | `root:root`, `0755` | Read-only production CD readiness check |
 | `/run/secret-broker/core.sock` | `broker-core:broker`, `0660` | Local-only Go policy decision channel |
+| `/run/secret-broker-signer/github.sock` | `broker-signer:broker`, `0660` | Signature-only GitHub App capability; private key remains in KMS/HSM |
 
 Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it. The service uses systemd credentials, so verify that the host supports `LoadCredential=` and the `%d` credential-directory specifier before the maintenance window.
 
@@ -60,7 +61,7 @@ The initializer refuses to overwrite an existing state file. Back up the encrypt
 3. Copy—not move—the currently deployed application to a versioned release directory named by its verified commit. Refuse to invent a commit when provenance is unknown; use a quarantine label and do not enable CI deployment.
 4. Copy encrypted data and only the runtime PKI files listed above to the target paths without printing them. The CA private key and all client private keys must remain offline and must not exist on the Broker host. Verify ownership and permissions with metadata-only commands.
 5. Replace `/opt/secret-broker/broker` with a relative symlink to the versioned release.
-6. Install and start both hardened systemd units. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. A missing policy core or unavailable control-plane state must make production operations fail closed.
+6. Install and start both hardened systemd units. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. If a GitHub operation is enabled, provision the independently reviewed signer workload under `/run/secret-broker-signer`; the Broker user must not own or be able to replace that directory or socket. A missing policy core, signer, or unavailable control-plane state must make the affected production operations fail closed.
 7. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
 8. Install the deploy helper, production preflight, and sudoers fragment. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command. Run the preflight locally as root and retain its pass/fail-only output with the release evidence.
 9. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.

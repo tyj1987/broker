@@ -94,6 +94,10 @@ import { WebAuthnService } from './lib/webauthn-service.js';
 import { requireTrustedBrowserMutation } from './lib/browser-request.js';
 import { buildAuditEvent, loadAuditChainStateSync, sealEvent } from './lib/audit-hash-chain.js';
 import {
+  commitGitHubRuntimeExecutors,
+  prepareGitHubRuntimeExecutors,
+} from './adapters/github-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -383,11 +387,17 @@ async function prepareConfig() {
   cfg.clients = cfg.clients || {};
   requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
   toolRegistry.validateConfiguration(cfg);
-  return { document: cfg, devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []) };
+  const githubExecutors = await prepareGitHubRuntimeExecutors({ config: cfg });
+  return {
+    document: cfg,
+    devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
+    githubExecutors,
+  };
 }
 
 function applyConfig(prepared) {
   operationBroker.commitDeviceRegistry(prepared.devices);
+  commitGitHubRuntimeExecutors(taskExecutors, prepared.githubExecutors);
   CONFIG = prepared.document;
 }
 

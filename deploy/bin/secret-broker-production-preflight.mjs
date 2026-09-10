@@ -11,6 +11,8 @@ const DEFAULT_PATHS = Object.freeze({
   controlPlaneState: '/var/lib/secret-broker/control-plane-state.enc',
   controlPlaneStateKey: '/etc/secret-broker/control-plane-state.key',
   policySocket: '/run/secret-broker/core.sock',
+  githubSignerDirectory: '/run/secret-broker-signer',
+  githubSignerSocket: '/run/secret-broker-signer/github.sock',
   forbiddenKeyRoots: [
     '/etc/secret-broker/pki/ca',
     '/etc/secret-broker/pki/clients',
@@ -33,6 +35,7 @@ const CHECKS = Object.freeze([
   ['control_plane_state_present', (snapshot) => snapshot.controlPlaneStatePresent === true],
   ['control_plane_state_key_protected', (snapshot) => snapshot.controlPlaneStateKeyProtected === true],
   ['policy_socket_protected', (snapshot) => snapshot.policySocketProtected === true],
+  ['github_signer_socket_protected', (snapshot) => snapshot.githubSignerSocketProtected === true],
   ['loopback_health', (snapshot) => snapshot.loopbackHealth === true],
 ]);
 
@@ -136,6 +139,14 @@ export async function collectProductionSnapshot({
   const state = await pathInfoImpl(paths.controlPlaneState);
   const stateKey = await pathInfoImpl(paths.controlPlaneStateKey);
   const policySocket = await pathInfoImpl(paths.policySocket);
+  const githubSignerDirectory = await pathInfoImpl(paths.githubSignerDirectory);
+  const githubSignerSocket = await pathInfoImpl(paths.githubSignerSocket);
+  const brokerUidResult = command('id', ['-u', 'broker']);
+  const brokerUid = brokerUidResult.ok ? Number(brokerUidResult.stdout) : Number.NaN;
+  const brokerGroupsResult = command('id', ['-G', 'broker']);
+  const brokerGroups = brokerGroupsResult.ok
+    ? brokerGroupsResult.stdout.trim().split(/\s+/).map(Number)
+    : [];
   const forbiddenPrivateKeyCount = (
     await Promise.all(paths.forbiddenKeyRoots.map((path) => countPrivateKeysImpl(path)))
   ).reduce((sum, value) => sum + value, 0);
@@ -162,6 +173,22 @@ export async function collectProductionSnapshot({
       policySocket?.isSocket() === true &&
       policySocket.isSymbolicLink() === false &&
       (policySocket.mode & 0o007) === 0,
+    githubSignerSocketProtected:
+      Number.isSafeInteger(brokerUid) &&
+      githubSignerDirectory?.isDirectory() === true &&
+      githubSignerDirectory.isSymbolicLink() === false &&
+      (githubSignerDirectory.mode & 0o022) === 0 &&
+      githubSignerDirectory.uid !== brokerUid &&
+      brokerGroups.includes(githubSignerDirectory.gid) &&
+      (githubSignerDirectory.mode & 0o010) !== 0 &&
+      githubSignerSocket?.isSocket() === true &&
+      githubSignerSocket.isSymbolicLink() === false &&
+      (githubSignerSocket.mode & 0o007) === 0 &&
+      githubSignerSocket.uid === githubSignerDirectory.uid &&
+      githubSignerSocket.uid !== brokerUid &&
+      githubSignerSocket.gid === githubSignerDirectory.gid &&
+      brokerGroups.includes(githubSignerSocket.gid) &&
+      (githubSignerSocket.mode & 0o060) === 0o060,
     loopbackHealth: await loopbackHealthImpl(fetchImpl),
   };
 }

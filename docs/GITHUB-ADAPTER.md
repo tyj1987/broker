@@ -50,10 +50,37 @@ The signer receives only the JWT signing input and binding metadata. It must
 return signature bytes; the provider has no private-key loading API. The shared
 HTTPS transport resolves and validates every destination address, pins one
 validated address into the socket lookup, preserves TLS hostname verification,
-denies redirects and bounds request/response sizes and time. Production KMS/HSM
-signer, account configuration and runtime wiring are not yet included. Adding a
-private key to source, ordinary configuration, logs or an Agent response is
-prohibited.
+denies redirects and bounds request/response sizes and time.
+
+## Runtime activation
+
+The server registers a GitHub executor only when its operation policy is
+explicitly enabled, uses `execution_mode: adapter`, has reviewed
+`contract_verified: true` evidence, and references a configured account. The
+account binding contains metadata only:
+
+```yaml
+provider_accounts:
+  github:
+    github-primary:
+      client_id: Iv1.REPLACE_WITH_GITHUB_APP_CLIENT_ID
+      installation_id: 123456
+      environments: [production]
+      repositories: [owner/repository]
+```
+
+The runtime rejects unknown fields, so an App private key cannot be placed in
+this configuration. Before committing a configuration reload it probes the
+fixed `/run/secret-broker-signer/github.sock` boundary. The socket and its
+directory must not be owned or replaceable by the Broker process. Requests use
+a bounded versioned protocol containing only the RS256 signing input and
+account metadata; responses contain only signature bytes. Socket errors,
+timeouts, ownership violations and malformed responses fail closed before the
+tool becomes discoverable.
+
+The isolated signer workload and its KMS/HSM policy are still subject to
+DQ-004 and are not included in the Broker process. Adding a private key to
+source, ordinary configuration, logs or an Agent response is prohibited.
 
 ## Verification status
 
@@ -61,7 +88,8 @@ Unit contract tests cover path and target injection, typed pagination and
 filtering, bounded branch and commit projections, execution-binding
 tampering, issue-versus-pull-request classification, untrusted-content marking,
 App/account/environment/repository binding, JWT claims and algorithm,
-invalid signer results, fixed read-only token permissions, missing/wrong/expired/overlong
+invalid signer results, fixed-socket ownership and protocol failures,
+configuration reload removal, fixed read-only token permissions, missing/wrong/expired/overlong
 leases, redirect denial, upstream status mapping, invalid and oversized
 responses, bounded projection and error redaction. The provider manifest
 remains `contract_required` until a production-grade signer and account binding

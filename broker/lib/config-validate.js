@@ -114,6 +114,15 @@ export function validateBrokerConfig(config, opts = {}) {
     errors.push({ level: 'error', path: 'api_keys', message: 'must be object/array map' });
   }
 
+  if (
+    config.provider_accounts != null &&
+    (!config.provider_accounts ||
+      typeof config.provider_accounts !== 'object' ||
+      Array.isArray(config.provider_accounts))
+  ) {
+    errors.push({ level: 'error', path: 'provider_accounts', message: 'must be an object' });
+  }
+
   if (config.healthcheck?.upstream && config.healthcheck.upstream !== 'local') {
     errors.push({
       level: 'error',

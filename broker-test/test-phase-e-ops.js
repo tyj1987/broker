@@ -49,6 +49,17 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(good.ok === true && good.errors.length === 0, 'good config');
 
+  const providerAccounts = validateBrokerConfig({
+    clients: {},
+    provider_accounts: { github: {} },
+  });
+  assert(providerAccounts.ok === true, 'provider account metadata map accepted');
+  const invalidProviderAccounts = validateBrokerConfig({
+    clients: {},
+    provider_accounts: [],
+  });
+  assert(invalidProviderAccounts.ok === false, 'provider account metadata fails closed on array');
+
   const badExecutionMode = validateBrokerConfig({
     clients: { admin: { role: 'admin' } },
     operation_policies: { aliyun: { 'billing.read': { execution_mode: 'arbitrary-shell' } } },

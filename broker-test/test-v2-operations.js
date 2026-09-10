@@ -632,4 +632,161 @@ assert.throws(
   (error) => error instanceof V2Error && error.code === 'device_denied',
 );
 
+const durableOperation = await otpWorkerBroker.createOperation({ name: 'owner-otp-worker' }, {
+  provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'console' },
+});
+const durableTask = otpWorkerBroker.listDeviceOtpTasks(otpWorkerPhone.id)
+  .find((task) => task.id === durableOperation.otp_task_id);
+otpWorkerBroker.submitOtp(otpWorkerPhone.id, durableTask.id, {
+  code: '804126', sim_binding: 'sim-worker', challenge: durableTask.challenge,
+});
+const durableLease = otpWorkerBroker.claimBrowserOperation(otpBrowserWorker.id);
+otpWorkerBroker.claimBrowserOperationOtp(
+  otpBrowserWorker.id,
+  durableLease.id,
+  durableLease.receipt,
+);
+const durableOperationState = otpWorkerBroker.exportState();
+assert.equal(durableOperationState.version, 1);
+assert.equal(
+  JSON.stringify(durableOperationState).includes(durableLease.receipt),
+  false,
+  'raw browser lease receipts are never persisted',
+);
+const restoredOtpWorker = new OperationBroker({ now: () => now, authorize: () => ({ allow: true }) });
+restoredOtpWorker.hydrateDevices(otpWorkerBroker.deviceRecords());
+restoredOtpWorker.restoreState(durableOperationState);
+assert.equal(
+  restoredOtpWorker.getOperation({ name: 'owner-otp-worker' }, durableOperation.id).status,
+  'consuming',
+  'a receipt-bound browser lease survives restart',
+);
+assert.equal(
+  restoredOtpWorker.completeBrowserOperation(otpBrowserWorker.id, durableLease.id, {
+    receipt: durableLease.receipt,
+    status: 'completed',
+    result: { status: 'ok-after-restart' },
+  }).status,
+  'completed',
+);
+otpWorkerBroker.completeBrowserOperation(otpBrowserWorker.id, durableLease.id, {
+  receipt: durableLease.receipt,
+  status: 'completed',
+  result: { status: 'released-after-snapshot' },
+});
+
+const nonceMessage = {
+  timestamp: now,
+  nonce: 'durable-replay-check',
+  method: 'GET',
+  path: `/api/v2/devices/${otpWorkerPhone.id}/otp-tasks`,
+  body: '',
+};
+nonceMessage.signature = sign(
+  null,
+  Buffer.from(canonicalDeviceMessage({ ...nonceMessage, deviceId: otpWorkerPhone.id })),
+  privateKey,
+).toString('base64url');
+otpWorkerBroker.verifyDeviceRequest(otpWorkerPhone.id, nonceMessage);
+const replayState = otpWorkerBroker.exportState();
+const replayRestored = new OperationBroker({ now: () => now });
+replayRestored.hydrateDevices(otpWorkerBroker.deviceRecords());
+replayRestored.restoreState(replayState);
+assert.throws(
+  () => replayRestored.verifyDeviceRequest(otpWorkerPhone.id, nonceMessage),
+  (error) => error instanceof V2Error && error.code === 'replay',
+  'device request replay tombstones survive restart',
+);
+
+const otpWorkerBrowserIdentity = {
+  name: 'owner-otp-worker',
+  context: { apiKey: {
+    allowed_services: ['aliyun'], allowed_operations: ['aliyun:browser.otp.fill'],
+    allowed_accounts: ['primary'], allowed_environments: ['staging'], allowed_resources: ['console'],
+  } },
+};
+const durableClaimOperation = await otpWorkerBroker.createOperation({ name: 'owner-otp-worker' }, {
+  provider: 'aliyun', operation_id: 'browser.otp.fill', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'console' },
+});
+const durableClaimTask = otpWorkerBroker.listDeviceOtpTasks(otpWorkerPhone.id)
+  .find((task) => task.id === durableClaimOperation.otp_task_id);
+otpWorkerBroker.submitOtp(otpWorkerPhone.id, durableClaimTask.id, {
+  code: '316405', sim_binding: 'sim-worker', challenge: durableClaimTask.challenge,
+});
+const durableClaim = otpWorkerBroker.claimBrowserOtp(otpWorkerBrowserIdentity, {
+  provider: 'aliyun', account_ref: 'primary', origin: 'https://account.aliyun.com',
+  tab_id: 9, frame_id: 0, document_id: 'durable-document',
+});
+const claimState = otpWorkerBroker.exportState();
+assert.equal(JSON.stringify(claimState).includes(durableClaim.receipt), false, 'raw extension receipts are not persisted');
+const claimRestored = new OperationBroker({ now: () => now });
+claimRestored.hydrateDevices(otpWorkerBroker.deviceRecords());
+claimRestored.restoreState(claimState);
+assert.equal(
+  claimRestored.finishBrowserOtp(otpWorkerBrowserIdentity, { receipt: durableClaim.receipt, completed: true }).status,
+  'completed',
+  'a receipt-bound browser extension claim survives restart',
+);
+
+const corruptState = structuredClone(replayState);
+corruptState.operations[0].status = 'invented';
+const beforeCorruptRestore = replayRestored.exportState();
+assert.throws(
+  () => replayRestored.restoreState(corruptState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+);
+assert.deepEqual(replayRestored.exportState(), beforeCorruptRestore, 'invalid state cannot partially replace live state');
+
+let failoverDeviceId;
+const failoverBroker = new OperationBroker({
+  now: () => now,
+  authorize: () => ({
+    allow: true,
+    otpRequired: true,
+    otp: {
+      deviceId: failoverDeviceId,
+      simBinding: 'sim-failover',
+      templateGroup: 'failover-login',
+      senderAllowlist: ['CloudLogin'],
+    },
+  }),
+});
+failoverBroker.hydrateDevices(otpWorkerBroker.deviceRecords());
+failoverDeviceId = otpWorkerPhone.id;
+const failoverOperation = await failoverBroker.createOperation({ name: 'owner-otp-worker' }, {
+  provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'console' },
+});
+const failoverTask = failoverBroker.listDeviceOtpTasks(failoverDeviceId)[0];
+failoverBroker.submitOtp(failoverDeviceId, failoverTask.id, {
+  code: '615204', sim_binding: 'sim-failover', challenge: failoverTask.challenge,
+});
+let releaseFailoverConsumer;
+let failoverConsumerStarted;
+const failoverStarted = new Promise((resolve) => { failoverConsumerStarted = resolve; });
+const failoverGate = new Promise((resolve) => { releaseFailoverConsumer = resolve; });
+const abandonedConsumption = failoverBroker.consumeOtp(failoverTask.id, async () => {
+  failoverConsumerStarted();
+  await failoverGate;
+  return { status: 'late-result' };
+});
+await failoverStarted;
+const inFlightState = failoverBroker.exportState();
+const failoverRestored = new OperationBroker({ now: () => now });
+failoverRestored.hydrateDevices(otpWorkerBroker.deviceRecords());
+failoverRestored.restoreState(inFlightState);
+assert.equal(
+  failoverRestored.getOperation({ name: 'owner-otp-worker' }, failoverOperation.id).status,
+  'failed',
+  'an unleased in-flight side effect is failed closed after restart',
+);
+assert.equal(
+  failoverRestored.getOperation({ name: 'owner-otp-worker' }, failoverOperation.id).error.code,
+  'execution_state_indeterminate',
+);
+releaseFailoverConsumer();
+await abandonedConsumption;
+
 console.log('v2 operations: all tests passed');

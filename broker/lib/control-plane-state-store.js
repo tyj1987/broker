@@ -14,11 +14,12 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { V2Error } from './operations-v2.js';
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const ENVELOPE_VERSION = 1;
 const ALGORITHM = 'A256GCM';
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
-const ROOT_KEYS = new Set(['version', 'generation', 'captured_at', 'approvals', 'execution_tokens', 'tasks']);
+const ROOT_KEYS_V1 = new Set(['version', 'generation', 'captured_at', 'approvals', 'execution_tokens', 'tasks']);
+const ROOT_KEYS_V2 = new Set([...ROOT_KEYS_V1, 'operations']);
 const ENVELOPE_KEYS = new Set(['version', 'generation', 'algorithm', 'iv', 'tag', 'ciphertext']);
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -46,21 +47,25 @@ function requireComponent(component, name) {
 }
 
 function validateSnapshot(snapshot) {
-  if (!exactKeys(snapshot, ROOT_KEYS) || snapshot.version !== STATE_VERSION
+  const rootKeys = snapshot?.version === 1 ? ROOT_KEYS_V1 : ROOT_KEYS_V2;
+  if (!exactKeys(snapshot, rootKeys) || ![1, STATE_VERSION].includes(snapshot.version)
     || !Number.isSafeInteger(snapshot.generation) || snapshot.generation < 1
     || !validTimestamp(snapshot.captured_at)
     || !snapshot.approvals || typeof snapshot.approvals !== 'object' || Array.isArray(snapshot.approvals)
     || !snapshot.execution_tokens || typeof snapshot.execution_tokens !== 'object' || Array.isArray(snapshot.execution_tokens)
-    || !snapshot.tasks || typeof snapshot.tasks !== 'object' || Array.isArray(snapshot.tasks)) {
+    || !snapshot.tasks || typeof snapshot.tasks !== 'object' || Array.isArray(snapshot.tasks)
+    || (snapshot.version === STATE_VERSION
+      && (!snapshot.operations || typeof snapshot.operations !== 'object' || Array.isArray(snapshot.operations)))) {
     throw failure('state_corrupt', 'control-plane state snapshot is invalid');
   }
 }
 
 export class ControlPlaneStateCoordinator {
-  constructor({ approvals, executionTokens, tasks, now = () => Date.now() } = {}) {
+  constructor({ approvals, executionTokens, tasks, operations, now = () => Date.now() } = {}) {
     this.approvals = requireComponent(approvals, 'approval');
     this.executionTokens = requireComponent(executionTokens, 'execution token');
     this.tasks = requireComponent(tasks, 'automation task');
+    this.operations = requireComponent(operations, 'operation');
     this.now = now;
     this.generation = 0;
   }
@@ -74,6 +79,7 @@ export class ControlPlaneStateCoordinator {
       approvals: this.approvals.exportState(),
       execution_tokens: this.executionTokens.exportState(),
       tasks: this.tasks.exportState(),
+      operations: this.operations.exportState(),
     };
   }
 
@@ -86,18 +92,23 @@ export class ControlPlaneStateCoordinator {
       approvals: this.approvals.exportState(),
       executionTokens: this.executionTokens.exportState(),
       tasks: this.tasks.exportState(),
+      operations: this.operations.exportState(),
       generation: this.generation,
     };
     try {
       this.approvals.restoreState(structuredClone(snapshot.approvals));
       this.executionTokens.restoreState(structuredClone(snapshot.execution_tokens));
       this.tasks.restoreState(structuredClone(snapshot.tasks));
+      this.operations.restoreState(structuredClone(snapshot.version === 1 ? {
+        version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [],
+      } : snapshot.operations));
       this.generation = snapshot.generation;
     } catch {
       try {
         this.approvals.restoreState(previous.approvals);
         this.executionTokens.restoreState(previous.executionTokens);
         this.tasks.restoreState(previous.tasks);
+        this.operations.restoreState(previous.operations);
         this.generation = previous.generation;
       } catch {
         throw failure('state_rollback_failed', 'control-plane state rollback failed');

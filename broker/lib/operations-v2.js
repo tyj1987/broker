@@ -8,8 +8,32 @@ const DEVICE_PLATFORMS = new Set(['android', 'ios', 'windows', 'linux', 'browser
 const MAX_CLOCK_SKEW_MS = 60_000;
 const DEFAULT_OTP_TTL_MS = 120_000;
 const MAX_JSON_BYTES = 64 * 1024;
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const DEVICE_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'p256-sha256']);
 const EXECUTION_MODES = new Set(['adapter', 'browser']);
+const OPERATION_STATE_VERSION = 1;
+const OPERATION_STATUSES = new Set(['waiting', 'received', 'consuming', 'completed', 'failed', 'expired', 'revoked']);
+const OTP_STATUSES = new Set(['waiting', 'received', 'consuming', 'completed', 'failed', 'expired', 'revoked']);
+const OPERATION_STATE_KEYS = new Set(['version', 'operations', 'otp_tasks', 'used_nonces', 'browser_claims', 'browser_leases']);
+const OPERATION_KEYS = new Set([
+  'id', 'owner', 'provider', 'operationId', 'accountRef', 'environment', 'executionMode',
+  'typedParameters', 'status', 'createdAt', 'updatedAt', 'expiresAt', 'otpTaskId', 'result', 'error',
+]);
+const OTP_TASK_KEYS = new Set([
+  'id', 'operationId', 'owner', 'deviceId', 'simBinding', 'provider', 'templateGroup',
+  'senderAllowlist', 'lockKey', 'challenge', 'challengeHash', 'recipientHash', 'status',
+  'code', 'createdAt', 'expiresAt',
+]);
+const NONCE_KEYS = new Set(['key', 'expiresAt']);
+const CLAIM_KEYS = new Set([
+  'key', 'owner', 'taskId', 'provider', 'accountRef', 'origin', 'tabId', 'frameId',
+  'documentId', 'expiresAt', 'code', 'previousTaskStatus', 'previousOperationStatus',
+  'previousOperationUpdatedAt',
+]);
+const LEASE_KEYS = new Set([
+  'id', 'receiptHash', 'deviceId', 'operationId', 'expiresAt', 'otpClaimed',
+  'previousStatus', 'previousUpdatedAt',
+]);
 const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|otp|verification.?code)/i;
 
 export class V2Error extends Error {
@@ -52,6 +76,28 @@ function requireTimestamp(value, field, allowNull = false) {
     throw new V2Error('invalid_device_registry', `${field} is not a valid timestamp`, 500);
   }
   return value;
+}
+
+function exactKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.size
+    && Object.keys(value).every((key) => keys.has(key));
+}
+
+function stateCorrupt() {
+  return new V2Error('state_corrupt', 'operation state snapshot is invalid', 500);
+}
+
+function finiteExpiry(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function cloneStateRecord(value) {
+  try {
+    return structuredClone(value);
+  } catch {
+    throw stateCorrupt();
+  }
 }
 
 function publicOperation(op) {
@@ -147,6 +193,12 @@ function publicOtpTask(task) {
   };
 }
 
+function browserOriginForProvider(provider) {
+  if (provider === 'aliyun') return 'https://account.aliyun.com';
+  if (provider === 'tencent') return 'https://cloud.tencent.com';
+  return null;
+}
+
 export function sha256Base64Url(value) {
   return createHash('sha256').update(value).digest('base64url');
 }
@@ -183,6 +235,203 @@ export class OperationBroker {
     this.activeOtpLocks = new Map();
     this.browserClaims = new Map();
     this.browserLeases = new Map();
+  }
+
+  exportState() {
+    this.prune();
+    return {
+      version: OPERATION_STATE_VERSION,
+      operations: [...this.operations.values()].map((operation) => cloneStateRecord({
+        id: operation.id,
+        owner: operation.owner,
+        provider: operation.provider,
+        operationId: operation.operationId,
+        accountRef: operation.accountRef,
+        environment: operation.environment,
+        executionMode: operation.executionMode,
+        typedParameters: operation.typedParameters,
+        status: operation.status,
+        createdAt: operation.createdAt,
+        updatedAt: operation.updatedAt,
+        expiresAt: operation.expiresAt,
+        otpTaskId: operation.otpTaskId || null,
+        result: operation.result ?? null,
+        error: operation.error || null,
+      })),
+      otp_tasks: [...this.otpTasks.values()].map((task) => cloneStateRecord(task)),
+      used_nonces: [...this.usedNonces].map(([key, expiresAt]) => ({ key, expiresAt })),
+      browser_claims: [...this.browserClaims].map(([key, claim]) => cloneStateRecord({
+        key,
+        owner: claim.owner,
+        taskId: claim.taskId,
+        provider: claim.provider,
+        accountRef: claim.accountRef,
+        origin: claim.origin,
+        tabId: claim.tabId,
+        frameId: claim.frameId,
+        documentId: claim.documentId,
+        expiresAt: claim.expiresAt,
+        code: claim.code,
+        previousTaskStatus: claim.previousTaskStatus,
+        previousOperationStatus: claim.previousOperationStatus,
+        previousOperationUpdatedAt: claim.previousOperationUpdatedAt,
+      })),
+      browser_leases: [...this.browserLeases.values()].map(cloneStateRecord),
+    };
+  }
+
+  restoreState(snapshot) {
+    try {
+      if (!exactKeys(snapshot, OPERATION_STATE_KEYS) || snapshot.version !== OPERATION_STATE_VERSION) {
+        throw stateCorrupt();
+      }
+      for (const key of ['operations', 'otp_tasks', 'used_nonces', 'browser_claims', 'browser_leases']) {
+        if (!Array.isArray(snapshot[key]) || snapshot[key].length > this.maxRecords) throw stateCorrupt();
+      }
+
+      const operations = new Map();
+      for (const source of snapshot.operations) {
+        if (!exactKeys(source, OPERATION_KEYS)
+          || !ID_RE.test(source.id) || !ID_RE.test(source.owner) || !ID_RE.test(source.provider)
+          || !ID_RE.test(source.operationId) || !ID_RE.test(source.accountRef)
+          || !ENVIRONMENTS.has(source.environment) || !EXECUTION_MODES.has(source.executionMode)
+          || !OPERATION_STATUSES.has(source.status)
+          || (source.otpTaskId !== null && !ID_RE.test(source.otpTaskId))
+          || (source.error !== null && !ID_RE.test(source.error))) throw stateCorrupt();
+        requireObject(source.typedParameters, 'typed_parameters');
+        requireTimestamp(source.createdAt, 'created_at');
+        requireTimestamp(source.updatedAt, 'updated_at');
+        requireTimestamp(source.expiresAt, 'expires_at');
+        if (operations.has(source.id)) throw stateCorrupt();
+        operations.set(source.id, cloneStateRecord(source));
+      }
+
+      const otpTasks = new Map();
+      const activeOtpLocks = new Map();
+      for (const source of snapshot.otp_tasks) {
+        if (!exactKeys(source, OTP_TASK_KEYS)
+          || !ID_RE.test(source.id) || !ID_RE.test(source.operationId) || !ID_RE.test(source.owner)
+          || !ID_RE.test(source.deviceId) || !ID_RE.test(source.simBinding) || !ID_RE.test(source.provider)
+          || !ID_RE.test(source.templateGroup) || typeof source.lockKey !== 'string'
+          || source.lockKey.length < 1 || source.lockKey.length > 520
+          || typeof source.challenge !== 'string' || !BASE64URL_RE.test(source.challenge)
+          || source.challengeHash !== sha256Base64Url(source.challenge)
+          || typeof source.recipientHash !== 'string' || !BASE64URL_RE.test(source.recipientHash)
+          || source.recipientHash.length !== 43
+          || !OTP_STATUSES.has(source.status)
+          || (source.code !== null && (typeof source.code !== 'string' || !OTP_RE.test(source.code)))
+          || !Array.isArray(source.senderAllowlist) || source.senderAllowlist.length < 1
+          || source.senderAllowlist.length > 16) throw stateCorrupt();
+        for (const sender of source.senderAllowlist) requireText(sender, 'sender_allowlist', 64);
+        requireTimestamp(source.createdAt, 'created_at');
+        requireTimestamp(source.expiresAt, 'expires_at');
+        if (otpTasks.has(source.id)) throw stateCorrupt();
+        const operation = operations.get(source.operationId);
+        const device = this.devices.get(source.deviceId);
+        const expectedLockKey = `${source.deviceId}:${source.simBinding}:${source.provider}:${source.templateGroup}`;
+        if (!operation || operation.otpTaskId !== source.id || operation.owner !== source.owner
+          || operation.provider !== source.provider || source.lockKey !== expectedLockKey
+          || !device || device.owner !== source.owner) throw stateCorrupt();
+        const task = cloneStateRecord(source);
+        otpTasks.set(task.id, task);
+        if (['waiting', 'received', 'consuming'].includes(task.status)) {
+          if (activeOtpLocks.has(task.lockKey)) throw stateCorrupt();
+          activeOtpLocks.set(task.lockKey, task.id);
+        }
+      }
+      for (const operation of operations.values()) {
+        if (operation.otpTaskId && !otpTasks.has(operation.otpTaskId)) throw stateCorrupt();
+      }
+
+      const usedNonces = new Map();
+      for (const source of snapshot.used_nonces) {
+        if (!exactKeys(source, NONCE_KEYS) || typeof source.key !== 'string' || source.key.length < 3
+          || source.key.length > 300 || !finiteExpiry(source.expiresAt) || usedNonces.has(source.key)) throw stateCorrupt();
+        usedNonces.set(source.key, source.expiresAt);
+      }
+
+      const browserClaims = new Map();
+      const claimedTaskIds = new Set();
+      for (const source of snapshot.browser_claims) {
+        if (!exactKeys(source, CLAIM_KEYS) || !BASE64URL_RE.test(source.key) || source.key.length !== 43
+          || !ID_RE.test(source.owner) || !ID_RE.test(source.taskId) || !ID_RE.test(source.provider)
+          || !ID_RE.test(source.accountRef) || source.origin !== browserOriginForProvider(source.provider)
+          || !Number.isSafeInteger(source.tabId) || source.tabId < 0 || source.frameId !== 0
+          || typeof source.documentId !== 'string' || source.documentId.length < 1 || source.documentId.length > 256
+          || !finiteExpiry(source.expiresAt) || typeof source.code !== 'string' || !OTP_RE.test(source.code)
+          || source.previousTaskStatus !== 'received' || !OPERATION_STATUSES.has(source.previousOperationStatus)) {
+          throw stateCorrupt();
+        }
+        requireTimestamp(source.previousOperationUpdatedAt, 'previous_operation_updated_at');
+        const task = otpTasks.get(source.taskId);
+        const operation = task ? operations.get(task.operationId) : null;
+        if (!task || task.status !== 'consuming' || !operation || operation.status !== 'consuming'
+          || operation.owner !== source.owner || operation.provider !== source.provider
+          || operation.accountRef !== source.accountRef || browserClaims.has(source.key)
+          || claimedTaskIds.has(source.taskId)) throw stateCorrupt();
+        const claim = cloneStateRecord(source);
+        delete claim.key;
+        browserClaims.set(source.key, claim);
+        claimedTaskIds.add(source.taskId);
+      }
+
+      const browserLeases = new Map();
+      const leasedOperationIds = new Set();
+      const leasedOtpTaskIds = new Set();
+      for (const source of snapshot.browser_leases) {
+        if (!exactKeys(source, LEASE_KEYS) || !ID_RE.test(source.id)
+          || typeof source.receiptHash !== 'string' || !BASE64URL_RE.test(source.receiptHash)
+          || source.receiptHash.length !== 43 || !ID_RE.test(source.deviceId) || !ID_RE.test(source.operationId)
+          || !finiteExpiry(source.expiresAt) || typeof source.otpClaimed !== 'boolean'
+          || !OPERATION_STATUSES.has(source.previousStatus)) throw stateCorrupt();
+        requireTimestamp(source.previousUpdatedAt, 'previous_updated_at');
+        const operation = operations.get(source.operationId);
+        const device = this.devices.get(source.deviceId);
+        if (!operation || operation.status !== 'consuming' || !device || device.platform !== 'browser-worker'
+          || browserLeases.has(source.id) || leasedOperationIds.has(source.operationId)) throw stateCorrupt();
+        browserLeases.set(source.id, cloneStateRecord(source));
+        leasedOperationIds.add(source.operationId);
+        if (source.otpClaimed && operation.otpTaskId) leasedOtpTaskIds.add(operation.otpTaskId);
+      }
+
+      const now = new Date(this.now()).toISOString();
+      for (const task of otpTasks.values()) {
+        if (task.status !== 'consuming') continue;
+        const hasClaim = claimedTaskIds.has(task.id);
+        const hasLease = leasedOtpTaskIds.has(task.id);
+        if (!hasClaim && !hasLease) {
+          task.status = 'failed';
+          activeOtpLocks.delete(task.lockKey);
+          const operation = operations.get(task.operationId);
+          if (operation && operation.status === 'consuming') {
+            operation.status = 'failed';
+            operation.error = 'execution_state_indeterminate';
+            operation.updatedAt = now;
+          }
+        }
+      }
+      for (const operation of operations.values()) {
+        if (operation.status === 'consuming'
+          && !(operation.otpTaskId && claimedTaskIds.has(operation.otpTaskId))
+          && !leasedOperationIds.has(operation.id)) {
+          operation.status = 'failed';
+          operation.error = 'execution_state_indeterminate';
+          operation.updatedAt = now;
+        }
+      }
+
+      this.operations = operations;
+      this.otpTasks = otpTasks;
+      this.usedNonces = usedNonces;
+      this.activeOtpLocks = activeOtpLocks;
+      this.browserClaims = browserClaims;
+      this.browserLeases = browserLeases;
+      this.enrollments = new Map();
+      this.prune();
+    } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_corrupt') throw error;
+      throw stateCorrupt();
+    }
   }
 
   hydrateDevices(records = []) {
@@ -623,8 +872,7 @@ export class OperationBroker {
     const provider = requireId(input?.provider, 'provider');
     const accountRef = requireId(input?.account_ref, 'account_ref');
     const origin = requireText(input?.origin, 'origin', 256);
-    const expectedOrigin = provider === 'aliyun' ? 'https://account.aliyun.com'
-      : provider === 'tencent' ? 'https://cloud.tencent.com' : null;
+    const expectedOrigin = browserOriginForProvider(provider);
     if (origin !== expectedOrigin) throw new V2Error('origin_denied', 'browser origin is not allowed', 403);
     const tabId = Number(input?.tab_id);
     const frameId = Number(input?.frame_id);
@@ -658,7 +906,7 @@ export class OperationBroker {
     const receipt = randomBytes(32).toString('base64url');
     const expiresAt = Math.min(new Date(task.expiresAt).getTime(), this.now() + 30_000);
     const claim = {
-      receipt, owner: identity.name, taskId: task.id, provider, accountRef, origin, tabId, frameId,
+      owner: identity.name, taskId: task.id, provider, accountRef, origin, tabId, frameId,
       documentId, expiresAt, code: task.code, previousTaskStatus: 'received',
       previousOperationStatus, previousOperationUpdatedAt,
     };

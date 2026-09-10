@@ -3382,6 +3382,7 @@ function start() {
       approvals: approvalBroker,
       executionTokens: taskBroker.executionTokens,
       tasks: taskBroker,
+      operations: operationBroker,
     });
     if (controlPlaneStateRuntime.enabled) {
       console.log(`[state] encrypted control-plane state ready (generation=${controlPlaneStateRuntime.generation}, restored=${controlPlaneStateRuntime.loaded})`);

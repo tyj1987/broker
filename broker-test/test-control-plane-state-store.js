@@ -46,13 +46,15 @@ try {
   const approvals = component({ version: 1, records: [{ id: 'approval-1' }] });
   const executionTokens = component({ version: 1, records: [{ id: 'execution-1' }] });
   const tasks = component({ version: 1, tasks: [{ id: 'task-1' }], idempotency: [], rate_limits: [] });
-  const coordinator = new ControlPlaneStateCoordinator({ approvals, executionTokens, tasks, now: () => 1_700_000_000_000 });
+  const operations = component({ version: 1, operations: [{ id: 'operation-1' }], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] });
+  const coordinator = new ControlPlaneStateCoordinator({ approvals, executionTokens, tasks, operations, now: () => 1_700_000_000_000 });
   const store = new EncryptedControlPlaneStateStore({ path: statePath, key, coordinator });
 
   for (const options of [
     {},
-    { approvals: { exportState() {} }, executionTokens, tasks },
-    { approvals, executionTokens: component({}), tasks: { exportState() {} } },
+    { approvals: { exportState() {} }, executionTokens, tasks, operations },
+    { approvals, executionTokens: component({}), tasks: { exportState() {} }, operations },
+    { approvals, executionTokens, tasks, operations: { exportState() {} } },
   ]) assert.throws(() => new ControlPlaneStateCoordinator(options), code('state_component_invalid'));
   assert.throws(() => new EncryptedControlPlaneStateStore({ path: 'relative', key, coordinator }), code('state_path_invalid'));
   assert.throws(() => new EncryptedControlPlaneStateStore({ path: statePath, key: 'not-a-buffer', coordinator }), code('state_key_invalid'));
@@ -68,15 +70,18 @@ try {
   assert.ok(!serialized.includes('approval-1'));
   assert.ok(!serialized.includes('execution-1'));
   assert.ok(!serialized.includes('task-1'));
+  assert.ok(!serialized.includes('operation-1'));
   assert.deepEqual(readdirSync(directory).sort(), ['control-plane.key', 'control-plane.state']);
 
   approvals.restoreState({ version: 1, records: [] });
   executionTokens.restoreState({ version: 1, records: [] });
   tasks.restoreState({ version: 1, tasks: [], idempotency: [], rate_limits: [] });
+  operations.restoreState({ version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] });
   assert.equal(store.load(), true);
   assert.deepEqual(approvals.exportState().records, [{ id: 'approval-1' }]);
   assert.deepEqual(executionTokens.exportState().records, [{ id: 'execution-1' }]);
   assert.deepEqual(tasks.exportState().tasks, [{ id: 'task-1' }]);
+  assert.deepEqual(operations.exportState().operations, [{ id: 'operation-1' }]);
 
   store.save();
   assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).generation, 2);
@@ -90,9 +95,10 @@ try {
   );
   const validSnapshot = coordinator.exportState();
   for (const corrupt of [
-    null, [], { ...validSnapshot, extra: true }, { ...validSnapshot, version: 2 },
+    null, [], { ...validSnapshot, extra: true }, { ...validSnapshot, version: 99 },
     { ...validSnapshot, generation: 0 }, { ...validSnapshot, captured_at: 'invalid' },
     { ...validSnapshot, execution_tokens: null }, { ...validSnapshot, tasks: [] },
+    { ...validSnapshot, operations: [] },
   ]) assert.throws(() => coordinator.restoreState(corrupt), code('state_corrupt'));
   assert.throws(() => coordinator.commitGeneration(99), code('state_generation_invalid'));
 
@@ -133,13 +139,33 @@ try {
     approvals: component({ version: 1, records: [] }),
     executionTokens: component({ version: 1, records: [] }),
     tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+    operations: component({ version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] }),
   });
+  const legacyOperations = component({
+    version: 1, operations: [{ id: 'must-be-cleared' }], otp_tasks: [], used_nonces: [],
+    browser_claims: [], browser_leases: [],
+  });
+  const legacyCoordinator = new ControlPlaneStateCoordinator({
+    approvals: component({ version: 1, records: [] }),
+    executionTokens: component({ version: 1, records: [] }),
+    tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+    operations: legacyOperations,
+  });
+  legacyCoordinator.restoreState({
+    version: 1, generation: 1, captured_at: new Date().toISOString(),
+    approvals: { version: 1, records: [] },
+    execution_tokens: { version: 1, records: [] },
+    tasks: { version: 1, tasks: [], idempotency: [], rate_limits: [] },
+  });
+  assert.deepEqual(legacyOperations.exportState().operations, [], 'v1 snapshots migrate with empty operation state');
+  assert.equal(legacyCoordinator.exportState().version, 2, 'the next checkpoint upgrades the snapshot schema');
   const indeterminatePath = join(directory, 'indeterminate.state');
   const indeterminateApprovals = component({ version: 1, records: [{ id: 'approval-indeterminate' }] });
   const indeterminateCoordinator = new ControlPlaneStateCoordinator({
     approvals: indeterminateApprovals,
     executionTokens: component({ version: 1, records: [] }),
     tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+    operations: component({ version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] }),
   });
   const indeterminateStore = new EncryptedControlPlaneStateStore({
     path: indeterminatePath, key, coordinator: indeterminateCoordinator,
@@ -154,6 +180,7 @@ try {
       approvals: recoveredApprovals,
       executionTokens: component({ version: 1, records: [] }),
       tasks: component({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+      operations: component({ version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] }),
     }),
   });
   assert.equal(recoveredStore.load(), true);
@@ -185,14 +212,14 @@ try {
     path: join(directory, 'oversized.state'), key,
     coordinator: new ControlPlaneStateCoordinator({
       approvals: component({ payload: 'x'.repeat(17 * 1024 * 1024) }),
-      executionTokens: component({}), tasks: component({}),
+      executionTokens: component({}), tasks: component({}), operations: component({}),
     }),
   });
   assert.throws(() => oversized.save(), code('state_too_large'));
 
   const rollbackFailure = new ControlPlaneStateCoordinator({
     approvals: { exportState: () => ({}), restoreState: () => { throw new Error('unavailable'); } },
-    executionTokens: component({}), tasks: component({}),
+    executionTokens: component({}), tasks: component({}), operations: component({}),
   });
   assert.throws(() => rollbackFailure.restoreState({
     version: 1, generation: 1, captured_at: new Date().toISOString(),

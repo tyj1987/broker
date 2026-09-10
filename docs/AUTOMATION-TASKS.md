@@ -125,8 +125,13 @@ production-target contract required by the SSH provider manifest.
 ## Current production boundary
 
 The current single-process Broker restores task, approval, execution-token
-tombstone, idempotency and rate-limit state from an authenticated encrypted
-state file. Task creation is returned only after a `created` checkpoint;
+tombstone, idempotency, rate-limit, typed operation, OTP replay, browser claim
+and browser lease state from an authenticated encrypted state file. Raw browser
+receipts are not persisted; only their SHA-256 bindings are stored. Legacy v1
+snapshots load with an empty operation component and are upgraded to the v2
+root schema at the next checkpoint. An unleased operation that was consuming
+an OTP when the process stopped is restored as `execution_state_indeterminate`
+and is never retried automatically. Task creation is returned only after a `created` checkpoint;
 cancellation is returned only after a `cancelled` checkpoint. Execution is
 checkpointed before the adapter side effect and again after its terminal
 transition. If a creation or cancellation checkpoint fails before file
@@ -135,6 +140,12 @@ are rolled back before an API success can be returned. A failure after atomic
 replacement is reported as `state_commit_indeterminate`; the matching in-memory
 mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
+
+The operation component is included in every global checkpoint and shutdown
+checkpoint. Per-mutation checkpoints for every operation, OTP and browser lease
+transition are the next required increment; until those routes are wired, an
+abrupt process loss can still discard changes made after the last global
+checkpoint.
 
 A restored `EXECUTING` task remains indeterminate and cannot be retried because
 the upstream side effect may already have occurred. The current file-backed

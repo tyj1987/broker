@@ -29,6 +29,10 @@ try {
     approvals: component({ version: 1, records: [{ id: 'approval' }] }),
     executionTokens: component({ version: 1, records: [{ id: 'token' }] }),
     tasks: component({ version: 1, tasks: [{ id: 'task' }], idempotency: [], rate_limits: [] }),
+    operations: component({
+      version: 1, operations: [{ id: 'operation' }], otp_tasks: [], used_nonces: [],
+      browser_claims: [], browser_leases: [],
+    }),
   });
   const disabled = createControlPlaneStateRuntime({ env: {}, ...dependencies() });
   assert.equal(disabled.enabled, false);
@@ -83,6 +87,7 @@ try {
   assert.deepEqual(initializedComponents.approvals.exportState().records, []);
   assert.deepEqual(initializedComponents.executionTokens.exportState().records, []);
   assert.deepEqual(initializedComponents.tasks.exportState().tasks, []);
+  assert.deepEqual(initializedComponents.operations.exportState().operations, []);
   initializedRuntime.close();
   assert.throws(
     () =>
@@ -129,6 +134,10 @@ try {
   assert.equal(first.generation, 1);
   assert.ok(existsSync(statePath));
   firstComponents.approvals.replace({ version: 1, records: [{ id: 'updated' }] });
+  firstComponents.operations.replace({
+    version: 1, operations: [{ id: 'updated-operation' }], otp_tasks: [], used_nonces: [],
+    browser_claims: [], browser_leases: [],
+  });
   assert.equal(first.checkpoint(), true);
   assert.equal(first.generation, 2);
   first.close();
@@ -147,6 +156,7 @@ try {
   assert.equal(restored.loaded, true);
   assert.equal(restored.generation, 2);
   assert.deepEqual(restoredComponents.approvals.exportState().records, [{ id: 'updated' }]);
+  assert.deepEqual(restoredComponents.operations.exportState().operations, [{ id: 'updated-operation' }]);
   restored.close();
 
   assert.throws(
@@ -166,6 +176,7 @@ try {
   assert.match(serverSource, /onCheckpoint: checkpointControlPlaneState/);
   assert.match(serverSource, /createControlPlaneStateRuntime\(\{/);
   assert.match(serverSource, /executionTokens: taskBroker\.executionTokens/);
+  assert.match(serverSource, /operations: operationBroker/);
   assert.match(serverSource, /onShutdown: \[\(\) => stopCronLoop\(\), closeControlPlaneState\]/);
 } finally {
   rmSync(directory, { recursive: true, force: true });

@@ -56,6 +56,9 @@ export function initializeControlPlaneState({ env = process.env, now = () => Dat
       approvals: emptyStateComponent({ version: 1, records: [] }),
       executionTokens: emptyStateComponent({ version: 1, records: [] }),
       tasks: emptyStateComponent({ version: 1, tasks: [], idempotency: [], rate_limits: [] }),
+      operations: emptyStateComponent({
+        version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [],
+      }),
       now,
     });
     store = new EncryptedControlPlaneStateStore({ path: statePath, key, coordinator });
@@ -72,6 +75,7 @@ export function createControlPlaneStateRuntime({
   approvals,
   executionTokens,
   tasks,
+  operations,
   now = () => Date.now(),
 } = {}) {
   const statePath = env?.CONTROL_PLANE_STATE_PATH;
@@ -96,6 +100,7 @@ export function createControlPlaneStateRuntime({
       approvals,
       executionTokens,
       tasks,
+      operations,
       now,
     });
     store = new EncryptedControlPlaneStateStore({ path: statePath, key, coordinator });

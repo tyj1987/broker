@@ -41,6 +41,8 @@ tags:
     description: Versioned, risk-classified tool registry
   - name: tasks-v2
     description: Policy-routed automation task lifecycle and state events
+  - name: emergency-v2
+    description: Strict dual-control automation emergency stop
   - name: approvals-v2
     description: Bound, WebAuthn-stepped-up approvals with separation of duties
   - name: devices-v2
@@ -608,6 +610,47 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           description: Task broker unavailable
+  /api/v2/emergency-stop:
+    get:
+      tags:
+        - emergency-v2
+      summary: Read the global automation emergency-stop state
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStop"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - emergency-v2
+      summary: Engage or clear automation execution after WebAuthn and dual approval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmergencyStopChange"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStop"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Emergency stop is already in the requested state
   /api/v2/tasks:
     post:
       tags:
@@ -1800,6 +1843,56 @@ components:
           minLength: 16
           maxLength: 128
           pattern: ^[A-Za-z0-9._:-]+$
+    EmergencyStopChange:
+      type: object
+      additionalProperties: false
+      required:
+        - engaged
+        - reason_code
+        - approval_request_id
+      properties:
+        engaged:
+          type: boolean
+        reason_code:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9._:-]{0,127}$
+        approval_request_id:
+          type: string
+          format: uuid
+    EmergencyStop:
+      type: object
+      additionalProperties: false
+      required:
+        - engaged
+        - generation
+        - changed_at
+        - changed_by
+        - reason_code
+        - approval_id
+      properties:
+        engaged:
+          type: boolean
+        generation:
+          type: integer
+          minimum: 0
+        changed_at:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        changed_by:
+          oneOf:
+            - type: string
+            - type: "null"
+        reason_code:
+          oneOf:
+            - type: string
+            - type: "null"
+        approval_id:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: "null"
     Task:
       type: object
       additionalProperties: false

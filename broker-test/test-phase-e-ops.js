@@ -117,6 +117,19 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(weakDeviceControl.ok === false, 'device control policy cannot reduce two-person approval');
 
+  const weakEmergencyControl = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    operation_policies: {
+      broker: {
+        'emergency.stop': {
+          approval_required: true, required_approvals: 1, roles: ['admin'],
+          security_profiles: ['strict'], identity_methods: ['session'],
+        },
+      },
+    },
+  });
+  assert(weakEmergencyControl.ok === false, 'emergency stop policy cannot reduce two-person approval');
+
   const badUrl = validateBrokerConfig({
     clients: { a: { role: 'admin' } },
     services: { x: { base_url: 'not-a-url' } },

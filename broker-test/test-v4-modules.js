@@ -175,6 +175,7 @@ section('OpenAPI');
   ok('has automation task creation', !!OPENAPI_SPEC.paths['/api/v2/tasks']?.post);
   ok('has automation task execution', !!OPENAPI_SPEC.paths['/api/v2/tasks/{id}/run']?.post);
   ok('has automation task events', !!OPENAPI_SPEC.paths['/api/v2/tasks/{id}/events']?.get);
+  ok('has strict emergency stop interface', !!OPENAPI_SPEC.paths['/api/v2/emergency-stop']?.post);
   ok('has closed task request schema', OPENAPI_SPEC.components.schemas.TaskCreate?.additionalProperties === false);
   const enrollmentBegin = OPENAPI_SPEC.components.schemas.DeviceEnrollmentBegin;
   const enrollmentFinish = OPENAPI_SPEC.components.schemas.DeviceEnrollmentFinish;

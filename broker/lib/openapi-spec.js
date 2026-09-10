@@ -207,6 +207,17 @@ const p = {
       responses: { 200: jsonOK('ToolList'), 401: respRef('Unauthorized'), 503: desc('Task broker unavailable') },
     },
   },
+  '/api/v2/emergency-stop': {
+    get: {
+      tags: ['emergency-v2'], summary: 'Read the global automation emergency-stop state',
+      responses: { 200: jsonOK('EmergencyStop'), 401: respRef('Unauthorized'), 403: respRef('Forbidden') },
+    },
+    post: {
+      tags: ['emergency-v2'], summary: 'Engage or clear automation execution after WebAuthn and dual approval',
+      requestBody: { required: true, content: { 'application/json': { schema: ref('EmergencyStopChange') } } },
+      responses: { 200: jsonOK('EmergencyStop'), 400: respRef('BadRequest'), 401: respRef('Unauthorized'), 403: respRef('Forbidden'), 409: desc('Emergency stop is already in the requested state') },
+    },
+  },
   '/api/v2/tasks': {
     post: {
       tags: ['tasks-v2'], summary: 'Create an idempotent, policy-routed automation task',
@@ -602,6 +613,26 @@ const s = {
       idempotency_key: { type: 'string', minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' },
     },
   },
+  EmergencyStopChange: {
+    type: 'object', additionalProperties: false,
+    required: ['engaged', 'reason_code', 'approval_request_id'],
+    properties: {
+      engaged: { type: 'boolean' },
+      reason_code: { type: 'string', pattern: '^[a-z0-9][a-z0-9._:-]{0,127}$' },
+      approval_request_id: { type: 'string', format: 'uuid' },
+    },
+  },
+  EmergencyStop: {
+    type: 'object', additionalProperties: false,
+    required: ['engaged', 'generation', 'changed_at', 'changed_by', 'reason_code', 'approval_id'],
+    properties: {
+      engaged: { type: 'boolean' }, generation: { type: 'integer', minimum: 0 },
+      changed_at: { oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+      changed_by: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+      reason_code: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+      approval_id: { oneOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }] },
+    },
+  },
   Task: {
     type: 'object', additionalProperties: false,
     required: ['id', 'owner', 'tool', 'tool_version', 'provider', 'operation_id', 'account_ref', 'environment', 'target', 'risk_level', 'state', 'approval_id', 'execution_id', 'created_at', 'updated_at', 'expires_at'],
@@ -836,6 +867,7 @@ export const OPENAPI_SPEC = {
     { name: 'operations-v2', description: 'Policy-bound typed operations' },
     { name: 'tools-v2', description: 'Versioned, risk-classified tool registry' },
     { name: 'tasks-v2', description: 'Policy-routed automation task lifecycle and state events' },
+    { name: 'emergency-v2', description: 'Strict dual-control automation emergency stop' },
     { name: 'approvals-v2', description: 'Bound, WebAuthn-stepped-up approvals with separation of duties' },
     { name: 'devices-v2', description: 'Device proof-of-possession and bound OTP tasks' },
     { name: 'browser-workers-v2', description: 'Signed short-lived leases for isolated typed browser operations' },

@@ -148,7 +148,7 @@ export function validateBrokerConfig(config, opts = {}) {
           if (!conditions.ok) {
             errors.push({ level: 'error', path, message: conditions.reason });
           }
-          if (provider === 'broker' && ['device.enroll', 'device.state'].includes(operationId)) {
+          if (provider === 'broker' && ['device.enroll', 'device.state', 'emergency.stop'].includes(operationId)) {
             const safeControlPolicy = policy.approval_required === true
               && Number(policy.required_approvals) >= 2
               && policy.roles?.includes('admin')
@@ -157,7 +157,7 @@ export function validateBrokerConfig(config, opts = {}) {
             if (!safeControlPolicy) {
               errors.push({
                 level: 'error', path,
-                message: 'device control requires strict admin session policy and at least two approvals',
+                message: 'critical broker control requires strict admin session policy and at least two approvals',
               });
             }
           }

@@ -48,6 +48,16 @@ function deviceStateApproval(deviceId, body) {
   };
 }
 
+function emergencyStopApproval(body) {
+  return {
+    provider: 'broker', operation_id: 'emergency.stop', account_ref: 'control-plane', environment: 'production',
+    typed_parameters: {
+      resource_ref: 'control-plane', engaged: body?.engaged, reason_code: body?.reason_code,
+    },
+    approval_request_id: body?.approval_request_id,
+  };
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEVICE_PLATFORMS = new Set(['android', 'windows', 'linux', 'ios', 'browser-worker']);
 const DEVICE_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'p256-sha256']);
@@ -106,6 +116,17 @@ function validatedDeviceStateBody(body) {
   return body;
 }
 
+function validatedEmergencyStopBody(body) {
+  if (!isRecord(body)
+    || !hasOnlyKeys(body, ['engaged', 'reason_code', 'approval_request_id'])
+    || typeof body.engaged !== 'boolean'
+    || typeof body.reason_code !== 'string' || !DEVICE_CAPABILITY_RE.test(body.reason_code)
+    || typeof body.approval_request_id !== 'string' || !UUID_RE.test(body.approval_request_id)) {
+    throw new V2Error('invalid_request', 'emergency stop request does not match the published schema');
+  }
+  return body;
+}
+
 export function createV2Routes(deps) {
   const {
     operationBroker, approvalBroker, taskBroker, webAuthnService, getIdentity, readBody, send, audit,
@@ -133,6 +154,12 @@ export function createV2Routes(deps) {
       if (error instanceof V2Error) throw error;
       throw new V2Error('state_unavailable', 'durable control-plane state is unavailable', 503);
     }
+  };
+  const requireAutomationEnabled = () => {
+    if (!taskBroker || typeof taskBroker.assertExecutionEnabled !== 'function') {
+      throw new V2Error('emergency_control_unavailable', 'automation safety control is unavailable', 503);
+    }
+    taskBroker.assertExecutionEnabled();
   };
 
   return async function handleV2(req, res, route) {
@@ -239,6 +266,55 @@ export function createV2Routes(deps) {
         return true;
       }
 
+      if ((method === 'GET' || method === 'POST') && pathname === '/api/v2/emergency-stop') {
+        const ctx = getIdentity(req);
+        const identity = identityView(ctx);
+        if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        if (!taskBroker) throw new V2Error('task_broker_unavailable', 'task broker is unavailable', 503);
+        if (ctx.via !== 'session' || !identity.isAdmin
+          || ctx.client?.security_profile !== 'strict'
+          || !ctx.authFactors?.includes('webauthn')) {
+          throw new V2Error('step_up_required', 'emergency stop access requires a strict administrator with WebAuthn step-up', 403);
+        }
+        if (method === 'GET') {
+          const result = taskBroker.emergencyStatus();
+          audit({ action: 'v2_emergency_stop_get', status: 'ok', cn: ctx.cn, engaged: result.engaged, generation: result.generation });
+          send(res, 200, result);
+          return true;
+        }
+        if (typeof requireBrowserMutation !== 'function') {
+          throw new V2Error('browser_origin_unavailable', 'trusted browser enforcement is unavailable', 503);
+        }
+        requireBrowserMutation(req, ctx);
+        const body = validatedEmergencyStopBody(await readBody(req));
+        mandatoryAudit({
+          action: 'v2_emergency_stop_intent', status: 'authorized', cn: ctx.cn,
+          engaged: body.engaged, reason_code: body.reason_code,
+        });
+        const claim = claimDualControlApproval(approvalBroker, identity, emergencyStopApproval(body));
+        let approvalSucceeded = false;
+        try {
+          approvalBroker.markSucceeded(claim.id);
+          approvalSucceeded = true;
+          const result = taskBroker.setEmergencyStop({
+            engaged: body.engaged, actor: identity.name,
+            reasonCode: body.reason_code, approvalId: claim.id,
+          });
+          audit({
+            action: 'v2_emergency_stop', status: result.engaged ? 'engaged' : 'cleared',
+            cn: ctx.cn, generation: result.generation, reason_code: result.reason_code,
+          });
+          send(res, 200, result);
+          return true;
+        } catch (error) {
+          if (!(error instanceof V2Error && error.code === 'state_commit_indeterminate')) {
+            if (approvalSucceeded) approvalBroker.rollbackSucceeded(claim.id);
+            approvalBroker.releaseClaim(claim.id);
+          }
+          throw error;
+        }
+      }
+
       if (method === 'POST' && pathname === '/api/v2/tasks') {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
@@ -304,6 +380,7 @@ export function createV2Routes(deps) {
         const ctx = getIdentity(req);
         const identity = identityView(ctx);
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+        requireAutomationEnabled();
         const body = await readBody(req);
         mandatoryAudit({ action: 'v2_operation_create_intent', status: 'authorized', cn: ctx.cn });
         const claim = approvalBroker.claimFor(identity, body);
@@ -447,6 +524,7 @@ export function createV2Routes(deps) {
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         if (ctx.via !== 'api_key') throw new V2Error('identity_denied', 'browser bridge API key required', 403);
         if (!ctx.apiKey?.scopes?.includes('browser:otp:fill')) throw new V2Error('scope_denied', 'browser bridge scope required', 403);
+        requireAutomationEnabled();
         const body = await readBody(req);
         mandatoryAudit({ action: 'v2_browser_otp_claim_intent', status: 'authorized', cn: ctx.cn });
         const result = operationBroker.claimBrowserOtpAndAudit(identity, body, (claim) => {
@@ -463,6 +541,7 @@ export function createV2Routes(deps) {
         if (!identity) throw new V2Error('unauthorized', 'authenticated identity required', 401);
         if (ctx.via !== 'api_key') throw new V2Error('identity_denied', 'browser bridge API key required', 403);
         if (!ctx.apiKey?.scopes?.includes('browser:otp:fill')) throw new V2Error('scope_denied', 'browser bridge scope required', 403);
+        requireAutomationEnabled();
         const body = await readBody(req);
         mandatoryAudit({ action: 'v2_browser_otp_finish_intent', status: 'authorized', cn: ctx.cn });
         const result = operationBroker.finishBrowserOtpAndAudit(identity, body, (completion) => {
@@ -613,6 +692,7 @@ export function createV2Routes(deps) {
 
       const workerClaimMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/browser-leases\/claim$/.exec(pathname);
       if (method === 'POST' && workerClaimMatch) {
+        requireAutomationEnabled();
         const body = await readBody(req);
         const deviceId = workerClaimMatch[1];
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
@@ -628,6 +708,7 @@ export function createV2Routes(deps) {
 
       const workerOtpMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/browser-leases\/([a-f0-9-]+)\/otp$/.exec(pathname);
       if (method === 'POST' && workerOtpMatch) {
+        requireAutomationEnabled();
         const body = await readBody(req);
         const [deviceId, leaseId] = workerOtpMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
@@ -643,6 +724,7 @@ export function createV2Routes(deps) {
 
       const workerCompleteMatch = /^\/api\/v2\/devices\/([a-f0-9-]+)\/browser-leases\/([a-f0-9-]+)\/complete$/.exec(pathname);
       if (method === 'POST' && workerCompleteMatch) {
+        requireAutomationEnabled();
         const body = await readBody(req);
         const [deviceId, leaseId] = workerCompleteMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));

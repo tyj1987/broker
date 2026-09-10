@@ -23,8 +23,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
 const MAX_TASKS = 10_000;
 const MAX_EVENTS = 64;
-const STATE_VERSION = 1;
-const STATE_KEYS = new Set(['version', 'tasks', 'idempotency', 'rate_limits']);
+const STATE_VERSION = 2;
+const STATE_KEYS_V1 = new Set(['version', 'tasks', 'idempotency', 'rate_limits']);
+const STATE_KEYS_V2 = new Set([...STATE_KEYS_V1, 'emergency_stop']);
+const EMERGENCY_STATE_KEYS = new Set([
+  'engaged', 'generation', 'changed_at', 'changed_by', 'reason_code', 'approval_id',
+]);
 const TASK_STATE_KEYS = new Set([
   'id', 'owner', 'tool', 'tool_version', 'account_ref', 'environment', 'parameters',
   'request_fingerprint', 'identity_method', 'role', 'policy_decision', 'state', 'events',
@@ -58,6 +62,42 @@ function validTimestamp(value) {
 
 function validBoundedString(value, max = 256) {
   return typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
+}
+
+function initialEmergencyStop() {
+  return {
+    engaged: false, generation: 0, changedAt: null, changedBy: null,
+    reasonCode: null, approvalId: null,
+  };
+}
+
+function exportedEmergencyStop(value) {
+  return {
+    engaged: value.engaged, generation: value.generation, changed_at: value.changedAt,
+    changed_by: value.changedBy, reason_code: value.reasonCode, approval_id: value.approvalId,
+  };
+}
+
+function restoreEmergencyStop(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || !hasExactKeys(value, EMERGENCY_STATE_KEYS)
+    || typeof value.engaged !== 'boolean'
+    || !Number.isSafeInteger(value.generation) || value.generation < 0) {
+    throw stateCorrupt('emergency stop state is invalid');
+  }
+  if (value.generation === 0) {
+    if (value.engaged || value.changed_at !== null || value.changed_by !== null
+      || value.reason_code !== null || value.approval_id !== null) {
+      throw stateCorrupt('initial emergency stop state is invalid');
+    }
+  } else if (!validTimestamp(value.changed_at) || !validBoundedString(value.changed_by)
+    || !ID_RE.test(value.reason_code || '') || !UUID_RE.test(value.approval_id || '')) {
+    throw stateCorrupt('emergency stop change record is invalid');
+  }
+  return {
+    engaged: value.engaged, generation: value.generation, changedAt: value.changed_at,
+    changedBy: value.changed_by, reasonCode: value.reason_code, approvalId: value.approval_id,
+  };
 }
 
 function exportedTask(task) {
@@ -294,6 +334,73 @@ export class AutomationTaskBroker {
     this.tasks = new Map();
     this.idempotency = new Map();
     this.executionRateLimits = new Map();
+    this.emergencyStop = initialEmergencyStop();
+  }
+
+  emergencyStatus() {
+    return exportedEmergencyStop(this.emergencyStop);
+  }
+
+  setEmergencyStop({ engaged, actor, reasonCode, approvalId }) {
+    if (typeof engaged !== 'boolean' || !validBoundedString(actor)
+      || !ID_RE.test(reasonCode || '') || !UUID_RE.test(approvalId || '')) {
+      throw new V2Error('invalid_request', 'emergency stop change is invalid');
+    }
+    if (this.emergencyStop.engaged === engaged) {
+      throw new V2Error('invalid_state', `emergency stop is already ${engaged ? 'engaged' : 'clear'}`, 409);
+    }
+    const previous = structuredClone(this.emergencyStop);
+    const cancelledTasks = [];
+    this.emergencyStop = {
+      engaged, generation: previous.generation + 1,
+      changedAt: new Date(this.now()).toISOString(), changedBy: actor,
+      reasonCode, approvalId,
+    };
+    try {
+      if (engaged) {
+        for (const task of this.tasks.values()) {
+          if (task.running || !['REQUESTED', 'PENDING_APPROVAL', 'READY'].includes(task.state)) continue;
+          const cancelled = { task, previous: structuredClone(task), approvalStatus: null };
+          cancelledTasks.push(cancelled);
+          if (task.approvalId) {
+            cancelled.approvalStatus = this.approvalBroker.cancelForTask(task.approvalId);
+          }
+          this.transition(task, 'CANCELLED', 'emergency_stop');
+        }
+      }
+      this.onEvent({
+        actor, identity: 'session', role: 'admin', tool: 'broker.emergency-stop',
+        target: 'control-plane', environment: 'production', risk_level: 'CRITICAL',
+        policy_decision: 'allow', approval_id: approvalId,
+        state: engaged ? 'ENGAGED' : 'CLEARED', reason: reasonCode,
+        at: this.emergencyStop.changedAt,
+      });
+      this.checkpoint(null, engaged ? 'emergency_stop_engaged' : 'emergency_stop_cleared');
+    } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+      this.emergencyStop = previous;
+      for (const cancelled of cancelledTasks.reverse()) {
+        this.tasks.set(cancelled.task.id, cancelled.previous);
+        if (cancelled.task.approvalId && cancelled.approvalStatus !== null) {
+          try {
+            this.approvalBroker.restoreTaskCancellation(
+              cancelled.task.approvalId,
+              cancelled.approvalStatus,
+            );
+          } catch {
+            throw new V2Error('state_rollback_failed', 'emergency stop rollback failed', 503);
+          }
+        }
+      }
+      throw error;
+    }
+    return this.emergencyStatus();
+  }
+
+  assertExecutionEnabled() {
+    if (this.emergencyStop.engaged) {
+      throw new V2Error('emergency_stop', 'automation execution is disabled by the emergency stop', 503);
+    }
   }
 
   listTools(identity) {
@@ -317,6 +424,7 @@ export class AutomationTaskBroker {
 
   async create(identity, input) {
     if (!validBoundedString(identity?.name)) throw new V2Error('unauthorized', 'authenticated identity required', 401);
+    this.assertExecutionEnabled();
     const allowedKeys = new Set(['tool', 'tool_version', 'account_ref', 'environment', 'parameters', 'idempotency_key']);
     if (!input || typeof input !== 'object' || Array.isArray(input)
       || Object.keys(input).some((key) => !allowedKeys.has(key))) throw new V2Error('invalid_request', 'task request contains unknown fields');
@@ -355,6 +463,7 @@ export class AutomationTaskBroker {
       };
       const needsApproval = ['HIGH', 'CRITICAL'].includes(tool.risk_level);
       const decision = await this.authorize(operation, needsApproval ? { ignoreApproval: true } : {});
+      this.assertExecutionEnabled();
       if (!decision?.allow) throw new V2Error('forbidden', decision?.reason || 'policy_denied', 403);
       const timestamp = this.now();
       const task = {
@@ -423,6 +532,7 @@ export class AutomationTaskBroker {
   }
 
   async run(identity, id) {
+    this.assertExecutionEnabled();
     const task = this.getOwned(identity, id);
     this.expire(task);
     if (TERMINAL.has(task.state) || task.state === 'EXECUTING' || task.running) throw new V2Error('invalid_state', 'task is not executable', 409);
@@ -463,6 +573,12 @@ export class AutomationTaskBroker {
       if (!decision?.allow) {
         task.policyDecision = 'deny';
         return this.completePreExecutionFailure(task, approvalClaim, decision?.reason || 'policy_denied');
+      }
+      try {
+        this.assertExecutionEnabled();
+      } catch (error) {
+        if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+        throw error;
       }
       task.policyDecision = 'allow';
       const executor = this.executors.get(`${task.tool.name}@${task.tool.version}`);
@@ -518,6 +634,9 @@ export class AutomationTaskBroker {
         if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
           throw new V2Error('unsafe_result', 'executor result contains credential material', 502);
         }
+        if (this.emergencyStop.engaged) {
+          throw new V2Error('emergency_stop', 'executor result was discarded after emergency stop activation', 503);
+        }
       } catch (error) {
         task.latencyMs = Math.max(0, this.now() - startedAt);
         if (error instanceof V2Error && error.code === 'task_expired') {
@@ -564,6 +683,7 @@ export class AutomationTaskBroker {
           throw new V2Error('state_rollback_failed', 'task cancellation rollback failed', 503);
         }
       }
+      this.assertExecutionEnabled();
       throw error;
     }
   }
@@ -655,11 +775,11 @@ export class AutomationTaskBroker {
   checkpoint(task, phase) {
     const result = this.onCheckpoint({
       phase,
-      task_id: task.id,
-      state: task.state,
-      execution_id: task.executionId || null,
-      approval_id: task.approvalId || null,
-      at: task.updatedAt,
+      task_id: task?.id || null,
+      state: task?.state || null,
+      execution_id: task?.executionId || null,
+      approval_id: task?.approvalId || this.emergencyStop.approvalId || null,
+      at: task?.updatedAt || this.emergencyStop.changedAt,
     });
     if (result && typeof result.then === 'function') {
       Promise.resolve(result).catch(() => {});
@@ -674,6 +794,7 @@ export class AutomationTaskBroker {
     this.prune();
     return {
       version: STATE_VERSION,
+      emergency_stop: exportedEmergencyStop(this.emergencyStop),
       tasks: [...this.tasks.values()].map(exportedTask),
       idempotency: [...this.idempotency.entries()]
         .filter(([, entry]) => entry.taskId && this.tasks.has(entry.taskId))
@@ -699,8 +820,9 @@ export class AutomationTaskBroker {
       || [...this.idempotency.values()].some((entry) => entry.promise)) {
       throw new V2Error('state_busy', 'automation task state has active mutations', 409);
     }
+    const stateKeys = snapshot?.version === 1 ? STATE_KEYS_V1 : STATE_KEYS_V2;
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
-      || !hasExactKeys(snapshot, STATE_KEYS) || snapshot.version !== STATE_VERSION
+      || !hasExactKeys(snapshot, stateKeys) || ![1, STATE_VERSION].includes(snapshot.version)
       || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.idempotency)
       || !Array.isArray(snapshot.rate_limits)) {
       throw stateCorrupt('snapshot envelope is invalid');
@@ -767,6 +889,9 @@ export class AutomationTaskBroker {
     this.tasks = tasks;
     this.idempotency = idempotency;
     this.executionRateLimits = executionRateLimits;
+    this.emergencyStop = snapshot.version === 1
+      ? initialEmergencyStop()
+      : restoreEmergencyStop(snapshot.emergency_stop);
     this.prune();
   }
 

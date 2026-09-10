@@ -926,7 +926,11 @@ const persistedReady = await beforeRestart.create(human, {
   ...lowInput, idempotency_key: 'persisted-ready-000001',
 });
 const taskState = beforeRestart.exportState();
-assert.equal(taskState.version, 1);
+assert.equal(taskState.version, 2);
+assert.deepEqual(taskState.emergency_stop, {
+  engaged: false, generation: 0, changed_at: null, changed_by: null,
+  reason_code: null, approval_id: null,
+});
 assert.equal(taskState.tasks.length, 2);
 
 const afterRestart = new AutomationTaskBroker({
@@ -1221,5 +1225,114 @@ const asyncCheckpointTask = await asyncCheckpointBroker.create(human, {
 });
 await assert.rejects(asyncCheckpointBroker.run(human, asyncCheckpointTask.id), expectCode('checkpoint_invalid'));
 assert.equal(asyncCheckpointExecutorCalls, 0, 'asynchronous persistence cannot race executor invocation');
+
+const emergencyEvents = [];
+let releaseEmergencyExecutor;
+let emergencyExecutorStarted;
+const emergencyStarted = new Promise((resolve) => { emergencyExecutorStarted = resolve; });
+const emergencyBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals, now: () => now,
+  executors: new Map([
+    ['broker.tools.inspect@1.0.0', async () => {
+      emergencyExecutorStarted();
+      await new Promise((resolve) => { releaseEmergencyExecutor = resolve; });
+      return {
+        name: 'github.repository.read', version: '1.0.0', provider: 'github',
+        operation_id: 'repo.read', risk_level: 'LOW', agent_execution: true,
+      };
+    }],
+    ['broker.device.state@1.0.0', async (parameters) => ({ id: parameters.device_id, state: parameters.state })],
+  ]),
+  onEvent: (event) => emergencyEvents.push(event),
+});
+const emergencyTask = await emergencyBroker.create(human, {
+  ...lowInput, idempotency_key: 'emergency-running-0001',
+});
+const emergencyPending = await emergencyBroker.create(human, {
+  ...criticalInput, idempotency_key: 'emergency-pending-0001',
+});
+const emergencyRun = emergencyBroker.run(human, emergencyTask.id);
+await emergencyStarted;
+const engaged = emergencyBroker.setEmergencyStop({
+  engaged: true, actor: 'admin-a', reasonCode: 'incident-response',
+  approvalId: '00000000-0000-4000-8000-000000000090',
+});
+assert.equal(engaged.engaged, true);
+assert.equal(engaged.generation, 1);
+assert.equal(emergencyBroker.get(human, emergencyPending.id).state, 'CANCELLED');
+assert.equal(
+  approvals.list(human).find((item) => item.id === emergencyPending.approval_id).status,
+  'CANCELLED',
+  'activation revokes pending approvals',
+);
+releaseEmergencyExecutor();
+const discarded = await emergencyRun;
+assert.equal(discarded.state, 'FAILED');
+assert.equal(discarded.error.code, 'emergency_stop', 'an in-flight result cannot commit after activation');
+await assert.rejects(
+  emergencyBroker.create(human, { ...lowInput, idempotency_key: 'emergency-denied-0001' }),
+  expectCode('emergency_stop'),
+);
+await assert.rejects(emergencyBroker.run(human, emergencyTask.id), expectCode('emergency_stop'));
+assert.ok(emergencyEvents.some((event) => event.state === 'ENGAGED' && event.risk_level === 'CRITICAL'));
+
+const emergencySnapshot = emergencyBroker.exportState();
+const restoredEmergencyBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+});
+restoredEmergencyBroker.restoreState(emergencySnapshot);
+assert.deepEqual(restoredEmergencyBroker.emergencyStatus(), engaged, 'emergency stop survives restart');
+const cleared = restoredEmergencyBroker.setEmergencyStop({
+  engaged: false, actor: 'admin-b', reasonCode: 'incident-resolved',
+  approvalId: '00000000-0000-4000-8000-000000000091',
+});
+assert.equal(cleared.engaged, false);
+assert.equal(cleared.generation, 2);
+await restoredEmergencyBroker.create(human, {
+  ...lowInput, idempotency_key: 'emergency-cleared-0001',
+});
+
+const emergencyCheckpointFailure = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+  onCheckpoint: (event) => {
+    if (event.phase === 'emergency_stop_engaged') throw new Error('emergency checkpoint unavailable');
+  },
+});
+const rollbackPending = await emergencyCheckpointFailure.create(human, {
+  ...lowInput, idempotency_key: 'emergency-rollback-0001',
+});
+assert.throws(() => emergencyCheckpointFailure.setEmergencyStop({
+  engaged: true, actor: 'admin-a', reasonCode: 'suspected-compromise',
+  approvalId: '00000000-0000-4000-8000-000000000092',
+}), /emergency checkpoint unavailable/);
+assert.equal(emergencyCheckpointFailure.emergencyStatus().engaged, false, 'ordinary checkpoint failure rolls back activation');
+assert.equal(emergencyCheckpointFailure.get(human, rollbackPending.id).state, 'READY');
+
+const emergencyIndeterminate = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+  onCheckpoint: (event) => {
+    if (event.phase === 'emergency_stop_engaged') {
+      throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+    }
+  },
+});
+assert.throws(() => emergencyIndeterminate.setEmergencyStop({
+  engaged: true, actor: 'admin-a', reasonCode: 'suspected-compromise',
+  approvalId: '00000000-0000-4000-8000-000000000093',
+}), expectCode('state_commit_indeterminate'));
+assert.equal(emergencyIndeterminate.emergencyStatus().engaged, true, 'indeterminate activation remains fail closed');
+
+const legacyTaskState = structuredClone(taskState);
+delete legacyTaskState.emergency_stop;
+legacyTaskState.version = 1;
+const legacyTaskBroker = new AutomationTaskBroker({
+  toolRegistry: persistenceRegistry, authorize, approvalBroker: approvals,
+  executors: persistenceExecutors, now: () => now,
+});
+legacyTaskBroker.restoreState(legacyTaskState);
+assert.equal(legacyTaskBroker.emergencyStatus().engaged, false, 'v1 task snapshots migrate to a clear switch');
+assert.throws(() => restoredEmergencyBroker.restoreState({
+  ...emergencySnapshot, emergency_stop: { ...emergencySnapshot.emergency_stop, generation: -1 },
+}), expectCode('state_corrupt'));
 
 console.log('automation tasks: low-risk and approved critical end-to-end loops passed');

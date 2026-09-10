@@ -5,6 +5,10 @@ agents. A caller names a registered tool and supplies schema-checked parameters;
 it cannot supply a URL, authentication header, credential, command or adapter
 implementation.
 
+This typed boundary supersedes the early `/api/v1/tools/:name/invoke`
+placeholder in the P0 tracking issue. The unrestricted compatibility route is
+intentionally not implemented.
+
 Registry schemas use an explicitly validated JSON Schema subset. Unsupported
 keywords are rejected at startup instead of being silently ignored. Object
 closure, primitive constants and enums, string lengths, array item/count bounds
@@ -80,6 +84,24 @@ never the bearer token or nonce. See [Single-use execution tokens](EXECUTION-TOK
   schema-validated business result.
 - `GET /api/v2/tasks/{id}/events` returns a bounded, ordered transition stream.
 - `POST /api/v2/tasks/{id}/cancel` terminally cancels a task before execution.
+
+## Emergency stop
+
+`GET /api/v2/emergency-stop` and `POST /api/v2/emergency-stop` expose the
+global automation kill switch. Both require an interactive strict-admin session
+with a current WebAuthn factor. A state change additionally requires two
+independent approvals bound to `broker:emergency.stop`, the requested state and
+the reason code. The mutation also passes the trusted same-origin check.
+
+The switch is included in the encrypted control-plane checkpoint. While it is
+engaged, task and typed-operation creation, extension OTP consumption, and
+isolated-browser lease claim, OTP consumption, and completion all fail closed.
+If activation occurs while a task adapter is running, its eventual upstream
+result is discarded and the task fails with `emergency_stop`. A normal
+checkpoint failure rolls the change back; an indeterminate durable write
+retains the in-memory stop until operator reconciliation. Clearing the switch
+requires the same WebAuthn and dual-control ceremony and increments its
+persisted generation.
 
 Mutation intent events are durably written before the broker is called and use
 `status=attempt`. They are availability and trace evidence, not an authorization

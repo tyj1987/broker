@@ -38,6 +38,24 @@
       "agent_execution": false
     },
     {
+      "name": "broker.emergency-stop",
+      "version": "1.0.0",
+      "description": "Engage or clear the global automation emergency stop after strict dual control.",
+      "provider": "broker",
+      "operation_id": "emergency.stop",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "engaged", "reason_code"], "properties": { "resource_ref": { "type": "string", "const": "control-plane" }, "engaged": { "type": "boolean" }, "reason_code": { "type": "string", "minLength": 1, "maxLength": 128 } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["engaged", "generation", "changed_at", "changed_by", "reason_code", "approval_id"], "properties": { "engaged": { "type": "boolean" }, "generation": { "type": "integer" }, "changed_at": { "type": "string" }, "changed_by": { "type": "string" }, "reason_code": { "type": "string" }, "approval_id": { "type": "string" } } },
+      "required_role": "admin",
+      "risk_level": "CRITICAL",
+      "environments": ["production"],
+      "target": { "kind": "control-plane", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 10, "window_seconds": 3600 },
+      "approval_policy": { "mode": "two_person", "approvals_required": 2 },
+      "audit_policy": { "required": true, "redact": [] },
+      "agent_execution": false
+    },
+    {
       "name": "broker.device.state",
       "version": "1.0.0",
       "description": "Suspend, reactivate, or revoke a registered broker device.",

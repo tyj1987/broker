@@ -11,6 +11,7 @@ let auditFailureAction = null;
 let checkpointFailurePhase = null;
 let asyncCheckpointPhase = null;
 let indeterminateCheckpointPhase = null;
+let emergencyStopped = false;
 const calls = [];
 const auditEvents = [];
 const handler = createV2Routes({
@@ -168,6 +169,20 @@ const handler = createV2Routes({
     },
   },
   taskBroker: {
+    emergencyStatus() {
+      return { engaged: emergencyStopped, generation: emergencyStopped ? 1 : 0, changed_at: null, changed_by: null, reason_code: null, approval_id: null };
+    },
+    assertExecutionEnabled() {
+      if (emergencyStopped) throw new V2Error('emergency_stop', 'automation execution is disabled', 503);
+    },
+    setEmergencyStop(input) {
+      calls.push(['emergency-stop', input]);
+      emergencyStopped = input.engaged;
+      return {
+        engaged: input.engaged, generation: 1, changed_at: new Date().toISOString(),
+        changed_by: input.actor, reason_code: input.reasonCode, approval_id: input.approvalId,
+      };
+    },
     listTools(subject) {
       calls.push(['tool-list', subject.name]);
       return [{ name: 'github.repository.read', version: '1.0.0' }];
@@ -353,6 +368,56 @@ assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'admin-ses
 identity = { clientName: 'admin-session', via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } };
 assert.equal((await getRoute('/api/v2/operations/00000000-0000-4000-8000-000000000011')).status, 200);
 assert.equal((await getRoute('/api/v2/devices')).value.devices[0].id, 'all-devices');
+
+assert.equal((await getRoute('/api/v2/emergency-stop')).value.error, 'step_up_required');
+identity.client.security_profile = 'strict';
+assert.equal((await getRoute('/api/v2/emergency-stop')).value.engaged, false);
+body = {
+  engaged: true, reason_code: 'incident-response',
+  approval_request_id: '00000000-0000-4000-8000-000000000011',
+};
+request.headers.origin = 'https://attacker.test';
+assert.equal((await route('/api/v2/emergency-stop')).value.error, 'origin_denied');
+request.headers.origin = 'https://broker.test';
+assert.equal((await route('/api/v2/emergency-stop')).value.error, 'approval_required');
+assert.ok(calls.some((item) => item[0] === 'approval-failed'
+  && item[1] === '00000000-0000-4000-8000-000000000011'));
+body.approval_request_id = '00000000-0000-4000-8000-000000000012';
+const engagedEmergency = await route('/api/v2/emergency-stop');
+assert.equal(engagedEmergency.status, 200);
+assert.equal(engagedEmergency.value.engaged, true);
+assert.ok(calls.some((item) => item[0] === 'emergency-stop'
+  && item[1].reasonCode === 'incident-response'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_emergency_stop_intent'));
+assert.ok(auditEvents.some((event) => event.action === 'v2_emergency_stop'));
+const emergencyChangesBeforeAuditFailure = calls.filter((item) => item[0] === 'emergency-stop').length;
+auditFailureAction = 'v2_emergency_stop_intent';
+assert.equal((await route('/api/v2/emergency-stop')).value.error, 'audit_unavailable');
+auditFailureAction = null;
+assert.equal(calls.filter((item) => item[0] === 'emergency-stop').length, emergencyChangesBeforeAuditFailure);
+body = { ...body, unexpected: true };
+assert.equal((await route('/api/v2/emergency-stop')).value.error, 'invalid_request');
+body = { provider: 'aliyun', operation_id: 'billing.read' };
+assert.equal((await route('/api/v2/operations')).value.error, 'emergency_stop');
+identity = {
+  clientName: 'browser-bridge', via: 'api_key', client: { role: 'operator' },
+  apiKey: { scopes: ['browser:otp:fill'] },
+};
+assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'emergency_stop');
+assert.equal((await route('/api/v2/browser/otp/finish')).value.error, 'emergency_stop');
+assert.equal((await route('/api/v2/devices/00000000-0000-4000-8000-000000000001/browser-leases/claim')).value.error, 'emergency_stop');
+assert.equal((await route('/api/v2/devices/00000000-0000-4000-8000-000000000001/browser-leases/00000000-0000-4000-8000-000000000002/otp')).value.error, 'emergency_stop');
+assert.equal((await route('/api/v2/devices/00000000-0000-4000-8000-000000000001/browser-leases/00000000-0000-4000-8000-000000000002/complete')).value.error, 'emergency_stop');
+identity = {
+  clientName: 'admin-session', via: 'session', authFactors: ['webauthn'],
+  client: { role: 'admin', security_profile: 'strict' },
+};
+body = {
+  engaged: false, reason_code: 'incident-resolved',
+  approval_request_id: '00000000-0000-4000-8000-000000000013',
+};
+assert.equal((await route('/api/v2/emergency-stop')).value.engaged, false);
+delete request.headers.origin;
 
 identity = { clientName: 'owner-1', via: 'session', client: { role: 'operator' } };
 body = {

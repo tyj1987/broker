@@ -1,12 +1,13 @@
 manifest_version: 1
 id: aliyun
 display_name: Alibaba Cloud
-checked_at: 2026-09-09
+checked_at: 2026-09-11
 status: contract_required
 official_docs:
   - https://www.alibabacloud.com/help/en/ram/use-cases/ensure-security-of-alibaba-cloud-resources
   - https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-assumerolewithoidc
   - https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature
+  - https://www.alibabacloud.com/help/en/ecs/developer-reference/api-ecs-2014-05-26-describeinstances
 origins: [https://ecs.cn-hangzhou.aliyuncs.com, https://sts.aliyuncs.com]
 authentication:
   priority: [ecs_ram_role, assume_role_with_oidc, sts]
@@ -26,3 +27,6 @@ operations:
     maximum_response_bytes: 2097152
 redaction: [Authorization, AccessKeyId, AccessKeySecret, SecurityToken, Signature]
 contract_test: { account: isolated_ram_role, required: true, last_result: not_run }
+implementation_evidence:
+  signature_v3_official_vector: passed
+  isolated_account_contract: not_run

@@ -69,7 +69,11 @@ continue.
   leases are accepted. Docker now uses the same isolated boundary with exact
   repository bindings and a second expiry check in the adapter. The external
   credential-service implementation and its authority remain undecided, so
-  every provider remains `contract_required`.
+  every provider remains `contract_required`. Alibaba Cloud Signature V3 now
+  matches the current official byte-level example, uses ISO 8601 time and a
+  per-request nonce, and signs temporary STS security tokens. This corrects the
+  local primitive only; no Alibaba Cloud account binding, credential sidecar or
+  production executor is enabled while this decision is open.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

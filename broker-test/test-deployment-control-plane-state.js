@@ -49,6 +49,7 @@ assert.doesNotMatch(deployHelper, /chown -R broker:broker/);
 assert.match(deployWorkflow, /cp -R tools broker\/tools/);
 assert.match(nginx, /ssl_certificate \/etc\/nginx\/cert\/broker\.52trz\.com\/fullchain\.pem/);
 assert.match(nginx, /proxy_ssl_verify on;/);
+assert.match(nginx, /proxy_ssl_protocols TLSv1\.3;/);
 assert.doesNotMatch(nginx, /proxy_ssl_verify off;/);
 assert.match(workflow, /Dir::Etc::sourcelist=\/etc\/apt\/sources\.list\.d\/ubuntu\.sources/);
 assert.match(workflow, /secrets\.stateKeySecretName=broker-state-key/);

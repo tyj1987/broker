@@ -232,6 +232,11 @@ replacement is reported as `state_commit_indeterminate`; the matching in-memory
 mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
 
+Expiry discovered by a task or event read is also committed synchronously before
+the response is returned. A pre-replacement checkpoint failure restores both the
+task and its approval state; an indeterminate replacement keeps the expired
+state so a restart cannot reopen an execution window.
+
 The operation component is included in every global checkpoint and shutdown
 checkpoint. Operation creation, device replay-nonce consumption, OTP receipt,
 browser-extension claims and completions, and isolated-browser lease claims,

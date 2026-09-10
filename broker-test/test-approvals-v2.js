@@ -356,6 +356,17 @@ assert.throws(
 );
 assert.throws(() => broker.rollbackSucceeded(request.id), expectCode('approval_mismatch'));
 
+const failedRetryable = broker.create(requester, input);
+broker.decide(approver('admin-a'), failedRetryable.id, 'approve');
+broker.decide(approver('admin-b'), failedRetryable.id, 'approve');
+broker.claimFor(requester, { ...input, approval_request_id: failedRetryable.id });
+broker.markFailed(failedRetryable.id);
+broker.rollbackFailed(failedRetryable.id);
+broker.releaseClaim(failedRetryable.id);
+assert.equal(broker.list(requester).find((item) => item.id === failedRetryable.id).status, 'APPROVED');
+broker.rollbackFailed(null);
+assert.throws(() => broker.rollbackFailed(failedRetryable.id), expectCode('approval_mismatch'));
+
 const successful = broker.create(requester, input);
 broker.decide(approver('admin-a'), successful.id, 'approve');
 broker.decide(approver('admin-b'), successful.id, 'approve');

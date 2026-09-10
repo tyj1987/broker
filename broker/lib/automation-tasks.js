@@ -704,9 +704,30 @@ export class AutomationTaskBroker {
   expire(task) {
     if (!task.running && !TERMINAL.has(task.state) && Date.parse(task.expiresAt) <= this.now()) {
       const wasExecuting = task.state === 'EXECUTING';
-      if (task.approvalId && !wasExecuting) this.approvalBroker.cancelForTask(task.approvalId);
-      this.transition(task, 'EXPIRED', 'task_expired');
-      if (task.approvalId && wasExecuting) this.approvalBroker.markFailed(task.approvalId);
+      const previousTask = structuredClone(task);
+      let previousApprovalStatus = null;
+      try {
+        if (task.approvalId && wasExecuting) {
+          this.approvalBroker.markFailed(task.approvalId);
+          previousApprovalStatus = 'EXECUTING';
+        } else if (task.approvalId) {
+          previousApprovalStatus = this.approvalBroker.cancelForTask(task.approvalId);
+        }
+        this.transition(task, 'EXPIRED', 'task_expired');
+        this.checkpoint(task, 'expired');
+      } catch (error) {
+        if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+        this.tasks.set(task.id, previousTask);
+        if (task.approvalId && previousApprovalStatus !== null) {
+          try {
+            if (wasExecuting) this.approvalBroker.rollbackFailed(task.approvalId);
+            else this.approvalBroker.restoreTaskCancellation(task.approvalId, previousApprovalStatus);
+          } catch {
+            throw new V2Error('state_rollback_failed', 'task expiry rollback failed', 503);
+          }
+        }
+        throw error;
+      }
     }
   }
 

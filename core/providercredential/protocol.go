@@ -264,6 +264,8 @@ func validStaticBinding(provider, operationID, accountRef, environment, resource
 			cloudflareAccountPattern.MatchString(resourceRef)
 	case "deepseek":
 		return operationID == "models.list" && resourceRef == "model-catalog"
+	case "openai":
+		return operationID == "models.list" && idPattern.MatchString(resourceRef)
 	case "docker":
 		parts := strings.Split(resourceRef, "/")
 		return operationID == "repository.tags.list" && len(resourceRef) < 256 && len(parts) == 2 &&

@@ -60,6 +60,14 @@ comments, tags and settings are deliberately excluded. It remains source-only
 and `contract_required` until the isolated Cloudflare account test and
 production credential authority are accepted.
 
+The source branch also wires `openai.models.list@1.0.0` through an isolated
+credential lease and a project-bound runtime. The fixed `GET /v1/models`
+request accepts no free URL or headers and releases model identifiers only.
+The preferred authority is OpenAI workload identity federation mapped to a
+dedicated project service account; a bounded project service-account token is
+the fallback. The operation remains source-only and `contract_required` until
+the identity exchange and isolated project contract are verified.
+
 This changes the active implementation plan from building another task model
 to validating the deployed orchestration boundary, then enabling providers one
 bounded read-only operation at a time. It does not authorize a second task API,

@@ -6,11 +6,13 @@ const SOCKETS = Object.freeze({
   cloudflare: `${SOCKET_DIRECTORY}/cloudflare.sock`,
   deepseek: `${SOCKET_DIRECTORY}/deepseek.sock`,
   docker: `${SOCKET_DIRECTORY}/docker.sock`,
+  openai: `${SOCKET_DIRECTORY}/openai.sock`,
 });
 const OPERATIONS = Object.freeze({
   cloudflare: Object.freeze(['zones.list', 'dns.records.list']),
   deepseek: Object.freeze(['models.list']),
   docker: Object.freeze(['repository.tags.list']),
+  openai: Object.freeze(['models.list']),
 });
 const MAX_REQUEST_BYTES = 4 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024;
@@ -38,6 +40,7 @@ function validResource(provider, operationId, value) {
   if (!OPERATIONS[provider]?.includes(operationId)) return false;
   if (provider === 'cloudflare') return CLOUDFLARE_ACCOUNT_ID_RE.test(value || '');
   if (provider === 'deepseek') return value === 'model-catalog';
+  if (provider === 'openai') return ID_RE.test(value || '');
   if (provider === 'docker') {
     if (typeof value !== 'string' || value.length >= 256) return false;
     const parts = value.split('/');

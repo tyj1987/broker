@@ -114,6 +114,10 @@ import {
   prepareDeepSeekRuntimeExecutors,
 } from './adapters/deepseek-runtime.js';
 import {
+  commitOpenAIRuntimeExecutors,
+  prepareOpenAIRuntimeExecutors,
+} from './adapters/openai-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -408,6 +412,7 @@ async function prepareConfig() {
   const dockerExecutors = await prepareDockerRuntimeExecutors({ config: cfg });
   const aliyunExecutors = await prepareAliyunRuntimeExecutors({ config: cfg });
   const deepseekExecutors = await prepareDeepSeekRuntimeExecutors({ config: cfg });
+  const openaiExecutors = await prepareOpenAIRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
@@ -416,6 +421,7 @@ async function prepareConfig() {
     dockerExecutors,
     aliyunExecutors,
     deepseekExecutors,
+    openaiExecutors,
   };
 }
 
@@ -426,6 +432,7 @@ function applyConfig(prepared) {
   commitDockerRuntimeExecutors(taskExecutors, prepared.dockerExecutors);
   commitAliyunRuntimeExecutors(taskExecutors, prepared.aliyunExecutors);
   commitDeepSeekRuntimeExecutors(taskExecutors, prepared.deepseekExecutors);
+  commitOpenAIRuntimeExecutors(taskExecutors, prepared.openaiExecutors);
   CONFIG = prepared.document;
 }
 

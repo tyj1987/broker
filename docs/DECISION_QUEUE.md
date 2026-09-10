@@ -96,7 +96,10 @@ continue.
   already enforced by the Node client, which also rejects responses with altered
   execution bindings. Its issuer remains
   dependency-injected: this protocol boundary is not a credential store and
-  does not enable a provider by itself.
+  does not enable a provider by itself. OpenAI model inventory now uses the
+  same source-only, execution-bound lease boundary with an exact project
+  resource and model-ID-only response projection. WIF token exchange and the
+  isolated OpenAI project contract remain required before activation.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

@@ -208,6 +208,38 @@ await deepseekClient.lease({
 });
 assert.equal(deepseekHarness.state.options.path, `${SOCKET_DIRECTORY}/deepseek.sock`);
 
+const openaiHarness = socketHarness({
+  response: JSON.stringify({
+    version: 2,
+    provider: 'openai',
+    operation_id: 'models.list',
+    account_ref: 'openai-52trz',
+    environment: 'production',
+    resource_ref: 'proj_52trzProduction',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+    token: 'unit-openai-token',
+    expires_at: new Date(NOW + 60_000).toISOString(),
+  }),
+});
+const openaiClient = createLocalProviderCredentialClient({
+  provider: 'openai',
+  connect: openaiHarness.connect,
+  stat: safeStat,
+  now: () => NOW,
+  processUid: 1000,
+  processGroups: [3000],
+});
+await openaiClient.lease({
+  operation_id: 'models.list',
+  account_ref: 'openai-52trz',
+  environment: 'production',
+  resource_ref: 'proj_52trzProduction',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
+});
+assert.equal(openaiHarness.state.options.path, `${SOCKET_DIRECTORY}/openai.sock`);
+
 for (const options of [
   {},
   { provider: 'unknown' },
@@ -348,11 +380,13 @@ assert.deepEqual(LOCAL_PROVIDER_CREDENTIAL_CONTRACT, {
     cloudflare: SOCKET,
     deepseek: `${SOCKET_DIRECTORY}/deepseek.sock`,
     docker: `${SOCKET_DIRECTORY}/docker.sock`,
+    openai: `${SOCKET_DIRECTORY}/openai.sock`,
   },
   allowed_operations: {
     cloudflare: ['zones.list', 'dns.records.list'],
     deepseek: ['models.list'],
     docker: ['repository.tags.list'],
+    openai: ['models.list'],
   },
   protocol_version: 2,
   maximum_request_bytes: 4096,

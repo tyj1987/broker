@@ -154,6 +154,7 @@ func TestRequestValidationFailsClosed(t *testing.T) {
 		"bad execution id":        requestLine(t, func(value map[string]any) { value["execution_id"] = "wrong" }),
 		"bad request binding":     requestLine(t, func(value map[string]any) { value["request_binding"] = "wrong" }),
 		"bad deepseek resource":   requestLine(t, func(value map[string]any) { value["resource_ref"] = "chat" }),
+		"bad openai resource":     requestLine(t, func(value map[string]any) { value["provider"] = "openai"; value["resource_ref"] = "../project" }),
 		"bad cloudflare resource": requestLine(t, func(value map[string]any) { value["provider"] = "cloudflare"; value["resource_ref"] = "zone" }),
 		"bad docker resource":     requestLine(t, func(value map[string]any) { value["provider"] = "docker"; value["resource_ref"] = "library" }),
 	}
@@ -173,6 +174,7 @@ func TestRequestValidationFailsClosed(t *testing.T) {
 func TestSupportedProviderResourceShapes(t *testing.T) {
 	tests := []map[string]string{
 		{"provider": "deepseek", "resource": "model-catalog"},
+		{"provider": "openai", "resource": "proj_52trzProduction"},
 		{"provider": "cloudflare", "resource": "0123456789abcdef0123456789abcdef"},
 		{"provider": "cloudflare-dns", "resource": "abcdef0123456789abcdef0123456789"},
 		{"provider": "docker", "resource": "library/alpine"},

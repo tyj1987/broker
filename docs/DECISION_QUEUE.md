@@ -99,7 +99,12 @@ continue.
   does not enable a provider by itself. OpenAI model inventory now uses the
   same source-only, execution-bound lease boundary with an exact project
   resource and model-ID-only response projection. WIF token exchange and the
-  isolated OpenAI project contract remain required before activation.
+  isolated OpenAI project contract remain required before activation. Tencent
+  Cloud CVM inventory now has a source-only adapter with a fixed API 3.0
+  endpoint, execution-bound payload hash, temporary-token requirement and a
+  network-address-free response projection. The isolated TC3 signer protocol,
+  CAM role authority, runtime registration and account contract test remain
+  required before activation.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

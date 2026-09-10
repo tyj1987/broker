@@ -26,6 +26,26 @@ readiness fails explicitly. This behavior is covered by the Node verification
 suite at commit `df1d0f05b28257ee07d6d80dd5bb78128c598a1d`, which was squash
 merged into the baseline above.
 
+The next source candidate is
+`codex/goal-current-state@d57946ea600305819bcb8822dca14e8fb81ed16f`,
+tracked in draft PR
+[#29](https://github.com/tyj1987/broker/pull/29). Its single PR CI run
+[`34540657300`](https://github.com/tyj1987/broker/actions/runs/34540657300)
+completed successfully. That run covered the Node and Go security boundaries,
+SDKs, desktop and mobile clients, CodeQL, secret-history and dependency scans,
+Terraform, the production container runtime policy, Trivy and SBOM generation.
+Attestation publication was skipped on the pull-request event as intended; it
+is a release-build responsibility after an approved merge to `master`.
+
+This candidate adds execution-bound, source-only adapters for GitHub, Alibaba
+Cloud, DeepSeek, Docker, Cloudflare and OpenAI. Each remains
+`contract_required`: deterministic source and integration tests do not replace
+an isolated provider-account contract test, production credential-authority
+approval, or runtime activation evidence. The candidate has not been merged or
+deployed, so the active production baseline remains `master@fdf0ada` until a
+version-bound human approval, protected deployment and post-deployment checks
+prove otherwise.
+
 This checkpoint proves the running release identity and the repaired
 deployment path. It does not approve the whole product for production. In
 particular, independent audit anchoring, provider contract evidence, workload

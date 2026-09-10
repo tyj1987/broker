@@ -208,7 +208,7 @@ assert.throws(
   /duplicate tool registration/,
 );
 
-assert.throws(() => registry.validateConfiguration({}), /must be configured/);
+assert.equal(registry.validateConfiguration({}), true, 'legacy config keeps every typed operation disabled');
 assert.throws(() => registry.validateConfiguration({ operation_policies: [] }), /must be configured/);
 assert.throws(() => registry.validateConfiguration({ operation_policies: { github: [] } }), /must be an object/);
 assert.equal(registry.validateConfiguration({ operation_policies: { github: { disabled: { enabled: false } } } }), true);

@@ -211,7 +211,11 @@ export class ToolRegistry {
 
   validateConfiguration(config) {
     const policies = config?.operation_policies;
-    if (!policies || typeof policies !== 'object' || Array.isArray(policies)) {
+    // A pre-v2 configuration has no typed-operation policy map. Treat that
+    // migration state exactly like an empty map: every typed operation stays
+    // disabled until an operator adds an explicit validated policy.
+    if (policies == null) return true;
+    if (typeof policies !== 'object' || Array.isArray(policies)) {
       throw new Error('operation_policies must be configured for the tool registry');
     }
     for (const [provider, operations] of Object.entries(policies)) {

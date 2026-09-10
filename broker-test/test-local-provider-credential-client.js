@@ -146,6 +146,36 @@ await dockerClient.lease({
 });
 assert.equal(dockerHarness.state.options.path, `${SOCKET_DIRECTORY}/docker.sock`);
 
+const dnsHarness = socketHarness({
+  response: JSON.stringify({
+    version: 2,
+    provider: 'cloudflare',
+    operation_id: 'dns.records.list',
+    account_ref: 'cloudflare-primary',
+    environment: 'production',
+    resource_ref: 'b'.repeat(32),
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+    token: 'unit-dns-token',
+    expires_at: new Date(NOW + 60_000).toISOString(),
+  }),
+});
+await createLocalProviderCredentialClient({
+  provider: 'cloudflare',
+  connect: dnsHarness.connect,
+  stat: safeStat,
+  now: () => NOW,
+  processUid: 1000,
+  processGroups: [3000],
+}).lease({
+  operation_id: 'dns.records.list',
+  account_ref: 'cloudflare-primary',
+  environment: 'production',
+  resource_ref: 'b'.repeat(32),
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
+});
+
 const deepseekHarness = socketHarness({
   response: JSON.stringify({
     version: 2,
@@ -320,9 +350,9 @@ assert.deepEqual(LOCAL_PROVIDER_CREDENTIAL_CONTRACT, {
     docker: `${SOCKET_DIRECTORY}/docker.sock`,
   },
   allowed_operations: {
-    cloudflare: 'zones.list',
-    deepseek: 'models.list',
-    docker: 'repository.tags.list',
+    cloudflare: ['zones.list', 'dns.records.list'],
+    deepseek: ['models.list'],
+    docker: ['repository.tags.list'],
   },
   protocol_version: 2,
   maximum_request_bytes: 4096,

@@ -49,6 +49,17 @@ approval, and that a completed task cannot replay the upstream call. The
 operation is not production-enabled while DQ-004 and the isolated GitHub App
 contract test remain open.
 
+The source branch now also registers
+`cloudflare.dns.records.list@1.0.0` as a bounded read-only inventory operation.
+It requires the same exact 32-character zone identifier in the task resource
+and typed parameters, enforces an account allowlist before acquiring an
+execution-bound credential lease, and fixes the outbound request to Cloudflare's
+HTTPS DNS-records endpoint. Only record identifiers, type, name, TTL, proxied
+state and bounded pagination metadata may leave the adapter; record content,
+comments, tags and settings are deliberately excluded. It remains source-only
+and `contract_required` until the isolated Cloudflare account test and
+production credential authority are accepted.
+
 This changes the active implementation plan from building another task model
 to validating the deployed orchestration boundary, then enabling providers one
 bounded read-only operation at a time. It does not authorize a second task API,

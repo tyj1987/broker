@@ -1,12 +1,17 @@
 import { createCloudflareZonesListExecutor } from './cloudflare-zones-list-executor.js';
+import { createCloudflareDnsRecordsListExecutor } from './cloudflare-dns-records-list-executor.js';
 import { createLocalProviderCredentialClient } from '../lib/local-provider-credential-client.js';
 
 const ACCOUNT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ACCOUNT_ID_RE = /^[a-f0-9]{32}$/;
 const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
-const BINDING_FIELDS = new Set(['account_id', 'environments']);
+const BINDING_FIELDS = new Set(['account_id', 'environments', 'zones']);
 const EXECUTORS = new Map([
   ['zones.list', ['cloudflare.zones.list@1.0.0', createCloudflareZonesListExecutor]],
+  [
+    'dns.records.list',
+    ['cloudflare.dns.records.list@1.0.0', createCloudflareDnsRecordsListExecutor],
+  ],
 ]);
 
 export class CloudflareRuntimeConfigError extends Error {
@@ -65,12 +70,21 @@ function normalizeAccounts(config, active) {
       !ACCOUNT_ID_RE.test(binding.account_id || '') ||
       !Array.isArray(binding.environments) ||
       binding.environments.length < 1 ||
-      binding.environments.some((environment) => !ENVIRONMENTS.has(environment))
+      binding.environments.some((environment) => !ENVIRONMENTS.has(environment)) ||
+      (binding.zones !== undefined &&
+        (!Array.isArray(binding.zones) ||
+          binding.zones.length < 1 ||
+          binding.zones.length > 100 ||
+          binding.zones.some((zone) => !ACCOUNT_ID_RE.test(zone || ''))))
     ) {
       invalid('Cloudflare provider account binding is invalid');
     }
     const environments = [...new Set(binding.environments)];
-    if (environments.length !== binding.environments.length) {
+    const zones = binding.zones === undefined ? [] : [...new Set(binding.zones)];
+    if (
+      environments.length !== binding.environments.length ||
+      zones.length !== (binding.zones?.length || 0)
+    ) {
       invalid('Cloudflare provider account binding contains duplicates');
     }
     normalized.set(
@@ -78,12 +92,19 @@ function normalizeAccounts(config, active) {
       Object.freeze({
         account_id: binding.account_id,
         environments: Object.freeze(environments),
+        zones: Object.freeze(zones),
       }),
     );
   }
   for (const operation of active) {
     if (operation.accounts.some((accountRef) => !normalized.has(accountRef))) {
       invalid('A verified Cloudflare operation references an unknown provider account');
+    }
+    if (
+      operation.operationId === 'dns.records.list' &&
+      operation.accounts.some((accountRef) => normalized.get(accountRef).zones.length === 0)
+    ) {
+      invalid('Verified Cloudflare DNS operations require exact zone bindings');
     }
   }
   return normalized;
@@ -94,6 +115,7 @@ function createTokenProvider(accounts, credentialClient) {
     account_ref: accountRef,
     environment,
     account_id: accountId,
+    zone_id: zoneId,
     execution_id: executionId,
     request_binding: requestBinding,
     signal,
@@ -101,21 +123,27 @@ function createTokenProvider(accounts, credentialClient) {
     const binding = accounts.get(accountRef);
     if (
       !binding ||
-      binding.account_id !== accountId ||
-      !binding.environments.includes(environment)
+      !binding.environments.includes(environment) ||
+      (accountId !== undefined) === (zoneId !== undefined) ||
+      (accountId !== undefined && binding.account_id !== accountId) ||
+      (zoneId !== undefined && !binding.zones.includes(zoneId))
     ) {
       throw new CloudflareRuntimeConfigError('Cloudflare provider account binding is unavailable');
     }
+    const operationId = accountId !== undefined ? 'zones.list' : 'dns.records.list';
+    const resourceRef = accountId !== undefined ? accountId : zoneId;
     const lease = await credentialClient.lease({
-      operation_id: 'zones.list',
+      operation_id: operationId,
       account_ref: accountRef,
       environment,
-      resource_ref: accountId,
+      resource_ref: resourceRef,
       execution_id: executionId,
       request_binding: requestBinding,
       signal,
     });
-    return { token: lease.token, account_id: binding.account_id };
+    return accountId !== undefined
+      ? { token: lease.token, account_id: binding.account_id }
+      : { token: lease.token, zone_id: zoneId, expires_at: lease.expires_at };
   };
 }
 
@@ -172,6 +200,7 @@ export const CLOUDFLARE_RUNTIME_CONTRACT = Object.freeze({
   supported_operations: Object.freeze([...EXECUTORS.keys()]),
   account_binding_fields: Object.freeze([...BINDING_FIELDS]),
   maximum_accounts: 64,
+  maximum_zones_per_account: 100,
   plaintext_token_configuration_supported: false,
   requires_contract_verified_policy: true,
   requires_isolated_credential_service: true,

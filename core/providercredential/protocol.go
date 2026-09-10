@@ -260,7 +260,8 @@ func validStaticBinding(provider, operationID, accountRef, environment, resource
 	}
 	switch provider {
 	case "cloudflare":
-		return operationID == "zones.list" && cloudflareAccountPattern.MatchString(resourceRef)
+		return (operationID == "zones.list" || operationID == "dns.records.list") &&
+			cloudflareAccountPattern.MatchString(resourceRef)
 	case "deepseek":
 		return operationID == "models.list" && resourceRef == "model-catalog"
 	case "docker":

@@ -236,6 +236,24 @@
       "agent_execution": true
     },
     {
+      "name": "cloudflare.dns.records.list",
+      "version": "1.0.0",
+      "description": "List bounded DNS record metadata for one explicitly authorized Cloudflare zone.",
+      "provider": "cloudflare",
+      "operation_id": "dns.records.list",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "zone_id"], "properties": { "resource_ref": { "type": "string", "minLength": 32, "maxLength": 32 }, "zone_id": { "type": "string", "minLength": 32, "maxLength": 32 }, "type": { "type": "string", "enum": ["A", "AAAA", "CAA", "CERT", "CNAME", "DNSKEY", "DS", "HTTPS", "LOC", "MX", "NAPTR", "NS", "OPENPGPKEY", "PTR", "SMIMEA", "SRV", "SSHFP", "SVCB", "TLSA", "TXT", "URI"] }, "name": { "type": "string", "minLength": 1, "maxLength": 253 }, "proxied": { "type": "boolean" }, "page": { "type": "integer", "minimum": 1, "maximum": 10000 }, "per_page": { "type": "integer", "minimum": 1, "maximum": 100 } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["records", "result_info"], "properties": { "records": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": false, "required": ["id", "type", "name", "ttl", "proxied"], "properties": { "id": { "type": "string" }, "type": { "type": "string" }, "name": { "type": "string" }, "ttl": { "type": "integer" }, "proxied": { "type": "boolean" } } } }, "result_info": { "type": "object", "additionalProperties": false, "required": ["page", "per_page", "count", "total_count", "total_pages"], "properties": { "page": { "type": "integer" }, "per_page": { "type": "integer" }, "count": { "type": "integer" }, "total_count": { "type": "integer" }, "total_pages": { "type": "integer" } } } } },
+      "required_role": "operator",
+      "risk_level": "MEDIUM",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "cloudflare-zone", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 30, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "api_token", "content", "comment", "tags"] },
+      "agent_execution": true
+    },
+    {
       "name": "ssh.host.inspect",
       "version": "1.0.0",
       "description": "Read bounded health metadata from one registered SSH target through an isolated runner.",

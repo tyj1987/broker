@@ -8,9 +8,9 @@ const SOCKETS = Object.freeze({
   docker: `${SOCKET_DIRECTORY}/docker.sock`,
 });
 const OPERATIONS = Object.freeze({
-  cloudflare: 'zones.list',
-  deepseek: 'models.list',
-  docker: 'repository.tags.list',
+  cloudflare: Object.freeze(['zones.list', 'dns.records.list']),
+  deepseek: Object.freeze(['models.list']),
+  docker: Object.freeze(['repository.tags.list']),
 });
 const MAX_REQUEST_BYTES = 4 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024;
@@ -35,7 +35,7 @@ function fail(code, message) {
 }
 
 function validResource(provider, operationId, value) {
-  if (operationId !== OPERATIONS[provider]) return false;
+  if (!OPERATIONS[provider]?.includes(operationId)) return false;
   if (provider === 'cloudflare') return CLOUDFLARE_ACCOUNT_ID_RE.test(value || '');
   if (provider === 'deepseek') return value === 'model-catalog';
   if (provider === 'docker') {

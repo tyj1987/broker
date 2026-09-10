@@ -174,6 +174,7 @@ func TestSupportedProviderResourceShapes(t *testing.T) {
 	tests := []map[string]string{
 		{"provider": "deepseek", "resource": "model-catalog"},
 		{"provider": "cloudflare", "resource": "0123456789abcdef0123456789abcdef"},
+		{"provider": "cloudflare-dns", "resource": "abcdef0123456789abcdef0123456789"},
 		{"provider": "docker", "resource": "library/alpine"},
 	}
 	for _, test := range tests {
@@ -182,6 +183,9 @@ func TestSupportedProviderResourceShapes(t *testing.T) {
 			switch test["provider"] {
 			case "cloudflare":
 				value["operation_id"] = "zones.list"
+			case "cloudflare-dns":
+				value["provider"] = "cloudflare"
+				value["operation_id"] = "dns.records.list"
 			case "docker":
 				value["operation_id"] = "repository.tags.list"
 			}

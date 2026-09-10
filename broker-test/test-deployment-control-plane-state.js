@@ -55,6 +55,12 @@ assert.match(workflow, /Dir::Etc::sourcelist=\/etc\/apt\/sources\.list\.d\/ubunt
 assert.match(workflow, /secrets\.stateKeySecretName=broker-state-key/);
 assert.doesNotMatch(workflow, /branches:\s*\[master,\s*'codex\/\*\*'\]/);
 assert.match(workflow, /^  workflow_dispatch:$/m);
+assert.match(workflow, /name: Production container validation/);
+assert.match(workflow, /push: false/);
+assert.match(workflow, /image-ref: secret-broker:\$\{\{ github\.sha \}\}/);
+assert.match(workflow, /subject-name: secret-broker/);
+assert.doesNotMatch(workflow, /push-to-registry:\s*true/);
+assert.doesNotMatch(workflow, /packages:\s*write/);
 assert.match(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.2/);
 assert.doesNotMatch(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.1/);
 

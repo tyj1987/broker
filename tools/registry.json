@@ -92,6 +92,24 @@
       "agent_execution": true
     },
     {
+      "name": "deepseek.models.list",
+      "version": "1.0.0",
+      "description": "List the bounded public metadata for models available to one DeepSeek account.",
+      "provider": "deepseek",
+      "operation_id": "models.list",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref"], "properties": { "resource_ref": { "type": "string", "const": "model-catalog" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["models"], "properties": { "models": { "type": "array" } } },
+      "required_role": "developer",
+      "risk_level": "LOW",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "model-catalog", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 30, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "access_token"] },
+      "agent_execution": true
+    },
+    {
       "name": "github.repository.read",
       "version": "1.0.0",
       "description": "Read bounded repository metadata through a GitHub App installation.",

@@ -4,6 +4,7 @@ import net from 'node:net';
 const SOCKET_DIRECTORY = '/run/secret-broker-credentials';
 const SOCKETS = Object.freeze({
   cloudflare: `${SOCKET_DIRECTORY}/cloudflare.sock`,
+  deepseek: `${SOCKET_DIRECTORY}/deepseek.sock`,
   docker: `${SOCKET_DIRECTORY}/docker.sock`,
 });
 const MAX_REQUEST_BYTES = 4 * 1024;
@@ -28,6 +29,7 @@ function fail(code, message) {
 
 function validResource(provider, value) {
   if (provider === 'cloudflare') return CLOUDFLARE_ACCOUNT_ID_RE.test(value || '');
+  if (provider === 'deepseek') return value === 'model-catalog';
   if (provider === 'docker') {
     if (typeof value !== 'string' || value.length >= 256) return false;
     const parts = value.split('/');

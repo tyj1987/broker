@@ -1,0 +1,26 @@
+manifest_version: 1
+id: deepseek
+display_name: DeepSeek API
+checked_at: 2026-09-11
+status: contract_required
+official_docs:
+  - https://api-docs.deepseek.com/api/deepseek-api/
+  - https://api-docs.deepseek.com/api/list-models
+origins: [https://api.deepseek.com]
+authentication:
+  priority: [short_lived_scoped_api_token]
+  inject: { Authorization: "Bearer {{access_token}}" }
+  maximum_ttl_seconds: 300
+  rotation: Rotate the account token in the isolated credential service without exposing it to the Broker or Agent.
+  revocation: Revoke the API key in the DeepSeek platform and invalidate every outstanding local lease.
+operations:
+  - id: models.list
+    method: GET
+    path_template: /models
+    permission: api.models.read
+    mutating: false
+    approval: none
+    parameters: { resource_ref: { const: model-catalog } }
+    maximum_response_bytes: 262144
+redaction: [Authorization, api_key, access_token]
+contract_test: { account: isolated_deepseek_account, required: true, last_result: not_run }

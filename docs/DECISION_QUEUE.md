@@ -168,3 +168,21 @@ continue.
 - Current safe default: keep the legacy service available for existing users,
   deny protected CD, and continue source/staging work. Do not copy the old key
   hierarchy into the hardened layout or use it to satisfy the preflight.
+
+## DQ-010: DeepSeek credential authority and usage controls
+
+- Status: open
+- Needed before: any DeepSeek operation is production-enabled
+- Decision: select the authoritative API-key store, rotation owner, account and
+  environment binding, spending limits, model allowlist and emergency revoke
+  process. Decide whether a future response-generation operation requires
+  per-task approval, budget reservation and content-retention controls.
+- Required evidence: isolated-account contract test, wrong-account and
+  wrong-environment denial, lease expiry and revocation latency, quota and
+  upstream outage behavior, output bounds, prompt/result audit policy and
+  secret-free logs, errors and crash artifacts.
+- Current safe default: only the official read-only `GET /models` operation is
+  implemented. It uses a fixed origin and path, a five-minute account-bound
+  credential lease, bounded response projection and startup preflight. The
+  provider remains `contract_required`; response generation and production
+  credentials are not enabled.

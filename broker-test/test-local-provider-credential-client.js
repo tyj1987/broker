@@ -134,6 +134,34 @@ await dockerClient.lease({
 });
 assert.equal(dockerHarness.state.options.path, `${SOCKET_DIRECTORY}/docker.sock`);
 
+const deepseekHarness = socketHarness({
+  response: JSON.stringify({
+    version: 1,
+    provider: 'deepseek',
+    operation_id: 'models.list',
+    account_ref: 'deepseek-primary',
+    environment: 'production',
+    resource_ref: 'model-catalog',
+    token: 'unit-deepseek-token',
+    expires_at: new Date(NOW + 60_000).toISOString(),
+  }),
+});
+const deepseekClient = createLocalProviderCredentialClient({
+  provider: 'deepseek',
+  connect: deepseekHarness.connect,
+  stat: safeStat,
+  now: () => NOW,
+  processUid: 1000,
+  processGroups: [3000],
+});
+await deepseekClient.lease({
+  operation_id: 'models.list',
+  account_ref: 'deepseek-primary',
+  environment: 'production',
+  resource_ref: 'model-catalog',
+});
+assert.equal(deepseekHarness.state.options.path, `${SOCKET_DIRECTORY}/deepseek.sock`);
+
 for (const options of [
   {},
   { provider: 'unknown' },
@@ -265,7 +293,11 @@ await assert.rejects(pending, expectCode('credential_request_aborted'));
 
 assert.deepEqual(LOCAL_PROVIDER_CREDENTIAL_CONTRACT, {
   socket_directory: SOCKET_DIRECTORY,
-  socket_paths: { cloudflare: SOCKET, docker: `${SOCKET_DIRECTORY}/docker.sock` },
+  socket_paths: {
+    cloudflare: SOCKET,
+    deepseek: `${SOCKET_DIRECTORY}/deepseek.sock`,
+    docker: `${SOCKET_DIRECTORY}/docker.sock`,
+  },
   protocol_version: 1,
   maximum_request_bytes: 4096,
   maximum_response_bytes: 8192,

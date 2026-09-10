@@ -110,6 +110,10 @@ import {
   prepareAliyunRuntimeExecutors,
 } from './adapters/aliyun-runtime.js';
 import {
+  commitDeepSeekRuntimeExecutors,
+  prepareDeepSeekRuntimeExecutors,
+} from './adapters/deepseek-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -403,6 +407,7 @@ async function prepareConfig() {
   const cloudflareExecutors = await prepareCloudflareRuntimeExecutors({ config: cfg });
   const dockerExecutors = await prepareDockerRuntimeExecutors({ config: cfg });
   const aliyunExecutors = await prepareAliyunRuntimeExecutors({ config: cfg });
+  const deepseekExecutors = await prepareDeepSeekRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
@@ -410,6 +415,7 @@ async function prepareConfig() {
     cloudflareExecutors,
     dockerExecutors,
     aliyunExecutors,
+    deepseekExecutors,
   };
 }
 
@@ -419,6 +425,7 @@ function applyConfig(prepared) {
   commitCloudflareRuntimeExecutors(taskExecutors, prepared.cloudflareExecutors);
   commitDockerRuntimeExecutors(taskExecutors, prepared.dockerExecutors);
   commitAliyunRuntimeExecutors(taskExecutors, prepared.aliyunExecutors);
+  commitDeepSeekRuntimeExecutors(taskExecutors, prepared.deepseekExecutors);
   CONFIG = prepared.document;
 }
 

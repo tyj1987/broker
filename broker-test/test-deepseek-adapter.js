@@ -12,6 +12,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = Date.parse('2026-09-11T02:00:00Z');
 const parameters = { resource_ref: 'model-catalog' };
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const context = {
   accountRef: 'deepseek-primary',
   environment: 'production',
@@ -19,6 +21,8 @@ const context = {
     tool: 'deepseek.models.list@1.0.0',
     target: 'model-catalog',
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
   signal: new AbortController().signal,
 };
@@ -28,6 +32,8 @@ const lease = (change = {}) => ({
   account_ref: context.accountRef,
   environment: context.environment,
   resource_ref: 'model-catalog',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   ...change,
 });
 const responseBody = (change = {}) => ({
@@ -63,6 +69,8 @@ assert.deepEqual(tokenInput, {
   account_ref: 'deepseek-primary',
   environment: 'production',
   resource_ref: 'model-catalog',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: context.signal,
 });
 assert.equal(requestInput.origin, 'https://api.deepseek.com');
@@ -95,6 +103,8 @@ for (const execution of [
   { ...context.execution, tool: 'deepseek.responses.create@1.0.0' },
   { ...context.execution, target: 'other' },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ]) {
   await assert.rejects(
     adapter(parameters, { ...context, execution }),

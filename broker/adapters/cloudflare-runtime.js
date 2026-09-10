@@ -94,6 +94,8 @@ function createTokenProvider(accounts, credentialClient) {
     account_ref: accountRef,
     environment,
     account_id: accountId,
+    execution_id: executionId,
+    request_binding: requestBinding,
     signal,
   }) {
     const binding = accounts.get(accountRef);
@@ -109,6 +111,8 @@ function createTokenProvider(accounts, credentialClient) {
       account_ref: accountRef,
       environment,
       resource_ref: accountId,
+      execution_id: executionId,
+      request_binding: requestBinding,
       signal,
     });
     return { token: lease.token, account_id: binding.account_id };

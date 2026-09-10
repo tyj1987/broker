@@ -8,6 +8,8 @@ const RESOURCE = 'model-catalog';
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TOKEN_TTL_MS = 5 * 60_000;
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/;
 
 function fail(code, message, status = 400) {
@@ -93,7 +95,9 @@ export function createDeepSeekModelsListAdapter({ request, tokenProvider, now = 
     if (
       context.execution?.tool !== TOOL ||
       context.execution?.target !== RESOURCE ||
-      context.execution?.environment !== context.environment
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
     ) {
       fail(
         'deepseek_execution_binding_mismatch',
@@ -110,6 +114,8 @@ export function createDeepSeekModelsListAdapter({ request, tokenProvider, now = 
         account_ref: context.accountRef,
         environment: context.environment,
         resource_ref: RESOURCE,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
         signal: context.signal,
       });
     } catch {

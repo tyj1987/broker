@@ -30,6 +30,13 @@ calling an injected lease issuer, then constrains the returned capability to a
 five-minute maximum lifetime. It has no production credential backend and does
 not change the deployed executable catalog.
 
+Protocol version 2 also binds each lease exchange to the consumed task
+`execution_id` and canonical `request_binding`. The adapter, local client and Go
+service independently validate these values, and the service echoes them in its
+response so the client rejects a swapped lease. A production credential
+authority must additionally validate the execution against durable control-plane
+state before issuing a capability.
+
 The source branch also registers `github.pull-request.create@1.0.0` as a HIGH
 risk, draft-by-default operation. Its deterministic end-to-end test proves that
 the requester cannot execute before a separate WebAuthn-stepped-up human

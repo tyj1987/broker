@@ -14,6 +14,11 @@ import (
 
 var protocolTestNow = time.Unix(2_000_000_000, 0).UTC()
 
+const (
+	testExecutionID    = "12345678-1234-4123-8123-123456789abc"
+	testRequestBinding = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
 type memoryConn struct {
 	input    *bytes.Reader
 	output   bytes.Buffer
@@ -43,9 +48,10 @@ func (address testAddr) String() string  { return string(address) }
 func requestLine(t *testing.T, mutate func(map[string]any)) string {
 	t.Helper()
 	request := map[string]any{
-		"version": 1, "provider": "deepseek", "operation_id": "models.list",
+		"version": 2, "provider": "deepseek", "operation_id": "models.list",
 		"account_ref": "deepseek-primary", "environment": "production",
-		"resource_ref": "model-catalog",
+		"resource_ref": "model-catalog", "execution_id": testExecutionID,
+		"request_binding": testRequestBinding,
 	}
 	if mutate != nil {
 		mutate(request)
@@ -107,6 +113,9 @@ func TestServeConnIssuesOnlyExactBoundLease(t *testing.T) {
 		backendRequest.Environment != "production" || backendRequest.ResourceRef != "model-catalog" {
 		t.Fatal("mandatory exact binding was not preserved")
 	}
+	if backendRequest.ExecutionID != testExecutionID || backendRequest.RequestBinding != testRequestBinding {
+		t.Fatal("execution binding was not preserved")
+	}
 	if !connection.deadline.Equal(protocolTestNow.Add(DefaultDeadline)) {
 		t.Fatal("deadline was not applied")
 	}
@@ -116,6 +125,9 @@ func TestServeConnIssuesOnlyExactBoundLease(t *testing.T) {
 	}
 	if response.Token != "ephemeral-token" || response.ExpiresAt != protocolTestNow.Add(4*time.Minute).Format(time.RFC3339Nano) {
 		t.Fatalf("unexpected response %#v", response)
+	}
+	if response.ExecutionID != testExecutionID || response.RequestBinding != testRequestBinding {
+		t.Fatal("response did not echo the execution binding")
 	}
 }
 
@@ -133,12 +145,14 @@ func TestRequestValidationFailsClosed(t *testing.T) {
 		"trailing":                requestLine(t, nil) + "{}\n",
 		"oversized":               strings.Repeat("x", MaxRequestBytes+1) + "\n",
 		"unknown field":           requestLine(t, func(value map[string]any) { value["credential"] = "canary" }),
-		"wrong version":           requestLine(t, func(value map[string]any) { value["version"] = 2 }),
+		"wrong version":           requestLine(t, func(value map[string]any) { value["version"] = 1 }),
 		"unknown provider":        requestLine(t, func(value map[string]any) { value["provider"] = "github" }),
 		"bad operation":           requestLine(t, func(value map[string]any) { value["operation_id"] = "../models" }),
 		"unregistered operation":  requestLine(t, func(value map[string]any) { value["operation_id"] = "tokens.issue" }),
 		"bad account":             requestLine(t, func(value map[string]any) { value["account_ref"] = "../root" }),
 		"bad environment":         requestLine(t, func(value map[string]any) { value["environment"] = "Production" }),
+		"bad execution id":        requestLine(t, func(value map[string]any) { value["execution_id"] = "wrong" }),
+		"bad request binding":     requestLine(t, func(value map[string]any) { value["request_binding"] = "wrong" }),
 		"bad deepseek resource":   requestLine(t, func(value map[string]any) { value["resource_ref"] = "chat" }),
 		"bad cloudflare resource": requestLine(t, func(value map[string]any) { value["provider"] = "cloudflare"; value["resource_ref"] = "zone" }),
 		"bad docker resource":     requestLine(t, func(value map[string]any) { value["provider"] = "docker"; value["resource_ref"] = "library" }),
@@ -234,12 +248,16 @@ func TestLeaseValidation(t *testing.T) {
 }
 
 func TestBindingSetRequiresExactTuple(t *testing.T) {
-	binding := Binding{"deepseek", "models.list", "deepseek-primary", "production", "model-catalog"}
+	binding := Binding{Provider: "deepseek", OperationID: "models.list", AccountRef: "deepseek-primary", Environment: "production", ResourceRef: "model-catalog"}
 	set, err := NewBindingSet([]Binding{binding})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := LeaseRequest{binding.Provider, binding.OperationID, binding.AccountRef, binding.Environment, binding.ResourceRef}
+	request := LeaseRequest{
+		Provider: binding.Provider, OperationID: binding.OperationID, AccountRef: binding.AccountRef,
+		Environment: binding.Environment, ResourceRef: binding.ResourceRef,
+		ExecutionID: testExecutionID, RequestBinding: testRequestBinding,
+	}
 	if err := set.AuthorizeBinding(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +267,7 @@ func TestBindingSetRequiresExactTuple(t *testing.T) {
 	}
 	for name, bindings := range map[string][]Binding{
 		"empty": {}, "duplicate": {binding, binding},
-		"invalid": {{"deepseek", "models.list", "deepseek-primary", "production", "chat"}},
+		"invalid": {{Provider: "deepseek", OperationID: "models.list", AccountRef: "deepseek-primary", Environment: "production", ResourceRef: "chat"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewBindingSet(bindings); err == nil {
@@ -259,7 +277,7 @@ func TestBindingSetRequiresExactTuple(t *testing.T) {
 	}
 	tooMany := make([]Binding, 257)
 	for index := range tooMany {
-		tooMany[index] = Binding{"deepseek", "models.list", "account-" + strings.Repeat("x", index%100), "production", "model-catalog"}
+		tooMany[index] = Binding{Provider: "deepseek", OperationID: "models.list", AccountRef: "account-" + strings.Repeat("x", index%100), Environment: "production", ResourceRef: "model-catalog"}
 	}
 	if _, err := NewBindingSet(tooMany); err == nil {
 		t.Fatal("oversized set accepted")

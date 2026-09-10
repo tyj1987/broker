@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ProtocolVersion    = 1
+	ProtocolVersion    = 2
 	MaxRequestBytes    = 4 * 1024
 	MaxResponseBytes   = 8 * 1024
 	MaxTokenBytes      = 4096
@@ -31,35 +31,43 @@ var (
 	environmentPattern       = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 	cloudflareAccountPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 	dockerComponentPattern   = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+	executionIDPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	requestBindingPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 )
 
 type wireRequest struct {
-	Version     int    `json:"version"`
-	Provider    string `json:"provider"`
-	OperationID string `json:"operation_id"`
-	AccountRef  string `json:"account_ref"`
-	Environment string `json:"environment"`
-	ResourceRef string `json:"resource_ref"`
+	Version        int    `json:"version"`
+	Provider       string `json:"provider"`
+	OperationID    string `json:"operation_id"`
+	AccountRef     string `json:"account_ref"`
+	Environment    string `json:"environment"`
+	ResourceRef    string `json:"resource_ref"`
+	ExecutionID    string `json:"execution_id"`
+	RequestBinding string `json:"request_binding"`
 }
 
 type wireResponse struct {
-	Version     int    `json:"version"`
-	Provider    string `json:"provider"`
-	OperationID string `json:"operation_id"`
-	AccountRef  string `json:"account_ref"`
-	Environment string `json:"environment"`
-	ResourceRef string `json:"resource_ref"`
-	Token       string `json:"token"`
-	ExpiresAt   string `json:"expires_at"`
+	Version        int    `json:"version"`
+	Provider       string `json:"provider"`
+	OperationID    string `json:"operation_id"`
+	AccountRef     string `json:"account_ref"`
+	Environment    string `json:"environment"`
+	ResourceRef    string `json:"resource_ref"`
+	ExecutionID    string `json:"execution_id"`
+	RequestBinding string `json:"request_binding"`
+	Token          string `json:"token"`
+	ExpiresAt      string `json:"expires_at"`
 }
 
 // LeaseRequest contains only the exact binding authorized by the Broker runtime.
 type LeaseRequest struct {
-	Provider    string
-	OperationID string
-	AccountRef  string
-	Environment string
-	ResourceRef string
+	Provider       string
+	OperationID    string
+	AccountRef     string
+	Environment    string
+	ResourceRef    string
+	ExecutionID    string
+	RequestBinding string
 }
 
 // Lease is a short-lived capability. Backends must not return a long-lived provider secret.
@@ -188,6 +196,7 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 		Provider: request.Provider, OperationID: request.OperationID,
 		AccountRef: request.AccountRef, Environment: request.Environment,
 		ResourceRef: request.ResourceRef,
+		ExecutionID: request.ExecutionID, RequestBinding: request.RequestBinding,
 	}
 	if err := server.Bindings.AuthorizeBinding(ctx, leaseRequest); err != nil {
 		return fail("binding_denied")
@@ -203,6 +212,7 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 		Version: ProtocolVersion, Provider: request.Provider, OperationID: request.OperationID,
 		AccountRef: request.AccountRef, Environment: request.Environment,
 		ResourceRef: request.ResourceRef, Token: lease.Token,
+		ExecutionID: request.ExecutionID, RequestBinding: request.RequestBinding,
 		ExpiresAt: lease.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
 	encoded, err := json.Marshal(response)
@@ -235,17 +245,27 @@ func readRequest(reader io.Reader) (wireRequest, error) {
 
 func validRequest(request wireRequest) bool {
 	if !idPattern.MatchString(request.OperationID) || !idPattern.MatchString(request.AccountRef) ||
-		!environmentPattern.MatchString(request.Environment) {
+		!environmentPattern.MatchString(request.Environment) ||
+		!executionIDPattern.MatchString(request.ExecutionID) ||
+		!requestBindingPattern.MatchString(request.RequestBinding) {
 		return false
 	}
-	switch request.Provider {
+	return validStaticBinding(request.Provider, request.OperationID, request.AccountRef, request.Environment, request.ResourceRef)
+}
+
+func validStaticBinding(provider, operationID, accountRef, environment, resourceRef string) bool {
+	if !idPattern.MatchString(operationID) || !idPattern.MatchString(accountRef) ||
+		!environmentPattern.MatchString(environment) {
+		return false
+	}
+	switch provider {
 	case "cloudflare":
-		return request.OperationID == "zones.list" && cloudflareAccountPattern.MatchString(request.ResourceRef)
+		return operationID == "zones.list" && cloudflareAccountPattern.MatchString(resourceRef)
 	case "deepseek":
-		return request.OperationID == "models.list" && request.ResourceRef == "model-catalog"
+		return operationID == "models.list" && resourceRef == "model-catalog"
 	case "docker":
-		parts := strings.Split(request.ResourceRef, "/")
-		return request.OperationID == "repository.tags.list" && len(request.ResourceRef) < 256 && len(parts) == 2 &&
+		parts := strings.Split(resourceRef, "/")
+		return operationID == "repository.tags.list" && len(resourceRef) < 256 && len(parts) == 2 &&
 			dockerComponentPattern.MatchString(parts[0]) && dockerComponentPattern.MatchString(parts[1])
 	default:
 		return false
@@ -302,11 +322,7 @@ func NewBindingSet(bindings []Binding) (*BindingSet, error) {
 	}
 	set := &BindingSet{allowed: make(map[Binding]struct{}, len(bindings))}
 	for _, binding := range bindings {
-		request := wireRequest{
-			Version: ProtocolVersion, Provider: binding.Provider, OperationID: binding.OperationID,
-			AccountRef: binding.AccountRef, Environment: binding.Environment, ResourceRef: binding.ResourceRef,
-		}
-		if !validRequest(request) {
+		if !validStaticBinding(binding.Provider, binding.OperationID, binding.AccountRef, binding.Environment, binding.ResourceRef) {
 			return nil, errors.New("binding is invalid")
 		}
 		if _, exists := set.allowed[binding]; exists {

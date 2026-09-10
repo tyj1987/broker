@@ -17,6 +17,8 @@ const MAX_RESPONSE_BYTES = 8 * 1024;
 const MAX_LEASE_TTL_MS = 5 * 60_000;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const CLOUDFLARE_ACCOUNT_ID_RE = /^[a-f0-9]{32}$/;
 const DOCKER_COMPONENT_RE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 
@@ -51,12 +53,22 @@ function validateRequest(provider, input) {
     Array.isArray(input) ||
     Object.keys(input).some(
       (key) =>
-        !['operation_id', 'account_ref', 'environment', 'resource_ref', 'signal'].includes(key),
+        ![
+          'operation_id',
+          'account_ref',
+          'environment',
+          'resource_ref',
+          'execution_id',
+          'request_binding',
+          'signal',
+        ].includes(key),
     ) ||
     !ID_RE.test(input.operation_id || '') ||
     !ID_RE.test(input.account_ref || '') ||
     !ENVIRONMENT_RE.test(input.environment || '') ||
     !validResource(provider, input.operation_id, input.resource_ref) ||
+    !EXECUTION_ID_RE.test(input.execution_id || '') ||
+    !REQUEST_BINDING_RE.test(input.request_binding || '') ||
     (input.signal !== undefined && !(input.signal instanceof AbortSignal)) ||
     !Object.hasOwn(SOCKETS, provider)
   ) {
@@ -66,12 +78,14 @@ function validateRequest(provider, input) {
 
 function encodeRequest(provider, input) {
   const payload = `${JSON.stringify({
-    version: 1,
+    version: 2,
     provider,
     operation_id: input.operation_id,
     account_ref: input.account_ref,
     environment: input.environment,
     resource_ref: input.resource_ref,
+    execution_id: input.execution_id,
+    request_binding: input.request_binding,
   })}\n`;
   if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) {
     fail('credential_request_invalid', 'Local provider credential request is invalid');
@@ -93,6 +107,8 @@ function decodeResponse(provider, input, value, now) {
     'account_ref',
     'environment',
     'resource_ref',
+    'execution_id',
+    'request_binding',
     'token',
     'expires_at',
   ];
@@ -102,12 +118,14 @@ function decodeResponse(provider, input, value, now) {
     typeof document !== 'object' ||
     Array.isArray(document) ||
     Object.keys(document).some((key) => !allowed.includes(key)) ||
-    document.version !== 1 ||
+    document.version !== 2 ||
     document.provider !== provider ||
     document.operation_id !== input.operation_id ||
     document.account_ref !== input.account_ref ||
     document.environment !== input.environment ||
     document.resource_ref !== input.resource_ref ||
+    document.execution_id !== input.execution_id ||
+    document.request_binding !== input.request_binding ||
     typeof document.token !== 'string' ||
     document.token.length < 8 ||
     document.token.length > 4096 ||
@@ -264,7 +282,7 @@ export const LOCAL_PROVIDER_CREDENTIAL_CONTRACT = Object.freeze({
   socket_directory: SOCKET_DIRECTORY,
   socket_paths: SOCKETS,
   allowed_operations: OPERATIONS,
-  protocol_version: 1,
+  protocol_version: 2,
   maximum_request_bytes: MAX_REQUEST_BYTES,
   maximum_response_bytes: MAX_RESPONSE_BYTES,
   maximum_lease_ttl_seconds: MAX_LEASE_TTL_MS / 1000,

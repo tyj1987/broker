@@ -13,6 +13,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
 const ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const basePolicy = {
   enabled: true,
   contract_verified: true,
@@ -120,6 +122,8 @@ const result = await executors.get('cloudflare.zones.list@1.0.0')(
       tool: 'cloudflare.zones.list@1.0.0',
       target: ACCOUNT_ID,
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -129,6 +133,8 @@ assert.deepEqual(leaseInputs[0], {
   account_ref: 'cloudflare-primary',
   environment: 'production',
   resource_ref: ACCOUNT_ID,
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal,
 });
 assert.equal(requests[0].headers.authorization, 'Bearer runtime-cloudflare-token');
@@ -144,6 +150,8 @@ await assert.rejects(
         tool: 'cloudflare.zones.list@1.0.0',
         target: 'a'.repeat(32),
         environment: 'production',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ),

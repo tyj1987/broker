@@ -12,6 +12,8 @@ import {
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = Date.parse('2026-09-11T02:00:00Z');
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const basePolicy = {
   enabled: true,
   contract_verified: true,
@@ -97,6 +99,8 @@ const result = await executors.get('deepseek.models.list@1.0.0')(
       tool: 'deepseek.models.list@1.0.0',
       target: 'model-catalog',
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -106,6 +110,8 @@ assert.deepEqual(leaseInputs[0], {
   account_ref: 'deepseek-primary',
   environment: 'production',
   resource_ref: 'model-catalog',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal,
 });
 assert.equal(requests[0].hostname, 'api.deepseek.com');
@@ -121,6 +127,8 @@ await assert.rejects(
         tool: 'deepseek.models.list@1.0.0',
         target: 'model-catalog',
         environment: 'staging',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ),

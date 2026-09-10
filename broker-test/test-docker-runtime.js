@@ -13,6 +13,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
 const REPOSITORY = 'tyj1987/broker';
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const basePolicy = {
   enabled: true,
   contract_verified: true,
@@ -114,6 +116,8 @@ const result = await executors.get('docker.repository.tags.list@1.0.0')(
       tool: 'docker.repository.tags.list@1.0.0',
       target: REPOSITORY,
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -123,6 +127,8 @@ assert.deepEqual(leaseInputs[0], {
   account_ref: 'docker-primary',
   environment: 'production',
   resource_ref: REPOSITORY,
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal,
 });
 assert.equal(requests[0].headers.authorization, 'Bearer runtime-docker-token');
@@ -138,6 +144,8 @@ await assert.rejects(
         tool: 'docker.repository.tags.list@1.0.0',
         target: 'other/repo',
         environment: 'production',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ),

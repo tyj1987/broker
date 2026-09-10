@@ -6,6 +6,8 @@ const ORIGIN = 'https://api.cloudflare.com';
 const PATH = '/client/v4/zones';
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const ACCOUNT_ID_RE = /^[a-f0-9]{32}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const ZONE_NAME_RE =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ZONE_STATUSES = new Set(['initializing', 'pending', 'active', 'moved']);
@@ -136,7 +138,9 @@ export function createCloudflareZonesListAdapter({ request, tokenProvider } = {}
       context.execution?.tool !== TOOL ||
       typeof context.execution?.target !== 'string' ||
       context.execution.target.toLowerCase() !== accountId ||
-      context.execution?.environment !== context.environment
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
     ) {
       fail(
         'cloudflare_execution_binding_mismatch',
@@ -154,6 +158,8 @@ export function createCloudflareZonesListAdapter({ request, tokenProvider } = {}
         account_ref: context.accountRef,
         environment: context.environment,
         account_id: accountId,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
         signal: context.signal,
       });
     } catch {

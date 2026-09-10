@@ -10,11 +10,15 @@ import {
 const NOW = 2_000_000_000_000;
 const SOCKET_DIRECTORY = '/run/secret-broker-credentials';
 const SOCKET = `${SOCKET_DIRECTORY}/cloudflare.sock`;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const requestInput = {
   operation_id: 'zones.list',
   account_ref: 'cloudflare-primary',
   environment: 'production',
   resource_ref: 'a'.repeat(32),
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: new AbortController().signal,
 };
 const safeStat = async (path) =>
@@ -68,12 +72,14 @@ function socketHarness({ response, error, timeout, throwOnConnect } = {}) {
 }
 
 const responseDocument = (overrides = {}) => ({
-  version: 1,
+  version: 2,
   provider: 'cloudflare',
   operation_id: requestInput.operation_id,
   account_ref: requestInput.account_ref,
   environment: requestInput.environment,
   resource_ref: requestInput.resource_ref,
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   token: 'unit-provider-token',
   expires_at: new Date(NOW + 60_000).toISOString(),
   ...overrides,
@@ -97,23 +103,27 @@ assert.equal(harness.state.options.path, SOCKET);
 assert.equal(harness.state.timeoutMs, 500);
 assert.equal(harness.state.destroyed, true);
 assert.deepEqual(JSON.parse(harness.state.payload), {
-  version: 1,
+  version: 2,
   provider: 'cloudflare',
   operation_id: requestInput.operation_id,
   account_ref: requestInput.account_ref,
   environment: requestInput.environment,
   resource_ref: requestInput.resource_ref,
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
 });
 assert.doesNotMatch(harness.state.payload, /token|secret|authorization/i);
 
 const dockerHarness = socketHarness({
   response: JSON.stringify({
-    version: 1,
+    version: 2,
     provider: 'docker',
     operation_id: 'repository.tags.list',
     account_ref: 'docker-primary',
     environment: 'production',
     resource_ref: 'tyj1987/broker',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
     token: 'unit-docker-token',
     expires_at: new Date(NOW + 60_000).toISOString(),
   }),
@@ -131,17 +141,21 @@ await dockerClient.lease({
   account_ref: 'docker-primary',
   environment: 'production',
   resource_ref: 'tyj1987/broker',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
 });
 assert.equal(dockerHarness.state.options.path, `${SOCKET_DIRECTORY}/docker.sock`);
 
 const deepseekHarness = socketHarness({
   response: JSON.stringify({
-    version: 1,
+    version: 2,
     provider: 'deepseek',
     operation_id: 'models.list',
     account_ref: 'deepseek-primary',
     environment: 'production',
     resource_ref: 'model-catalog',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
     token: 'unit-deepseek-token',
     expires_at: new Date(NOW + 60_000).toISOString(),
   }),
@@ -159,6 +173,8 @@ await deepseekClient.lease({
   account_ref: 'deepseek-primary',
   environment: 'production',
   resource_ref: 'model-catalog',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
 });
 assert.equal(deepseekHarness.state.options.path, `${SOCKET_DIRECTORY}/deepseek.sock`);
 
@@ -184,6 +200,8 @@ for (const input of [
   { ...requestInput, account_ref: '../account' },
   { ...requestInput, environment: 'Production' },
   { ...requestInput, resource_ref: '../resource' },
+  { ...requestInput, execution_id: 'wrong' },
+  { ...requestInput, request_binding: 'wrong' },
   { ...requestInput, signal: {} },
 ])
   await assert.rejects(client.lease(input), expectCode('credential_request_invalid'));
@@ -198,10 +216,12 @@ await assert.rejects(
 for (const response of [
   '{bad-json',
   JSON.stringify(null),
-  JSON.stringify(responseDocument({ version: 2 })),
+  JSON.stringify(responseDocument({ version: 1 })),
   JSON.stringify(responseDocument({ provider: 'docker' })),
   JSON.stringify(responseDocument({ account_ref: 'other' })),
   JSON.stringify(responseDocument({ resource_ref: 'b'.repeat(32) })),
+  JSON.stringify(responseDocument({ execution_id: '87654321-1234-4123-8123-123456789abc' })),
+  JSON.stringify(responseDocument({ request_binding: 'b'.repeat(43) })),
   JSON.stringify(responseDocument({ token: 'short' })),
   JSON.stringify(responseDocument({ token: 'unsafe\r\ntoken' })),
   JSON.stringify(responseDocument({ expires_at: new Date(NOW).toISOString() })),
@@ -304,7 +324,7 @@ assert.deepEqual(LOCAL_PROVIDER_CREDENTIAL_CONTRACT, {
     deepseek: 'models.list',
     docker: 'repository.tags.list',
   },
-  protocol_version: 1,
+  protocol_version: 2,
   maximum_request_bytes: 4096,
   maximum_response_bytes: 8192,
   maximum_lease_ttl_seconds: 300,

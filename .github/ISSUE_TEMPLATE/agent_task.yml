@@ -1,0 +1,110 @@
+name: Agent task / 协作任务
+description: BCP-1.0 范围、验收、授权、唯一执行者与证据合同
+title: "[Task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先读取 AGENTS.md、docs/AGENT-COLLABORATION.md 和协作控制台 #23。
+        不提交真实 Secret、客户数据或敏感日志。填写表单不等于取得执行或生产授权。
+  - type: textarea
+    id: metadata
+    attributes:
+      label: 任务元数据
+      description: 必须填写实际协议提交和基线。未知值明确写 UNKNOWN，不虚构。
+      value: |
+        protocol_version: BCP-1.0
+        protocol_commit: UNKNOWN
+        task_revision: 1
+        workflow_state: DRAFT
+        coordinator: workbench
+        executor: UNCLAIMED
+        reviewer: UNASSIGNED
+        base_ref: master
+        base_sha: UNKNOWN
+        work_branch: UNASSIGNED
+        head_sha: UNKNOWN
+        retry_budget: 1
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级（不是风险等级）
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: 建议风险等级（以可信策略判定为准）
+      options:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - CRITICAL
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: 可验证目标
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 允许修改的范围与明确不做的事项
+      value: |
+        Scope:
+        Non-goals:
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收条件与测试计划
+      description: 列出逐项条件、命令、环境、预期结果和安全/异常场景。
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖、已有任务与分支
+      description: 填写真实 Issue/PR/分支，防止重复实现；无依赖写 none。
+    validations:
+      required: true
+  - type: textarea
+    id: authorization
+    attributes:
+      label: 授权边界与审批引用
+      description: HIGH 需要有效人工审批，CRITICAL 对 Agent 拒绝；评论或标签不能代替授权。
+      value: |
+        authorized_scope:
+        approval_ref:
+        production_impact:
+        cost_impact:
+    validations:
+      required: true
+  - type: textarea
+    id: handoff
+    attributes:
+      label: 接收、所有权与下一检查点
+      description: 未收到真实 ACK 时保留 PENDING；不能代填其他会话的回执。
+      value: |
+        delivery_state: PENDING
+        receiver: UNASSIGNED
+        ownership: UNCLAIMED
+        next_checkpoint:
+        blockers:
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 执行证据（执行后补充）
+      description: 完整代码 SHA、PR、命令退出码、测试结果、脱敏证据、未覆盖部分；不得自报全绿。

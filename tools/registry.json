@@ -146,6 +146,24 @@
       "agent_execution": true
     },
     {
+      "name": "github.issues.list",
+      "version": "1.0.0",
+      "description": "List a bounded issue or pull-request projection through a repository-scoped GitHub App installation.",
+      "provider": "github",
+      "operation_id": "issues.list",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "owner", "repo"], "properties": { "resource_ref": { "type": "string" }, "owner": { "type": "string" }, "repo": { "type": "string" }, "state": { "type": "string" }, "assignee": { "type": "string" }, "creator": { "type": "string" }, "mentioned": { "type": "string" }, "labels": { "type": "array", "maxItems": 10, "items": { "type": "string", "maxLength": 50 } }, "sort": { "type": "string" }, "direction": { "type": "string" }, "since": { "type": "string" }, "item_kind": { "type": "string" }, "page": { "type": "integer" }, "per_page": { "type": "integer" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["issues", "page", "per_page", "has_more"], "properties": { "issues": { "type": "array" }, "page": { "type": "integer" }, "per_page": { "type": "integer" }, "has_more": { "type": "boolean" } } },
+      "required_role": "developer",
+      "risk_level": "LOW",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "github-repository", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 60, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "installation_token", "body", "comments", "email"] },
+      "agent_execution": true
+    },
+    {
       "name": "cloudflare.zones.list",
       "version": "1.0.0",
       "description": "List Cloudflare zones visible to a scoped service token.",

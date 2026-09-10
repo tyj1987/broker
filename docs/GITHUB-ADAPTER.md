@@ -1,6 +1,6 @@
 # GitHub repository adapter
 
-The GitHub provider currently implements three credential-isolated, read-only
+The GitHub provider currently implements four credential-isolated, read-only
 operations:
 
 - `github.repository.read@1.0.0` calls `GET /repos/{owner}/{repo}` and returns
@@ -15,6 +15,12 @@ operations:
   Branch/SHA, path, author, committer and time filters are typed and bounded.
   Commit messages, email addresses, signatures and signed payloads are excluded
   from the Agent-visible result.
+- `github.issues.list@1.0.0` calls
+  `GET /repos/{owner}/{repo}/issues` with typed state, actor, label, ordering,
+  time and pagination filters. Because GitHub returns pull requests from this
+  endpoint, `item_kind` explicitly selects issues, pull requests or both. Each
+  title is marked `untrusted_external`; bodies, comments, email addresses and
+  credentials are never projected.
 
 The adapter fixes the origin to `https://api.github.com`, the method to `GET`,
 redirect handling to manual denial, the response limit to 1 MiB and the API
@@ -37,7 +43,7 @@ JWT and requests a token for exactly one repository. Its required permissions
 are fixed when the provider is constructed, accept explicit read-only grants
 only, and are checked exactly in the GitHub response and returned lease.
 Repository metadata uses only `Metadata: read`; branch and commit listing use
-only `Contents: read`. Account bindings must also match the requested
+only `Contents: read`; issue listing uses only `Issues: read`. Account bindings must also match the requested
 environment and repository.
 
 The signer receives only the JWT signing input and binding metadata. It must
@@ -53,7 +59,8 @@ prohibited.
 
 Unit contract tests cover path and target injection, typed pagination and
 filtering, bounded branch and commit projections, execution-binding
-tampering, App/account/environment/repository binding, JWT claims and algorithm,
+tampering, issue-versus-pull-request classification, untrusted-content marking,
+App/account/environment/repository binding, JWT claims and algorithm,
 invalid signer results, fixed read-only token permissions, missing/wrong/expired/overlong
 leases, redirect denial, upstream status mapping, invalid and oversized
 responses, bounded projection and error redaction. The provider manifest
@@ -70,3 +77,4 @@ Official references checked on 2026-09-10:
 - [Choose GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)
 - [List branches](https://docs.github.com/en/rest/branches/branches#list-branches)
 - [List commits](https://docs.github.com/en/rest/commits/commits#list-commits)
+- [List repository issues](https://docs.github.com/en/rest/issues/issues#list-repository-issues)

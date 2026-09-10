@@ -21,6 +21,14 @@ ok('ghp_ redacted', !redact('pat=ghp_1234567890ABCDEFGHIJabcdefghij').includes('
 ok('github_pat_ redacted', !redact('Bearer github_pat_abc_DEF_123_ghi_456jklmno_789pqrstu_vwx_yzABC_DEF').includes('github_pat_abc_DEF_123'));
 ok('ghu_ (App user) redacted', !redact('token=ghu_AAAAAAAAAAAAAAAAAAAA').includes('ghu_AAAA'));
 
+// === Secret Broker ===
+section('Secret Broker API keys');
+const liveBrokerKey = 'mb_live_' + 'A'.repeat(32);
+const testBrokerKey = 'mb_test_' + 'b'.repeat(32);
+ok('mb_live_ redacted', redact(`token=${liveBrokerKey}`) === 'token=mb_live_***');
+ok('mb_test_ redacted', redact(`Bearer ${testBrokerKey}`) === 'Bearer mb_test_***');
+ok('Broker key heuristic', hasLikelySecret(`key=${liveBrokerKey}`));
+
 // === OpenAI / Anthropic / Google ===
 section('AI provider keys');
 ok('sk- redacted', !redact('sk-' + 'A'.repeat(40)).includes('A'.repeat(40)));
@@ -91,6 +99,7 @@ const nested = {
     { x: 1, y: 'github_pat_abc_DEF_123_ghi_456jklmno_789pqrstu_vwx_yzABC_DEF' },
     'plain text',
   ],
+  broker: liveBrokerKey,
 };
 const safe = redactDeep(nested);
 ok('user not redacted', safe.user === 'tyj');
@@ -101,6 +110,7 @@ ok('array object redacted', !safe.list[0].y.includes('abc_DEF_123_ghi_456'));
 ok('array object has placeholder', safe.list[0].y.includes('***'));
 ok('nested ok public kept', safe.secrets.nested.ok === 'public');
 ok('array sk redacted', !safe.secrets.nested.leak.includes('A'.repeat(40)));
+ok('Broker key redacted in nested output', safe.broker === 'mb_live_***');
 
 const keyBound = redactDeep({
   password: 'ordinary-text',

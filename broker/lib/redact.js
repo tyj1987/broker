@@ -32,6 +32,8 @@ const PATTERNS = [
   { name: 'github_app_ghu',     regex: /ghu_[A-Za-z0-9]{20,}/g,                    replace: 'ghu_***' },
   { name: 'github_app_ghs',     regex: /ghs_[A-Za-z0-9]{20,}/g,                    replace: 'ghs_***' },
   { name: 'github_oauth_ghr',   regex: /ghr_[A-Za-z0-9]{20,}/g,                    replace: 'ghr_***' },
+  // Secret Broker
+  { name: 'broker_api_key',      regex: /mb_(live|test)_[A-Za-z0-9]{20,}/g,         replace: 'mb_$1_***' },
   // OpenAI
   { name: 'openai_sk_proj',     regex: /sk-proj-[A-Za-z0-9_\-]{20,}/g,            replace: 'sk-proj-***' },
   { name: 'openai_classic',     regex: /sk-[A-Za-z0-9]{20,}/g,                    replace: 'sk-***' },
@@ -134,7 +136,7 @@ export function redactDeep(value, seen = new WeakSet()) {
 export function hasLikelySecret(s) {
   if (typeof s !== 'string' || s.length < 8) return false;
   // Heuristics: presence of common token prefixes, PEM marker, JWT shape, UUID
-  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|(?:password|passwd|passphrase|client[_-]?secret|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
+  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|mb_(?:live|test)_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|(?:password|passwd|passphrase|client[_-]?secret|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
 }
 
 /**

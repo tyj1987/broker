@@ -157,6 +157,10 @@ jobs:
       - name: Enforce core line coverage
         run: |
           test "$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=signer-coverage.out ./githubsigner
+      - name: Enforce signer protocol line coverage
+        run: |
+          test "$(go tool cover -func=signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race ./server
       - run: go build ./...
 

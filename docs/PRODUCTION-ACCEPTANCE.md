@@ -127,16 +127,20 @@ release approval.
   records; tests cover restart continuation, malformed input and tampering.
   Legacy unsealed logs remain outside the migration genesis, and the missing
   independent signed chain-head anchor remains a P1 acceptance blocker.
-- The GitHub repository-read adapter has a fixed origin, method, API version,
-  response limit and projection. The App token provider produces an RS256 JWT
-  only through an injected signer capability, requests exactly one repository
-  with Metadata read, and verifies the returned repository, permission and
-  expiry. The HTTPS transport validates all DNS answers, pins the connection,
-  keeps TLS hostname verification enabled, denies redirects and bounds body,
-  response and time. The composed executor is integration-tested without a
-  private key. No production KMS/HSM signer, account binding or isolated-account
-  live contract has run, so the manifest remains `contract_required` and this
-  is not production-available evidence.
+- Five GitHub read adapters cover repository metadata, branches, commits,
+  issues and workflow-run status with fixed origin, method, API version,
+  response limits and bounded projections. The App token provider produces an
+  RS256 JWT only through an injected signer capability, requests exactly one
+  repository with the operation's one read permission, and verifies the
+  returned repository, permission and expiry. The HTTPS transport validates
+  all DNS answers, pins the connection, keeps TLS hostname verification
+  enabled, denies redirects and bounds body, response and time. The Go signer
+  protocol validates Linux peer credentials, exact metadata bindings and JWT
+  claims before passing only a SHA-256 digest to an injected backend. The
+  composed executors are integration-tested without a private key. No
+  production KMS/HSM backend, signer workload, account binding or
+  isolated-account live contract has run, so the manifest remains
+  `contract_required` and this is not production-available evidence.
 - The Cloudflare zones-list adapter binds the execution, credential and API
   query to one exact account ID, accepts only bounded filters and pagination,
   and returns a minimal zone projection. The composed executor uses the pinned

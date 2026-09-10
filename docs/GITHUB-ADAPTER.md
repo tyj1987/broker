@@ -86,8 +86,11 @@ timeouts, ownership violations and malformed responses fail closed before the
 tool becomes discoverable.
 
 The isolated signer workload and its KMS/HSM policy are still subject to
-DQ-004 and are not included in the Broker process. Adding a private key to
-source, ordinary configuration, logs or an Agent response is prohibited.
+DQ-004 and are not included in the Broker process. The Go `githubsigner`
+protocol core validates the peer, exact metadata binding and GitHub App JWT
+claims before passing only a SHA-256 digest to an injected backend. It does not
+contain a file-key fallback. Adding a private key to source, ordinary
+configuration, logs or an Agent response is prohibited.
 
 ## Verification status
 
@@ -97,6 +100,7 @@ tampering, issue-versus-pull-request classification, untrusted-content marking,
 workflow-run filter validation and bounded status projection,
 App/account/environment/repository binding, JWT claims and algorithm,
 invalid signer results, fixed-socket ownership and protocol failures,
+strict signer-side JWT validation, peer and binding denial, digest-only backend calls,
 configuration reload removal, fixed read-only token permissions, missing/wrong/expired/overlong
 leases, redirect denial, upstream status mapping, invalid and oversized
 responses, bounded projection and error redaction. The provider manifest

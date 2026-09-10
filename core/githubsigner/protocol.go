@@ -1,0 +1,365 @@
+// Package githubsigner validates the local GitHub App signing protocol.
+// It passes only a SHA-256 digest to an injected non-exportable signing backend.
+package githubsigner
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	ProtocolVersion    = 1
+	MaxRequestBytes    = 8 * 1024
+	MaxSignatureBytes  = 1024
+	MinSignatureBytes  = 256
+	MaxJWTLifetime     = 10 * time.Minute
+	DefaultDeadline    = 2 * time.Second
+	DefaultConcurrency = 32
+)
+
+var (
+	accountRefPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	environmentPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	clientIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
+)
+
+type wireRequest struct {
+	Version      int    `json:"version"`
+	Algorithm    string `json:"algorithm"`
+	SigningInput string `json:"signing_input"`
+	AccountRef   string `json:"account_ref"`
+	Environment  string `json:"environment"`
+	ClientID     string `json:"client_id"`
+}
+
+type jwtHeader struct {
+	Algorithm string `json:"alg"`
+	Type      string `json:"typ"`
+}
+
+type jwtClaims struct {
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
+	Issuer    string `json:"iss"`
+}
+
+type wireResponse struct {
+	Version   int    `json:"version"`
+	Signature string `json:"signature"`
+}
+
+// DigestRequest deliberately has no plaintext signing-input or private-key field.
+type DigestRequest struct {
+	AccountRef  string
+	Environment string
+	ClientID    string
+	Digest      [sha256.Size]byte
+}
+
+type DigestSigner interface {
+	SignDigest(context.Context, DigestRequest) ([]byte, error)
+}
+
+type DigestSignerFunc func(context.Context, DigestRequest) ([]byte, error)
+
+func (function DigestSignerFunc) SignDigest(ctx context.Context, request DigestRequest) ([]byte, error) {
+	return function(ctx, request)
+}
+
+type BindingAuthorizer interface {
+	AuthorizeBinding(context.Context, string, string, string) error
+}
+
+type BindingAuthorizerFunc func(context.Context, string, string, string) error
+
+func (function BindingAuthorizerFunc) AuthorizeBinding(
+	ctx context.Context,
+	accountRef string,
+	environment string,
+	clientID string,
+) error {
+	return function(ctx, accountRef, environment, clientID)
+}
+
+type PeerAuthorizer interface {
+	AuthorizePeer(context.Context, net.Conn) error
+}
+
+type PeerAuthorizerFunc func(context.Context, net.Conn) error
+
+func (function PeerAuthorizerFunc) AuthorizePeer(ctx context.Context, connection net.Conn) error {
+	return function(ctx, connection)
+}
+
+type ProtocolError struct {
+	Code string
+}
+
+func (protocolError *ProtocolError) Error() string { return protocolError.Code }
+
+func fail(code string) error { return &ProtocolError{Code: code} }
+
+type Server struct {
+	Signer        DigestSigner
+	Bindings      BindingAuthorizer
+	Peers         PeerAuthorizer
+	Clock         func() time.Time
+	Deadline      time.Duration
+	MaxConcurrent int
+	OnError       func(string)
+}
+
+func NewServer(signer DigestSigner, bindings BindingAuthorizer, peers PeerAuthorizer) (*Server, error) {
+	if signer == nil || bindings == nil || peers == nil {
+		return nil, errors.New("signer dependencies are required")
+	}
+	return &Server{
+		Signer: signer, Bindings: bindings, Peers: peers,
+		Clock: time.Now, Deadline: DefaultDeadline, MaxConcurrent: DefaultConcurrency,
+	}, nil
+}
+
+// Serve accepts bounded concurrent connections until the context is cancelled.
+// It reports only stable error codes; dependency details never reach the callback.
+func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
+	if server == nil || listener == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
+		return fail("server_invalid")
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = listener.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
+	semaphore := make(chan struct{}, server.MaxConcurrent)
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	for {
+		connection, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fail("accept_failed")
+		}
+		select {
+		case semaphore <- struct{}{}:
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				defer func() { <-semaphore }()
+				defer connection.Close()
+				if err := server.ServeConn(ctx, connection); err != nil {
+					server.report(protocolErrorCode(err))
+				}
+			}()
+		default:
+			_ = connection.Close()
+			server.report("server_busy")
+		}
+	}
+}
+
+// ServeConn accepts exactly one newline-delimited request and writes one response.
+// Callers retain ownership of the connection and must close it after this method.
+func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error {
+	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil || connection == nil {
+		return fail("server_invalid")
+	}
+	deadline := server.Deadline
+	if deadline <= 0 || deadline > 10*time.Second {
+		return fail("server_invalid")
+	}
+	clock := server.Clock
+	if clock == nil {
+		return fail("server_invalid")
+	}
+	now := clock()
+	if err := connection.SetDeadline(now.Add(deadline)); err != nil {
+		return fail("connection_invalid")
+	}
+	if err := server.Peers.AuthorizePeer(ctx, connection); err != nil {
+		return fail("peer_denied")
+	}
+	request, err := readRequest(connection, now)
+	if err != nil {
+		return err
+	}
+	if err := server.Bindings.AuthorizeBinding(
+		ctx, request.AccountRef, request.Environment, request.ClientID,
+	); err != nil {
+		return fail("binding_denied")
+	}
+	digest := sha256.Sum256([]byte(request.SigningInput))
+	signature, err := server.Signer.SignDigest(ctx, DigestRequest{
+		AccountRef: request.AccountRef, Environment: request.Environment,
+		ClientID: request.ClientID, Digest: digest,
+	})
+	if err != nil {
+		return fail("signing_failed")
+	}
+	if len(signature) < MinSignatureBytes || len(signature) > MaxSignatureBytes {
+		return fail("signature_invalid")
+	}
+	response := wireResponse{
+		Version:   ProtocolVersion,
+		Signature: base64.RawURLEncoding.EncodeToString(signature),
+	}
+	if err := json.NewEncoder(connection).Encode(response); err != nil {
+		return fail("response_failed")
+	}
+	return nil
+}
+
+func readRequest(reader io.Reader, now time.Time) (wireRequest, error) {
+	buffered := bufio.NewReaderSize(reader, MaxRequestBytes+1)
+	line, err := buffered.ReadString('\n')
+	if err != nil || len(line) > MaxRequestBytes || buffered.Buffered() > 0 {
+		return wireRequest{}, fail("request_invalid")
+	}
+	line = strings.TrimSuffix(line, "\n")
+	if strings.HasSuffix(line, "\r") || line == "" {
+		return wireRequest{}, fail("request_invalid")
+	}
+	var request wireRequest
+	if err := decodeStrict([]byte(line), &request); err != nil {
+		return wireRequest{}, fail("request_invalid")
+	}
+	if request.Version != ProtocolVersion || request.Algorithm != "RS256" ||
+		!accountRefPattern.MatchString(request.AccountRef) ||
+		!environmentPattern.MatchString(request.Environment) ||
+		!clientIDPattern.MatchString(request.ClientID) {
+		return wireRequest{}, fail("request_invalid")
+	}
+	if err := validateSigningInput(request.SigningInput, request.ClientID, now); err != nil {
+		return wireRequest{}, err
+	}
+	return request, nil
+}
+
+func validateSigningInput(value string, clientID string, now time.Time) error {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 || len(value) < 20 || len(value) > 4096 {
+		return fail("jwt_invalid")
+	}
+	headerBytes, err := decodeCanonicalBase64URL(parts[0])
+	if err != nil {
+		return fail("jwt_invalid")
+	}
+	claimsBytes, err := decodeCanonicalBase64URL(parts[1])
+	if err != nil {
+		return fail("jwt_invalid")
+	}
+	var header jwtHeader
+	var claims jwtClaims
+	if decodeStrict(headerBytes, &header) != nil || decodeStrict(claimsBytes, &claims) != nil ||
+		header.Algorithm != "RS256" || header.Type != "JWT" || claims.Issuer != clientID {
+		return fail("jwt_invalid")
+	}
+	nowUnix := now.Unix()
+	if claims.IssuedAt < nowUnix-120 || claims.IssuedAt > nowUnix+30 ||
+		claims.ExpiresAt <= nowUnix || claims.ExpiresAt <= claims.IssuedAt ||
+		time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > MaxJWTLifetime {
+		return fail("jwt_invalid")
+	}
+	return nil
+}
+
+func decodeCanonicalBase64URL(value string) ([]byte, error) {
+	if value == "" || strings.Contains(value, "=") {
+		return nil, errors.New("invalid base64url")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return nil, errors.New("invalid base64url")
+	}
+	return decoded, nil
+}
+
+func decodeStrict(value []byte, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(value)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("trailing json")
+	}
+	return nil
+}
+
+func protocolErrorCode(err error) string {
+	var protocolError *ProtocolError
+	if errors.As(err, &protocolError) {
+		return protocolError.Code
+	}
+	return "internal_error"
+}
+
+func (server *Server) report(code string) {
+	if server.OnError == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	server.OnError(code)
+}
+
+type Binding struct {
+	AccountRef  string
+	Environment string
+	ClientID    string
+}
+
+type BindingSet struct {
+	allowed map[Binding]struct{}
+}
+
+func NewBindingSet(bindings []Binding) (*BindingSet, error) {
+	if len(bindings) == 0 || len(bindings) > 64 {
+		return nil, errors.New("binding set size is invalid")
+	}
+	set := &BindingSet{allowed: make(map[Binding]struct{}, len(bindings))}
+	for _, binding := range bindings {
+		if !accountRefPattern.MatchString(binding.AccountRef) ||
+			!environmentPattern.MatchString(binding.Environment) ||
+			!clientIDPattern.MatchString(binding.ClientID) {
+			return nil, errors.New("binding is invalid")
+		}
+		if _, exists := set.allowed[binding]; exists {
+			return nil, errors.New("binding is duplicated")
+		}
+		set.allowed[binding] = struct{}{}
+	}
+	return set, nil
+}
+
+func (bindings *BindingSet) AuthorizeBinding(
+	_ context.Context,
+	accountRef string,
+	environment string,
+	clientID string,
+) error {
+	if bindings == nil {
+		return errors.New("binding denied")
+	}
+	if _, allowed := bindings.allowed[Binding{
+		AccountRef: accountRef, Environment: environment, ClientID: clientID,
+	}]; !allowed {
+		return errors.New("binding denied")
+	}
+	return nil
+}

@@ -1,0 +1,27 @@
+manifest_version: 1
+id: tencent
+display_name: Tencent Cloud
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://www.tencentcloud.com/document/product/213/30657
+  - https://www.tencentcloud.com/document/product/598/30348
+origins: [https://cvm.tencentcloudapi.com, https://sts.tencentcloudapi.com]
+authentication:
+  priority: [cam_role, oidc_federation, temporary_credentials]
+  inject: { Authorization: "TC3-HMAC-SHA256 {{signature}}", X-TC-Token: "{{session_token}}" }
+  maximum_ttl_seconds: 3600
+  rotation: Refresh temporary CAM role credentials before expiry.
+  revocation: Revoke the role session or remove the role trust relationship.
+operations:
+  - id: cvm.instances.list
+    method: POST
+    path_template: /
+    permission: cvm:DescribeInstances
+    mutating: false
+    approval: none
+    parameters: { Region: { type: string }, Offset: { type: integer }, Limit: { type: integer } }
+    fixed_headers: { X-TC-Action: DescribeInstances, X-TC-Version: "2017-03-12" }
+    maximum_response_bytes: 2097152
+redaction: [Authorization, SecretId, SecretKey, Token, Signature]
+contract_test: { account: isolated_cam_role, required: true, last_result: not_run }

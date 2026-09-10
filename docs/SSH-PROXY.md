@@ -1,175 +1,96 @@
-# SSH Proxy (V4.1)
+# SSH proxy compatibility interface
 
-> **Goal**: AI agents execute commands on remote hosts via broker. Private
-> keys NEVER leave the broker process.
+## Strict typed capability
 
-## Why
+`ssh.host.inspect@1.0.0` is the first strict replacement for the compatibility
+proxy. Its only caller-controlled field is an opaque registered `resource_ref`.
+The adapter does not accept a hostname, port, login name, command, shell input,
+private key, certificate or arbitrary environment value.
 
-Traditional `secret-broker exec --env "SSH_KEY" -- ssh ...` would inject the
-private key as an env var, where it can be captured by:
-- shell history (`/proc/self/environ`)
-- core dumps
-- audit logs
-- accidentally-printed env in error messages
+The Broker passes a bound request to an isolated runner capability containing
+only the operation ID, account reference, environment, target reference and
+cancellation signal. The runner returns a closed, bounded health record:
+hostname, uptime, one-minute load, disk-use percentage and service state. Any
+unexpected field, wrong target, malformed value or runner error fails closed;
+raw stdout, stderr and credential material are never returned to the caller.
 
-The SSH proxy keeps the private key on the broker's tmpfs (0600) for the
-duration of the command, then `rm -rf` immediately. AI receives only
-stdout/stderr/exit code.
+Production remains disabled until an isolated target contract proves all of
+the following:
+
+- the target registry resolves the opaque reference to one fixed host, port,
+  principal and allowed operation;
+- `StrictHostKeyChecking=yes` uses an independently verified host key or host
+  certificate authority; first-use acceptance is forbidden;
+- a short-lived user certificate or hardware-backed agent is restricted to a
+  forced inspection command, with all forwarding disabled;
+- the runner is separately isolated, has bounded output and time, redacts its
+  logs, and cannot return credential handles or raw process output;
+- revocation, wrong target, wrong principal, host-key change, timeout and
+  concurrent execution tests pass.
+
+OpenSSH documents that strict host-key checking refuses unknown or changed
+keys, `IdentitiesOnly` restricts offered identities, and server-side
+`ForceCommand` must be paired with `DisableForwarding` when other channels are
+not allowed. The exact production CA, registry and runner ownership is tracked
+in the decision queue.
+
+The v1 SSH proxy is a compatibility feature. It accepts a free-form remote
+command and therefore is **disabled for strict-profile identities**. It is not
+a substitute for `/api/v2` typed operations and must not be exposed to AI in a
+strict deployment.
 
 ## Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/v1/ssh/exec` | Run a command on a remote host |
-| `POST` | `/api/v1/ssh/tunnel` | Open a local port forward |
-| `POST` | `/api/v1/ssh/tunnel/stop` | Close a tunnel by ID |
-| `GET`  | `/api/v1/ssh/tunnels` | List active tunnels (admin) |
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/ssh/exec` | Run one compatibility-mode remote command |
+| `POST` | `/api/v1/ssh/tunnel` | Open a compatibility-mode local forward |
+| `POST` | `/api/v1/ssh/tunnel/stop` | Stop a forward by opaque ID |
+| `GET` | `/api/v1/ssh/tunnels` | List active tunnel metadata |
 
-## sshExec
+The implementation validates `user@host[:port]`, bounds command and output
+sizes, starts OpenSSH without a local shell, writes temporary key material with
+mode `0600`, and removes it in a `finally` path. The selected `ssh_connection`
+must also bind the requested host, port and username and contain an
+independently verified OpenSSH `known_hosts` entry. The compatibility runner
+uses `StrictHostKeyChecking=yes`; unknown or changed host keys fail closed and
+first-use acceptance is forbidden. These controls reduce local
+injection and leakage risk, but they do not make an arbitrary remote command
+safe: OpenSSH sends the command to the remote login shell, where shell syntax
+can be interpreted.
 
-Request:
-```json
-{
-  "target": "app@10.0.1.5",
-  "command": "systemctl status nginx",
-  "secret_name": "ssh.connection",  // default
-  "timeout_ms": 30000
-}
-```
+## Deployment requirements
 
-Response:
-```json
-{
-  "ok": true,
-  "exitCode": 0,
-  "stdout": "● nginx.service - The nginx HTTP and reverse proxy server\n   Active: active (running)...",
-  "stderr": "",
-  "duration_ms": 47,
-  "target": "app@10.0.1.5"
-}
-```
+- Bind the compatibility listener separately from the strict API and keep it
+  private.
+- Permit only named compatibility clients, fixed target hosts, fixed source
+  networks and narrowly scoped service records.
+- Provision any private key through the server's protected secret deployment
+  channel. Do not paste or upload a private key through the dashboard, SDK,
+  issue tracker, CI log or chat.
+- Prefer a locked server-side key path, SSH certificate, hardware-backed agent,
+  or workload identity over a long-lived private-key value.
+- Use a forced command and restricted `authorized_keys` options on the target;
+  do not grant an unrestricted administrative shell.
+- Disable core dumps, place the temporary directory on private memory-backed
+  storage, and alert if cleanup fails.
 
-The private key **never appears** in any field of the response.
+The API response contains exit status and bounded output only; it must never
+contain a key, key path, passphrase or secret record. Logs and audit events are
+subject to the common redaction rules.
 
-## sshTunnel
+## Strict replacement
 
-Request:
-```json
-{
-  "target": "app@bastion.example.com",
-  "local_port": 5432,
-  "remote_host": "db.internal",
-  "remote_port": 5432,
-  "secret_name": "ssh.bastion"
-}
-```
+A strict SSH-backed action must be registered as a named `/api/v2` operation.
+Its server-side adapter fixes the host, port, remote account and command
+template, accepts only schema-validated parameters, applies Node and Go policy
+decisions, and records mandatory audit intent before execution. No production
+operation is enabled until its isolated-target contract test has passed.
 
-Response:
-```json
-{
-  "ok": true,
-  "id": "uuid-here",
-  "localPort": 5432,
-  "remote": "db.internal:5432",
-  "target": "app@bastion.example.com",
-  "startedAt": "2026-09-01T08:35:00Z"
-}
-```
+## Verification
 
-The broker runs `ssh -N -L 5432:db.internal:5432 ...`. Connect to
-`localhost:5432` and traffic is forwarded over the broker.
-
-## CLI
-
-```bash
-# Exec
-secret-broker ssh-exec \
-  --target app@10.0.1.5 \
-  --command "uptime"
-
-# Tunnel (foreground, Ctrl-C to stop)
-secret-broker ssh-tunnel \
-  --target app@bastion.example.com \
-  --local-port 5432 \
-  --remote-host db.internal \
-  --remote-port 5432
-```
-
-## Security
-
-### Target validation
-
-`target` must match `user@host[:port]` with strict regex. Rejected:
-- shell metacharacters: `; & | \` $ ' " \`
-- ports outside 1-65535
-- invalid hostnames
-
-### Command validation
-
-`command` must:
-- be a non-empty string
-- be ≤ 4096 chars
-- contain no newline / NUL
-
-The command is passed to `ssh` as a **single argument** (after `--`), so
-shell expansion does not happen on the broker.
-
-### Output limits
-
-stdout and stderr are capped at 10 MB each to prevent memory exhaustion
-from runaway commands. Excess is silently dropped.
-
-### Timeout
-
-Default 5 minutes. Configurable per-request via `timeout_ms`.
-
-### Private key lifecycle
-
-```
-1. mkdtempSync('/tmp/broker-ssh-XXXXXX')     # 0700
-2. writeFileSync('id_key', privateKey)        # 0600
-3. spawn('ssh', ['-i', 'id_key', ...])        # broker-controlled
-4. wait for command to finish
-5. rm -rf('/tmp/broker-ssh-XXXXXX')          # finally block
-```
-
-If broker process crashes, tmpfs is wiped on next boot (or by cron).
-
-## Secret type
-
-Use the `ssh_jump_host` type (V4) or store a custom secret with fields:
-- `private_key` (required) — PEM-encoded RSA/ECDSA/Ed25519 key
-- `username` (optional, derived from target)
-- `passphrase` (optional, used by ssh-keygen decrypt)
-
-Example `secrets/secrets-detail.json` entry:
-```json
-{
-  "name": "ssh.bastion",
-  "type": "ssh_jump_host",
-  "value": {
-    "jump_host": "bastion.example.com",
-    "jump_user": "bastion",
-    "jump_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
-  }
-}
-```
-
-## Testing
-
-`broker-test/test-ssh-proxy.js` (53 tests):
-- target / command validation
-- sshExec happy path with injected executor
-- sshExec error paths
-- key file lifecycle (mkdtemp / write / chmod / rm)
-- tunnel start/stop, in-flight cleanup
-- zero credential leakage (return values never include private_key)
-
-## Comparison to alternatives
-
-| Approach | Private key lifetime | AI exposure | Risk |
-|----------|---------------------|-------------|------|
-| `env var` (legacy) | entire subprocess | yes | high (history, logs) |
-| `ssh-agent` (legacy) | agent lifetime | yes (when `SSH_AUTH_SOCK` env leaked) | medium |
-| `sshpass` (legacy) | entire command | yes | high |
-| **broker sshExec** | 100ms around command | **no** | low |
+`broker-test/test-ssh-proxy.js` covers compatibility parsing, strict host-key
+pinning, secret-bound targets, executor argument construction, output handling,
+temporary-file cleanup, tunnel lifecycle and credential non-disclosure.
+Passing those tests validates the compatibility implementation only; it does
+not approve the feature for a strict profile or for production.

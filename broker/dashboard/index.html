@@ -5,40 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
   <title>Secret Broker · AI 动作控制台</title>
-  <meta name="description" content="Secret Broker is an mTLS credential proxy. Do not ask the user for GitHub PAT, Aliyun AccessKey, or OpenAI keys. Ask only for this site's login: client name + password, or a broker-issued client certificate, or a broker API key (Bearer). After auth, call GET /api/v1/identity, GET /api/v1/services, then POST /api/v1/proxy/:service. Secrets never leave the server.">
-  <link rel="alternate" type="text/plain" href="/llms.txt" title="Agent instructions">
-  <link rel="describedby" href="/llms.txt">
-  <script type="application/json" id="broker-agent">
-  {
-    "name": "Secret Broker",
-    "role": "mTLS credential proxy for AI clients",
-    "ask_user_for": [
-      "dashboard client name (e.g. client.dashboard-admin)",
-      "dashboard password for that client",
-      "or a client TLS certificate+key issued by this broker CA",
-      "or a broker API key created in this console (Authorization: Bearer)"
-    ],
-    "never_ask_user_for": [
-      "GitHub PAT",
-      "Aliyun AccessKey / Secret",
-      "OpenAI / Anthropic / Gemini API keys",
-      "any plaintext secret stored inside broker"
-    ],
-    "auth": {
-      "password": { "method": "POST", "path": "/api/v1/login", "body": { "client": "<client name>", "password": "<password>" }, "session": "HttpOnly cookie broker_session; subsequent fetch must use credentials include" },
-      "mfa": { "method": "POST", "path": "/api/v1/login/mfa", "when": "login response mfa_required true", "body": { "mfa_token": "<from login>", "code": "<TOTP or recovery>" } },
-      "mtls": { "note": "browser or CLI presents client cert; identity is automatic" },
-      "api_key": { "header": "Authorization: Bearer <broker API key>" }
-    },
-    "after_login": [
-      "GET /api/v1/identity",
-      "GET /api/v1/services",
-      "GET /api/v1/secrets (names only)",
-      "POST /api/v1/proxy/<service> with {method, path, query, headers, body}"
-    ],
-    "health": { "public": "GET /health returns {status:ok} only" }
-  }
-  </script>
+  <meta name="description" content="Secret Broker management console for policy-bound operations, device approvals, and audit review.">
   <link rel="stylesheet" href="style.css?v=4.1.2">
 </head>
 <body>
@@ -48,7 +15,7 @@
     <div class="login-card">
       <div class="login-logo">🔐</div>
       <h1>Secret Broker</h1>
-      <p class="subtitle">mTLS 凭据代理 · AI 动作控制台</p>
+      <p class="subtitle">策略化操作与设备管理控制台</p>
       <p class="hint">
         密钥永不离开 broker：你在这里点击/填写请求，broker 自动注入密钥调用外部 API，
         明文密钥不会出现在这个页面上。
@@ -66,10 +33,10 @@
         </label>
         <div id="login-error" class="status-error" hidden></div>
         <button type="submit" class="btn btn-primary btn-block">登录 / Login</button>
+        <button type="button" class="btn btn-block" id="btn-webauthn-login">使用安全密钥 / Security key</button>
       </form>
       <p class="hint muted">
-        安全提示：密码登录连续失败 5 次将锁定 15 分钟；如果你的浏览器已安装客户端证书，
-        可以直接使用（mTLS 身份自动生效）。
+        严格档仅支持安全密钥。密码与 TOTP 只属于隔离的兼容档或受控档。
       </p>
     </div>
   </section>
@@ -90,6 +57,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-tab="home">🏠 首页 / Home</button>
       <button class="tab-btn" data-tab="me">👤 我的资料 / Me <span class="badge-new">新</span></button>
+      <button class="tab-btn" data-tab="approvals">✅ 审批 / Approvals</button>
       <button class="tab-btn" data-tab="api-keys">🔑 API Keys</button>
       <button class="tab-btn" data-tab="actions">⚡ 动作 / Actions</button>
       <button class="tab-btn" data-tab="audit">📋 审计 / Audit</button>
@@ -232,6 +200,29 @@
         </section>
 
         <section class="me-section">
+          <h3>安全密钥 / Security keys</h3>
+          <p class="muted">严格档至少登记两把未同步的实体密钥。添加第二把密钥前，请先用已登记密钥登录。</p>
+          <ul id="webauthn-credentials"></ul>
+          <label>密钥名称 <input id="webauthn-label" type="text" maxlength="80" value="Security key" autocomplete="off" /></label>
+          <button type="button" class="btn" id="btn-webauthn-register">登记新密钥 / Register</button>
+          <div id="webauthn-status" class="status"></div>
+        </section>
+
+        <section class="me-section">
+          <h3>移动设备 / Mobile devices</h3>
+          <p class="muted">配对口令五分钟后失效。只在受信任的 Android 设备中输入；界面不会自动复制或保存口令。</p>
+          <ul id="broker-devices"></ul>
+          <label>设备名称 <input id="device-label" type="text" maxlength="80" value="android-phone" autocomplete="off" /></label>
+          <button type="button" class="btn" id="btn-device-enroll">生成 Android 配对口令</button>
+          <div id="device-enrollment" hidden>
+            <label>Enrollment ID <input id="device-enrollment-id" type="text" readonly /></label>
+            <label>Short-lived challenge <input id="device-enrollment-challenge" type="text" readonly /></label>
+            <p class="muted">Expires: <code id="device-enrollment-expires"></code></p>
+          </div>
+          <div id="device-status" class="status"></div>
+        </section>
+
+        <section class="me-section">
           <h3>改密码 / Change Password</h3>
           <p class="muted">密码必须 ≥ 12 字符。改完立即生效（其他 session 仍可用当前密码）。</p>
           <form id="form-change-pw">
@@ -313,10 +304,27 @@
         </section>
       </section>
 
+      <section id="tab-approvals" class="tab-content">
+        <div class="card">
+          <h2>Bound approvals</h2>
+          <p class="hint">Review only the bound provider, operation, account, environment and resource. Approval requires this browser's WebAuthn session; API keys and paired devices cannot decide.</p>
+          <div class="filter-row">
+            <button id="btn-refresh-approvals" type="button" class="btn">Refresh</button>
+            <span id="approval-status" class="status"></span>
+          </div>
+          <div class="table-scroll">
+            <table id="approvals-table" class="data-table">
+              <thead><tr><th>Provider</th><th>Operation</th><th>Account</th><th>Environment</th><th>Resource</th><th>Requester</th><th>Approvals</th><th>Status</th><th>Decision</th></tr></thead>
+              <tbody><tr><td colspan="9" class="muted">Open this tab to load approvals.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- ===== API Keys tab (v3.0 M2-C) ===== -->
       <section id="tab-api-keys" class="tab-content">
         <h2>🔑 API Key 管理 / API Key Management</h2>
-        <p class="muted">v3.0 M2 · 短命 Bearer Token · 适用于 Web 端 AI 客户端（无需 mTLS）</p>
+        <p class="muted">短期、可撤销、精确约束的工作负载凭据。MCP/Codex 应只使用类型化操作权限。</p>
 
         <!-- 顶部安全提示 banner -->
         <div class="me-section" style="border-left: 3px solid #d4a849;">
@@ -328,7 +336,7 @@
         <!-- 创建表单 -->
         <section class="me-section">
           <h3>创建新 API Key / Create New Key</h3>
-          <p class="muted">请填 label（标签）+ scope（权限）+ expires-in（有效期）。提交后会弹窗显示完整 key。</p>
+          <p class="muted">操作型 Key 必须同时绑定服务、操作、账户、资源和环境；任何一项缺失都会失败关闭。</p>
           <form id="form-create-key" autocomplete="off">
             <label>Label / 标签
               <input type="text" name="name" id="ak-name" required maxlength="64"
@@ -339,21 +347,47 @@
             <fieldset style="border:1px solid #1f2530;border-radius:4px;padding:8px 14px;margin:8px 0;">
               <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Scope / 权限（至少一项）</legend>
               <label style="display:block;margin:4px 0;">
-                <input type="checkbox" name="scope_resolve" id="ak-scope-resolve" value="secrets:resolve" checked />
-                <code>secrets:resolve</code> — 允许拉取密钥（白名单内）
+                <input type="checkbox" name="scope_operations" id="ak-scope-operations" value="operations:execute" checked />
+                <code>operations:execute</code> — MCP/Codex 类型化任务（推荐）
               </label>
               <label style="display:block;margin:4px 0;">
-                <input type="checkbox" name="scope_proxy" id="ak-scope-proxy" value="services:proxy" checked />
-                <code>services:proxy</code> — 允许代理外部服务调用
+                <input type="checkbox" name="scope_proxy" id="ak-scope-proxy" value="services:proxy" />
+                <code>services:proxy</code> — 旧版固定服务代理（兼容用途）
+              </label>
+              <label style="display:block;margin:4px 0;">
+                <input type="checkbox" name="scope_resolve" id="ak-scope-resolve" value="secrets:resolve" />
+                <code>secrets:resolve</code> — 明文导出（不应用于 AI/MCP）
+              </label>
+            </fieldset>
+
+            <fieldset id="ak-operation-constraints" style="border:1px solid #1f2530;border-radius:4px;padding:8px 14px;margin:8px 0;">
+              <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Typed operation constraints / 类型化操作边界</legend>
+              <p class="hint">每行或逗号分隔；禁止 <code>*</code>。值必须与 Broker 已登记策略完全一致。</p>
+              <label>Services / 服务
+                <textarea name="allowed_services" id="ak-allowed-services" rows="2" placeholder="github"></textarea>
+              </label>
+              <label>Operations / 操作
+                <textarea name="allowed_operations" id="ak-allowed-operations" rows="3" placeholder="github:repository.read"></textarea>
+              </label>
+              <label>Accounts / 账户引用
+                <textarea name="allowed_accounts" id="ak-allowed-accounts" rows="2" placeholder="52trz-github"></textarea>
+              </label>
+              <label>Resources / 资源引用
+                <textarea name="allowed_resources" id="ak-allowed-resources" rows="3" placeholder="tyj1987/52trz"></textarea>
+              </label>
+              <label>Environments / 环境
+                <textarea name="allowed_environments" id="ak-allowed-environments" rows="2" placeholder="development, staging"></textarea>
+              </label>
+              <label>Secret refs / 密钥引用（仅需要凭据的操作）
+                <textarea name="allowed_secrets" id="ak-allowed-secrets" rows="2" placeholder="GITHUB_APP"></textarea>
               </label>
             </fieldset>
 
             <label>有效期 / Expires-in
               <select name="ttl_seconds" id="ak-ttl" required>
+                <option value="3600">1 小时 / 1 hour</option>
                 <option value="86400">24 小时 / 24 hours</option>
                 <option value="604800" selected>7 天 / 7 days (推荐 / recommended)</option>
-                <option value="2592000">30 天 / 30 days</option>
-                <option value="0">永久（不推荐） / Never (not recommended)</option>
               </select>
             </label>
 
@@ -495,7 +529,6 @@
             <button id="btn-audit-refresh" class="btn">刷新 / Refresh</button>
             <button id="btn-audit-export-json" class="btn admin-only" hidden>⬇ 导出 JSON</button>
             <button id="btn-audit-export-csv" class="btn admin-only" hidden>⬇ 导出 CSV</button>
-            <button id="btn-audit-clear" class="btn btn-danger admin-only" hidden>🗑 清除日志 / Clear</button>
             <span class="muted" id="audit-count" style="margin-left:auto"></span>
           </div>
           <table id="audit-table">
@@ -595,7 +628,7 @@
           <h2>设备管理 / Devices (Clients)</h2>
           <p>每台设备一个 mTLS client cert。客户端名规范：<code>[a-z][a-z0-9_.-]{0,63}</code>。</p>
           <p class="hint">证书签发后必须<b>离线</b>把 zip 包送达设备——里面包含私钥，泄露后必须立即撤销。</p>
-          <p id="pki-readonly-banner" class="badge-warn" hidden>⚠ 当前 <code>pki/clients/</code> 不可写（生产环境典型情况）。"签发/补发"和"轮换"按钮已禁用。请在 ECS 上跑 <code>scripts/issue-client-cert.sh &lt;name&gt;</code>。</p>
+          <p id="pki-readonly-banner" class="badge-ok" hidden>🔒 当前使用生产外部管理模式：Broker 只保存已授权证书指纹，不保存客户端私钥。签发、轮换和证书包下载须由受信运维端离线完成。</p>
         </div>
         <div class="card admin-only" hidden>
           <div class="admin-toolbar">
@@ -798,10 +831,11 @@ secret-broker get github.pat</code></pre>
   <script src="app.js?v=4.1.5"></script>
   <script src="home.js?v=4.1.5"></script>
   <script src="me.js?v=4.1.5"></script>
+  <script src="approvals.js?v=4.2.0"></script>
   <script src="api-keys.js?v=4.1.5"></script>
   <script src="admin/secrets.js?v=4.1.5"></script>
   <script src="admin/services.js?v=4.1.5"></script>
-  <script src="admin/clients.js?v=4.1.5"></script>
+  <script src="admin/clients.js?v=4.2.0"></script>
   <script src="admin/audit.js?v=4.1.5"></script>
 </body>
 </html>

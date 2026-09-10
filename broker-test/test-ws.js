@@ -226,7 +226,11 @@ section('broadcastEvent validation');
 section('end-to-end WebSocket');
 {
   _resetForTests();
-  const wss = new WebSocketServer({ port: 0 });
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise((resolveListening, rejectListening) => {
+    wss.once('listening', resolveListening);
+    wss.once('error', rejectListening);
+  });
   // 模拟一个 client,验证 broadcastEvent 通过 wss.send 路径
   const PORT = wss.address().port;
   wss.on('connection', (ws) => {
@@ -238,17 +242,36 @@ section('end-to-end WebSocket');
   const WebSocketClient = ws.WebSocket || ws;
   const c = new WebSocketClient(`ws://127.0.0.1:${PORT}`);
   const received = [];
-  c.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+  const waitForMessage = (predicate) => new Promise((resolveMessage, rejectMessage) => {
+    const timer = setTimeout(() => {
+      c.off('message', onMessage);
+      rejectMessage(new Error('timed out waiting for WebSocket message'));
+    }, 2_000);
+    const onMessage = (raw) => {
+      const message = JSON.parse(raw.toString());
+      received.push(message);
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      c.off('message', onMessage);
+      resolveMessage(message);
+    };
+    c.on('message', onMessage);
+  });
+  const ack = waitForMessage((message) => message.type === 'ack');
   await new Promise((r) => c.on('open', r));
-  // 等 ack
-  await new Promise((r) => setTimeout(r, 50));
-  // 广播
+  await ack;
+  const event = waitForMessage((message) => message.type === 'event' && message.event_type === 'alerts');
   broadcastEvent({ type: 'alerts', severity: 'critical', data: { msg: 'x' } });
-  await new Promise((r) => setTimeout(r, 50));
+  await event;
   ok('ack received', received.some(m => m.type === 'ack'));
   ok('event broadcasted', received.some(m => m.type === 'event' && m.event_type === 'alerts'));
+  const closed = new Promise((resolveClosed) => c.once('close', resolveClosed));
   c.close();
-  wss.close();
+  await closed;
+  await new Promise((resolveClosed, rejectClosed) => wss.close((error) => {
+    if (error) rejectClosed(error);
+    else resolveClosed();
+  }));
 }
 
 // ============================================================

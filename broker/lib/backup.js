@@ -2,7 +2,17 @@
 // Phase F. Does NOT copy private keys by default — emits a checklist/manifest.
 
 import { createHash } from 'node:crypto';
-import { existsSync, statSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+} from 'node:fs';
 import { join, basename } from 'node:path';
 
 /**
@@ -14,21 +24,26 @@ function fileEntry(path, meta = {}) {
   if (!path) {
     return { path: null, present: false, ...meta };
   }
-  const present = existsSync(path);
+  let present = false;
   let size = null;
   let mtime = null;
   let sha256 = null;
-  if (present) {
-    try {
-      const st = statSync(path);
+  let descriptor;
+  try {
+      const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+      descriptor = openSync(path, flags);
+      const st = fstatSync(descriptor);
+      if (!st.isFile()) throw new Error('not a regular file');
+      present = true;
       size = st.size;
       mtime = st.mtime.toISOString();
       if (!meta.sensitive && st.size < 5 * 1024 * 1024) {
-        sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
+        sha256 = createHash('sha256').update(readFileSync(descriptor)).digest('hex');
       }
-    } catch {
-      /* ignore */
-    }
+  } catch {
+    /* absent, inaccessible and unsafe paths are all excluded */
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
   return {
     path,

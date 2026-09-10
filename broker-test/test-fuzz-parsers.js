@@ -13,7 +13,7 @@
 
 import { parseRateLimit } from '../broker/lib/rate-limit.js';
 import { parseSshTarget, validateCommand } from '../broker/ssh-proxy.js';
-import { checkPathAllowed } from '../broker/can-proxy.js';
+import { checkPathAllowed, isSafeRegexPattern } from '../broker/can-proxy.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -201,9 +201,6 @@ const malformedRegex = [
   '[z-a]',      // invalid range
   '(?<=foo)bar',// variable-length lookbehind
   '(?{})',      // invalid group
-  // ReDoS-ish (should not hang)
-  '(a+)+$',     // catastrophic backtracking pattern
-  '(a|a)*$',
   '((((((((((((((((((a)))))))))))))))))$',
 ];
 for (const pattern of malformedRegex) {
@@ -219,8 +216,13 @@ section('10. checkPathAllowed does not hang on ReDoS');
 
 {
   const start = Date.now();
+  const nestedQuantifier = '(a+)+$';
+  const ambiguousAlternation = '(a|a)*$';
+  ok('nested quantified group rejected', !isSafeRegexPattern(nestedQuantifier));
+  ok('ambiguous repeated alternation rejected', !isSafeRegexPattern(ambiguousAlternation));
   const result = checkPathAllowed('^[a-z]+$', 'short-string-no-backtracking');
   const elapsed = Date.now() - start;
+  ok('safe regex remains executable', result === false);
   ok(`safe regex returned in ${elapsed}ms`, elapsed < 100, `took ${elapsed}ms`);
 }
 

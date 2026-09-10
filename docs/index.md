@@ -1,103 +1,51 @@
-# Secret Broker
+# Secret Broker documentation
 
-> **AI-first mTLS secret broker with zero-credential-leakage.**
+Secret Broker is a policy-bound credential broker for automation, developer
+tools and cloud workloads. Strict callers submit typed operations and receive
+only approved business results; they do not receive long-lived credentials.
 
-A self-hosted secret manager designed for AI agents, Kubernetes workloads,
-and developer workstations. Stores credentials encrypted with SOPS, serves
-them over mTLS, and never lets AI see raw secrets — only metadata or
-redacted placeholders.
-
-[:material-rocket-launch: Quickstart](QUICKSTART.md){ .md-button .md-button--primary }
+[:material-rocket-launch: Source verification](QUICKSTART.md){ .md-button .md-button--primary }
 [:material-github: GitHub](https://github.com/tyj1987/broker){ .md-button }
 
----
+## Start here
 
-## What is it?
+- [Architecture](https://github.com/tyj1987/broker/blob/master/ARCHITECTURE.md) — current trust boundaries and repository layout.
+- [Threat model](THREAT-MODEL.md) — assets, actors, attacks, implemented controls and open gaps.
+- [SDK reference](SDK-REFERENCE.md) — `/api/v2` typed-operation and approval clients.
+- [Tool registry](TOOL-REGISTRY.md) — versioned capability metadata and risk invariants.
+- [Automation tasks](AUTOMATION-TASKS.md) — policy-routed task lifecycle, APIs and current durability boundary.
+- [MCP typed-task bridge](MCP-TASK-BRIDGE.md) — executable-tool discovery and task execution without secret or arbitrary-proxy access.
+- [Execution tokens](EXECUTION-TOKENS.md) — short-lived, bound, single-use adapter capabilities.
+- [Audit integrity](AUDIT-INTEGRITY.md) — restart-safe hash chaining, migration boundary and external-anchor gate.
+- [GitHub adapter](GITHUB-ADAPTER.md) — fixed-origin repository metadata operation and credential lease boundary.
+- [Cloudflare adapter](CLOUDFLARE-ADAPTER.md) — account-bound zone inventory with a scoped token capability.
+- [SSH capability](SSH-PROXY.md) — typed target inspection and the isolated-runner production boundary.
+- [Docker adapter](DOCKER-ADAPTER.md) — repository-bound tag inventory through a short-lived pull token.
+- [PostgreSQL adapter](POSTGRESQL-ADAPTER.md) — fixed-query inspection with a verified read-only role boundary.
+- [Google Drive adapter](GOOGLE-DRIVE-ADAPTER.md) — file-bound plain-text export through a mandatory content-release filter.
+- [Decision queue](DECISION_QUEUE.md) — open high-impact choices and their required evidence.
+- [Verification](https://github.com/tyj1987/broker/blob/master/VERIFY.md) — reproducible local and CI checks.
+- [Production acceptance](PRODUCTION-ACCEPTANCE.md) — observed evidence, release blockers and remaining gates.
+- [Operations runbook](https://github.com/tyj1987/broker/blob/master/RUNBOOK.md) — deployment, rollback, rotation, incidents and disaster recovery.
 
-!!! quote "The problem"
-    AI agents (LLMs, IDEs, MCP clients) need API tokens, database passwords,
-    and SSH keys to do their job — but you can't trust them not to leak
-    credentials into logs, conversation history, or model training data.
+## Security boundary
 
-**Secret Broker** is the answer:
+`/api/v2` covers the versioned tool registry, typed operations, WebAuthn-backed approvals, registered
+devices and operation-bound OTP tasks. A production request must pass both the
+Node precheck and the Go policy core, and its exact provider operation must have
+retained isolated-account contract evidence.
 
-* **mTLS-only** — every request is authenticated with a client certificate.
-  No anonymous access, ever.
-* **SOPS-encrypted at rest** — secrets live in `secrets/broker.yaml` encrypted
-  with age or PGP keys.
-* **Zero-credential-leakage** — the broker, SDK, and audit log all
-  auto-redact known secret patterns (GitHub PAT, OpenAI `sk-`, AWS `AKIA`,
-  JWTs, etc.). Tests assert this on every commit.
-* **AI-aware** — built-in support for WebAuthn, TOTP, WebSocket events,
-  workload identity (K8s/ECS/GKE), and proxy-mode for 40+ service templates.
+`/api/v1` is a migration surface. Strict-profile identities are denied access
+to plaintext resolution, arbitrary proxying, state mutation and free-form SSH.
+The existence or test coverage of a compatibility route does not make it safe
+for a strict deployment.
 
-## Key features
+## Client status
 
-<div class="grid cards" markdown>
+The repository includes Go, Python and VS Code SDKs; a Tauri Windows/Linux
+client; a Kotlin Android client; an initial SwiftUI iOS client; and a Chrome/
+Edge helper. Physical-device, signing and production validation states are
+reported separately in the production acceptance record.
 
-- :material-shield-key:{ .lg .middle } **mTLS + WebAuthn + TOTP**
-
-  ---
-
-  6 authentication factors. No password-only logins. Per-client lockout
-  on 5 failed attempts.
-
-- :material-robot:{ .lg .middle } **AI-aware proxy mode**
-
-  ---
-
-  AI calls `GET /api/v1/proxy/github/repos/owner/repo` and the broker
-  transparently injects the `Authorization: Bearer` header. The AI never
-  sees the PAT.
-
-- :material-cloud-sync:{ .lg .middle } **Workload identity**
-
-  ---
-
-  K8s ServiceAccount tokens, ECS task roles, and GKE Workload Identity
-  Federation. Pods 0 AKs.
-
-- :material-rotate-3d:{ .lg .middle } **Auto-rotation**
-
-  ---
-
-  Configurable rotation intervals per secret type. Slack/PagerDuty alerts
-  on stale credentials. 1-click rollback via git.
-
-- :material-chart-line:{ .lg .middle } **First-class observability**
-
-  ---
-
-  Prometheus metrics, structured audit logs, OpenTelemetry traces,
-  and a pre-built Grafana dashboard.
-
-- :material-package-variant:{ .lg .middle } **8 client SDKs**
-
-  ---
-
-  Node, Python, Go, MCP (stdio/SSE), VS Code/Cursor, and a CLI. Zero
-  hard dependencies for Python/Go.
-
-</div>
-
-## 8 ways to call the broker
-
-| Entry | Use case |
-|-------|----------|
-| `POST /api/v1/secrets/resolve` | Programmatic secret fetch |
-| `GET /api/v1/proxy/:service/*` | Transparent header injection |
-| `WS /ws` | Real-time audit/alert stream |
-| `POST /api/v1/ssh/exec` | SSH without exposing the key |
-| `POST /api/v1/ssh/tunnel` | Local port forward to internal DB |
-| `POST /api/v1/workload-identity/assume` | Exchange OIDC for STS |
-| `GET /api/v1/me` | Self-service: rotate cert, TOTP, audit |
-| MCP server | Native integration for Claude Desktop / Cursor |
-
-## Where to go next
-
-- [Quickstart](QUICKSTART.md) — 5-minute walkthrough
-- [Master Plan](DESIGN-V4-MASTER-PLAN.md) — architecture overview
-- [API Calling Standards](DESIGN-V4-API-CALLING-STANDARDS.md) — how to call
-  the broker from AI agents
-- [Helm chart](../deploy/helm/broker/) — production deployment
-- [Python SDK](../sdk/python/) — zero-dep client
+Do not place credentials, OTP values, private keys, decrypted configuration or
+production evidence containing secrets in documentation, issues or CI logs.

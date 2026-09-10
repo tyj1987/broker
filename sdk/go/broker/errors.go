@@ -18,6 +18,7 @@ var (
 	ErrServer      = errors.New("broker: server error (5xx)")
 	ErrConnection  = errors.New("broker: connection error")
 	ErrInvalidArg  = errors.New("broker: invalid argument")
+	ErrBrowserOnly = errors.New("broker: operation requires the WebAuthn browser workbench")
 )
 
 // BrokerError is a typed error that includes the HTTP status and response body.
@@ -25,8 +26,8 @@ type BrokerError struct {
 	Status int
 	Code   string
 	Body   string
-	Op     string  // logical operation, e.g. "get_secret"
-	Err    error   // wrapped error (typed)
+	Op     string // logical operation, e.g. "get_secret"
+	Err    error  // wrapped error (typed)
 }
 
 func (e *BrokerError) Error() string {

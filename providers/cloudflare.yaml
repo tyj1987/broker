@@ -1,0 +1,28 @@
+manifest_version: 1
+id: cloudflare
+display_name: Cloudflare
+checked_at: 2026-09-09
+status: contract_required
+official_docs:
+  - https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
+  - https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/
+  - https://developers.cloudflare.com/api/resources/zones/methods/list/
+origins: [https://api.cloudflare.com]
+authentication:
+  priority: [scoped_api_token]
+  inject: { Authorization: "Bearer {{api_token}}" }
+  rotation: Create a replacement scoped token, verify it, then revoke the old token.
+  revocation: Revoke the API token from the Cloudflare dashboard or token API.
+operations:
+  - id: zones.list
+    method: GET
+    path_template: /client/v4/zones
+    permission: Zone:Read
+    mutating: false
+    approval: none
+    parameters: { name: { type: string }, page: { type: integer }, per_page: { type: integer } }
+    account_binding: resource_ref is the exact 32-character Cloudflare account ID and is sent as account.id.
+    pagination: { default_page: 1, default_per_page: 20, minimum_per_page: 5, maximum_per_page: 50 }
+    maximum_response_bytes: 2097152
+redaction: [Authorization, api_token, cfut_token, global_api_key]
+contract_test: { account: isolated_cloudflare_account, required: true, last_result: not_run }

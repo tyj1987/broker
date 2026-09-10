@@ -11,12 +11,20 @@
 // canProxy / isServiceAllowed / clientNamesAllowedFor 都用统一 matchProxyRule,
 // 累加语义: 任一 rule 命中即可 (之前是首个不匹配就 return false, 已修)
 
+export function isSafeRegexPattern(pattern) {
+  if (typeof pattern !== 'string' || pattern.length > 256) return false;
+  if (/\([^)]*[*+][^)]*\)[*+{]/.test(pattern)) return false;
+  if (/\(([^|()]+)\|\1[^)]*\)[*+{]/.test(pattern)) return false;
+  return true;
+}
+
 export function checkPathAllowed(pattern, path) {
   if (pattern == null) return true;
   if (Array.isArray(pattern)) {
     if (pattern.length === 0) return true; // empty allowlist = no restriction
     return pattern.some(p => checkPathAllowed(p, path));
   }
+  if (!isSafeRegexPattern(pattern)) return false;
   try {
     return new RegExp(pattern).test(path);
   } catch {
@@ -48,6 +56,7 @@ export function matchProxyRule(rule, serviceName, path) {
 
 export function canProxy(ctx, serviceName, path) {
   if (!ctx || !ctx.client) return false;
+  if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
   for (const rule of allow) {
@@ -59,6 +68,7 @@ export function canProxy(ctx, serviceName, path) {
 // Does the client have ANY access to a service at all (for the dashboard badge)?
 export function isServiceAllowed(ctx, serviceName) {
   if (!ctx || !ctx.client) return false;
+  if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
   return allow.some(rule => matchProxyRule(rule, serviceName, '*'));

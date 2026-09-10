@@ -35,6 +35,7 @@ export async function handleSshProxy(req, res, route, deps) {
 
 async function handleExec(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret }) {
   if (!ctx?.client) return jsonError(res, 401, 'Authentication required');
+  if (ctx.client.security_profile === 'strict') return jsonError(res, 403, 'Strict profile forbids free-form SSH');
   if (rateLimit && !rateLimit(ctx, 'ssh.exec')) return jsonError(res, 429, 'Too many ssh exec requests');
   const body = await readBody(req) || {};
   const { target, command, secret_name, secretName, timeout_ms, timeoutMs } = body;
@@ -74,6 +75,7 @@ async function handleExec(req, res, { send, jsonError, readBody, audit, ctx, con
 
 async function handleTunnel(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit, getSecret }) {
   if (!ctx?.client) return jsonError(res, 401, 'Authentication required');
+  if (ctx.client.security_profile === 'strict') return jsonError(res, 403, 'Strict profile forbids free-form SSH');
   if (rateLimit && !rateLimit(ctx, 'ssh.tunnel')) return jsonError(res, 429, 'Too many ssh tunnel requests');
   const body = await readBody(req) || {};
   const { target, local_port, localPort, remote_host, remoteHost, remote_port, remotePort, secret_name, secretName } = body;

@@ -14,7 +14,19 @@
 // v3.2: default cert validity is 90 days (was 365) to enforce rotation culture.
 
 import { spawn } from 'node:child_process';
-import { existsSync, unlinkSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 // Path resolution. We accept two layouts:
@@ -33,12 +45,14 @@ function pickClientsDir() {
   return null;
 }
 
-const CA_CRT   = findFirst(process.env.CA_CERT_PATH, process.env.TLS_CA);
+const CA_CRT   = findFirst(
+  process.env.CA_CERT_PATH,
+  process.env.TLS_CA,
+  process.env.PKI_DIR && join(process.env.PKI_DIR, 'ca', 'ca.crt'),
+  process.env.PKI_DIR && join(process.env.PKI_DIR, 'ca.crt'),
+);
 const CA_KEY   = findFirst(process.env.CA_KEY_PATH, CA_CRT && CA_CRT.replace(/ca\.crt$/, 'ca.key'));
 const CLIENTS_DIR = pickClientsDir();
-if (!CA_CRT) throw new Error('CA cert not found: set CA_CERT_PATH or TLS_CA env');
-if (!CA_KEY) throw new Error('CA key not found: set CA_KEY_PATH or place ca.key next to ca.crt');
-if (!CLIENTS_DIR) throw new Error('CLIENTS_DIR not set and PKI_DIR not provided');
 
 // Resolve openssl binary. On Windows, `spawn` won't auto-append .exe, so we
 // honor OPENSSL_BIN env first, then probe the executable extension.
@@ -74,6 +88,7 @@ function run(cmd, args, opts = {}) {
 }
 
 function clientPaths(cn) {
+  if (!CLIENTS_DIR) throw new Error('client certificate storage is unavailable');
   return {
     key:  join(CLIENTS_DIR, `${cn}.key`),
     csr:  join(CLIENTS_DIR, `${cn}.csr`),
@@ -96,12 +111,42 @@ function writableSerialPath() {
 function ensureWritableSerial() {
   const dest = writableSerialPath();
   if (!existsSync(CLIENTS_DIR)) mkdirSync(CLIENTS_DIR, { recursive: true });
-  if (existsSync(dest)) return dest;
   const besideCa = CA_CRT ? CA_CRT.replace(/ca\.crt$/i, 'ca.srl') : null;
-  if (besideCa && existsSync(besideCa)) {
-    writeFileSync(dest, readFileSync(besideCa));
-  } else {
-    writeFileSync(dest, '01\n');
+  let destination;
+  let source;
+  let initialized = false;
+  try {
+    destination = openSync(dest, 'wx', 0o644);
+  } catch (error) {
+    if (error?.code === 'EEXIST') return dest;
+    throw error;
+  }
+  try {
+    let initial = Buffer.from('01\n', 'utf8');
+    if (besideCa) {
+      try {
+        const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+        source = openSync(besideCa, flags);
+        const metadata = fstatSync(source);
+        if (!metadata.isFile() || metadata.size < 1 || metadata.size > 4096) throw new Error('invalid CA serial');
+        initial = readFileSync(source);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      } finally {
+        if (source !== undefined) {
+          closeSync(source);
+          source = undefined;
+        }
+      }
+    }
+    writeFileSync(destination, initial);
+    fsyncSync(destination);
+    initialized = true;
+  } finally {
+    closeSync(destination);
+    if (!initialized) {
+      try { unlinkSync(dest); } catch { /* best effort */ }
+    }
   }
   try { chmodSync(dest, 0o644); } catch {}
   return dest;
@@ -112,8 +157,9 @@ function ensureWritableSerial() {
 // to bundle into the install zip; cert_pem is also bundled; fingerprint
 // goes into broker.yaml for the server to recognize the new cert.
 export async function issueClientCert(cn, { days = DEFAULT_CERT_DAYS } = {}) {
-  if (!existsSync(CA_KEY)) throw new Error(`CA key not found: ${CA_KEY}`);
-  if (!existsSync(CA_CRT)) throw new Error(`CA cert not found: ${CA_CRT}`);
+  if (!CA_KEY || !existsSync(CA_KEY)) throw new Error('offline CA key is unavailable');
+  if (!CA_CRT || !existsSync(CA_CRT)) throw new Error('CA certificate is unavailable');
+  if (!CLIENTS_DIR) throw new Error('client certificate storage is unavailable');
   if (!existsSync(CLIENTS_DIR)) mkdirSync(CLIENTS_DIR, { recursive: true });
 
   const p = clientPaths(cn);
@@ -182,7 +228,7 @@ export function deleteClientCertFiles(cn) {
 
 // Read CA cert PEM (for bundle).
 export function readCaCertPem() {
-  if (!existsSync(CA_CRT)) throw new Error(`CA cert not found: ${CA_CRT}`);
+  if (!CA_CRT || !existsSync(CA_CRT)) throw new Error('CA certificate is unavailable');
   return readFileSync(CA_CRT, 'utf8');
 }
 

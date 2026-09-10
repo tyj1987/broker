@@ -1,131 +1,101 @@
-# Secret Broker · 架构
+# Secret Broker 架构
 
-> 一页式 V4.1.1 架构总览。深入细节见 `docs/THREAT-MODEL.md` 及相关 spec 文档。
-> 运行时运维见 `RUNBOOK.md`。
->
-> English version: [ARCHITECTURE.md](ARCHITECTURE.md)
+> V4.2 当前架构总览。设计目标与已取得的证据是两回事；生产验收状态见
+> `docs/PRODUCTION-ACCEPTANCE.md`，运维步骤见 `RUNBOOK.md`。
 
-## 鸟瞰图
+English: [ARCHITECTURE.md](ARCHITECTURE.md)
 
-```
-                ┌──────────────────────────────────────────────────────────┐
-                │                       AI 客户端                           │
-                │  (Claude / Cursor / VS Code / CLI / mcp-server)         │
-                │                                                           │
-                │   • 使用 proxy 模式   → 永远看不到密钥值                │
-                │   • 使用 mTLS         → 证明身份                          │
-                │   • 接收 WebAuthn     → 无密码存储                       │
-                └─────────────────┬────────────────────────────────────────┘
-                                  │ mTLS (TLS 1.2+)
-                                  ▼
-   ┌──────────────────────────────────────────────────────────────────────┐
-   │                          Secret Broker (Node 20)                    │
-   │                                                                      │
-   │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
-   │   │ REST API │  │ WebSocket│  │  MCP stdio│  │   SSH    │            │
-   │   │ /api/v1/ │  │   /ws    │  │  /mcp    │  │  /api/v1/│            │
-   │   │          │  │ events   │  │   tools  │  │   ssh/*  │            │
-   │   └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘            │
-   │        │             │              │              │                │
-   │   ┌────┴─────────────┴──────────────┴──────────────┴─────────────┐  │
-   │   │ 8 个调用面: get/list/resolve / proxy / exec / ssh  │  │
-   │   │ / workload-identity / login / health / audit / ws subscribe│  │
-   │   └─────────────────────────┬──────────────────────────────────┘  │
-   │                              │                                  │
-   │            ┌─────────────────┴───────────────┐                  │
-   │            │            Policy Engine         │                  │
-   │            │  (per-client 白名单, scope 检查)  │                  │
-   │            └─────────┬────────────────────────┘                  │
-   │                      │                                          │
-   │   ┌──────────────────┴──────────────────────────────┐           │
-   │   │              Audit + Redact Layer               │           │
-   │   │  • JSONL 追加,带 SHA-256 哈希链                │           │
-   │   │  • 12+ 已知密钥模式自动脱敏                 │           │
-   │   └──────────────────┬──────────────────────────────┘           │
-   │                      │                                          │
-   │   ┌──────────────────┴──────────────────────────────┐           │
-   │   │              签名 + 注入层                       │           │
-   │   │  (Aliyun v2 / AWS sigv4 / Azure AD / GCP /     │           │
-   │   │   Cloudflare / Docker registry / 微信支付)     │           │
-   │   └──────────────────┬──────────────────────────────┘           │
-   │                      │                                          │
-   │   ┌──────────────────┴──────────────────────────────┐           │
-   │   │  SOPS 解密 secrets/broker.yaml (at-rest)       │           │
-   │   └──────────────────┬──────────────────────────────┘           │
-   │                      │                                          │
-   │   ┌──────────────────┴──────────────────────────────┐           │
-   │   │   Nginx (edge, 443, public TLS terminator)     │           │
-   │   │   mTLS 验证, X-SSL-Client-* 头转发给 broker   │           │
-   │   └────────────────────────────────────────────────┘           │
-   │                                                                     │
-   └─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-                       ┌─────────────────────┐
-                       │  Upstream APIs      │
-                       │  GitHub/Cloud/SSH/  │
-                       │  K8s/ECS/GKE       │
-                       └─────────────────────┘
+## 信任边界
+
+```text
+客户端 / SDK / 工作负载
+        │  mTLS、短期会话或受限工作负载身份
+        ▼
+nginx 可信边缘代理
+        │  清除外来身份头，以独立代理身份连接回环端口
+        ▼
+Node 过渡层 ── 结构、身份与策略预检 ── Unix socket ── Go 策略核心
+        │
+        ├─ /api/v2 类型化操作、审批、设备与验证码任务
+        ├─ 兼容档 /api/v1；严格档拒绝明文解析、任意代理和自由 SSH
+        ├─ 追加式审计与统一脱敏
+        └─ 固定目标、方法、路径、Header 和响应大小的服务商适配器
 ```
 
-## 8 个调用面
+生产环境中 Go 决策核心不可用时必须拒绝操作。Node 最终只保留界面、协议兼容
+和迁移职责，不能提供绕过 Go 策略的入口。
 
-| 调用面 | 端点 | 谁能用 |
-|---|---|---|
-| `get/list/resolve` | `GET/POST /api/v1/secrets[/*]` | admin 或有 `allowed_resolve` 的人 |
-| `proxy` | `POST /api/v1/proxy/:service` | admin 或有 `allowed_proxy` 的人 |
-| `exec` (SSH) | `POST /api/v1/ssh/exec` | admin 或有 `allowed_proxy` 的人 |
-| `workload-identity` | `POST /api/v1/wli/token` | 容器/Pod 用 OIDC |
-| `login` | `POST /api/v1/login` + `/mfa` | 人类管理员 |
-| `health` | `GET /health`, `/api/v1/healthcheck/status` | 任何人(只读元数据) |
-| `audit` | `GET /api/v1/admin/audit[/*]` | admin only |
-| `ws subscribe` | `WS /api/v1/ws` | admin only |
+## `/api/v2` 操作模型
 
-## 6 个认证因素
+客户端只提交 `provider`、`operation_id`、`account_ref`、`environment` 和
+Schema 允许的 `typed_parameters`。权限同时约束主体、角色、安全档、身份方式、
+服务商、账户、环境、资源、API Key 子权限、审批与有效期。
 
-| 因素 | 谁能用 | 强度 |
-|---|---|---|
-| **mTLS 客户端证书** | 每台设备 | 强 (加密身份) |
-| **TOTP** (RFC 6238) | 人类管理员 | 中 (Phishing-resistant) |
-| **WebAuthn / Passkey** (FIDO2) | 人类管理员 | 强 (硬件密钥) |
-| **API Key** (Bearer) | AI 客户端 / CI | 中 (短期, 限速) |
-| **Workload Identity** (OIDC) | K8s/ECS/GKE Pods | 强 (自动轮转) |
-| **Password** (scrypt) | 人类管理员 | 弱 (推荐 MFA) |
+审批请求与完整操作参数摘要绑定，申请人与审批人分离。审批必须由带 WebAuthn
+复验的短时会话完成，并且只能消费一次。创建审批请求本身也必须先经过同一套
+Node 与 Go 策略检查。
 
-## 4 个 SDK
+验证码属于既有操作，不属于 Broker 登录因素。任务绑定操作、账户、设备、SIM、
+服务商、挑战、接收方和过期时间；没有匹配任务的短信不会上传。AI 没有“读取最
+新验证码”接口。
 
-- **Node** (`sdk/node/`) — `npm install @tyj1987/broker-sdk`
-- **Python** (`sdk/python/`) — `pip install secret-broker` (零硬依赖)
-- **Go** (`sdk/go/`) — `go get github.com/tyj1987/broker-sdk-go` (零硬依赖)
-- **VS Code / Cursor** (`sdk/vscode/`) — 从 releases 装 `.vsix`
+## 身份与认证
 
-## 4 个部署面
+- 严格档：实体 FIDO2/WebAuthn、mTLS 或绑定受众和工作负载的短期身份。
+- 受控档：允许受控 Passkey。
+- 兼容档：密码、TOTP、Bearer 与 v1 功能只在隔离入口按显式策略开放。
+- SMS 不能替代实体密钥，也不能自动批准付款、恢复或安全设置修改。
 
-| 面 | 适用 | 路径 |
-|---|---|---|
-| **Docker / Compose** | 本地开发、小团队 | `Dockerfile`, `docker-compose.yml` |
-| **Aliyun / Tencent Terraform** | 自托管云 | `infra/aliyun/`, `infra/tencent/` |
-| **Helm** | K8s | `deploy/helm/broker/` |
-| **Grafana + Prometheus** | 监控 | `deploy/grafana/` |
+浏览器会话为 10 分钟绝对过期，可即时撤销，不在响应体返回 Session。Cookie 使用
+`Secure`、`HttpOnly` 和 `SameSite=Strict`。
 
-## 设计原则
+## 凭据与出站边界
 
-1. **零信任 mTLS 优先**: 每条连接都被验证。Bearer API key 是一种**次要**便利,不是默认。
-2. **静态加密 + 内存使用**: 凭据用 SOPS 加密在磁盘上,broker 进程启动时解密到内存。**凭据永远不写日志或错误响应**。
-3. **拒绝客户端隐藏**: AI Agent 不能从日志、错误消息、监控指标里"探测"出密钥。broker **主动** 用 `redact.js` 过滤所有输出。
-4. **三道防御层**:
-   - `policy` 决定谁可以调什么
-   - `redact` 决定什么会被泄漏
-   - `audit` 决定谁干了什么
-5. **可移植**: 单一 Node 进程,无外部服务依赖(除 SOPS+age 加密存储),Docker 镜像 ~150MB,启动 <2 秒。
+优先使用 OIDC、RAM Role、STS 等短期身份。确需静态凭据时，由 Broker 在受限适配
+器内部使用，调用方不能覆盖 `Authorization`、Cookie、Host、签名或转发身份头。
+任意 URL、绝对 URL、重定向逃逸、IP literal、私网、回环和 metadata 地址均被拒绝。
 
-## 阅读顺序
+仓库不包含生产配置、私钥、日志、备份、设备数据或 Terraform state。当前本地存储
+仍是过渡实现；KMS 信封加密、不可篡改远端审计和适配器进程隔离未取得生产证据。
 
-如果是第一次接触这个项目,按这个顺序读:
+## 客户端
 
-1. **[README.md](README.md)** —— 它是什么
-2. **[QUICKSTART.md](docs/QUICKSTART.md)** —— 5 分钟教程
-3. **[ARCHITECTURE.md](ARCHITECTURE.md)** (本文件) —— 高层总览
-4. **[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)** —— 威胁模型
-5. **[RUNBOOK.md](RUNBOOK.md)** —— 运行时运维
-6. **源码** —— 从 `broker/server.js` + `broker/lib/redact.js` 开始
+- Windows/Linux：Tauri 2，负责配对、类型化操作与后续审批/审计界面。
+- Android：Kotlin/Compose、Keystore、双卡与 SMS 能力探测；真机权限结论待验收。
+- iOS：SwiftUI 与 Secure Enclave P-256 初始实现；编译、签名和真机验收未完成。
+- 浏览器：Chrome/Edge MV3 与 Native Messaging，仅用于本人参与的一次性填码。
+- CLI/SDK：Go CLI 及 Go、Python、VS Code 客户端，不默认导出凭据。
+
+## 部署面
+
+- `Dockerfile`、Compose：Node 与 Go 核心分离、非 root、只读根文件系统。
+- `deploy/helm/broker/`：Go 核心通过本地 socket sidecar 提供决策。
+- `infra/aliyun/broker/`：阿里云主站基础设施基线。
+- `infra/tencent/`：腾讯云灾备基础设施基线。
+- `deploy/systemd/` 与 `deploy/nginx/`：版本化发布和可信代理配置。
+
+Terraform 文件目前只通过本地格式和离线验证，不等于已经 plan/apply。生产发布仍
+受 `docs/PRODUCTION-ACCEPTANCE.md` 中的 P0/P1、凭据轮换、契约测试、真机测试和灾
+备演练门禁约束。
+
+## 仓库布局
+
+```text
+broker/               Node 过渡服务和管理界面
+core/                 Go 策略核心与 CLI
+clients/              desktop、android、ios、browser
+sdk/                  Go、Python、VS Code 等客户端
+contracts/            OpenAPI 与生成物
+providers/            版本化服务商 Manifest
+deploy/               容器、Helm、nginx、systemd 与回滚工具
+infra/                阿里云主站与腾讯云灾备 Terraform
+docs/                 架构、安全、使用和验收文档
+```
+
+## 不可破坏的约束
+
+1. AI 不获得长期明文凭据。
+2. 所有入口使用同一权限计算，身份来源不能改变权限结果。
+3. 严格档禁止明文 resolve、任意 URL 代理和自由命令执行。
+4. 敏感状态变更必须先写入强制审计意图；审计不可用时拒绝变更。
+5. “代码存在”“自动测试通过”“真机通过”“生产验证通过”分别记录，不能互相替代。

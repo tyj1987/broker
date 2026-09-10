@@ -1,60 +1,94 @@
-# Deploy broker to the Aliyun ECS systemd host.
-# The runner copies a tarball over SSH so the ECS does not need to fetch GitHub.
-#
-# Repository secrets (Settings → Secrets and variables → Actions):
-#   ECS_HOST              hostname, e.g. example.com
-#   ECS_SSH_KEY           OpenSSH private key (ed25519, no passphrase)
-#   ECS_SSH_USER          optional, default root
-#   ECS_SSH_KNOWN_HOSTS   optional ssh-keyscan line; if empty, keyscan at runtime
-
 name: Deploy ECS
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [master]
-    paths:
-      - 'broker/**'
-      - 'scripts/broker/nginx-broker.example.com.conf'
-      - '.github/workflows/deploy-ecs.yml'
-  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
 
 concurrency:
-  group: deploy-ecs
+  group: production-aliyun
   cancel-in-progress: false
 
 jobs:
-  test:
-    name: Test before deploy
-    runs-on: ubuntu-latest
+  build:
+    name: Build immutable release
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'master'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          node-version: '22'
-      - name: npm install + modular tests
-        working-directory: broker
+          ref: master
+          persist-credentials: false
+      - name: Verify master still matches the successful CI revision
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: broker/package-lock.json
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: core/go.mod
+      - working-directory: broker
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - working-directory: broker
+        run: npm run test:verify
+      - working-directory: broker
+        run: npm prune --omit=dev --ignore-scripts
+      - working-directory: broker
+        run: rm -rf node_modules/.bin
+      - name: Build Go policy core
+        run: go build -trimpath -buildvcs=true -ldflags='-s -w' -o broker/bin/secret-broker-policy ./core/cmd/policy-server
+      - name: Create immutable payload and checksum
         run: |
-          npm install --omit=dev --no-audit --no-fund
-          npm run test:modular
-          node ../broker-test/test-v4-modules.js
+          cp -R tools broker/tools
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            --exclude='docs/openapi.yaml' -czf broker-${RELEASE_SHA}.tgz -C broker .
+          sha256sum broker-${RELEASE_SHA}.tgz > broker-${RELEASE_SHA}.tgz.sha256
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: broker-${{ env.RELEASE_SHA }}.tgz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: broker-release-${{ env.RELEASE_SHA }}
+          path: |
+            broker-${{ env.RELEASE_SHA }}.tgz
+            broker-${{ env.RELEASE_SHA }}.tgz.sha256
+          if-no-files-found: error
+          retention-days: 30
 
   deploy:
-    name: SSH deploy to ECS
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    name: Approved atomic deploy
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: production-aliyun
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Pack broker tree
-        run: |
-          tar czf /tmp/broker-payload.tgz \
-            --exclude=node_modules \
-            --exclude=coverage \
-            --exclude='*.bak*' \
-            -C broker .
-
-      - name: Copy tarball and restart service
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: broker-release-${{ env.RELEASE_SHA }}
+      - name: Verify release checksum
+        run: sha256sum --check broker-${RELEASE_SHA}.tgz.sha256
+      - name: Verify GitHub build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify broker-${RELEASE_SHA}.tgz --repo "$GITHUB_REPOSITORY"
+      - name: Deploy with pinned host identity and rollback
         env:
           ECS_HOST: ${{ secrets.ECS_HOST }}
           ECS_SSH_USER: ${{ secrets.ECS_SSH_USER }}
@@ -62,38 +96,21 @@ jobs:
           ECS_SSH_KNOWN_HOSTS: ${{ secrets.ECS_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          : "${ECS_HOST:?Set repository secret ECS_HOST}"
-          : "${ECS_SSH_KEY:?Set repository secret ECS_SSH_KEY}"
-          USER="${ECS_SSH_USER:-root}"
-          install -m 700 -d "$HOME/.ssh"
-          printf '%s\n' "$ECS_SSH_KEY" > "$HOME/.ssh/deploy"
-          chmod 600 "$HOME/.ssh/deploy"
-          if [ -n "${ECS_SSH_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$ECS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          else
-            ssh-keyscan -H -t ed25519,rsa "$ECS_HOST" > "$HOME/.ssh/known_hosts"
-          fi
-          chmod 644 "$HOME/.ssh/known_hosts"
-          SSH=(ssh -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
-          SCP=(scp -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
-          "${SCP[@]}" /tmp/broker-payload.tgz "$USER@$ECS_HOST:/tmp/broker-payload.tgz"
-          "${SSH[@]}" "$USER@$ECS_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          DST=/opt/secret-broker/broker
-          test -d "$DST"
-          rm -rf /tmp/broker-new
-          mkdir -p /tmp/broker-new
-          tar xzf /tmp/broker-payload.tgz -C /tmp/broker-new
-          test -f /tmp/broker-new/server.js
-          node --check /tmp/broker-new/server.js
-          cp -a /tmp/broker-new/. "$DST/"
-          if [ -f "$DST/package.json" ]; then
-            (cd "$DST" && npm install --omit=dev --no-audit --no-fund)
-          fi
-          systemctl restart secret-broker
-          sleep 3
-          systemctl is-active secret-broker
-          curl -sk https://127.0.0.1:8443/health
-          echo
-          rm -rf /tmp/broker-new /tmp/broker-payload.tgz
-          REMOTE
+          : "${ECS_HOST:?ECS_HOST is required}"
+          : "${ECS_SSH_USER:?ECS_SSH_USER is required and must be a dedicated deployment account}"
+          : "${ECS_SSH_KEY:?ECS_SSH_KEY is required}"
+          : "${ECS_SSH_KNOWN_HOSTS:?ECS_SSH_KNOWN_HOSTS is required; runtime keyscan is forbidden}"
+          test "$ECS_SSH_USER" != root || { echo 'root SSH deployment is forbidden' >&2; exit 1; }
+          SSH_DIR=$(mktemp -d)
+          trap 'rm -rf "$SSH_DIR"' EXIT
+          printf '%s\n' "$ECS_SSH_KEY" > "$SSH_DIR/key"
+          printf '%s\n' "$ECS_SSH_KNOWN_HOSTS" > "$SSH_DIR/known_hosts"
+          chmod 600 "$SSH_DIR/key"
+          chmod 600 "$SSH_DIR/known_hosts"
+          SSH_ARGS=(-i "$SSH_DIR/key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_DIR/known_hosts")
+          scp "${SSH_ARGS[@]}" "broker-${RELEASE_SHA}.tgz" "broker-${RELEASE_SHA}.tgz.sha256" "$ECS_SSH_USER@$ECS_HOST:/tmp/"
+          ssh "${SSH_ARGS[@]}" "$ECS_SSH_USER@$ECS_HOST" \
+            "sudo -n /usr/local/sbin/secret-broker-deploy '$RELEASE_SHA'"
+
+      - name: Verify public nginx health path
+        run: curl --fail --silent --show-error --proto '=https' --tlsv1.3 https://broker.52trz.com/health

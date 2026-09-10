@@ -140,6 +140,17 @@ section('7. HTML file → no-cache + html CSP');
   ok('CSP has script-src (html)', /script-src/.test(res.headers['Content-Security-Policy']));
 }
 
+section('7b. Approval deep link is an HTML entrypoint');
+
+{
+  const res = fakeRes();
+  handleStatic(fakeReq(), res, { method: 'GET', pathname: '/approvals' }, deps);
+  ok('approval deep link served', res.statusCode === 200);
+  ok('approval deep link is HTML', res.headers['Content-Type'] === 'text/html; charset=utf-8');
+  ok('approval deep link is not cached', /no-cache/.test(res.headers['Cache-Control']));
+  ok('approval script is mapped', STATIC_MAP['/approvals.js'] === 'approvals.js');
+}
+
 section('8. 500 for missing dashboard file');
 
 {

@@ -20,13 +20,13 @@ Compatible with Go 1.21+.
 ## Install
 
 ```bash
-go get github.com/tyj1987/broker-sdk-go
+go get github.com/tyj1987/broker/sdk/go
 ```
 
 ## Quick start
 
 ```go
-import "github.com/tyj1987/broker-sdk-go/broker"
+import "github.com/tyj1987/broker/sdk/go/broker"
 
 c, _ := broker.NewClient(broker.Config{
     Endpoint:   "https://broker.example.com:8443",

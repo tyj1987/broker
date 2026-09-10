@@ -1,27 +1,27 @@
 {
   "name": "secret-broker",
-  "version": "4.1.7",
+  "version": "4.2.0",
   "description": "mTLS Secret Broker with SOPS-backed credentials, proxy-mode for AI clients",
   "main": "server.js",
   "type": "module",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=24.20.0 <25"
   },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "wire": "node ../scripts/broker/apply-phase-af-full-wire.mjs",
-    "lint": "cd .. && npx --no-install eslint --config eslint.config.js broker/ broker-test/ cli/ 2>&1 | tail -40",
-    "lint:fix": "cd .. && npx --no-install eslint --config eslint.config.js --fix broker/ broker-test/ cli/ 2>&1 | tail -40",
-    "format": "cd .. && npx --no-install prettier --write --log-level=warn 'broker/**/*.js' 'broker-test/**/*.js' 'cli/**/*.js' 'broker/lib/**/*.js' 'broker/routes/**/*.js' 2>&1 | tail -10",
-    "format:check": "cd .. && npx --no-install prettier --check 'broker/**/*.js' 'broker-test/**/*.js' 'cli/**/*.js' 2>&1 | tail -10",
+    "lint": "cd .. && node broker/node_modules/eslint/bin/eslint.js --config eslint.config.js broker broker-test",
+    "lint:fix": "cd .. && node broker/node_modules/eslint/bin/eslint.js --config eslint.config.js --fix broker broker-test",
+    "format": "cd .. && node broker/node_modules/prettier/bin/prettier.cjs --write --log-level=warn broker broker-test",
+    "format:check": "cd .. && node broker/node_modules/prettier/bin/prettier.cjs --check broker broker-test",
+    "openapi:generate": "node bin/openapi-generate.js",
+    "state:init": "node bin/control-plane-state-init.js",
     "test:lib": "node ../broker-test/test-lib-phase-b.js",
     "test:ip": "node ../broker-test/test-ip-allowlist.js",
-    "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-routes-auth-me.js && node ../broker-test/test-routes-b4.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js && node ../broker-test/test-aliyun-rpc.js && node ../broker-test/test-doh.js && node ../broker-test/test-outbound-relay.js",
-    "test:obs": "node ../broker-test/test-phase-c-obs.js",
+    "test:routes": "node ../broker-test/test-routes-phase-b2.js && node ../broker-test/test-dashboard-admin-visibility.js && node ../broker-test/test-local-health.js && node ../broker-test/test-aliyun-rpc.js && node ../broker-test/test-doh.js && node ../broker-test/test-outbound-relay.js",
+    "test:obs": "node ../broker-test/test-phase-c-obs.js && node ../broker-test/test-alert-history.js",
     "test:trace": "node ../broker-test/test-phase-d-trace-audit.js",
     "test:ops": "node ../broker-test/test-phase-e-ops.js",
-    "test:backup": "node ../broker-test/test-phase-f-backup-probes.js",
     "test:redact": "node ../broker-test/test-redact.js",
     "test:mfa": "node ../broker-test/test-mfa-policy.js",
     "test:sms": "node ../broker-test/test-sms-provider.js",
@@ -43,18 +43,33 @@
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",
     "test:ws": "node ../broker-test/test-ws.js",
     "test:p2": "npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws",
-    "test:python-sdk": "cd ../sdk/python && python -m pip install --quiet pytest pytest-asyncio cryptography && python -m pytest tests/ -q && cd ../../broker",
+    "test:v2": "node ../broker-test/test-v2-operations.js && node ../broker-test/test-v2-boundaries.js && node ../broker-test/test-v2-routes.js && node ../broker-test/test-approvals-v2.js && node ../broker-test/test-execution-tokens.js && node ../broker-test/test-automation-tasks.js && node ../broker-test/test-control-plane-state-store.js && node ../broker-test/test-control-plane-state-runtime.js && node ../broker-test/test-deployment-control-plane-state.js && node ../broker-test/test-production-preflight.js && node ../broker-test/test-browser-request.js && node ../broker-test/test-operation-policy.js && node ../broker-test/test-policy-conditions.js && node ../broker-test/test-go-policy-client.js && node ../broker-test/test-tool-registry.js && node ../broker-test/test-webauthn-service.js && node ../broker-test/test-secret-cache.js && node ../broker-test/test-runtime-reload.js && node ../broker-test/test-reload-auth.js",
+    "test:production-preflight": "node ../broker-test/test-production-preflight.js",
+    "test:outbound-policy": "node ../broker-test/test-outbound-policy.js",
+    "test:pinned-https": "node ../broker-test/test-pinned-https-request.js",
+    "test:github-adapter": "node ../broker-test/test-local-signer-client.js && node ../broker-test/test-github-token-provider.js && node ../broker-test/test-github-adapter.js && node ../broker-test/test-github-executor.js && node ../broker-test/test-github-branches.js && node ../broker-test/test-github-commits.js && node ../broker-test/test-github-issues.js && node ../broker-test/test-github-workflow-runs.js && node ../broker-test/test-github-runtime.js",
+    "test:cloudflare-adapter": "node ../broker-test/test-cloudflare-adapter.js",
+    "test:ssh-capability": "node ../broker-test/test-ssh-host-inspect.js && node ../broker-test/test-ssh-task-loop.js",
+    "test:docker-adapter": "node ../broker-test/test-docker-adapter.js",
+    "test:postgresql-adapter": "node ../broker-test/test-postgresql-adapter.js",
+    "test:google-drive-adapter": "node ../broker-test/test-google-drive-adapter.js",
+    "test:mcp-task-bridge": "node ../broker-test/test-mcp-task-bridge.js",
+    "test:providers": "node ../broker-test/test-provider-manifests.js",
+    "test:verify": "npm run test:modular && npm run test:v4-modules && npm run test:workload && npm run test:ssh && npm run test:ws && npm run test:v2 && npm run test:outbound-policy && npm run test:pinned-https && npm run test:github-adapter && npm run test:cloudflare-adapter && npm run test:ssh-capability && npm run test:docker-adapter && npm run test:postgresql-adapter && npm run test:google-drive-adapter && npm run test:mcp-task-bridge && npm run test:providers",
+    "test:coverage": "c8 --check-coverage --clean --all --include=adapters/cloudflare-zones-list-executor.js --include=adapters/cloudflare-zones-list.js --include=adapters/docker-repository-tags-list-executor.js --include=adapters/docker-repository-tags-list.js --include=adapters/github-app-token-provider.js --include=adapters/github-branches-list-executor.js --include=adapters/github-branches-list.js --include=adapters/github-commits-list-executor.js --include=adapters/github-commits-list.js --include=adapters/github-issues-list-executor.js --include=adapters/github-issues-list.js --include=adapters/github-repository-read-executor.js --include=adapters/github-repository-read.js --include=adapters/github-runtime.js --include=adapters/github-workflow-runs-list-executor.js --include=adapters/github-workflow-runs-list.js --include=adapters/google-drive-document-read-executor.js --include=adapters/google-drive-document-read.js --include=adapters/postgresql-database-inspect.js --include=adapters/ssh-host-inspect.js --include=lib/approvals-v2.js --include=lib/audit-hash-chain.js --include=lib/automation-tasks.js --include=lib/browser-request.js --include=lib/control-plane-state-runtime.js --include=lib/control-plane-state-store.js --include=lib/execution-tokens.js --include=lib/local-signer-client.js --include=lib/mcp-task-bridge.js --include=lib/operation-policy.js --include=lib/operations-v2.js --include=lib/outbound-policy.js --include=lib/pinned-https-request.js --include=lib/policy-conditions.js --include=lib/redact.js --include=lib/reload-auth.js --include=lib/runtime-reload.js --include=lib/secret-cache.js --include=lib/tool-registry.js --include=lib/trace.js --include=mcp-server.js --reporter=text --reporter=lcov --lines=90 --branches=85 --functions=90 npm run test:verify",
+    "test:python-sdk": "cd ../sdk/python && python -m pytest tests/ -q",
     "test:verify-all": "npm run test:verify && npm run test:python-sdk",
-    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:backup && npm run test:v4"
+    "test:modular": "npm run test:lib && npm run test:ip && npm run test:routes && npm run test:obs && npm run test:trace && npm run test:ops && npm run test:v4"
   },
   "dependencies": {
-    "ws": "^8.21.3",
-    "yaml": "^2.9.0"
+    "@simplewebauthn/server": "14.0.1",
+    "ws": "8.21.3",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
-    "eslint": "^9.10.0",
-    "prettier": "^3.3.3"
+    "c8": "12.0.0",
+    "eslint": "10.10.0",
+    "prettier": "3.9.6"
   },
   "license": "MIT"
 }

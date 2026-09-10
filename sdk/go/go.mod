@@ -1,4 +1,4 @@
-module github.com/tyj1987/broker-sdk-go
+module github.com/tyj1987/broker/sdk/go
 
 go 1.21
 

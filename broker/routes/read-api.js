@@ -35,6 +35,7 @@ export function createReadApiRoutes(deps) {
       client_name: ctx.clientName,
       cert_subject: ctx.certSubject,
       via: ctx.via,
+      auth_factors: Array.isArray(ctx.authFactors) ? [...new Set(ctx.authFactors)] : [],
     });
     return true;
   }
@@ -118,13 +119,13 @@ export function createReadApiRoutes(deps) {
       return true;
     }
     if (!deps.canResolve(ctx, body.name)) {
-      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'denied' });
+      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret_name: body.name, status: 'denied' });
       jsonError(res, 403, 'Not allowed to resolve this secret');
       return true;
     }
     const entry = deps.getSecret(body.name);
     if (!entry) {
-      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'not_found' });
+      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret_name: body.name, status: 'not_found' });
       jsonError(res, 404, `Secret ${body.name} not loaded`);
       return true;
     }
@@ -135,11 +136,11 @@ export function createReadApiRoutes(deps) {
         jsonError(res, 404, `Field ${field} not found on secret ${body.name}`);
         return true;
       }
-      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, field, status: 'ok' });
+      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret_name: body.name, field, status: 'ok' });
       send(res, 200, { name: body.name, field, value: v });
       return true;
     }
-    deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'ok' });
+    deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret_name: body.name, status: 'ok' });
     send(res, 200, { name: body.name, type: entry.type, value: entry.value, fields: entry.fields });
     return true;
   }

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secret Broker</title>
+  </head>
+  <body>
+    <main>
+      <header><p class="eyebrow">SECRET BROKER</p><h1>Operations console</h1></header>
+      <section class="card" aria-labelledby="connection-title">
+        <h2 id="connection-title">Device connection</h2>
+        <p id="status">Not checked</p>
+        <button id="health" type="button">Check broker</button>
+        <button id="approvals" class="secondary" type="button">Open WebAuthn approvals</button>
+        <p>The approval workbench opens in your default browser. Desktop credentials cannot approve requests.</p>
+      </section>
+      <section class="card" aria-labelledby="credential-title">
+        <h2 id="credential-title">Local credential</h2>
+        <p>Saved in the operating system credential store. It is never displayed again.</p>
+        <label>API key <input id="api-key" type="password" autocomplete="off" spellcheck="false" /></label>
+        <button id="save-key" type="button">Save locally</button>
+        <button id="delete-key" class="secondary" type="button">Remove locally</button>
+      </section>
+      <section class="card" aria-labelledby="operation-title">
+        <h2 id="operation-title">Start typed operation</h2>
+        <label>Provider <input id="provider" value="aliyun" /></label>
+        <label>Operation <input id="operation" value="account.summary" /></label>
+        <label>Account <input id="account" value="primary" /></label>
+        <label>Environment <select id="environment"><option>production</option><option>staging</option><option>development</option></select></label>
+        <label>Resource <input id="resource" value="account-summary" /></label>
+        <button id="create" type="button">Request operation</button>
+        <button id="refresh-operation" class="secondary" type="button" disabled>Refresh last operation</button>
+        <pre id="result" aria-live="polite"></pre>
+      </section>
+      <section class="card" aria-labelledby="browser-title">
+        <h2 id="browser-title">Browser helper credential</h2>
+        <p>Use a separate key restricted to the <code>browser:otp:fill</code> scope. The value is stored locally and never displayed again.</p>
+        <label>Bridge key <input id="browser-key" type="password" autocomplete="off" spellcheck="false" /></label>
+        <button id="save-browser-key" type="button">Save bridge key</button>
+        <button id="delete-browser-key" class="secondary" type="button">Remove bridge key</button>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

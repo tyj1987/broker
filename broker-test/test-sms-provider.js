@@ -57,42 +57,61 @@ section('webhook provider');
   ok('missing url throws', threw);
 }
 {
-  // Set up a local mock server
-  const http = await import('node:http');
   let received = null;
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => {
-      received = { method: req.method, url: req.url, body };
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ message_id: 'msg-123', cost: 1 }));
-    });
-  });
-  await new Promise(r => server.listen(0, r));
-  const port = server.address().port;
-
-  const provider = makeWebhookSmsProvider({ url: `http://127.0.0.1:${port}/sms` });
+  const fetchImpl = async (url, request) => {
+    received = { url, ...request };
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async json() { return { message_id: 'msg-123', cost: 1 }; },
+    };
+  };
+  const provider = makeWebhookSmsProvider(
+    { url: 'https://sms.example.com/send' },
+    { fetchImpl },
+  );
   const r = await provider.send('+8613800000000', '654321', { ttl_seconds: 300 });
   ok('webhook returns message_id from upstream', r.message_id === 'msg-123');
   ok('webhook returns cost from upstream', r.cost === 1);
   ok('webhook posted phone+code', received && received.body.includes('+8613800000000') && received.body.includes('654321'));
   ok('webhook method=POST', received.method === 'POST');
+  ok('webhook redirects are disabled', received.redirect === 'manual');
 
   // test failure path
-  server.close();
-  await new Promise(r => server.listen(0, r));
-  const port2 = server.address().port;
-  const failServer = http.createServer((req, res) => {
-    res.writeHead(500); res.end('boom');
-  });
-  await new Promise(r => failServer.listen(0, r));
-  const failPort = failServer.address().port;
-  const provider2 = makeWebhookSmsProvider({ url: `http://127.0.0.1:${failPort}/sms` });
+  let cancelled = false;
+  const provider2 = makeWebhookSmsProvider(
+    { url: 'https://sms.example.com/send' },
+    { fetchImpl: async () => ({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      body: { async cancel() { cancelled = true; } },
+    }) },
+  );
   let err = null;
   try { await provider2.send('+86138', '111'); } catch (e) { err = e; }
   ok('webhook 500 throws', err && /500/.test(err.message));
-  failServer.close();
+  ok('webhook error response body is cancelled', cancelled);
+}
+{
+  let err = null;
+  try { makeWebhookSmsProvider({ url: 'http://sms.example.com/send' }); } catch (e) { err = e; }
+  ok('insecure webhook is denied by default', !!err && /HTTPS/.test(err.message));
+}
+{
+  let err = null;
+  try { makeWebhookSmsProvider({ url: 'https://sms.example.com/send', headers: { Host: 'evil.example' } }); } catch (e) { err = e; }
+  ok('authority header override is denied', !!err && /not allowed/.test(err.message));
+}
+{
+  const provider = makeWebhookSmsProvider(
+    { url: 'https://sms.example.com/send' },
+    { fetchImpl: async () => ({ ok: false, status: 307, statusText: 'Temporary Redirect' }) },
+  );
+  let err = null;
+  try { await provider.send('+86138', '111111'); } catch (e) { err = e; }
+  ok('webhook redirect is denied', !!err);
 }
 
 // === SmsRegistry ===
@@ -105,10 +124,30 @@ section('SmsRegistry');
 {
   const reg = SmsRegistry.fromConfig({
     default: 'webhook',
-    providers: { webhook: { type: 'webhook', url: 'http://example.com/sms' } },
+    providers: { webhook: { type: 'webhook', url: 'http://example.com/sms', allow_insecure: true } },
   });
   ok('fromConfig uses default', reg.defaultName === 'webhook');
   ok('fromConfig has webhook', !!reg.providers.webhook);
+}
+{
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  let missing = null;
+  let insecure = null;
+  let stub = null;
+  try { SmsRegistry.fromConfig(null); } catch (e) { missing = e; }
+  try {
+    SmsRegistry.fromConfig({
+      default: 'webhook',
+      providers: { webhook: { type: 'webhook', url: 'http://sms.example.com/send', allow_insecure: true } },
+    });
+  } catch (e) { insecure = e; }
+  try { SmsRegistry.fromConfig({ default: 'stub', providers: { stub: { type: 'stub' } } }); } catch (e) { stub = e; }
+  if (previous === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previous;
+  ok('production requires SMS configuration', !!missing && /configured/.test(missing.message));
+  ok('production rejects insecure webhook', !!insecure && /HTTPS/.test(insecure.message));
+  ok('production rejects stub provider', !!stub && /unsupported/.test(stub.message));
 }
 {
   // empty providers -> still has stub
@@ -123,10 +162,11 @@ section('SmsRegistry');
   ok('registry.send uses stub', r.provider === 'stub');
 }
 {
-  // unknown provider falls back
+  // unknown providers fail closed
   const reg = SmsRegistry.fromConfig(null);
-  const r = await reg.send('+8613800000000', '123', { provider: 'nonexistent' });
-  ok('unknown provider falls back to stub', r.provider === 'stub');
+  let err = null;
+  try { await reg.send('+8613800000000', '123', { provider: 'nonexistent' }); } catch (e) { err = e; }
+  ok('unknown provider throws', !!err && /not configured/.test(err.message));
 }
 {
   // direct construction

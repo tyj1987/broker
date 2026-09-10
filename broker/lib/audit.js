@@ -5,7 +5,7 @@
 // of jsonl every dashboard refresh).
 
 import { EventEmitter } from 'node:events';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { redactDeep } from './redact.js';
@@ -61,8 +61,7 @@ export function createAudit(auditDir, opts = {}) {
       auditBytes += Buffer.byteLength(line, 'utf8');
       if (auditBytes > 50 * 1024 * 1024) {
         const old = auditFilePath();
-        const rotated = old + '.1';
-        if (existsSync(rotated)) unlinkSync(rotated);
+        const rotated = old.replace(/\.jsonl$/, `-${Date.now()}-${randomUUID()}.jsonl`);
         renameSync(old, rotated);
         auditBytes = 0;
       }

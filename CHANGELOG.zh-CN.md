@@ -1,5 +1,8 @@
 # Changelog
 
+> 历史条目仅保留当时的发布声明，不代表当前的安全、覆盖率、赏金或生产验收证据。
+> 当前状态以 `VERIFY.md` 和 `docs/PRODUCTION-ACCEPTANCE.md` 为准。
+
 All notable changes to Secret Broker are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
@@ -70,7 +73,7 @@ Highlights:
 - Double-cloud deployment: Aliyun + Tencent
 - 23 tasks across 6 months of design + implementation (W1-W24)
 
-See [`RELEASE-NOTES-v4.1.0.md`](RELEASE-NOTES-v4.1.0.md) for the full changelog.
+原独立的 `RELEASE-NOTES-v4.1.0.md` 已在仓库清理时合并到本文件。
 
 ---
 
@@ -528,4 +531,3 @@ All 17 recommendations from `REVIEW.md` implemented:
 - **New lib modules**: 5 (security-headers, mtls, audit-async, audit-hash-chain)
 - **New routes**: 1 (read-api)
 - **New docs**: 1 (EXTENDING.md)
-

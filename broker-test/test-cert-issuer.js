@@ -18,12 +18,16 @@
 // under 20 seconds (each genrsa + x509 takes 2-3 seconds). All other
 // functions are tested against the certs issued for tests 1, 4, 5.
 
-import { strict as assert } from 'node:assert';
-import { test, before, after } from 'node:test';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+
+const OPENSSL_BIN = process.env.OPENSSL_BIN
+  || (process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\usr\\bin\\openssl.exe')
+    ? 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe'
+    : 'openssl');
+process.env.OPENSSL_BIN = OPENSSL_BIN;
 
 // ---------- helpers ----------
 
@@ -31,8 +35,8 @@ function makeCA(caDir) {
   if (!existsSync(caDir)) mkdirSync(caDir, { recursive: true });
   const key = join(caDir, 'ca.key');
   const crt = join(caDir, 'ca.crt');
-  execFileSync('openssl', ['genrsa', '-out', key, '2048']);
-  execFileSync('openssl', [
+  execFileSync(OPENSSL_BIN, ['genrsa', '-out', key, '2048']);
+  execFileSync(OPENSSL_BIN, [
     'req', '-x509', '-new', '-nodes',
     '-key', key, '-sha256', '-days', '30',
     '-subj', '/CN=test-ca',
@@ -48,7 +52,7 @@ function verifyCertAgainstCA(certPem, caPem) {
     const caPath = join(tmp, 'ca.crt');
     writeFileSync(certPath, certPem);
     writeFileSync(caPath, caPem);
-    execFileSync('openssl', ['verify', '-CAfile', caPath, certPath], { stdio: 'pipe' });
+    execFileSync(OPENSSL_BIN, ['verify', '-CAfile', caPath, certPath], { stdio: 'pipe' });
     return true;
   } catch { return false; }
   finally { rmSync(tmp, { recursive: true, force: true }); }
@@ -59,7 +63,7 @@ function getCertSubject(certPem) {
   try {
     const certPath = join(tmp, 'c.crt');
     writeFileSync(certPath, certPem);
-    const out = execFileSync('openssl', ['x509', '-in', certPath, '-noout', '-subject'], { encoding: 'utf8' });
+    const out = execFileSync(OPENSSL_BIN, ['x509', '-in', certPath, '-noout', '-subject'], { encoding: 'utf8' });
     return out.trim();
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 }
@@ -185,7 +189,10 @@ const p12 = certIssuer.paths.clientPaths('client.alice');
 // re-issue since we deleted it in test 8
 await certIssuer.issueClientCert('client.perm');
 const mode = statSync(certIssuer.paths.clientPaths('client.perm').key).mode & 0o777;
-ok(`key file mode is 0600 (got ${mode.toString(8)})`, mode === 0o600);
+ok(process.platform === 'win32'
+  ? 'POSIX key mode check is not applicable on Windows'
+  : `key file mode is 0600 (got ${mode.toString(8)})`,
+process.platform === 'win32' || mode === 0o600);
 
 section('13. custom days option respected');
 
@@ -201,6 +208,30 @@ section('15. Fingerprint format is uppercase hex with colons');
 
 ok('64 hex + 31 colons = 95 chars', r1.fingerprint_sha256.length === 95);
 ok('all uppercase hex', /^[A-F0-9:]+$/.test(r1.fingerprint_sha256));
+
+section('16. offline CA boundary permits startup and denies issuance');
+
+{
+  const certOnlyRoot = join(WORK, 'cert-only-pki');
+  const certOnlyCa = join(certOnlyRoot, 'ca');
+  mkdirSync(certOnlyCa, { recursive: true });
+  writeFileSync(join(certOnlyCa, 'ca.crt'), readFileSync(CA_CERT_PATH));
+  const moduleUrl = new URL('../broker/cert-issuer.js', import.meta.url).href;
+  const script = [
+    'const m = await import(process.argv[1]);',
+    'try { await m.issueClientCert("client.must-fail"); process.exit(3); }',
+    'catch (error) { if (!/offline CA key is unavailable/.test(error.message)) process.exit(4); }',
+  ].join(' ');
+  execFileSync(process.execPath, ['--input-type=module', '-e', script, moduleUrl], {
+    env: {
+      PATH: process.env.PATH,
+      OPENSSL_BIN,
+      PKI_DIR: certOnlyRoot,
+    },
+    stdio: 'pipe',
+  });
+  ok('module imports without a CA private key and issuance fails closed', true);
+}
 
 // ---------- summary ----------
 

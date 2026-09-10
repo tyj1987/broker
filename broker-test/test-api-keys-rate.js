@@ -3,6 +3,7 @@
 import {
   generateApiKey,
   generateMasterKey,
+  createChildKey,
   normalizeRateLimit,
   RATE_LIMIT_PRESETS,
 } from '../broker/api-keys.js';
@@ -48,12 +49,20 @@ section('generateApiKey with new fields');
   const { key_obj } = generateApiKey('test', 'client', {
     rate_limit: { minute: 10, hour: 100, day: 1000 },
     ip_whitelist: ['10.0.0.0/8', '192.168.0.0/16'],
+    allowed_operations: ['aliyun:browser.otp.fill'],
+    allowed_accounts: ['primary'],
+    allowed_resources: ['account.aliyun.com'],
+    allowed_environments: ['production'],
   });
   ok('rate_limit object stored', typeof key_obj.rate_limit === 'object');
   ok('rate_limit.minute = 10', key_obj.rate_limit.minute === 10);
   ok('rate_limit.hour = 100', key_obj.rate_limit.hour === 100);
   ok('rate_limit.day = 1000', key_obj.rate_limit.day === 1000);
   ok('ip_whitelist stored', Array.isArray(key_obj.ip_whitelist) && key_obj.ip_whitelist.length === 2);
+  ok('allowed_operations stored', key_obj.allowed_operations[0] === 'aliyun:browser.otp.fill');
+  ok('allowed_accounts stored', key_obj.allowed_accounts[0] === 'primary');
+  ok('allowed_resources stored', key_obj.allowed_resources[0] === 'account.aliyun.com');
+  ok('allowed_environments stored', key_obj.allowed_environments[0] === 'production');
   // v3 string backward compat
 }
 {
@@ -80,9 +89,40 @@ section('IP whitelist');
 // === master key still works ===
 section('master key');
 {
-  const { key_obj } = generateMasterKey('m', 'client', {});
+  const { key_obj } = generateMasterKey('m', 'client', {
+    child_scopes: ['operations:execute'],
+    allowed_services: ['aliyun'],
+    allowed_operations: ['aliyun:browser.otp.fill'],
+    allowed_accounts: ['primary'],
+    allowed_resources: ['account.aliyun.com'],
+    allowed_environments: ['production'],
+  });
   ok('master is_master=true', key_obj.is_master === true);
   ok('master can_create_child=true', key_obj.can_create_child === true);
+  const keys = [key_obj];
+  const child = createChildKey(keys, key_obj, 'child', {
+    scopes: ['operations:execute'], allowed_services: ['aliyun', 'github'],
+    allowed_operations: ['aliyun:browser.otp.fill', 'github:repo.read'],
+    allowed_accounts: ['primary', 'secondary'], allowed_resources: ['account.aliyun.com', 'other'],
+    allowed_environments: ['production', 'staging'], ttl_seconds: 60 * 60 * 24 * 365,
+    rate_limit: 'unlimited', ip_whitelist: ['203.0.113.0/24'],
+  });
+  ok('child created', child.ok === true);
+  ok('child service cannot exceed parent', JSON.stringify(child.key_obj.allowed_services) === '["aliyun"]');
+  ok('child operation cannot exceed parent', JSON.stringify(child.key_obj.allowed_operations) === '["aliyun:browser.otp.fill"]');
+  ok('child account cannot exceed parent', JSON.stringify(child.key_obj.allowed_accounts) === '["primary"]');
+  ok('child resource cannot exceed parent', JSON.stringify(child.key_obj.allowed_resources) === '["account.aliyun.com"]');
+  ok('child environment cannot exceed parent', JSON.stringify(child.key_obj.allowed_environments) === '["production"]');
+  ok('child cannot outlive parent', new Date(child.key_obj.expires_at) <= new Date(key_obj.expires_at));
+  ok('child rate cannot exceed parent', child.key_obj.rate_limit.hour === 100);
+}
+
+{
+  const { key_obj: master } = generateMasterKey('bounded', 'client', {
+    ttl_ms: 1_500, child_scopes: ['audit:read'],
+  });
+  const child = createChildKey([], master, 'bounded-child', { scopes: ['audit:read'], ttl_seconds: 60 });
+  ok('short parent uses exact absolute expiration', child.key_obj.expires_at === master.expires_at);
 }
 
 // === backward compat: ip_whitelist null = open ===
@@ -91,6 +131,13 @@ section('backward compat');
   const { key_obj } = generateApiKey('t', 'c', {});
   ok('no whitelist = open', isClientIpAllowed(key_obj, '8.8.8.8'));
   ok('default rate_limit = "100/hour"', key_obj.rate_limit === '100/hour' || (typeof key_obj.rate_limit === 'object'));
+}
+
+section('child constraints fail closed');
+{
+  const { key_obj } = generateMasterKey('unconstrained', 'client', { child_scopes: ['services:proxy'] });
+  const denied = createChildKey([], key_obj, 'unsafe-child', { scopes: ['services:proxy'] });
+  ok('unconstrained proxy child denied', denied.ok === false && denied.reason === 'service_constraints_required');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

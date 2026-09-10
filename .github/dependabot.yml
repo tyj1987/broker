@@ -20,6 +20,42 @@ updates:
     commit-message:
       prefix: "broker(deps)"
 
+  - package-ecosystem: "npm"
+    directory: "/sdk/vscode"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "sdk-vscode"
+
+  - package-ecosystem: "npm"
+    directory: "/clients/desktop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "client-desktop"
+
+  - package-ecosystem: "cargo"
+    directory: "/clients/desktop/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "client-desktop"
+
+  - package-ecosystem: "gradle"
+    directory: "/clients/android"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "client-android"
+
   # Python SDK
   - package-ecosystem: "pip"
     directory: "/sdk/python"
@@ -40,6 +76,15 @@ updates:
       - "dependencies"
       - "sdk-go"
 
+  - package-ecosystem: "gomod"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "security-core"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -54,7 +99,7 @@ updates:
 
   # Docker
   - package-ecosystem: "docker"
-    directory: "/broker"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"

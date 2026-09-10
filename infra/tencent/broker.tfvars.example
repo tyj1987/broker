@@ -1,0 +1,11 @@
+region            = "ap-shanghai"
+availability_zone = "ap-shanghai-2"
+admin_cidr        = "203.0.113.5/32"
+ssh_key_ids       = ["skey-example"]
+cam_role_name     = "secret-broker-standby"
+broker_domain     = "broker.example.com"
+
+# Resolve these from the selected VPC/region documentation and review them
+# before applying. Placeholder ranges deliberately fail real connectivity.
+dns_resolver_cidrs = ["192.0.2.53/32"]
+ntp_server_cidrs   = ["192.0.2.123/32"]

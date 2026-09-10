@@ -1,0 +1,66 @@
+manifest_version: 1
+id: github
+display_name: GitHub
+checked_at: 2026-09-10
+status: contract_required
+official_docs:
+  - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+  - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app
+  - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
+  - https://docs.github.com/en/rest/authentication
+  - https://docs.github.com/en/rest/repos/repos#get-a-repository
+  - https://docs.github.com/en/rest/branches/branches#list-branches
+  - https://docs.github.com/en/rest/commits/commits#list-commits
+  - https://docs.github.com/en/rest/issues/issues#list-repository-issues
+  - https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository
+origins: [https://api.github.com]
+authentication:
+  priority: [github_app_installation_token, actions_oidc, fine_grained_pat]
+  inject: { Authorization: "Bearer {{short_lived_token}}", Accept: application/vnd.github+json, X-GitHub-Api-Version: "2026-03-10" }
+  maximum_ttl_seconds: 3600
+  rotation: Mint a new installation token for each bounded operation.
+  revocation: DELETE /installation/token or suspend/uninstall the app installation.
+  signer_boundary: Non-exportable RS256 capability; the broker receives signature bytes, never the private key.
+operations:
+  - id: repo.read
+    method: GET
+    path_template: /repos/{owner}/{repo}
+    permission: metadata:read
+    mutating: false
+    approval: none
+    parameters: { owner: { type: string }, repo: { type: string } }
+    maximum_response_bytes: 1048576
+  - id: branches.list
+    method: GET
+    path_template: /repos/{owner}/{repo}/branches
+    permission: contents:read
+    mutating: false
+    approval: none
+    parameters: { owner: { type: string }, repo: { type: string }, protected: { type: boolean }, page: { type: integer }, per_page: { type: integer, maximum: 100 } }
+    maximum_response_bytes: 1048576
+  - id: commits.list
+    method: GET
+    path_template: /repos/{owner}/{repo}/commits
+    permission: contents:read
+    mutating: false
+    approval: none
+    parameters: { owner: { type: string }, repo: { type: string }, sha: { type: string }, path: { type: string }, author: { type: string }, committer: { type: string }, since: { type: string }, until: { type: string }, page: { type: integer }, per_page: { type: integer, maximum: 100 } }
+    maximum_response_bytes: 1048576
+  - id: issues.list
+    method: GET
+    path_template: /repos/{owner}/{repo}/issues
+    permission: issues:read
+    mutating: false
+    approval: none
+    parameters: { owner: { type: string }, repo: { type: string }, state: { type: string }, assignee: { type: string }, creator: { type: string }, mentioned: { type: string }, labels: { type: array }, sort: { type: string }, direction: { type: string }, since: { type: string }, item_kind: { type: string }, page: { type: integer }, per_page: { type: integer, maximum: 100 } }
+    maximum_response_bytes: 1048576
+  - id: workflow_runs.list
+    method: GET
+    path_template: /repos/{owner}/{repo}/actions/runs
+    permission: actions:read
+    mutating: false
+    approval: none
+    parameters: { owner: { type: string }, repo: { type: string }, actor: { type: string }, branch: { type: string }, event: { type: string }, status: { type: string }, head_sha: { type: string }, exclude_pull_requests: { type: boolean }, check_suite_id: { type: integer }, page: { type: integer }, per_page: { type: integer, maximum: 100 } }
+    maximum_response_bytes: 1048576
+redaction: [Authorization, installation_token, app_private_key, jwt]
+contract_test: { account: isolated_github_app, required: true, last_result: not_run }

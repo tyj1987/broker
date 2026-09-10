@@ -3,14 +3,14 @@
 // Compatible with Go 1.21+.
 //
 // 8 calling surfaces:
-//   1. GetSecret / ListSecrets / ResolveSecrets
-//   2. Proxy
-//   3. Exec (subprocess with secrets in env)
-//   4. SSHExec / SSHTunnel
-//   5. AssumeWorkloadIdentity
-//   6. Login
-//   7. Identity / Health
-//   8. Subscribe (WebSocket, requires optional nhooyr.io/websocket OR custom; we provide SubscribeEvents via WSClient)
+//  1. GetSecret / ListSecrets / ResolveSecrets
+//  2. Proxy
+//  3. Exec (subprocess with secrets in env)
+//  4. SSHExec / SSHTunnel
+//  5. AssumeWorkloadIdentity
+//  6. Login
+//  7. Identity / Health
+//  8. Subscribe (WebSocket, requires optional nhooyr.io/websocket OR custom; we provide SubscribeEvents via WSClient)
 package broker
 
 import (
@@ -30,7 +30,7 @@ import (
 )
 
 // Version of the SDK.
-const Version = "4.1.0"
+const Version = "4.2.0"
 
 // ============================================================
 // Client
@@ -38,10 +38,10 @@ const Version = "4.1.0"
 
 // Client is a synchronous mTLS client for Secret Broker V4.
 type Client struct {
-	endpoint        string
-	http            *http.Client
+	endpoint         string
+	http             *http.Client
 	workloadIdentity *WorkloadIdentity
-	sessionCookie   string
+	sessionCookie    string
 }
 
 // Config holds Client configuration.
@@ -54,8 +54,9 @@ type Config struct {
 	ClientKey  string
 	// CACert: path to PEM-encoded CA cert (broker CA). Defaults to system trust store.
 	CACert string
-	// VerifyTLS: if false, skip CA verification (NOT recommended for production).
-	VerifyTLS bool
+	// InsecureSkipVerify disables TLS certificate validation. Test-only.
+	// The secure default is false.
+	InsecureSkipVerify bool
 	// Timeout: request timeout. Default 30s.
 	Timeout time.Duration
 	// WorkloadIdentity: optional K8s/ECS/GKE binding for STS exchange.
@@ -73,10 +74,6 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
-	if !cfg.VerifyTLS {
-		// Explicit insecure: still keep verify for default
-	}
-
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.CACert != "" {
 		pem, err := os.ReadFile(cfg.CACert)
@@ -96,7 +93,7 @@ func NewClient(cfg Config) (*Client, error) {
 		}
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
-	if !cfg.VerifyTLS {
+	if cfg.InsecureSkipVerify {
 		tlsCfg.InsecureSkipVerify = true
 	}
 
@@ -126,6 +123,7 @@ func NewClient(cfg Config) (*Client, error) {
 type apiResponse struct {
 	Status int
 	Body   []byte
+	Header http.Header
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, query url.Values) (*apiResponse, error) {
@@ -158,11 +156,16 @@ func (c *Client) do(ctx context.Context, method, path string, body any, query ur
 		return nil, newConnError(method+" "+path, err)
 	}
 	defer resp.Body.Close()
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "broker_session" {
+			c.sessionCookie = cookie.Value
+		}
+	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, newConnError(method+" "+path, err)
 	}
-	return &apiResponse{Status: resp.StatusCode, Body: raw}, nil
+	return &apiResponse{Status: resp.StatusCode, Body: raw, Header: resp.Header.Clone()}, nil
 }
 
 func (c *Client) doAndCheck(ctx context.Context, op, method, path string, body any, query url.Values, out any) error {
@@ -248,19 +251,15 @@ func (c *Client) Proxy(ctx context.Context, service, method, subPath string, bod
 	if !strings.HasPrefix(subPath, "/") {
 		subPath = "/" + subPath
 	}
-	u := fmt.Sprintf("/api/v1/proxy/%s%s", url.PathEscape(service), subPath)
-	var wrappedBody any
+	u := fmt.Sprintf("/api/v1/proxy/%s", url.PathEscape(service))
+	wrappedBody := map[string]any{"method": strings.ToUpper(method), "path": subPath}
 	if body != nil {
-		switch v := body.(type) {
-		case string:
-			wrappedBody = map[string]any{"raw": v}
-		case []byte:
-			wrappedBody = map[string]any{"raw": string(v)}
-		default:
-			wrappedBody = map[string]any{"body": v}
-		}
+		wrappedBody["body"] = body
 	}
-	resp, err := c.do(ctx, method, u, wrappedBody, query)
+	if len(query) > 0 {
+		wrappedBody["query"] = query
+	}
+	resp, err := c.do(ctx, "POST", u, wrappedBody, nil)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -268,6 +267,217 @@ func (c *Client) Proxy(ctx context.Context, service, method, subPath string, bod
 		return resp.Status, resp.Body, newError("proxy", resp.Status, string(resp.Body))
 	}
 	return resp.Status, resp.Body, nil
+}
+
+// OperationRequest is the policy input for a typed V2 operation. It never
+// contains a URL, authentication header, or long-lived credential.
+type OperationRequest struct {
+	Provider          string         `json:"provider"`
+	OperationID       string         `json:"operation_id"`
+	AccountRef        string         `json:"account_ref"`
+	Environment       string         `json:"environment"`
+	TypedParameters   map[string]any `json:"typed_parameters"`
+	OTP               map[string]any `json:"otp,omitempty"`
+	ApprovalRequestID string         `json:"approval_request_id,omitempty"`
+}
+
+// Operation is the redacted state returned by the broker.
+type Operation struct {
+	ID          string         `json:"id"`
+	Provider    string         `json:"provider"`
+	OperationID string         `json:"operation_id"`
+	AccountRef  string         `json:"account_ref"`
+	Environment string         `json:"environment"`
+	Status      string         `json:"status"`
+	Result      map[string]any `json:"result,omitempty"`
+	Error       map[string]any `json:"error,omitempty"`
+}
+
+// ApprovalRequest is bound to the exact operation dimensions and parameter hash.
+type ApprovalRequest struct {
+	Provider        string         `json:"provider"`
+	OperationID     string         `json:"operation_id"`
+	AccountRef      string         `json:"account_ref"`
+	Environment     string         `json:"environment"`
+	TypedParameters map[string]any `json:"typed_parameters"`
+}
+
+// Approval is the public state of a short-lived separation-of-duties request.
+type Approval struct {
+	ID                string           `json:"id"`
+	Requester         string           `json:"requester"`
+	Provider          string           `json:"provider"`
+	OperationID       string           `json:"operation_id"`
+	AccountRef        string           `json:"account_ref"`
+	Environment       string           `json:"environment"`
+	ResourceRef       string           `json:"resource_ref"`
+	RequiredApprovals int              `json:"required_approvals"`
+	Approvals         []map[string]any `json:"approvals"`
+	Status            string           `json:"status"`
+	CreatedAt         string           `json:"created_at"`
+	ExpiresAt         string           `json:"expires_at"`
+}
+
+// TaskRequest starts one idempotent, policy-routed tool execution.
+type TaskRequest struct {
+	Tool           string         `json:"tool"`
+	ToolVersion    string         `json:"tool_version"`
+	AccountRef     string         `json:"account_ref"`
+	Environment    string         `json:"environment"`
+	Parameters     map[string]any `json:"parameters"`
+	IdempotencyKey string         `json:"idempotency_key"`
+}
+
+// Task is the redacted state returned by the automation task broker.
+type Task struct {
+	ID          string         `json:"id"`
+	Owner       string         `json:"owner"`
+	Tool        string         `json:"tool"`
+	ToolVersion string         `json:"tool_version"`
+	RiskLevel   string         `json:"risk_level"`
+	State       string         `json:"state"`
+	ApprovalID  string         `json:"approval_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
+	Result      map[string]any `json:"result,omitempty"`
+	Error       map[string]any `json:"error,omitempty"`
+	LatencyMs   int64          `json:"latency_ms,omitempty"`
+}
+
+// TaskEvent is credential-free transition metadata for one task.
+type TaskEvent struct {
+	Sequence int    `json:"sequence"`
+	State    string `json:"state"`
+	Reason   string `json:"reason"`
+	At       string `json:"at"`
+}
+
+// CreateOperation requests one allowlisted provider operation.
+func (c *Client) CreateOperation(ctx context.Context, request OperationRequest) (*Operation, error) {
+	var operation Operation
+	if err := c.doAndCheck(ctx, "create_operation", "POST", "/api/v2/operations", request, nil, &operation); err != nil {
+		return nil, err
+	}
+	return &operation, nil
+}
+
+// GetOperation reads the redacted state of a previously created operation.
+func (c *Client) GetOperation(ctx context.Context, id string) (*Operation, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: operation id required", ErrInvalidArg)
+	}
+	var operation Operation
+	path := "/api/v2/operations/" + url.PathEscape(id)
+	if err := c.doAndCheck(ctx, "get_operation", "GET", path, nil, nil, &operation); err != nil {
+		return nil, err
+	}
+	return &operation, nil
+}
+
+// CreateTask creates an idempotent, versioned tool execution task.
+func (c *Client) CreateTask(ctx context.Context, request TaskRequest) (*Task, error) {
+	var task Task
+	if err := c.doAndCheck(ctx, "create_task", "POST", "/api/v2/tasks", request, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// GetTask returns the current redacted state of a task visible to the caller.
+func (c *Client) GetTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var task Task
+	path := "/api/v2/tasks/" + url.PathEscape(id)
+	if err := c.doAndCheck(ctx, "get_task", "GET", path, nil, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// RunTask claims any required approval and executes the registered adapter once.
+func (c *Client) RunTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var task Task
+	path := "/api/v2/tasks/" + url.PathEscape(id) + "/run"
+	if err := c.doAndCheck(ctx, "run_task", "POST", path, map[string]any{}, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// TaskEvents returns the bounded transition history without task parameters.
+func (c *Client) TaskEvents(ctx context.Context, id string) ([]TaskEvent, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var response struct {
+		Events []TaskEvent `json:"events"`
+	}
+	path := "/api/v2/tasks/" + url.PathEscape(id) + "/events"
+	if err := c.doAndCheck(ctx, "task_events", "GET", path, nil, nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Events, nil
+}
+
+// CancelTask terminally cancels a task before execution starts.
+func (c *Client) CancelTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: task id required", ErrInvalidArg)
+	}
+	var task Task
+	path := "/api/v2/tasks/" + url.PathEscape(id) + "/cancel"
+	if err := c.doAndCheck(ctx, "cancel_task", "POST", path, map[string]any{}, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// CreateApproval requests human approval for one exact operation.
+func (c *Client) CreateApproval(ctx context.Context, request ApprovalRequest) (*Approval, error) {
+	var approval Approval
+	if err := c.doAndCheck(ctx, "create_approval", "POST", "/api/v2/approvals", request, nil, &approval); err != nil {
+		return nil, err
+	}
+	return &approval, nil
+}
+
+// ListApprovals returns only requests visible to the current identity.
+func (c *Client) ListApprovals(ctx context.Context) ([]Approval, error) {
+	var response struct {
+		Approvals []Approval `json:"approvals"`
+	}
+	if err := c.doAndCheck(ctx, "list_approvals", "GET", "/api/v2/approvals", nil, nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Approvals, nil
+}
+
+// CancelApproval cancels a request before execution starts. It cannot approve
+// or revive a request.
+func (c *Client) CancelApproval(ctx context.Context, id string) (*Approval, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: approval id required", ErrInvalidArg)
+	}
+	var approval Approval
+	path := "/api/v2/approvals/" + url.PathEscape(id) + "/cancel"
+	if err := c.doAndCheck(ctx, "cancel_approval", "POST", path, map[string]any{}, nil, &approval); err != nil {
+		return nil, err
+	}
+	return &approval, nil
+}
+
+// DecideApproval is retained for source compatibility. Approval decisions are
+// browser-only so the Broker can verify the same-origin WebAuthn session.
+// This method never sends a network request.
+func (c *Client) DecideApproval(_ context.Context, id, decision string) (*Approval, error) {
+	if id == "" || (decision != "approve" && decision != "reject") {
+		return nil, fmt.Errorf("%w: approval id and valid decision required", ErrInvalidArg)
+	}
+	return nil, ErrBrowserOnly
 }
 
 // ============================================================
@@ -374,14 +584,14 @@ func (c *Client) SSHTunnelStop(ctx context.Context, id string) error {
 
 // WorkloadCreds is the short-lived STS response.
 type WorkloadCreds struct {
-	OK             bool   `json:"ok"`
-	Provider       string `json:"provider"`
-	Role           string `json:"role"`
-	AccessKeyID    string `json:"access_key_id"`
+	OK              bool   `json:"ok"`
+	Provider        string `json:"provider"`
+	Role            string `json:"role"`
+	AccessKeyID     string `json:"access_key_id"`
 	AccessKeySecret string `json:"access_key_secret"`
-	SecurityToken  string `json:"security_token"`
-	Expiration     string `json:"expiration"`
-	ExpiresInMs    int    `json:"expires_in_ms"`
+	SecurityToken   string `json:"security_token"`
+	Expiration      string `json:"expiration"`
+	ExpiresInMs     int    `json:"expires_in_ms"`
 }
 
 // AssumeWorkloadIdentity exchanges an OIDC token for STS credentials.
@@ -404,10 +614,10 @@ func (c *Client) AssumeWorkloadIdentity(ctx context.Context, provider, oidcToken
 		return nil, fmt.Errorf("%w: oidcToken (or workloadIdentity) required", ErrInvalidArg)
 	}
 	body := map[string]any{
-		"provider":    provider,
-		"oidc_token":  oidcToken,
-		"role_arn":    roleArn,
-		"audience":    audience,
+		"provider":   provider,
+		"oidc_token": oidcToken,
+		"role_arn":   roleArn,
+		"audience":   audience,
 	}
 	var r WorkloadCreds
 	if err := c.doAndCheck(ctx, "assume_workload_identity", "POST", "/api/v1/workload-identity/assume", body, nil, &r); err != nil {
@@ -422,25 +632,17 @@ func (c *Client) AssumeWorkloadIdentity(ctx context.Context, provider, oidcToken
 
 // Login authenticates with username + password (+ optional MFA).
 func (c *Client) Login(ctx context.Context, username, password, mfaToken, mfaCode string) error {
-	body := map[string]any{
-		"username": username,
-		"password": password,
+	if (mfaToken == "") != (mfaCode == "") {
+		return fmt.Errorf("%w: mfaToken and mfaCode must be provided together", ErrInvalidArg)
 	}
 	if mfaToken != "" {
-		body["mfa_token"] = mfaToken
+		return c.doAndCheck(ctx, "login_mfa", "POST", "/api/v1/login/mfa", map[string]any{
+			"mfa_token": mfaToken, "code": mfaCode,
+		}, nil, nil)
 	}
-	if mfaCode != "" {
-		body["mfa_code"] = mfaCode
-	}
-	type resp struct {
-		SessionToken string `json:"session_token"`
-	}
-	var r resp
-	if err := c.doAndCheck(ctx, "login", "POST", "/api/v1/login", body, nil, &r); err != nil {
-		return err
-	}
-	c.sessionCookie = r.SessionToken
-	return nil
+	return c.doAndCheck(ctx, "login", "POST", "/api/v1/login", map[string]any{
+		"client": username, "password": password,
+	}, nil, nil)
 }
 
 // Logout drops the current session.

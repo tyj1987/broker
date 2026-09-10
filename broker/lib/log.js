@@ -11,9 +11,22 @@
 //
 // All sinks are best-effort; a sink failure never blocks the broker.
 
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { createSocket } from 'node:dgram';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -44,10 +57,17 @@ class FileSink {
     if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true });
   }
   write(level, msg, fields, line) {
+    let descriptor;
     try {
-      const stat = existsSync(this.path) ? statSync(this.path) : { size: 0 };
+      const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND
+        | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+      descriptor = openSync(this.path, flags, 0o600);
+      const stat = fstatSync(descriptor);
+      if (!stat.isFile()) throw new Error('log target is not a regular file');
       this.bytes = stat.size;
-      appendFileSync(this.path, line + '\n');
+      appendFileSync(descriptor, line + '\n', 'utf8');
+      closeSync(descriptor);
+      descriptor = undefined;
       this.bytes += Buffer.byteLength(line, 'utf8') + 1;
       if (this.bytes > 50 * 1024 * 1024) {
         const rotated = this.path + '.1';
@@ -57,6 +77,10 @@ class FileSink {
       }
     } catch (err) {
       console.error(`[log-sink ${this.name}] write failed:`, err.message);
+    } finally {
+      if (descriptor !== undefined) {
+        try { closeSync(descriptor); } catch { /* best effort */ }
+      }
     }
   }
 }
@@ -75,8 +99,8 @@ class HttpSink {
       try {
         const u = new URL(url);
         const isHttps = u.protocol === 'https:';
-        const mod = isHttps ? require('node:https') : require('node:http');
-        const req = mod.request({
+        const request = isHttps ? httpsRequest : httpRequest;
+        const req = request({
           hostname: u.hostname,
           port: u.port || (isHttps ? 443 : 80),
           path: u.pathname + u.search,
@@ -109,8 +133,7 @@ class SyslogSink {
       const tag = 'secret-broker';
       // RFC 5424 format
       const syslogLine = `<${pri}>1 ${new Date().toISOString()} ${hostname} ${tag} - - - ${line}`;
-      const dgram = require('node:dgram');
-      const client = dgram.createSocket('udp4');
+      const client = createSocket('udp4');
       client.send(Buffer.from(syslogLine), this.port, this.host, (err) => {
         client.close();
       });

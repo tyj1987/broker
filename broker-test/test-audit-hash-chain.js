@@ -19,13 +19,15 @@
 
 import {
   computeHash,
+  buildAuditEvent,
   sealEvent,
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainStateSync,
   GENESIS_HASH,
 } from '../broker/lib/audit-hash-chain.js';
-import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -45,6 +47,19 @@ section('1. computeHash determinism');
   const h2 = computeHash({ a: 1, b: 'x' });
   ok('same input → same hash', h1 === h2);
   ok('64 hex chars', /^[a-f0-9]{64}$/.test(h1));
+}
+
+section('1b. audit envelope binds request id and redacts by field name');
+
+{
+  const e = buildAuditEvent({ action: 'execute', password: 'plain-value' }, {
+    requestId: 'request-0001', now: () => 1_900_000_000_000, idFactory: () => 'event-0001',
+  });
+  ok('request id is attached', e.request_id === 'request-0001');
+  ok('timestamp and id are deterministic in test', e.ts === '2030-03-17T17:46:40.000Z' && e.id === 'event-0001');
+  ok('sensitive field is redacted before sealing', e.password === '[REDACTED]');
+  const explicit = buildAuditEvent({ action: 'execute', request_id: 'internal-request' }, { requestId: 'outer-request' });
+  ok('explicit internal request id is preserved', explicit.request_id === 'internal-request');
 }
 
 section('2. computeHash distinguishes inputs');
@@ -170,7 +185,7 @@ section('13. verifyAuditDir works on real files');
   const WORK = mkdtempSync(join(tmpdir(), 'broker-chain-'));
   process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
   // Create some audit files with chained events
-  const writer = createChainWriter({ onEvent: e => {} });
+  const writer = createChainWriter({ onEvent: () => {} });
   const events = [];
   for (let i = 0; i < 3; i++) {
     const ev = writer.write({ action: 'test', n: i });
@@ -185,6 +200,30 @@ section('13. verifyAuditDir works on real files');
   ok('ok=true', r.ok === true);
   ok('count=3', r.count === 3);
   ok('files=1', r.files === 1);
+}
+
+section('14. production chain resumes and rejects corruption');
+
+{
+  const WORK = mkdtempSync(join(tmpdir(), 'broker-chain-state-'));
+  process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
+  writeFileSync(join(WORK, 'audit-legacy.jsonl'), JSON.stringify({ action: 'legacy' }) + '\n');
+  const empty = loadAuditChainStateSync(WORK, { chainOnly: true });
+  ok('legacy unsealed log is outside the new chain boundary', empty.count === 0 && empty.lastHash === GENESIS_HASH);
+  const e1 = sealEvent({ action: 'one' }, empty.lastHash);
+  const e2 = sealEvent({ action: 'two' }, e1.hash);
+  const chainFile = join(WORK, 'audit-chain-2026-09-09.jsonl');
+  writeFileSync(chainFile, `${JSON.stringify(e1)}\n${JSON.stringify(e2)}\n`);
+  const resumed = loadAuditChainStateSync(WORK, { chainOnly: true });
+  ok('restart resumes the last committed hash', resumed.count === 2 && resumed.lastHash === e2.hash);
+  writeFileSync(chainFile, `${JSON.stringify(e1)}\nnot-json\n`);
+  let malformed = false;
+  try { loadAuditChainStateSync(WORK, { chainOnly: true }); } catch (error) { malformed = /invalid audit JSON/.test(error.message); }
+  ok('malformed chained log fails closed', malformed);
+  writeFileSync(chainFile, `${JSON.stringify(e1)}\n${JSON.stringify({ ...e2, action: 'tampered' })}\n`);
+  let tampered = false;
+  try { loadAuditChainStateSync(WORK, { chainOnly: true }); } catch (error) { tampered = /verification failed/.test(error.message); }
+  ok('tampered chained log fails closed', tampered);
 }
 
 // ---------- summary ----------

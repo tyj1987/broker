@@ -1,6 +1,10 @@
 // broker/lib/config-validate.js — lightweight config preflight (no deps)
 // Phase E. Not a full JSON Schema engine — critical invariants only.
 
+import { existsSync as nodeExistsSync } from 'node:fs';
+import { validatePolicyConditions } from './policy-conditions.js';
+import { validateParameterSchema } from './operation-policy.js';
+
 /**
  * @typedef {{ level: 'error'|'warn', path: string, message: string }}
  */
@@ -8,7 +12,7 @@
 /**
  * Validate broker CONFIG shape after load / migration.
  * @param {object} config
- * @param {{ strict?: boolean }} [opts] strict: treat warns as errors for exit code
+ * @param {{ strict?: boolean, allowWebAuthnBootstrap?: boolean }} [opts]
  * @returns {{ ok: boolean, errors: object[], warnings: object[] }}
  */
 export function validateBrokerConfig(config, opts = {}) {
@@ -46,6 +50,30 @@ export function validateBrokerConfig(config, opts = {}) {
           path: `clients.${name}`,
           message: 'allow_password_login true but no password set',
         });
+      }
+      if (c.security_profile == null) {
+        warnings.push({
+          level: 'warn', path: `clients.${name}.security_profile`,
+          message: 'security_profile is missing; compatibility behavior applies',
+        });
+      } else if (!['strict', 'controlled', 'compatible'].includes(c.security_profile)) {
+        errors.push({
+          level: 'error', path: `clients.${name}.security_profile`,
+          message: 'must be strict, controlled, or compatible',
+        });
+      }
+      if (c.security_profile === 'strict') {
+        if (c.password || c.allow_password_login) {
+          errors.push({ level: 'error', path: `clients.${name}`, message: 'strict profile cannot enable password authentication' });
+        }
+        if ((c.allowed_resolve || []).length > 0 || (c.allowed_proxy || []).length > 0) {
+          errors.push({ level: 'error', path: `clients.${name}`, message: 'strict profile cannot enable plaintext resolve or compatibility proxy access' });
+        }
+        const keys = c.factors?.webauthn?.credentials || [];
+        const hardwareKeys = keys.filter((key) => key?.device_type === 'singleDevice' && key?.backed_up === false);
+        if (hardwareKeys.length < 2 && !(opts.allowWebAuthnBootstrap && c.webauthn_bootstrap === true)) {
+          errors.push({ level: 'error', path: `clients.${name}.factors.webauthn`, message: 'strict profile requires two non-synced hardware-bound credentials' });
+        }
       }
       if (c.rate_limit && typeof c.rate_limit === 'string' && !/^\d+\/(second|minute|hour|day)$/i.test(c.rate_limit)) {
         warnings.push({
@@ -86,6 +114,67 @@ export function validateBrokerConfig(config, opts = {}) {
     errors.push({ level: 'error', path: 'api_keys', message: 'must be object/array map' });
   }
 
+  if (
+    config.provider_accounts != null &&
+    (!config.provider_accounts ||
+      typeof config.provider_accounts !== 'object' ||
+      Array.isArray(config.provider_accounts))
+  ) {
+    errors.push({ level: 'error', path: 'provider_accounts', message: 'must be an object' });
+  }
+
+  if (config.healthcheck?.upstream && config.healthcheck.upstream !== 'local') {
+    errors.push({
+      level: 'error',
+      path: 'healthcheck.upstream',
+      message: 'external MCP healthcheck execution is not supported',
+    });
+  }
+
+  if (config.operation_policies != null) {
+    if (!config.operation_policies || typeof config.operation_policies !== 'object' || Array.isArray(config.operation_policies)) {
+      errors.push({ level: 'error', path: 'operation_policies', message: 'must be an object' });
+    } else {
+      for (const [provider, operations] of Object.entries(config.operation_policies)) {
+        if (!operations || typeof operations !== 'object' || Array.isArray(operations)) {
+          errors.push({ level: 'error', path: `operation_policies.${provider}`, message: 'must be an object' });
+          continue;
+        }
+        for (const [operationId, policy] of Object.entries(operations)) {
+          const path = `operation_policies.${provider}.${operationId}`;
+          if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+            errors.push({ level: 'error', path, message: 'must be an object' });
+            continue;
+          }
+          if (policy.execution_mode != null && !['adapter', 'browser'].includes(policy.execution_mode)) {
+            errors.push({ level: 'error', path: `${path}.execution_mode`, message: 'must be adapter or browser' });
+          }
+          if (policy.parameter_schema != null) {
+            const schema = validateParameterSchema(policy.parameter_schema);
+            if (!schema.ok) errors.push({ level: 'error', path: `${path}.parameter_schema`, message: schema.reason });
+          }
+          const conditions = validatePolicyConditions(policy);
+          if (!conditions.ok) {
+            errors.push({ level: 'error', path, message: conditions.reason });
+          }
+          if (provider === 'broker' && ['device.enroll', 'device.state', 'emergency.stop'].includes(operationId)) {
+            const safeControlPolicy = policy.approval_required === true
+              && Number(policy.required_approvals) >= 2
+              && policy.roles?.includes('admin')
+              && policy.security_profiles?.includes('strict')
+              && policy.identity_methods?.includes('session');
+            if (!safeControlPolicy) {
+              errors.push({
+                level: 'error', path,
+                message: 'critical broker control requires strict admin session policy and at least two approvals',
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
   // At least one admin recommended
   const clients = config.clients || {};
   const admins = Object.values(clients).filter((c) => c && c.role === 'admin');
@@ -101,6 +190,12 @@ export function validateBrokerConfig(config, opts = {}) {
   return { ok, errors, warnings };
 }
 
+export function requireValidBrokerConfig(config, opts = {}) {
+  const result = validateBrokerConfig(config, opts);
+  if (!result.ok) throw new Error(`broker configuration rejected:\n${formatValidationReport(result)}`);
+  return result;
+}
+
 /**
  * Preflight filesystem / env checks before listen.
  * @param {object} paths e.g. { configPath, auditDir, certDir, ageKey }
@@ -110,14 +205,7 @@ export function validateBrokerConfig(config, opts = {}) {
 export function preflightPaths(paths = {}, fsApi = null) {
   const errors = [];
   const warnings = [];
-  // dynamic import avoided; caller passes existsSync
-  const exists = fsApi?.existsSync || ((p) => {
-    try {
-      return require('node:fs').existsSync(p);
-    } catch {
-      return false;
-    }
-  });
+  const exists = fsApi?.existsSync || nodeExistsSync;
 
   // Use only if paths provided
   for (const [label, p] of Object.entries(paths)) {

@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Secret Broker Fill",
+  "version": "0.1.0",
+  "description": "User-initiated one-time code fill for approved sites.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmfLM+6QMcdHDs/5H1uCrc51Y5B9l6F4m0+c4Lp2bbKPpxo87anRtDqh7uKZ9jyUJq+zyxIXuB3v/DFNBH2XzDD7y7VlN/Lu+y5HpsIYtXB4hj9LvjynumawwEu5ZSHPXvqfKw8rTkakMYRwHt1PjXqBHH4bUjsNi7W/RKHwDg1HJfOt4R8hryHKtbeXx3QJm3XkBEmt/39jwW7F7ReM5bztFaGVR6/2GPnBaWKncGnpS7zg/TrqMB/q2UMYATbGzWsjZdPI8tHFH0pCNHXjt3D+ANFv9oW1G76+asrmhjIZk01Qyt4VvbFnZVWfsL9tdBMg0K/Zq9m6Ky+c5qX5pOwIDAQAB",
+  "permissions": ["activeTab", "nativeMessaging", "scripting"],
+  "host_permissions": [
+    "https://account.aliyun.com/*",
+    "https://cloud.tencent.com/login/*"
+  ],
+  "background": { "service_worker": "service-worker.js" },
+  "action": { "default_title": "Fill approved code", "default_popup": "popup.html" }
+}

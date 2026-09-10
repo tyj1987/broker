@@ -11,6 +11,7 @@ export { applyAdminVisibility, isAdminIdentity } from './admin-visibility.js';
 export { buildZip, computeCrc32 } from './zip.js';
 export { createAudit } from './audit.js';
 export { parseRateLimit, createRateLimiter } from './rate-limit.js';
+export { createPinnedHttpsRequest, PinnedRequestError, PINNED_HTTPS_LIMITS } from './pinned-https-request.js';
 export { isIpAllowed, normalizeIp, matchIpRule } from './ip-allowlist.js';
 // V4 任务 1 配套: 凭据零接触安全基础
 export { redact, redactDeep, redactJson, hasLikelySecret, SUPPORTED_PATTERNS } from './redact.js';
@@ -73,14 +74,17 @@ export { createAuditAsync, AsyncAuditWriteError } from './audit-async.js';
 // V4.1.1: Audit hash chain for tamper-evidence
 export {
   computeHash,
+  buildAuditEvent,
   sealEvent,
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainStateSync,
   GENESIS_HASH,
 } from './audit-hash-chain.js';
 export {
   validateBrokerConfig,
+  requireValidBrokerConfig,
   preflightPaths,
   formatValidationReport,
 } from './config-validate.js';

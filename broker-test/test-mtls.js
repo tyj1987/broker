@@ -13,14 +13,10 @@
 //  10. mTLS-header path: verify != SUCCESS → null
 //  11. mTLS path: matching fingerprint → returns mtls context
 //  12. mTLS path: no matching fingerprint → null
-//  13. Priority: API key beats session beats mTLS
+//  13. API key narrows, but cannot replace, a stronger identity
 //  14. Error in X509Certificate parsing → null (graceful)
 
 import { createIdentityResolver } from '../broker/lib/mtls.js';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -33,9 +29,11 @@ function section(t) { console.log(`\n[${t}]`); }
 
 const FP = 'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89';
 const FP_LOWER = FP.toLowerCase();
+const PROXY_FP = '11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00';
 
 function makeConfig() {
   return {
+    trusted_proxy_fingerprints: [PROXY_FP],
     clients: {
       'client.alice': {
         role: 'developer',
@@ -72,6 +70,7 @@ function makeDeps(overrides = {}) {
     rateLimitApiKey: overrides.rateLimitApiKey || (() => true),
     recordUse: overrides.recordUse || (() => {}),
     recordClientSeen: overrides.recordClientSeen || (() => {}),
+    requireNodeCrypto: overrides.requireNodeCrypto,
     audit: overrides.audit || ((e) => auditEvents.push(e)),
     auditEvents,
   };
@@ -179,41 +178,30 @@ section('8. No session → falls through (returns null when nothing else)');
 section('9. mTLS-header (nginx forwarded, SUCCESS)');
 
 {
-  // Fake x509 with self-signed cert PEM
-  const tmp = mkdtempSync(join(tmpdir(), 'mtls-'));
-  try {
-    const key = join(tmp, 'k.key');
-    const csr = join(tmp, 'k.csr');
-    const crt = join(tmp, 'k.crt');
-    // Make CA + sign a client cert
-    const caKey = join(tmp, 'ca.key');
-    const caCrt = join(tmp, 'ca.crt');
-    execFileSync('openssl', ['genrsa', '-out', caKey, '2048']);
-    execFileSync('openssl', ['req', '-x509', '-new', '-nodes', '-key', caKey, '-days', '1', '-subj', '/CN=ca', '-out', caCrt]);
-    execFileSync('openssl', ['genrsa', '-out', key, '2048']);
-    execFileSync('openssl', ['req', '-new', '-key', key, '-subj', '/CN=client.alice', '-out', csr]);
-    execFileSync('openssl', ['x509', '-req', '-in', csr, '-CA', caCrt, '-CAkey', caKey, '-CAcreateserial', '-days', '1', '-out', crt]);
-    const pem = readFileSync(crt, 'utf8');
-    const fpLine = execFileSync('openssl', ['x509', '-in', crt, '-noout', '-fingerprint', '-sha256'], { encoding: 'utf8' });
-    const realFp = fpLine.split('=')[1].trim();
-    const cfg = makeConfig();
-    cfg.clients['client.alice'].cert_fingerprint_sha256 = realFp;
-    const deps = makeDeps({ config: cfg });
-    const r = createIdentityResolver(deps);
-    const id = r.getIdentity(req({
-      headers: {
-        'x-ssl-client-verify': 'SUCCESS',
-        'x-ssl-client-cert': encodeURIComponent(pem),
-      },
-      socket: { remoteAddress: '127.0.0.1' },
-    }));
-    ok('returns context', id !== null);
-    ok('via = mtls-header', id?.via === 'mtls-header');
-    ok('cn = client.alice', id?.cn === 'client.alice');
-    ok('fp matches', id?.fp === realFp);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+  class FakeX509Certificate {
+    constructor(pem) {
+      if (pem !== 'FAKE CLIENT CERTIFICATE') throw new Error('invalid certificate');
+      this.fingerprint256 = FP;
+      this.subject = 'CN=client.alice';
+    }
   }
+  const deps = makeDeps({ requireNodeCrypto: { X509Certificate: FakeX509Certificate } });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'SUCCESS',
+      'x-ssl-client-cert': encodeURIComponent('FAKE CLIENT CERTIFICATE'),
+    },
+    socket: {
+      remoteAddress: '127.0.0.1',
+      authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('returns context', id !== null);
+  ok('via = mtls-header', id?.via === 'mtls-header');
+  ok('cn = client.alice', id?.cn === 'client.alice');
+  ok('fp matches', id?.fp === FP);
 }
 
 section('10. mTLS-header (verify != SUCCESS)');
@@ -239,6 +227,7 @@ section('11. Direct mTLS (peer cert, matching fingerprint)');
   const id = r.getIdentity(req({
     socket: {
       remoteAddress: '203.0.113.5',
+      authorized: true,
       getPeerCertificate: () => ({
         subject: { CN: 'client.alice' },
         fingerprint256: FP_LOWER,
@@ -258,6 +247,7 @@ section('12. Direct mTLS (no matching fingerprint)');
   const id = r.getIdentity(req({
     socket: {
       remoteAddress: '203.0.113.5',
+      authorized: true,
       getPeerCertificate: () => ({
         subject: { CN: 'client.unknown' },
         fingerprint256: '00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00',
@@ -267,7 +257,7 @@ section('12. Direct mTLS (no matching fingerprint)');
   ok('returns null', id === null);
 }
 
-section('13. Priority: API key > session > mTLS');
+section('13. API key is intersected with the session identity');
 
 {
   const deps = makeDeps({
@@ -281,7 +271,8 @@ section('13. Priority: API key > session > mTLS');
   });
   const r = createIdentityResolver(deps);
   const id = r.getIdentity(req({ headers: { authorization: 'Bearer mb_test_aaaa' } }));
-  ok('API key wins over session', id?.via === 'api_key');
+  ok('session remains the principal', id?.via === 'session');
+  ok('API key restrictions are attached', id?.apiKey?.id === 'mb_test_aaaa');
 }
 
 section('14. Garbage X-SSL-Client-Cert → null (graceful)');
@@ -294,12 +285,66 @@ section('14. Garbage X-SSL-Client-Cert → null (graceful)');
       'x-ssl-client-verify': 'SUCCESS',
       'x-ssl-client-cert': encodeURIComponent('NOT A PEM CERT'),
     },
-    socket: { remoteAddress: '127.0.0.1' },
+    socket: {
+      remoteAddress: '127.0.0.1',
+      authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
   }));
   ok('returns null on bad cert', id === null);
 }
 
-section('15. getApiKeyIdentity standalone');
+section('15. Forwarded identity requires an authorized trusted proxy');
+
+{
+  class FakeX509Certificate {
+    constructor() {
+      this.fingerprint256 = FP;
+      this.subject = 'CN=client.alice';
+    }
+  }
+  const deps = makeDeps({ requireNodeCrypto: { X509Certificate: FakeX509Certificate } });
+  const r = createIdentityResolver(deps);
+  const headers = {
+    'x-ssl-client-verify': 'SUCCESS',
+    'x-ssl-client-cert': encodeURIComponent('FAKE CLIENT CERTIFICATE'),
+  };
+  const unauthorized = r.getIdentity(req({
+    headers,
+    socket: {
+      remoteAddress: '127.0.0.1',
+      authorized: false,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  const untrusted = r.getIdentity(req({
+    headers,
+    socket: {
+      remoteAddress: '127.0.0.1',
+      authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: FP }),
+    },
+  }));
+  ok('rejects unauthorized proxy TLS', unauthorized === null);
+  ok('rejects untrusted proxy fingerprint', untrusted === null);
+}
+
+section('16. Direct mTLS requires an authorized certificate chain');
+
+{
+  const deps = makeDeps();
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    socket: {
+      remoteAddress: '203.0.113.5',
+      authorized: false,
+      getPeerCertificate: () => ({ subject: { CN: 'client.alice' }, fingerprint256: FP }),
+    },
+  }));
+  ok('rejects unauthorized direct mTLS', id === null);
+}
+
+section('17. getApiKeyIdentity standalone');
 
 {
   const deps = makeDeps();
@@ -308,6 +353,45 @@ section('15. getApiKeyIdentity standalone');
   ok('returns ctx', ctx !== null);
   ok('via = api_key', ctx?.via === 'api_key');
   ok('apiKey.id matches', ctx?.apiKey?.id === 'mb_test_aaaa');
+}
+
+section('18. A bearer key cannot replace a different certificate identity');
+
+{
+  const cfg = makeConfig();
+  cfg.api_keys.mb_bob = { id: 'mb_bob', client: 'client.bob', scopes: ['operations:execute'] };
+  const deps = makeDeps({ config: cfg });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: { authorization: 'Bearer mb_bob' },
+    socket: {
+      remoteAddress: '203.0.113.5',
+      authorized: true,
+      getPeerCertificate: () => ({ subject: { CN: 'client.alice' }, fingerprint256: FP }),
+    },
+  }));
+  ok('cross-subject binding denied', id === null);
+  ok('binding denial audited', deps.auditEvents.some(e => e.reason === 'identity_binding_mismatch'));
+}
+
+section('19. Trusted proxy X-Forwarded-For is used only as a single value');
+
+{
+  let observedIp = '';
+  const deps = makeDeps({ isClientIpAllowed: (_key, ip) => { observedIp = ip; return true; } });
+  const r = createIdentityResolver(deps);
+  r.getIdentity(req({
+    headers: {
+      authorization: 'Bearer mb_test_aaaa',
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '198.51.100.7',
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('uses sanitized forwarded client IP', observedIp === '198.51.100.7');
 }
 
 // ---------- summary ----------

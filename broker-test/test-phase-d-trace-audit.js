@@ -18,7 +18,7 @@ import {
   pruneAuditFiles,
   auditPolicyFromEnv,
 } from '../broker/lib/audit-policy.js';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BROKER_VERSION } from '../broker/version.js';
@@ -56,6 +56,10 @@ console.log('=== resolveRequestId ===');
 {
   assert(resolveRequestId({ 'x-request-id': 'r1' }) === 'r1', 'x-request-id');
   assert(resolveRequestId({}).length === 32, 'generated');
+  const injected = 'Bearer ' + 'Z'.repeat(40);
+  const replacement = resolveRequestId({ 'x-request-id': injected });
+  assert(replacement !== injected && /^[a-f0-9]{32}$/.test(replacement), 'unsafe request id replaced');
+  assert(resolveRequestId({ 'x-request-id': 'comma,value' }) !== 'comma', 'ambiguous request id replaced');
 }
 
 console.log('=== request context ALS ===');
@@ -84,8 +88,7 @@ console.log('=== audit sampling ===');
 
 console.log('=== pruneAuditFiles ===');
 {
-  const dir = join(tmpdir(), 'broker-audit-test-' + Date.now());
-  mkdirSync(dir, { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), 'broker-audit-test-'));
   writeFileSync(join(dir, 'audit-2020-01-01.jsonl'), '{}\n');
   writeFileSync(join(dir, 'audit-2099-01-01.jsonl'), '{}\n');
   const r = pruneAuditFiles(dir, 30);

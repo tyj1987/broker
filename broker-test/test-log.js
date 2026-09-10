@@ -10,7 +10,7 @@ import {
   _setSinks,
   signLine,
 } from '../broker/lib/log.js';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,23 @@ let pass = 0, fail = 0;
 function ok(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+}
+
+if (process.platform !== 'win32') {
+  const WORK = mkdtempSync(join(tmpdir(), 'broker-log-link-'));
+  try {
+    const target = join(WORK, 'target.log');
+    const link = join(WORK, 'broker.log');
+    writeFileSync(target, 'original\n', { mode: 0o600 });
+    symlinkSync(target, link);
+    const originalError = console.error;
+    console.error = () => {};
+    new FileSink(link).write('info', 'blocked', {}, '{"msg":"blocked"}');
+    console.error = originalError;
+    ok('file sink refuses symbolic links', readFileSync(target, 'utf8') === 'original\n');
+  } finally {
+    rmSync(WORK, { recursive: true, force: true });
+  }
 }
 function section(t) { console.log(`\n[${t}]`); }
 

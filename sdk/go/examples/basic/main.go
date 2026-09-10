@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/tyj1987/broker-sdk-go/broker"
+	"github.com/tyj1987/broker/sdk/go/broker"
 )
 
 func main() {

@@ -1,292 +1,89 @@
-# .gitignore
-# ============================
-# 绝对不能入库的（红线）/ Hard rules — must NEVER enter git
-# ============================
-
-# age / SOPS 私钥 / age / SOPS private keys
-*.key
-key-*.txt
-*.age.key
-sops/age/
-
-# 临时解密产物 / Decrypted scratch files
-*.dec.yaml
-*.dec.yml
-*.dec.env
-.env.decrypted
-.env.local
-.env.*.local
+# Credentials and decrypted runtime state
 .env
-
-# SSH / TLS 私钥 / SSH / TLS private keys
+.env.*
+!.env.example
+*.key
 *.pem
-id_rsa
-id_ed25519
 *.p12
 *.pfx
-
-# IDE / 编辑器 / IDE / editor
-.vscode/
-.idea/
-*.swp
-.DS_Store
-Thumbs.db
-
-# Node / Python / Go 通用 / Generic
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-venv/
-target/
-dist/
-build/
-*.log
-coverage/
-.nyc_output/
-
-# 任务临时文件 / Task scratch
-tmp/
-.tmp/
-
-# 备份钥匙归档（轮转时的临时归档）/ Key rotation archives
-.config/sops/age/archive-*/
-
-# ============================
-# 加密文件可以入（显式放行）/ Encrypted files OK
-# ============================
-# 加密后的 secrets/*.env 格式：
-#   DATABASE_URL: ENC[AES256_GCM,...]
-#   sops:
-#     age: [...]
-# 这是 SOPS 密文，入库安全。Encrypted secrets ARE safe to commit.
-
-# ============================
-# Secret Broker 特定 / Secret Broker specific
-# ============================
-# PKI 证书和私钥（ca.crt 入库方便 dev 客户端导入, ca.key 私钥绝不入库）
-pki/**/*.key
-pki/**/*.csr
-pki/**/*.ext
-pki/**/crl.pem
-pki/**/index.txt*
-pki/**/serial*
-pki/**/*.srl
-pki/**/openssl.cnf
-# 其他 server / client cert 各自生成, 不入库 (CN/SAN 跟环境绑)
-pki/**/*.crt
-# ca.crt 是公钥证书, 入库方便 dev 客户端验证 server cert
-!pki/ca/ca.crt
-!pki/ca/.gitkeep
-
-# Audit 日志
-audit/*.jsonl
-audit/*.log
-
-# 客户端配置（含 cert 路径）
-.broker/
-
-# v3.1.1 M5.6/M5.9: 运行时 healthcheck/alert 持久化 (含 cert fp, 不入 git)
-secrets/healthcheck-state.json
-secrets/alert-history.jsonl
-secrets/secrets-detail.json  # 凭据 detail, SOPS 加密后的不入 (运行时明文)
-
-# v4.1 dev 明文配置 (本地启动用, 严禁入库)
-secrets/broker.yaml
-secrets/clients.json
-# broker SOPS 原子写回时的临时文件
-secrets/.broker.tmp.*.yaml
-
-# audit/ 下 dev 脚本副本 (scripts/dev/ 才是 source of truth) + 历史 session 报告
-audit/*.cmd
-audit/*.ps1
-audit/*.py
-audit/*.md
-
-# scripts/dev/.scratch/ 是 audit 副本备份目录, 不入库
-scripts/dev/.scratch/
-
-# Python build artifacts (wheel + sdist) — 用 twine upload dist/* 上 PyPI
-sdk/python/dist/
-sdk/python/build/
-sdk/python/*.egg-info/
-
-# Go build artifacts
-sdk/go/bin/
-sdk/go/dist/
-
-# Release asset bundle (one-time upload to GitHub Release, do not commit)
-release-assets/*.tar.gz
-release-assets/*.zip
-# MANIFEST.md is the only release-assets file that goes in git (lists what to upload)
-!release-assets/MANIFEST.md
-
-# Generated artifacts (rebuilt by bin/ scripts, not source)
-
-# Terraform 变量文件（避免 commit 真密码 / 真 IP）
-infra/**/*.tfvars
-infra/**/*.tfvars.json
-!infra/**/example.tfvars
-.terraform/
-*.tfstate
-*.tfstate.*.backup
-*.tfstate.backup
-crash.log
-crash.*.log
-.tf-plan
-plan.out
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraform.lock.hcl.lock-info  # 部分用户会想保留 lock, 默认 ignore
-
-# 阿里云 / 腾讯云 私钥对
-*.pem
-**/id_rsa
-**/id_ed25519
-
-=====================
-# 绝对不能入库的（红线）/ Hard rules — must NEVER enter git
-# ============================
-# age / SOPS 私钥 / age / SOPS private keys
-*.key
-key-*.txt
-*.age.key
-sops/age/
-# 临时解密产物 / Decrypted scratch files
-*.dec.yaml
-*.dec.yml
-*.dec.env
-.env.decrypted
-.env.local
-.env.*.local
-.env
-# SSH / TLS 私钥 / SSH / TLS private keys
-*.pem
+*.csr
 id_rsa
 id_ed25519
-*.p12
-*.pfx
-# IDE / 编辑器 / IDE / editor
-.vscode/
-.idea/
-*.swp
-.DS_Store
-Thumbs.db
-# Node / Python / Go 通用 / Generic
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-venv/
-target/
-dist/
-build/
-*.log
-coverage/
-.nyc_output/
-# 任务临时文件 / Task scratch
-tmp/
-.tmp/
-# 备份钥匙归档（轮转时的临时归档）/ Key rotation archives
-.config/sops/age/archive-*/
-# 加密文件可以入（显式放行）/ Encrypted files OK
-# 加密后的 secrets/*.env 格式：
-#   DATABASE_URL: ENC[AES256_GCM,...]
-#   sops:
-#     age: [...]
-# 这是 SOPS 密文，入库安全。Encrypted secrets ARE safe to commit.
-# Secret Broker 特定 / Secret Broker specific
-# PKI 证书和私钥（ca.crt 入库方便 dev 客户端导入, ca.key 私钥绝不入库）
-pki/**/*.key
-pki/**/*.csr
-pki/**/*.ext
-pki/**/crl.pem
-pki/**/index.txt*
-pki/**/serial*
-pki/**/*.srl
-pki/**/openssl.cnf
-# 其他 server / client cert 各自生成, 不入库 (CN/SAN 跟环境绑)
-pki/**/*.crt
-# ca.crt 是公钥证书, 入库方便 dev 客户端验证 server cert
-!pki/ca/ca.crt
-!pki/ca/.gitkeep
-# Audit 日志
-audit/*.jsonl
-audit/*.log
-# 客户端配置（含 cert 路径）
-.broker/
-# v3.1.1 M5.6/M5.9: 运行时 healthcheck/alert 持久化 (含 cert fp, 不入 git)
-secrets/healthcheck-state.json
-secrets/alert-history.jsonl
-secrets/secrets-detail.json  # 凭据 detail, SOPS 加密后的不入 (运行时明文)
-# v4.1 dev 明文配置 (本地启动用, 严禁入库)
-secrets/broker.yaml
-secrets/clients.json
-# broker SOPS 原子写回时的临时文件
-secrets/.broker.tmp.*.yaml
-# audit/ 下 dev 脚本副本 (scripts/dev/ 才是 source of truth) + 历史 session 报告
-audit/*.cmd
-audit/*.ps1
-audit/*.py
-audit/*.md
-# scripts/dev/.scratch/ 是 audit 副本备份目录, 不入库
-scripts/dev/.scratch/
-# Python build artifacts (wheel + sdist) — 用 twine upload dist/* 上 PyPI
-sdk/python/dist/
-sdk/python/build/
-sdk/python/*.egg-info/
-# Go build artifacts
-sdk/go/bin/
-sdk/go/dist/
-# Release asset bundle (one-time upload to GitHub Release, do not commit)
-release-assets/*.tar.gz
-release-assets/*.zip
-# MANIFEST.md is the only release-assets file that goes in git (lists what to upload)
-!release-assets/MANIFEST.md
-# Generated artifacts (rebuilt by bin/ scripts, not source)
-# Terraform 变量文件（避免 commit 真密码 / 真 IP）
-infra/**/*.tfvars
-infra/**/*.tfvars.json
-!infra/**/example.tfvars
-.terraform/
-*.tfstate
-*.tfstate.*.backup
-*.tfstate.backup
-crash.log
-crash.*.log
-.tf-plan
-plan.out
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraform.lock.hcl.lock-info  # 部分用户会想保留 lock, 默认 ignore
-# 阿里云 / 腾讯云 私钥对
-**/id_rsa
-**/id_ed25519
-<<<<<<< HEAD
-docs/openapi.yaml
-# --- ECS runtime secrets / host material (never commit) ---
+key-*.txt
+*.age.key
+age/key.txt
 broker.env
 broker.env.*
 master-key.txt
 .dashboard-password
-age/key.txt
-secrets/broker_dec.yaml
-secrets/secrets-meta.json
-secrets/secrets-detail.json
-secrets/common.env
-secrets/*.bak*
-secrets/broker.yaml.*
-pki/clients/
-pki/server/
-broker/**/*.bak*
-broker/server.js.bak*
-broker/server.js.patch.*
-=======
-# 历史/未维护的代码 (Phase B 实验性, README 自己声明 UNSUPPORTED)
-broker/experimental/
-# 本地工作目录下的 AI helper 文件 / review 草稿
-REVIEW.md
+secrets/*
+!secrets/.gitkeep
+!secrets/*.example
+!secrets/*.example.*
+pki/*
+!pki/.gitkeep
+audit/*
+!audit/.gitkeep
+
+# Local client and tool state
+.broker/
+.worktrees/
+.tools/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+tmp/
+.tmp/
+
+# Dependency, build, and generated output
+**/node_modules/
+**/.gradle/
+**/__pycache__/
+*.egg-info/
+*.pyc
+.venv/
+venv/
+target/
+dist/
+build/
+out/
+site/
+coverage/
+coverage.txt
+coverage.out
+*-coverage.out
+/core/coverage
+.nyc_output/
+*.vsix
+*.tar.gz
+*.zip
+
+# Test caches
+.pytest_cache/
+.pytest-tmp/
+.pytest-tmp*/
+
+# Local mobile and desktop build metadata
+**/local.properties
+clients/desktop/src-tauri/gen/
+
+# Terraform local state; lock files remain tracked
+**/.terraform/
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!*.example.tfvars
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+.tf-plan
+plan.out
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.lock-info

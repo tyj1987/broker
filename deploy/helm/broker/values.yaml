@@ -3,7 +3,7 @@
 # Declare variables to be passed into your templates.
 
 # -- Number of broker replicas
-replicaCount: 2
+replicaCount: 1
 
 image:
   # -- Image repository
@@ -12,6 +12,8 @@ image:
   pullPolicy: IfNotPresent
   # -- Image tag (defaults to chart appVersion when empty)
   tag: ""
+  # -- Immutable sha256 digest. Required for production releases.
+  digest: ""
 
 # -- Image pull secrets (e.g. for ghcr.io private repos)
 imagePullSecrets: []
@@ -33,16 +35,16 @@ serviceAccount:
 podAnnotations: {}
 # -- Pod-level security context
 podSecurityContext:
-  fsGroup: 1000
+  fsGroup: 65532
   runAsNonRoot: true
-  runAsUser: 1000
+  runAsUser: 65532
 
 # -- Container-level security context
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
   runAsNonRoot: true
-  runAsUser: 1000
+  runAsUser: 65532
   capabilities:
     drop:
       - ALL
@@ -82,6 +84,14 @@ resources:
     cpu: 200m
     memory: 256Mi
 
+coreResources:
+  limits:
+    cpu: 200m
+    memory: 64Mi
+  requests:
+    cpu: 20m
+    memory: 16Mi
+
 # -- Horizontal Pod Autoscaler settings
 autoscaling:
   enabled: false
@@ -89,7 +99,7 @@ autoscaling:
   maxReplicas: 5
   targetCPUUtilizationPercentage: 80
 
-# -- Persistent volume for SOPS-encrypted secrets
+# -- Persistent volume for encrypted broker data and control-plane state
 persistence:
   enabled: true
   # -- PVC size
@@ -136,19 +146,15 @@ config:
     defaultChannel: console
     channels: []
 
-# -- Secrets configuration
-# This MUST be provided at install time, e.g.:
-#   helm install broker ./deploy/helm/broker \
-#     --set-file secrets.brokerYaml=secrets/broker.yaml
+# -- References to secrets provisioned outside Helm. Secret values must not be
+# passed on the command line or stored in Helm release history.
 secrets:
-  # -- Path to a SOPS-encrypted broker.yaml (set via --set-file)
-  brokerYaml: ""
-  # -- Path to the broker's TLS cert (PEM)
-  tlsCert: ""
-  # -- Path to the broker's TLS key (PEM)
-  tlsKey: ""
-  # -- Path to the CA cert (PEM)
-  caCert: ""
+  # -- Existing secret containing broker.yaml.
+  configSecretName: ""
+  # -- Existing secret containing tls.crt, tls.key and ca.crt.
+  tlsSecretName: ""
+  # -- Existing secret containing a 32-byte control-plane-state.key.
+  stateKeySecretName: ""
 
 # -- Liveness/metrics probes
 probes:
@@ -164,3 +170,10 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
+
+# `helm test` requires a dedicated, least-privilege client certificate. Never
+# reuse an administrator or end-user certificate for this probe.
+tests:
+  enabled: false
+  clientCertificateSecret: ""
+  tlsServerName: broker.local

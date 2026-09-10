@@ -78,14 +78,50 @@ export function validateCommand(command) {
 }
 
 // ============================================================
-// 私钥生命周期
+// SSH材料生命周期
 // ============================================================
-function writePrivateKey(fsImpl, keyContent) {
+function validateKnownHosts(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('ssh secret with verified known_hosts required');
+  }
+  if (value.length > 16 * 1024 || /[\r\0]/.test(value)) {
+    throw new Error('known_hosts is invalid or too large');
+  }
+  const lines = value.trim().split('\n').filter(Boolean);
+  const valid = lines.every(line => {
+    const fields = line.trim().split(/\s+/);
+    const offset = fields[0]?.startsWith('@') ? 1 : 0;
+    return fields.length >= offset + 3
+      && /^(ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521))$/.test(fields[offset + 1] || '')
+      && /^[A-Za-z0-9+/]+={0,2}$/.test(fields[offset + 2] || '');
+  });
+  if (!lines.length || !valid) throw new Error('known_hosts must contain OpenSSH host key entries');
+  return value.trim() + '\n';
+}
+
+function configuredTarget(secret, requestedTarget) {
+  if (!secret || !secret.private_key) throw new Error('ssh secret with private_key required');
+  if (!secret.host || !secret.username) throw new Error('ssh secret host and username required');
+  const port = secret.port || 22;
+  const configured = parseSshTarget(`${secret.username}@${secret.host}:${port}`);
+  if (requestedTarget) {
+    const requested = parseSshTarget(requestedTarget);
+    if (requested.user !== configured.user || requested.host !== configured.host || requested.port !== configured.port) {
+      throw new Error('requested target does not match ssh secret target');
+    }
+  }
+  return configured;
+}
+
+function writeSshMaterial(fsImpl, secret) {
   const dir = fsImpl.mkdtempSync(join(tmpdir(), KEY_DIR_PREFIX));
   const keyPath = join(dir, 'id_key');
-  fsImpl.writeFileSync(keyPath, keyContent, { mode: 0o600 });
+  const knownHostsPath = join(dir, 'known_hosts');
+  fsImpl.writeFileSync(keyPath, secret.private_key, { mode: 0o600 });
   fsImpl.chmodSync(keyPath, 0o600);
-  return { dir, keyPath };
+  fsImpl.writeFileSync(knownHostsPath, validateKnownHosts(secret.known_hosts), { mode: 0o600 });
+  fsImpl.chmodSync(knownHostsPath, 0o600);
+  return { dir, keyPath, knownHostsPath };
 }
 
 function cleanupKeyDir(fsImpl, dir) {
@@ -114,21 +150,19 @@ function cleanupKeyDir(fsImpl, dir) {
  * @returns {Promise<{ok:boolean, exitCode:number|null, stdout:string, stderr:string, duration_ms:number}>}
  */
 export async function sshExec(opts, deps = {}) {
-  const target = parseSshTarget(opts.target);
+  const target = configuredTarget(opts.secret, opts.target);
   const command = validateCommand(opts.command);
-  if (!opts.secret || !opts.secret.private_key) {
-    throw new Error('ssh secret with private_key required');
-  }
   const fsImpl = deps.fsImpl || { writeFileSync, chmodSync, rmSync, existsSync, mkdtempSync };
   const executor = deps.executor || defaultExecutor;
   const startedAt = Date.now();
-  const { dir, keyPath } = writePrivateKey(fsImpl, opts.secret.private_key);
+  const { dir, keyPath, knownHostsPath } = writeSshMaterial(fsImpl, opts.secret);
   const args = [
     '-i', keyPath,
-    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'StrictHostKeyChecking=yes',
     '-o', 'BatchMode=yes',
     '-o', 'LogLevel=ERROR',
-    '-o', 'UserKnownHostsFile=/dev/null',  // broker 不持久化 known_hosts (凭据零接触)
+    '-o', `UserKnownHostsFile=${knownHostsPath}`,
+    '-o', 'GlobalKnownHostsFile=/dev/null',
     '-p', String(target.port),
     `${target.user}@${target.host}`,
     '--',
@@ -221,7 +255,7 @@ function defaultExecutor(cmd, args, opts = {}) {
  * @returns {Promise<{id:string, stop:()=>Promise<void>}>}
  */
 export async function sshTunnel(opts, deps = {}) {
-  const target = parseSshTarget(opts.target);
+  const target = configuredTarget(opts.secret, opts.target);
   if (!opts.localPort || !PORT_RE.test(String(opts.localPort))) {
     throw new Error('localPort must be 1-65535');
   }
@@ -230,9 +264,6 @@ export async function sshTunnel(opts, deps = {}) {
   }
   if (!opts.remotePort || !PORT_RE.test(String(opts.remotePort))) {
     throw new Error('remotePort must be 1-65535');
-  }
-  if (!opts.secret || !opts.secret.private_key) {
-    throw new Error('ssh secret with private_key required');
   }
   const fsImpl = deps.fsImpl || { writeFileSync, chmodSync, rmSync, existsSync, mkdtempSync };
   const executor = deps.executor || ((cmd, args) => {
@@ -244,13 +275,14 @@ export async function sshTunnel(opts, deps = {}) {
       } catch (e) { reject(e); }
     });
   });
-  const { dir, keyPath } = writePrivateKey(fsImpl, opts.secret.private_key);
+  const { dir, keyPath, knownHostsPath } = writeSshMaterial(fsImpl, opts.secret);
   const args = [
     '-i', keyPath,
-    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'StrictHostKeyChecking=yes',
     '-o', 'BatchMode=yes',
     '-o', 'LogLevel=ERROR',
-    '-o', 'UserKnownHostsFile=/dev/null',
+    '-o', `UserKnownHostsFile=${knownHostsPath}`,
+    '-o', 'GlobalKnownHostsFile=/dev/null',
     '-o', 'ExitOnForwardFailure=yes',
     '-N',                  // no command, just forward
     '-L', `${opts.localPort}:${opts.remoteHost}:${opts.remotePort}`,

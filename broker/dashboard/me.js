@@ -58,6 +58,79 @@
     }
   }
 
+  async function loadWebAuthn() {
+    const list = $('#webauthn-credentials');
+    if (!list) return;
+    try {
+      const result = await api('/api/v2/me/webauthn/credentials');
+      list.replaceChildren(...(result.credentials || []).map((credential) => {
+        const item = document.createElement('li');
+        item.textContent = `${credential.label || 'Security key'} · ${credential.device_type || 'unknown'} · ${credential.backed_up ? 'synced' : 'not synced'}`;
+        return item;
+      }));
+      setStatus('#webauthn-status', result.strict_ready ? '严格档密钥数量已满足' : '严格档需要至少两把实体密钥', result.strict_ready ? 'ok' : 'warn');
+    } catch (ex) {
+      setStatus('#webauthn-status', '无法读取安全密钥状态：' + (ex.message || ex), 'err');
+    }
+  }
+
+  async function registerWebAuthn() {
+    const label = $('#webauthn-label')?.value.trim() || 'Security key';
+    try {
+      const result = await window.brokerWebAuthn.register(label);
+      setStatus('#webauthn-status', result.strict_ready ? '密钥登记成功，严格档已就绪' : '密钥登记成功，请登记备用实体密钥', 'ok');
+      await loadWebAuthn();
+    } catch (ex) {
+      setStatus('#webauthn-status', '密钥登记失败：' + (ex.message || ex), 'err');
+    }
+  }
+
+  async function loadDevices() {
+    const list = $('#broker-devices');
+    if (!list) return;
+    try {
+      const result = await api('/api/v2/devices');
+      list.replaceChildren(...(result.devices || []).map((device) => {
+        const item = document.createElement('li');
+        item.textContent = `${device.label} · ${device.platform} · ${device.state}`;
+        return item;
+      }));
+      if (!(result.devices || []).length) {
+        const item = document.createElement('li');
+        item.textContent = '尚未登记设备';
+        list.appendChild(item);
+      }
+    } catch (ex) {
+      setStatus('#device-status', '无法读取设备：' + (ex.message || ex), 'err');
+    }
+  }
+
+  async function beginDeviceEnrollment() {
+    const label = $('#device-label')?.value.trim();
+    if (!/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(label || '')) {
+      setStatus('#device-status', '设备名称只能使用小写字母、数字及 . _ : -', 'err');
+      return;
+    }
+    try {
+      const result = await api('/api/v2/devices/enroll/begin', {
+        method: 'POST',
+        body: { label, platform: 'android', capabilities: ['otp.receive', 'approval'] },
+      });
+      $('#device-enrollment-id').value = result.enrollment_id;
+      $('#device-enrollment-challenge').value = result.challenge;
+      $('#device-enrollment-expires').textContent = result.expires_at;
+      $('#device-enrollment').hidden = false;
+      setStatus('#device-status', '配对口令已生成；请在五分钟内完成', 'warn');
+      setTimeout(() => {
+        $('#device-enrollment-id').value = '';
+        $('#device-enrollment-challenge').value = '';
+        $('#device-enrollment').hidden = true;
+      }, Math.max(0, Date.parse(result.expires_at) - Date.now()));
+    } catch (ex) {
+      setStatus('#device-status', '无法开始配对：' + (ex.message || ex), 'err');
+    }
+  }
+
   // ---- 改密码 ----
   async function submitChangePassword(ev) {
     ev.preventDefault();
@@ -111,19 +184,12 @@
     }
   }
 
-  // 简易 QR 渲染：用 Google Chart API（如果离线可以替换成纯 JS QR 库）
+  // Never send an otpauth URI to a third-party QR service. A future QR view
+  // must be generated entirely from bundled, reviewed code.
   function renderQrCode(otpauthUrl) {
     const old = $('#totp-qr');
     if (old) old.remove();
-    const img = document.createElement('img');
-    img.id = 'totp-qr';
-    img.alt = 'TOTP QR';
-    img.style = 'background:#fff;padding:8px;display:block;margin:8px 0;width:200px;height:200px;';
-    // 使用 api.qrserver.com 渲染（公网/内网都能用）
-    const chartUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(otpauthUrl);
-    img.src = chartUrl;
-    const anchor = $('#totp-otpauth-url');
-    if (anchor) anchor.parentNode.insertBefore(img, anchor.nextSibling);
+    void otpauthUrl;
   }
 
   async function submitTotpVerify(ev) {
@@ -218,10 +284,14 @@
     const fr = $('#form-rotate-cert'); if (fr) fr.addEventListener('submit', submitRotateCert);
     const cancel = $('#btn-totp-cancel'); if (cancel) cancel.addEventListener('click', cancelTotpSetup);
     const btnAudit = $('#btn-load-audit'); if (btnAudit) btnAudit.addEventListener('click', loadAudit);
+    const securityKey = $('#btn-webauthn-register'); if (securityKey) securityKey.addEventListener('click', registerWebAuthn);
+    const enrollDevice = $('#btn-device-enroll'); if (enrollDevice) enrollDevice.addEventListener('click', beginDeviceEnrollment);
 
     // tab 切换 (监听 hashchange 或 button click)
     document.addEventListener('me-tab-opened', loadMe);
     document.addEventListener('me-tab-opened', loadAudit);
+    document.addEventListener('me-tab-opened', loadWebAuthn);
+    document.addEventListener('me-tab-opened', loadDevices);
   }
 
   if (document.readyState === 'loading') {

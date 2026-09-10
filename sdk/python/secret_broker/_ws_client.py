@@ -122,7 +122,7 @@ async def connect(endpoint: str, path: str, ssl_ctx: ssl.SSLContext, session_coo
         "Connection: Upgrade",
         f"Sec-WebSocket-Key: {key}",
         "Sec-WebSocket-Version: 13",
-        "User-Agent: secret-broker-py/4.1.0",
+        "User-Agent: secret-broker-py/4.2.0",
     ]
     if session_cookie:
         req_lines.append(f"Cookie: broker_session={session_cookie}")

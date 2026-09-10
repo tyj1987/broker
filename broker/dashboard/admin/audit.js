@@ -276,22 +276,6 @@
     if (exj) exj.addEventListener('click', () => downloadExport('json'));
     const exc = $('#btn-audit-export-csv');
     if (exc) exc.addEventListener('click', () => downloadExport('csv'));
-    const clearBtn = $('#btn-audit-clear');
-    if (clearBtn) clearBtn.addEventListener('click', clearAuditLogs);
-  }
-
-  async function clearAuditLogs() {
-    if (!isAdmin) return;
-    if (!confirm('确定清除全部审计日志？此操作不可恢复。\nClear ALL audit logs? This cannot be undone.')) return;
-    try {
-      await api('/api/v1/admin/audit', { method: 'DELETE', body: { confirm: true } });
-      events = [];
-      renderTable();
-      await loadFacets();
-      await loadAudit();
-    } catch (e) {
-      alert('清除失败 / Clear failed: ' + e.message);
-    }
   }
 
   function downloadExport(fmt) {

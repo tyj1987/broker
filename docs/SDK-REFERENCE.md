@@ -1,211 +1,202 @@
-# SDK Reference (V4.1)
+# SDK reference
 
-> Quick reference for all 3 official Secret Broker SDKs.
+The Go, Python, and VS Code clients use the same `/api/v2` typed-operation
+contract. An automation supplies an allowlisted operation identifier and typed
+parameters; it never supplies an arbitrary URL, authentication header, command,
+or long-lived credential.
 
-## Common API surface
+## Preferred API
 
-All 3 SDKs implement the same 8 calling surfaces:
+| Capability | Python | Go | TypeScript |
+|---|---|---|---|
+| Create operation | `create_operation(...)` | `CreateOperation(...)` | `createOperation(...)` |
+| Read redacted state/result | `get_operation(id)` | `GetOperation(id)` | `getOperation(id)` |
+| Create approval request | `create_approval(...)` | `CreateApproval(...)` | `createApproval(...)` |
+| List visible approvals | `list_approvals()` | `ListApprovals(...)` | `listApprovals()` |
+| Cancel owned approval | `cancel_approval(id)` | `CancelApproval(...)` | `cancelApproval(id)` |
+| Create task | `create_task(...)` | `CreateTask(...)` | `createTask(...)` |
+| Read task | `get_task(id)` | `GetTask(...)` | `getTask(id)` |
+| Run task | `run_task(id)` | `RunTask(...)` | `runTask(id)` |
+| Read task events | `task_events(id)` | `TaskEvents(...)` | `taskEvents(id)` |
+| Cancel task | `cancel_task(id)` | `CancelTask(...)` | `cancelTask(id)` |
+| Health check | `health()` | `Health()` | `health()` |
 
-| # | Surface | Method (all SDKs) |
-|---|---------|-------------------|
-| 1 | Single secret | `getSecret(name)` |
-| 1 | Bulk secrets | `resolveSecrets(names)` / `resolve_bulk(names)` |
-| 1 | List secrets | `listSecrets()` |
-| 2 | Proxy | `proxy(service, method, path, body, query)` |
-| 3 | Exec | `exec(env_names, command, args)` |
-| 4 | SSH exec | `sshExec(target, command, secretName, timeoutMs)` |
-| 4 | SSH tunnel | `sshTunnel(target, localPort, remoteHost, remotePort, secretName)` |
-| 5 | Workload identity | `assumeWorkloadIdentity(provider, oidcToken, roleArn, audience)` |
-| 6 | Login | `login(username, password, mfaToken, mfaCode)` |
-| 7 | Self / Health | `me()` / `health()` |
-| 8 | WebSocket | subscribe / unsubscribe / recv (async) |
+An operation request contains exactly:
+
+```json
+{
+  "provider": "github",
+  "operation_id": "repo.read",
+  "account_ref": "personal",
+  "environment": "production",
+  "typed_parameters": {
+    "resource_ref": "repository-name"
+  }
+}
+```
+
+The Broker evaluates the subject, provider, operation, account, environment,
+resource, approval state, rate, time and API-key constraints. Unknown fields
+are rejected by the operation schema. A completed response contains only the
+business result allowed by that operation; it must not contain injected
+credentials, cookies, signing material, internal paths, or browser state.
+
+An accepted operation is not published to the caller until its creation audit
+has been durably accepted. If that mandatory audit fails, the unpublished
+operation, any waiting OTP task and its serialization lock are rolled back, and
+an unused approval claim is released. This rollback applies only before an
+executor or isolated browser worker has received the operation.
+
+Approval requests use the same publication boundary. A newly created request is
+returned only after its mandatory creation audit is accepted; otherwise the
+unpublished request is removed. The rollback is rejected once any approver has
+acted on the request.
+
+Approval decisions and cancellations also require a mandatory result audit. The
+in-memory transition and its audit commit are synchronous: if the audit commit
+fails, the exact prior status and approver set are restored before the caller can
+observe success. A durable multi-node implementation remains gated on the state
+store transaction decision in DQ-001.
+
+Device enrollment challenges are likewise unpublished until their mandatory
+creation audit succeeds. An audit failure deletes the unused challenge and
+releases the dual-control approval claim, so a caller cannot receive an
+unaudited pairing capability.
+
+Device OTP submission is committed with its mandatory result audit in the same
+synchronous transition. If the audit commit fails, the OTP code, task state and
+operation state are restored to their pre-submission values; the device must use
+a fresh signed request nonce to retry.
+
+An isolated browser lease is not released to a worker until its mandatory claim
+audit succeeds. Audit failure deletes the unpublished receipt and lease, then
+restores the operation to its prior waiting or OTP-received state.
+
+OTP release to an isolated browser worker follows the same rule. The mandatory
+result audit contains only device, lease and status metadata. If it fails, the
+code remains server-side, the OTP task returns to `received`, and the lease may
+retry with a fresh signed request without an unaudited disclosure.
+
+Browser completion reports are fully validated before their mandatory result
+audit is committed. The lease and operation enter a terminal state only after
+that audit succeeds. On audit outage, the lease remains active for a bounded,
+signed retry; the worker must not repeat the upstream provider action.
+
+The assisted browser-extension OTP claim has the same mandatory intent and
+result audit boundary as an isolated worker. If the result audit fails, the
+unpublished receipt is removed and the code, task and operation are restored to
+the pre-claim state.
+
+The extension completion callback is validated and mandatorily audited before
+the receipt is consumed or the OTP operation becomes terminal. During an audit
+outage the bounded receipt remains active for a status-only retry; the extension
+must not repeat page submission.
+
+A successful WebAuthn assertion does not create a browser session until its
+mandatory authentication audit has been accepted. If audit storage is
+unavailable, no session record or cookie is created and the client must start a
+new WebAuthn ceremony.
+
+Authentication and registration challenges are also unpublished until their
+mandatory creation audit succeeds. On audit failure the exact flow, ceremony
+type and client binding are checked before the challenge is removed.
+
+A WebAuthn registration result is verified and mandatorily audited before the
+credential is added to the client configuration. Audit failure consumes the
+one-time ceremony but leaves the credential set unchanged, requiring a new
+registration challenge.
+
+Device proof of possession is likewise mandatorily audited before the verified
+device is added to the registry. If the audit commit fails, the pairing
+challenge remains valid for its original bounded lifetime and no device record
+is created.
+
+Both device enrollment endpoints enforce their closed OpenAPI request shapes
+before approval lookup, intent audit, proof verification, or registry mutation.
+Unknown fields, unsupported platforms or signature algorithms, and malformed
+approval or enrollment identifiers are rejected without publishing a challenge
+or attempting a device proof. Public keys and proof signatures are never copied
+into audit events. Labels and capability identifiers use bounded safe character
+sets; capability lists, public keys, and Base64url proof signatures have explicit
+size limits before cryptographic parsing.
+
+Device state changes enforce the closed OpenAPI request shape before intent
+audit or approval lookup. Only `state` and a UUID `approval_request_id` are
+accepted, and `state` is limited to `active`, `suspended`, or `revoked`.
+
+Mutation intent events contain only server-derived action and identity
+metadata. Unvalidated tool, provider, account, resource, and parameter values
+are omitted; validated values appear only in the policy and state-transition
+audit records.
+
+An operation policy may additionally set `source_cidrs`, `not_before`, and
+`not_after`. CIDRs support IPv4 and IPv6. Time values use RFC 3339 and the end
+is exclusive. Missing source identity, malformed CIDRs, malformed or inverted
+time windows, and requests outside the window are denied by both the Node
+transition layer and the Go policy service.
+
+For orchestrators, the task API wraps that policy decision in an idempotent
+state machine. A task refers to an exact `tool@version` from the registry and
+returns only output allowed by that tool's closed schema. High-risk tasks route
+through the approval lifecycle, and every run performs a fresh authorization
+check. See [Automation tasks](AUTOMATION-TASKS.md).
 
 ## Authentication
 
-| Mechanism | Config |
-|-----------|--------|
-| **mTLS client cert** (recommended) | `client_cert` / `client_cert` / `ClientCert` |
-| **mTLS client key** | `client_key` / `client_key` / `ClientKey` |
-| **CA cert (server verification)** | `ca_cert` / `ca_cert` / `CACert` |
-| **Verify TLS** (default true) | `verify_tls` / `verifyTls` / `VerifyTLS` |
-| **Password login + session cookie** | `login()` returns `session_token`, SDK auto-uses for subsequent calls |
-| **Workload identity** | `workload_identity` constructor arg |
+- Human control-plane access uses mTLS and WebAuthn. Strict profiles require
+  two non-synced hardware-bound credentials.
+- Browser sessions are delivered only as `Secure`, `HttpOnly`,
+  `SameSite=Strict` cookies with a ten-minute absolute lifetime. Login responses
+  do not repeat the session token in JSON.
+- Workloads use OIDC/SPIFFE-style short-lived identities where available.
+- An API key, when a compatibility integration still requires one, must be a
+  short-lived child key constrained by service, operation, account,
+  environment, resource, secret references, IP and rate. Empty constraint
+  lists deny typed operations.
+- TLS verification is enabled by default. Disabling it is not a supported
+  production configuration.
 
-## Common patterns
+Approval decisions are intentionally absent from the network-capable SDK
+surface. The compatibility methods `decide_approval`, `DecideApproval`, and
+`decideApproval` fail locally without sending a request. A human must use the
+same-origin `/approvals` browser workbench so the Broker can verify a fresh
+WebAuthn factor and the configured HTTPS origin.
 
-### Bulk resolve for environment injection
+Approval lifecycle states are `REQUESTED`, `APPROVED`, `EXECUTING`,
+`SUCCEEDED`, `DENIED`, `FAILED`, `EXPIRED`, and `CANCELLED`. Once execution is
+claimed, failure is terminal; the approval cannot be returned to an executable
+state. The requester may cancel before execution. An administrator cancelling
+another request needs a WebAuthn-stepped-up browser session.
 
-=== "Node"
-    ```javascript
-    const env = await client.resolveSecrets(['github.pat', 'openai.key']);
-    const child = spawn('git', ['push'], { env: { ...process.env, ...env } });
-    ```
+## Legacy API surface
 
-=== "Python"
-    ```python
-    env = c.resolve_secrets(['github.pat', 'openai.key'])
-    subprocess.run(['git', 'push'], env={**os.environ, **env})
-    ```
+The SDKs retain v1 resolve, proxy, exec and SSH methods for isolated migration
+environments. Strict profiles deny these routes. New integrations must not use
+them, and examples must not export resolved secrets to environment variables or
+command arguments.
 
-=== "Go"
-    ```go
-    env, _ := c.ResolveSecrets(ctx, []string{"github.pat", "openai.key"})
-    // Exec appends to os.Environ() automatically
-    rc, _ := c.Exec(ctx, []string{"github.pat", "openai.key"}, []string{"git", "push"})
-    ```
+The compatibility surface will be removed only after downstream users have
+migrated to versioned provider operations. Its presence is not evidence that a
+provider adapter is production-ready.
 
-### Workload identity (K8s Pod)
+## Error and logging rules
 
-=== "Node"
-    ```javascript
-    import { BrokerClient, WorkloadIdentity } from '@tyj1987/broker-sdk';
-    const wi = new WorkloadIdentity({
-      provider: 'k8s',
-      roleArn: process.env.BROKER_ROLE_ARN,
-    });
-    const client = new BrokerClient({
-      endpoint: 'https://broker:8443',
-      cert: fs.readFileSync('/var/run/secrets/tls/client.crt'),
-      key: fs.readFileSync('/var/run/secrets/tls/client.key'),
-      ca: fs.readFileSync('/var/run/secrets/tls/ca.crt'),
-      workloadIdentity: wi,
-    });
-    const creds = await client.assumeWorkloadIdentity('aws');
-    ```
+SDK errors contain an operation name, HTTP status and stable redacted code.
+They never include request authorization, response bodies that may contain a
+credential, private key paths, OTP values or session cookies. Client logs must
+apply the shared canary-secret tests before release.
 
-=== "Python"
-    ```python
-    from secret_broker import BrokerClient, WorkloadIdentity
-    wi = WorkloadIdentity("k8s", role_arn=os.environ["BROKER_ROLE_ARN"])
-    c = BrokerClient(
-        endpoint="https://broker:8443",
-        client_cert="/var/run/secrets/tls/client.crt",
-        client_key="/var/run/secrets/tls/client.key",
-        ca_cert="/var/run/secrets/tls/ca.crt",
-        workload_identity=wi,
-    )
-    creds = c.assume_workload_identity("aws")
-    ```
+## Release verification
 
-=== "Go"
-    ```go
-    wi := broker.NewWorkloadIdentity(broker.ProviderK8S, os.Getenv("BROKER_ROLE_ARN"))
-    c, _ := broker.NewClient(broker.Config{
-        Endpoint: "https://broker:8443",
-        WorkloadIdentity: wi,
-        // ... certs
-    })
-    creds, _ := c.AssumeWorkloadIdentity(ctx, "aws", "", "", "")
-    ```
+Run each SDK's tests from a clean checkout:
 
-### WebSocket event subscription
+```sh
+python -m pytest sdk/python/tests -q
+go test -race ./...
+npm --prefix sdk/vscode ci
+npm --prefix sdk/vscode test
+```
 
-=== "Node"
-    ```javascript
-    import { BrokerClient } from '@tyj1987/broker-sdk';
-    const client = new BrokerClient({ endpoint: 'wss://broker:8443', ... });
-    const ws = await client.connectWS('/ws');
-    await ws.subscribe(['alerts', 'secret_rotated']);
-    for await (const event of ws) {
-      console.log(event.event_type, event.data);
-    }
-    ```
-
-=== "Python"
-    ```python
-    import asyncio
-    from secret_broker import BrokerClient
-
-    async def watch():
-        c = BrokerClient(...)
-        async with await c.async_client().connect_ws() as ws:
-            await ws.subscribe(["alerts", "secret_rotated"])
-            async for event in ws:
-                print(event)
-
-    asyncio.run(watch())
-    ```
-
-=== "Go"
-    ```go
-    ws, _ := broker.WSConnect("https://broker:8443", "/ws", nil)
-    defer ws.Close()
-    ws.Subscribe([]string{"alerts", "secret_rotated"}, nil)
-    for {
-        msg, err := ws.Recv()
-        if err != nil { break }
-        fmt.Printf("[%s] %s\n", msg.EventType, msg.Data)
-    }
-    ```
-
-## Typed errors
-
-All SDKs raise typed errors that allow `errors.Is()` / `instanceof` checks.
-
-| HTTP | Node | Python | Go |
-|------|------|--------|-----|
-| 401  | `BrokerAuthError` | `BrokerAuthError` | `ErrAuth` |
-| 403  | `BrokerPermissionError` | `BrokerPermissionError` | `ErrPermission` |
-| 404  | `BrokerNotFoundError` | `BrokerNotFoundError` | `ErrNotFound` |
-| 429  | `BrokerRateLimitError` | `BrokerRateLimitError` | `ErrRateLimit` |
-| 5xx  | `BrokerServerError` | `BrokerServerError` | `ErrServer` |
-| Network | `BrokerConnectionError` | `BrokerConnectionError` | `ErrConnection` |
-
-## Zero credential leakage
-
-All SDKs run **incoming** error messages through a redaction engine before
-returning them. Patterns scrubbed:
-
-- `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` (GitHub PAT)
-- `github_pat_` (GitHub Container Registry)
-- `sk-` (OpenAI)
-- `sk-proj-` (OpenAI project-scoped)
-- `sk-ant-` (Anthropic)
-- `sk_(live|test)_` (Stripe)
-- `AKIA`, `ASIA` (AWS)
-- `STS.` (Aliyun STS)
-- `xoxb-`, `xoxp-`, `xapp-`, `xoxa-` (Slack)
-- `AIza` (Google API key)
-- `LTAI` (Aliyun AccessKey)
-- `eyJ*.eyJ*.eyJ*` (JWT)
-- UUID v4 in header context
-- `-----BEGIN .* PRIVATE KEY-----`
-- `Authorization: <value>`, `X-API-Key: <value>`, `token=<value>`, `password=<value>` in headers/queries
-
-This is enforced **on every code path**:
-- Python: `_redact()` in `secret_broker/client.py`
-- Go: `redact()` in `broker/errors.go`
-- Node: `redact()` in `sdk/node/src/redact.ts`
-- Plus server-side: `broker/lib/redact.js` scrubs **outgoing** audit log + alert payload
-
-## Hard dependencies
-
-| SDK | Runtime deps | Build/dev deps |
-|-----|--------------|-----------------|
-| Node | `ws` (WebSocket only) | TypeScript |
-| Python | **none** (stdlib only: ssl, urllib, asyncio, json) | pytest, cryptography (test only) |
-| Go | **none** (stdlib only: net/http, crypto/tls, encoding/json) | – |
-
-## Test counts
-
-| SDK | Tests | Status |
-|-----|-------|--------|
-| Python | 28 | ✅ 100% pass |
-| Go | 15 (test cases) | ✅ 100% (manual review; no Go toolchain in this env) |
-| Node | (covered by broker/tests) | – |
-| VS Code extension | 11 test cases | ✅ (uses Node https mock + openssl) |
-
-## Compatibility matrix
-
-| Python | Node | Go | Status |
-|--------|------|-----|--------|
-| 3.9+ | 20+ | 1.21+ | supported |
-| 3.8   | 18   | 1.20 | best-effort (no CI) |
-| 3.7-  | 16-  | 1.19- | EOL — please upgrade |
-
-## Where to get help
-
-- GitHub: https://github.com/tyj1987/broker/issues
-- Discord: #broker channel
-- Email: broker@local
-- Docs site: https://docs.broker.example.com
+The Python command assumes the pinned test requirements have been installed;
+the Go race test is a Linux CI gate. A package is released only from a signed
+release artifact whose commit, SBOM and provenance match the source tree.

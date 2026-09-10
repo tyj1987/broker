@@ -12,7 +12,7 @@
 //   9. Redaction works
 //  10. readFiltered returns recent events from disk
 
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditAsync } from '../broker/lib/audit-async.js';
@@ -76,7 +76,6 @@ section('3. Mandatory audit throws on FS failure');
   // Actually simpler: write to a file path we can't create a dir at.
   // Skip the mkdir-block trick; use the fact that appendFile on an unwritable
   // file fails.
-  const audit = createAuditAsync({ auditDir: WORK });
   // Make the audit file unreadable/unwritable to current user
   // (won't work as root, so just check behavior matches when there's a write error)
   // Instead, simulate by passing a deliberately bad onWriteError trigger.
@@ -138,7 +137,7 @@ section('6. Redaction works');
     token: 'ghp_FAKEFAKEFAKEFAKEFAKEFAKE', // synthetic, <36 chars, won't match gitleaks
   });
   ok('ghp_ value not present in event', !('ghp_FAKEFAKEFAKE' in ev) && !JSON.stringify(ev).includes('ghp_FAKEFAKEFAKE'));
-  ok('redacted placeholder present', JSON.stringify(ev).includes('ghp_***'));
+  ok('token field is fully redacted', ev.token === '[REDACTED]' && !JSON.stringify(ev).includes('ghp_'));
 }
 
 section('7. Health endpoint');

@@ -14,7 +14,7 @@ body:
     id: version
     attributes:
       label: broker version
-      description: Output of `curl -k --cert client.crt --key client.key --cacert ca.crt https://broker:8443/health` or `npm run --silent -p version`
+      description: Broker commit or release version. Do not disable TLS verification to collect it.
       placeholder: "4.1.0"
     validations:
       required: true
@@ -95,4 +95,4 @@ body:
         - label: I have searched existing issues to avoid duplicates
         - label: I have reproduced the bug against the latest `main` branch
         - label: I have redacted all secret values in logs and screenshots
-        - label: This is NOT a security vulnerability (security issues go to security@broker.example.com)
+        - label: This is NOT a security vulnerability (use GitHub private vulnerability reporting for security issues)

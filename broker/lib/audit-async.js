@@ -14,7 +14,7 @@
 // event envelope, and respects the same `mandatory: true` option.
 
 import { EventEmitter } from 'node:events';
-import { appendFile, mkdir, rename, unlink, stat, readdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, rename, stat, readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -63,8 +63,7 @@ export function createAuditAsync(opts) {
   async function rotateIfNeeded() {
     if (auditBytes <= ROTATE_BYTES) return;
     const old = auditFilePath();
-    const rotated = old + '.1';
-    try { await unlink(rotated); } catch { /* ignore */ }
+    const rotated = old.replace(/\.jsonl$/, `-${Date.now()}-${randomUUID()}.jsonl`);
     try { await rename(old, rotated); auditBytes = 0; } catch { /* ignore */ }
   }
 

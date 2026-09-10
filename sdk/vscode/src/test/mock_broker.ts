@@ -1,9 +1,7 @@
 // Mock HTTPS broker for VS Code SDK tests.
 // Generates a fresh self-signed cert via `openssl` (assumed present on PATH).
-// Tests pass `verifyTls: true` to skip CA verification.
+// Tests pass `insecureSkipVerify: true` to skip CA verification.
 import * as https from 'node:https';
-import * as tls from 'node:tls';
-import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -20,15 +18,13 @@ let cachedCerts: MockCerts | null = null;
 
 function generateSelfSigned(): MockCerts {
   if (cachedCerts) return cachedCerts;
-  // Use `openssl` if available; else throw.
-  const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['openssl'], { encoding: 'utf8' });
-  if ((which.status ?? 1) !== 0) {
-    throw new Error('openssl not found on PATH; cannot generate self-signed test cert');
-  }
+  const bundled = 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe';
+  const openssl = process.env.OPENSSL_BIN
+    || (process.platform === 'win32' && fs.existsSync(bundled) ? bundled : 'openssl');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'broker-vscode-test-'));
   const certPath = path.join(tmp, 'cert.pem');
   const keyPath = path.join(tmp, 'key.pem');
-  const out = spawnSync('openssl', [
+  const out = spawnSync(openssl, [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
     '-keyout', keyPath, '-out', certPath,
     '-days', '1', '-subj', '/CN=127.0.0.1',
@@ -49,8 +45,9 @@ function generateSelfSigned(): MockCerts {
 let server: https.Server | null = null;
 let port = 0;
 
-export function startMockBroker(): { port: number; certPath: string; keyPath: string; stop: () => void } {
-  if (server) { server.close(); server = null; }
+export async function startMockBroker(): Promise<{ port: number; certPath: string; keyPath: string; stop: () => Promise<void> }> {
+  if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+  server = null;
   const certs = generateSelfSigned();
   server = https.createServer(
     { cert: certs.certPem, key: certs.keyPem },
@@ -75,9 +72,50 @@ export function startMockBroker(): { port: number; certPath: string; keyPath: st
             res.writeHead(404, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ error: 'not found' }));
           }
-        } else if (url && url.startsWith('/api/v1/proxy/github/forbidden')) {
-          res.writeHead(403, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: 'forbidden' }));
+        } else if (url === '/api/v2/operations' && method === 'POST') {
+          const parsed = JSON.parse(body || '{}');
+          res.writeHead(202, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000001', provider: parsed.provider, operation_id: parsed.operation_id, status: 'waiting' }));
+        } else if (url === '/api/v2/operations/00000000-0000-4000-8000-000000000001' && method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000001', provider: 'github', operation_id: 'repo.read', status: 'completed' }));
+        } else if (url === '/api/v2/tasks' && method === 'POST') {
+          res.writeHead(202, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', tool: 'broker.tools.inspect', state: 'READY', risk_level: 'LOW' }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003' && method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', state: 'SUCCEEDED', result: { name: 'github.repository.read' } }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003/events' && method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ events: [{ sequence: 1, state: 'REQUESTED', reason: 'task_created', at: '2026-09-09T00:00:00Z' }] }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003/run' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', state: 'SUCCEEDED', result: { name: 'github.repository.read' } }));
+        } else if (url === '/api/v2/tasks/00000000-0000-4000-8000-000000000003/cancel' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000003', state: 'CANCELLED' }));
+        } else if (url === '/api/v2/approvals' && method === 'POST') {
+          const parsed = JSON.parse(body || '{}');
+          res.writeHead(201, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', requester: 'test', provider: parsed.provider, operation_id: parsed.operation_id, account_ref: parsed.account_ref, environment: parsed.environment, resource_ref: parsed.typed_parameters.resource_ref, required_approvals: 2, approvals: [], status: 'REQUESTED', created_at: '2026-09-09T00:00:00Z', expires_at: '2026-09-09T00:05:00Z' }));
+        } else if (url === '/api/v2/approvals' && method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ approvals: [{ id: '00000000-0000-4000-8000-000000000002', status: 'REQUESTED' }] }));
+        } else if (url === '/api/v2/approvals/00000000-0000-4000-8000-000000000002/decision' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', status: 'APPROVED' }));
+        } else if (url === '/api/v2/approvals/00000000-0000-4000-8000-000000000002/cancel' && method === 'POST') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: '00000000-0000-4000-8000-000000000002', status: 'CANCELLED' }));
+        } else if (url === '/api/v1/proxy/github' && method === 'POST') {
+          const parsed = JSON.parse(body || '{}');
+          if (parsed.path === '/forbidden') {
+            res.writeHead(403, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'forbidden' }));
+          } else {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, request: parsed }));
+          }
         } else {
           res.writeHead(404, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: 'no route' }));
@@ -85,21 +123,21 @@ export function startMockBroker(): { port: number; certPath: string; keyPath: st
       });
     }
   );
-  server.listen(0, '127.0.0.1', () => {
-    const addr = server!.address();
-    if (addr && typeof addr === 'object') port = addr.port;
+  await new Promise<void>((resolve, reject) => {
+    server!.once('error', reject);
+    server!.listen(0, '127.0.0.1', () => {
+      const addr = server!.address();
+      if (addr && typeof addr === 'object') port = addr.port;
+      resolve();
+    });
   });
-  // wait until listening
-  const start = Date.now();
-  while (port === 0 && Date.now() - start < 3000) {
-    // busy-wait briefly (test only)
-  }
   return {
     port,
     certPath: certs.certPath,
     keyPath: certs.keyPath,
-    stop: () => {
-      if (server) { server.close(); server = null; }
+    stop: async () => {
+      if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = null;
       port = 0;
     },
   };

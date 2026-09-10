@@ -18,7 +18,8 @@ To test from outside the cluster:
 
 Then:
 
-  curl -k --cert client.crt --key client.key --cacert ca.crt https://127.0.0.1:8443/health
+  curl --fail --cert client.crt --key client.key --cacert ca.crt \
+    --resolve broker.local:8443:127.0.0.1 https://broker.local:8443/health
 
 ** Verifying the install **
 

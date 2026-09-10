@@ -3,7 +3,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-export const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min
+export const SESSION_TTL_MS = 10 * 60 * 1000; // absolute lifetime
 export const SESSION_HEADER = 'x-auth-token';
 export const MAX_LOGIN_FAILS = 5;
 export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
@@ -16,6 +16,7 @@ export function createSessionStore(opts = {}) {
   const header = opts.header ?? SESSION_HEADER;
   const maxFails = opts.maxFails ?? MAX_LOGIN_FAILS;
   const lockoutMs = opts.lockoutMs ?? LOGIN_LOCKOUT_MS;
+  const now = opts.now ?? Date.now;
 
   const sessions = new Map();
   const loginAttempts = new Map();
@@ -29,8 +30,8 @@ export function createSessionStore(opts = {}) {
       clientName: ctx.clientName,
       cert: ctx.cert,
       client: ctx.client,
-      expiresAt: Date.now() + ttlMs,
-      createdAt: Date.now(),
+      expiresAt: now() + ttlMs,
+      createdAt: now(),
     });
     return token;
   }
@@ -41,11 +42,10 @@ export function createSessionStore(opts = {}) {
     if (!t) return null;
     const s = sessions.get(t);
     if (!s) return null;
-    if (Date.now() > s.expiresAt) {
+    if (now() > s.expiresAt) {
       sessions.delete(t);
       return null;
     }
-    s.expiresAt = Date.now() + ttlMs;
     return s;
   }
 
@@ -56,18 +56,18 @@ export function createSessionStore(opts = {}) {
   function checkLoginLock(key) {
     const a = loginAttempts.get(key);
     if (!a) return true;
-    if (a.lockedUntil && Date.now() < a.lockedUntil) return false;
+    if (a.lockedUntil && now() < a.lockedUntil) return false;
     return true;
   }
 
   function recordLoginFail(key) {
     const a = loginAttempts.get(key) || { fails: 0, lockedUntil: 0 };
-    if (a.lockedUntil && Date.now() >= a.lockedUntil) {
+    if (a.lockedUntil && now() >= a.lockedUntil) {
       a.fails = 0;
       a.lockedUntil = 0;
     }
     a.fails += 1;
-    if (a.fails >= maxFails) a.lockedUntil = Date.now() + lockoutMs;
+    if (a.fails >= maxFails) a.lockedUntil = now() + lockoutMs;
     loginAttempts.set(key, a);
   }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-approvals"
+description = "Enables the open_approvals command without any pre-configured scope."
+commands.allow = ["open_approvals"]
+
+[[permission]]
+identifier = "deny-open-approvals"
+description = "Denies the open_approvals command without any pre-configured scope."
+commands.deny = ["open_approvals"]

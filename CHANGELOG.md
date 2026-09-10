@@ -1,5 +1,9 @@
 # Changelog
 
+> Historical entries record claims made by earlier releases. They are not current
+> security, coverage, bounty, or production-acceptance evidence. Use `VERIFY.md`
+> and `docs/PRODUCTION-ACCEPTANCE.md` for the current evidence status.
+
 All notable changes to Secret Broker are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
@@ -135,7 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [4.1.0] - 2026-09-01 (GA)
 
-> Full release notes for v4.1.0. See also [`RELEASE-NOTES-v4.1.0.md`](RELEASE-NOTES-v4.1.0.md).
+> The former standalone `RELEASE-NOTES-v4.1.0.md` was consolidated here during repository cleanup.
 
 ### Highlights
 
@@ -419,7 +423,7 @@ All 17 recommendations from `REVIEW.md` implemented:
 
 ## [4.1.0] - 2026-09-01 (GA)
 
-> 完整的 v4.1.0 发布说明。亦见 [`RELEASE-NOTES-v4.1.0.md`](RELEASE-NOTES-v4.1.0.md)。
+> 完整的 v4.1.0 发布说明已在仓库清理时合并到本文件。
 
 ### 亮点
 

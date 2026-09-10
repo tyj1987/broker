@@ -98,19 +98,25 @@ console.log('=== handleStatic ===');
 
 console.log('=== createSessionStore ===');
 {
-  const store = createSessionStore({ ttlMs: 60_000 });
+  let now = 1_900_000_000_000;
+  const store = createSessionStore({ ttlMs: 60_000, now: () => now });
   const client = { role: 'admin' };
   const tok = store.makeSession({ cn: 'a', fp: 'f', clientName: 'admin', client, cert: {} });
   assert(typeof tok === 'string' && tok.length > 10, 'token');
   const req = { headers: { [store.header]: tok } };
   const s = store.getSession(req);
   assert(s && s.cn === 'a' && s.role === 'admin', 'getSession');
+  const absoluteExpiry = s.expiresAt;
+  now += 30_000;
+  assert(store.getSession(req)?.expiresAt === absoluteExpiry, 'session access does not extend absolute expiry');
+  now += 30_001;
+  assert(store.getSession(req) === null, 'session expires absolutely');
   assert(store.checkLoginLock('u|pw') === true, 'lock open');
   for (let i = 0; i < 5; i++) store.recordLoginFail('u|pw');
   assert(store.checkLoginLock('u|pw') === false, 'locked after fails');
   store.clearLoginLock('u|pw');
   assert(store.checkLoginLock('u|pw') === true, 'cleared');
-  assert(SESSION_TTL_MS === 30 * 60 * 1000, 'default TTL const');
+  assert(SESSION_TTL_MS === 10 * 60 * 1000, 'default TTL const');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

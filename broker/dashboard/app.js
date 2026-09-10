@@ -83,6 +83,79 @@ function showLogin() {
   $('#login-password').value = '';
 }
 
+function fromBase64Url(value) {
+  const padded = String(value).replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  const raw = atob(padded);
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+}
+
+function toBase64Url(value) {
+  if (value == null) return null;
+  const bytes = new Uint8Array(value);
+  let raw = '';
+  for (const byte of bytes) raw += String.fromCharCode(byte);
+  return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function browserOptions(options) {
+  return {
+    ...options,
+    challenge: fromBase64Url(options.challenge),
+    user: options.user ? { ...options.user, id: fromBase64Url(options.user.id) } : undefined,
+    allowCredentials: options.allowCredentials?.map((item) => ({ ...item, id: fromBase64Url(item.id) })),
+    excludeCredentials: options.excludeCredentials?.map((item) => ({ ...item, id: fromBase64Url(item.id) })),
+  };
+}
+
+function credentialJson(credential) {
+  const response = credential.response;
+  return {
+    id: credential.id,
+    rawId: toBase64Url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment,
+    clientExtensionResults: credential.getClientExtensionResults(),
+    response: {
+      clientDataJSON: toBase64Url(response.clientDataJSON),
+      attestationObject: response.attestationObject ? toBase64Url(response.attestationObject) : undefined,
+      authenticatorData: response.authenticatorData ? toBase64Url(response.authenticatorData) : undefined,
+      signature: response.signature ? toBase64Url(response.signature) : undefined,
+      userHandle: response.userHandle ? toBase64Url(response.userHandle) : undefined,
+      transports: typeof response.getTransports === 'function' ? response.getTransports() : undefined,
+    },
+  };
+}
+
+async function beginWebAuthnLogin() {
+  const client = $('#login-client').value.trim();
+  if (!client || !window.PublicKeyCredential) throw new Error('此浏览器不支持安全密钥登录');
+  const flow = await api('/api/v2/auth/webauthn/begin', { method: 'POST', body: { client } });
+  const assertion = await navigator.credentials.get({ publicKey: browserOptions(flow.options) });
+  if (!assertion) throw new Error('未取得安全密钥响应');
+  await api('/api/v2/auth/webauthn/finish', {
+    method: 'POST', body: { flow_id: flow.flow_id, response: credentialJson(assertion) },
+  });
+}
+
+async function registerWebAuthn(label) {
+  if (!window.PublicKeyCredential) throw new Error('此浏览器不支持安全密钥注册');
+  const flow = await api('/api/v2/me/webauthn/registration/begin', { method: 'POST', body: { label } });
+  const credential = await navigator.credentials.create({ publicKey: browserOptions(flow.options) });
+  if (!credential) throw new Error('未取得安全密钥响应');
+  return api('/api/v2/me/webauthn/registration/finish', {
+    method: 'POST', body: { flow_id: flow.flow_id, response: credentialJson(credential) },
+  });
+}
+
+window.brokerWebAuthn = { register: registerWebAuthn };
+
+$('#btn-webauthn-login').addEventListener('click', async () => {
+  const err = $('#login-error');
+  err.hidden = true;
+  try { await beginWebAuthnLogin(); await boot(); }
+  catch (ex) { err.textContent = `安全密钥登录失败：${ex.message}`; err.hidden = false; }
+});
+
 // ---------- 登录 ----------
 let _pendingMfaToken = null;  // server 返的 mfa_token，等用户输完 6 位 code 再提交
 $('#login-form').addEventListener('submit', async (e) => {
@@ -233,6 +306,7 @@ let _pendingG = false;
 let _gTimeout = null;
 const KEY_MAP = {
   'h': 'home',
+  'r': 'approvals',
   'a': 'actions',
   's': 'secrets',
   'u': 'audit',
@@ -510,7 +584,7 @@ async function loadAudit() {
     }
     tbody.innerHTML = '';
     for (const e of events) {
-      const target = e.secret || (e.service ? `${e.service}${e.path || ''}` : `${e.method || ''} ${e.path || ''}`);
+      const target = e.secret_name || e.secret || (e.service ? `${e.service}${e.path || ''}` : `${e.method || ''} ${e.path || ''}`);
       const latency = e.latency_ms ? `${e.latency_ms}ms` : '-';
       const status = e.status || e.upstream_status || '-';
       const cls = e.status === 'denied' ? 'status-denied'
@@ -719,6 +793,7 @@ async function boot() {
   // 身份事件立刻显示 admin Tab；不要再轮询 #identity 文本（30s 窗口会漏掉登录）。
   emitBrokerIdentity(ident);
   showApp();
+  if (location.pathname === '/approvals') switchTab('approvals');
 }
 
 boot();

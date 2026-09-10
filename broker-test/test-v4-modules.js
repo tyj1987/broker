@@ -171,10 +171,29 @@ section('OpenAPI');
   ok('has >= 30 paths', Object.keys(OPENAPI_SPEC.paths).length >= 30);
   ok('has /health', !!OPENAPI_SPEC.paths['/health']);
   ok('has /api/v1/proxy/{service}', !!OPENAPI_SPEC.paths['/api/v1/proxy/{service}']);
+  ok('has signed device suspension', !!OPENAPI_SPEC.paths['/api/v2/devices/{device_id}/suspend']);
+  ok('has automation task creation', !!OPENAPI_SPEC.paths['/api/v2/tasks']?.post);
+  ok('has automation task execution', !!OPENAPI_SPEC.paths['/api/v2/tasks/{id}/run']?.post);
+  ok('has automation task events', !!OPENAPI_SPEC.paths['/api/v2/tasks/{id}/events']?.get);
+  ok('has strict emergency stop interface', !!OPENAPI_SPEC.paths['/api/v2/emergency-stop']?.post);
+  ok('has closed task request schema', OPENAPI_SPEC.components.schemas.TaskCreate?.additionalProperties === false);
+  const enrollmentBegin = OPENAPI_SPEC.components.schemas.DeviceEnrollmentBegin;
+  const enrollmentFinish = OPENAPI_SPEC.components.schemas.DeviceEnrollmentFinish;
+  ok('device enrollment capabilities are bounded and unique', enrollmentBegin?.properties?.capabilities?.maxItems === 32
+    && enrollmentBegin.properties.capabilities.uniqueItems === true);
+  ok('device enrollment identifiers use safe patterns', !!enrollmentBegin?.properties?.label?.pattern
+    && !!enrollmentBegin.properties.capabilities.items.pattern);
+  ok('device proof payloads are bounded', enrollmentFinish?.properties?.public_key_pem?.maxLength === 4096
+    && enrollmentFinish.properties.signature.maxLength === 512);
   ok('has ProxyRequest schema', !!OPENAPI_SPEC.components.schemas.ProxyRequest);
   ok('has LoginResponse schema', !!OPENAPI_SPEC.components.schemas.LoginResponse);
   ok('has mTLS security scheme', !!OPENAPI_SPEC.components.securitySchemes.mtls);
   ok('has bearerAuth', !!OPENAPI_SPEC.components.securitySchemes.bearerAuth);
+  const decision = OPENAPI_SPEC.paths['/api/v2/approvals/{id}/decision'].post;
+  ok('approval decision is session-only', JSON.stringify(decision.security) === JSON.stringify([{ sessionCookie: [] }]));
+  ok('approval decision requires Origin', decision.parameters.some((parameter) => parameter.in === 'header' && parameter.name === 'Origin' && parameter.required));
+  ok('browser OTP claim is API-key only', JSON.stringify(OPENAPI_SPEC.paths['/api/v2/browser/otp/claim'].post.security) === JSON.stringify([{ bearerAuth: [] }]));
+  ok('browser OTP finish is API-key only', JSON.stringify(OPENAPI_SPEC.paths['/api/v2/browser/otp/finish'].post.security) === JSON.stringify([{ bearerAuth: [] }]));
   ok('proxy endpoint has 502/503 responses', OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['502'] && OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['503']);
 }
 

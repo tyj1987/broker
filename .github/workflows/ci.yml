@@ -1,157 +1,495 @@
-# .github/workflows/ci.yml
-# Runs on every push and PR. No deploys. Just: secrets-safe check, lint, test.
-
 name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [master]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/workflows/*.md'
+      - 'CHANGELOG.md'
   pull_request:
-    branches: [main, master]
+    branches: [master]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/workflows/*.md'
+      - 'CHANGELOG.md'
+  workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: read
 
-env:
-  REGISTRY_ALIYUN: registry.cn-hangzhou.aliyuncs.com
-  REGISTRY_TENCENT: ccr.ccs.tencentyun.com
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-
-  # ============================================================
-  # 1. 密钥泄漏扫描
-  # ============================================================
   secret-scan:
-    name: gitleaks scan
-    runs-on: ubuntu-latest
+    name: Secret history scan
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # 8.30.1 has an open default-rule regression. Keep the scanner fixed
+          # until a verified upstream release supersedes 8.29.1.
+          GITLEAKS_VERSION: 8.29.1
 
-  # ============================================================
-  # 2. Broker 服务端测试
-  # ============================================================
-  broker-test:
-    name: Broker test
-    runs-on: ubuntu-latest
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20.x]
+        language: [actions, go, javascript-typescript, python]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install sops + age
-        run: |
-          curl -LO https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
-          sudo install -m 755 sops-v3.9.0.linux.amd64 /usr/local/bin/sops
-          curl -LO https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-linux-amd64.tar.gz
-          tar -xzf age-v1.2.0-linux-amd64.tar.gz
-          sudo install -m 755 age/age /usr/local/bin/age
-          sudo install -m 755 age/age-keygen /usr/local/bin/age-keygen
-
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: github/codeql-action/init@a35ac6e6798d72df5475948b28efb89edc2e19ca
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-          cache-dependency-path: broker/package.json
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/autobuild@a35ac6e6798d72df5475948b28efb89edc2e19ca
+      - uses: github/codeql-action/analyze@a35ac6e6798d72df5475948b28efb89edc2e19ca
 
-      - name: Install broker deps
-        working-directory: broker
-        run: npm ci
-
-      - name: Start broker with ephemeral CA + certs
-        run: |
-          # 端到端 smoke test：起 broker，验证 mTLS 鉴权
-          set -e
-          TEST_DIR=$(mktemp -d)
-          cd $TEST_DIR
-          cp -r $GITHUB_WORKSPACE/broker .
-          cp -r $GITHUB_WORKSPACE/pki .
-          cp -r $GITHUB_WORKSPACE/secrets .
-          cp -r $GITHUB_WORKSPACE/age .
-          chmod 600 age/key.txt
-          PKI_DIR=$TEST_DIR/pki \
-          CONFIG_PATH=$TEST_DIR/secrets/broker.yaml \
-          SECRETS_PATH=$TEST_DIR/secrets/common.env \
-          AGE_KEY_FILE=$TEST_DIR/age/key.txt \
-          AUDIT_DIR=$TEST_DIR/audit \
-          node broker/server.js &
-          BROKER_PID=$!
-          sleep 3
-          # 不带客户端证书应该 401
-          if curl -sk https://localhost:8443/health; then
-            echo "WARN: /health should not require auth but should at least not 5xx"
-          fi
-          kill $BROKER_PID 2>/dev/null || true
-          echo "broker smoke test passed"
-
-      - name: Lint broker
-        working-directory: broker
-        run: |
-          node -c server.js
-          node --check server.js
-
-  # ============================================================
-  # 3. 客户端 CLI 语法检查
-  # ============================================================
-  cli-syntax:
-    name: CLI syntax
-    runs-on: ubuntu-latest
+  repository-security:
+    name: SCA, secrets, licenses and IaC
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
         with:
-          node-version: 20.x
-      - name: Check CLI
-        run: |
-          node --check cli/secret-broker.js
-          node cli/secret-broker.js help > /dev/null
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig,license
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
 
-  # ============================================================
-  # 4. Terraform validate
-  # ============================================================
-  terraform-validate:
-    name: Terraform validate
-    runs-on: ubuntu-latest
+  broker:
+    name: Node broker
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: broker/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm audit --audit-level=high
+      - run: npm run lint
+      - run: npm run test:coverage
+      - name: Verify generated OpenAPI is current
+        run: npm run openapi:generate
+      - name: Check generated contract diff
+        working-directory: .
+        run: git diff --exit-code -- contracts/openapi.yaml
+
+  python-sdk:
+    name: Python SDK
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12.11'
+          cache: pip
+          cache-dependency-path: sdk/python/requirements-test.txt
+      - run: python -m pip install -r requirements-test.txt
+      - run: python -m pip_audit --strict -r requirements-test.txt
+      - run: python -m pytest tests -q
+
+  documentation:
+    name: Documentation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12.11'
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - run: python -m pip install --disable-pip-version-check -r docs/requirements.txt pip-audit==2.10.1
+      - run: python -m pip_audit --strict -r docs/requirements.txt
+      - run: python -m mkdocs build --strict --site-dir .site
+
+  go-sdk:
+    name: Go SDK
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: sdk/go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.23.12'
+          cache-dependency-path: sdk/go/go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        env:
+          GOTOOLCHAIN: auto
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go build ./...
+
+  go-core:
+    name: Go security core
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: core/go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - run: go test -race -coverprofile=coverage.out ./policy
+      - name: Enforce core line coverage
+        run: |
+          test "$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=signer-coverage.out ./githubsigner
+      - name: Enforce signer protocol line coverage
+        run: |
+          test "$(go tool cover -func=signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race ./server
+      - run: go build ./...
+
+  vscode-sdk:
+    name: VS Code SDK
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: sdk/vscode
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: sdk/vscode/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm audit --audit-level=high
+      - run: npm run build
+      - run: npm test
+      - run: npm run package -- --no-dependencies
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vscode-extension-${{ github.sha }}
+          path: sdk/vscode/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android client
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: clients/android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: clients/android/**/*.gradle*
+      - name: Install pinned Android SDK packages
+        run: >-
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --channel=3
+          'platforms;android-37.0' 'build-tools;36.0.0'
+      - run: chmod +x gradlew
+      - run: ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-debug-${{ github.sha }}
+          path: clients/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios:
+    name: iOS protocol and Secure Enclave client
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: swift --version
+      - name: Compile the app target
+        run: swift build --package-path clients/ios --product SecretBrokerIOSApp
+      - name: Build and test Swift package
+        run: swift test --package-path clients/ios
+
+  browser-helper:
+    name: Browser helper
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+      - run: node --check service-worker.js
+        working-directory: clients/browser
+      - run: node --check popup.js
+        working-directory: clients/browser
+      - run: node test/manifest.test.mjs
+        working-directory: clients/browser
+      - run: sh -n native-host/install-linux.sh
+        working-directory: clients/browser
+
+  browser-worker:
+    name: Isolated browser worker core
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: workers/browser
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: workers/browser/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm audit --audit-level=high
+      - run: npm test
+
+  desktop-windows:
+    name: Windows desktop client
+    runs-on: windows-2025
+    defaults:
+      run:
+        working-directory: clients/desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: clients/desktop/package-lock.json
+      - shell: pwsh
+        run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - shell: pwsh
+        run: rustup default 1.98.1
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '..\browser\native-host\install-windows.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count) { throw ($errors | ForEach-Object Message) -join "`n" }
+      - run: cargo build --release --manifest-path src-tauri/Cargo.toml --locked --bin secret-broker-browser-host
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: |
+          $version = '0.22.2'
+          $archive = Join-Path $env:RUNNER_TEMP "cargo-audit-$version.zip"
+          $destination = Join-Path $env:RUNNER_TEMP 'cargo-audit'
+          $url = "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v$version/cargo-audit-x86_64-pc-windows-msvc-v$version.zip"
+          curl.exe --fail --location --proto '=https' --tlsv1.2 --output $archive $url
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-audit download failed' }
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '0a7316540862c13d954f648917ceacca593747baed6eec180fafa590be2710ab'
+          if ($actual -ne $expected) { throw 'cargo-audit checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binary = Join-Path $destination "cargo-audit-x86_64-pc-windows-msvc-v$version/cargo-audit.exe"
+          $raw = & $binary audit --file src-tauri/Cargo.lock --json
+          $auditExit = $LASTEXITCODE
+          $raw | Set-Content -LiteralPath cargo-audit.json -Encoding utf8NoBOM
+          if ($auditExit -ne 0) { throw 'cargo-audit found a security vulnerability' }
+          $report = $raw | ConvertFrom-Json
+          if ([int]$report.vulnerabilities.count -ne 0) { throw 'cargo-audit vulnerability report is non-empty' }
+          Write-Host "cargo-audit: 0 vulnerabilities; advisory warnings are retained in cargo-audit.json"
+      - run: npm run tauri -- build --bundles nsis
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-windows-unsigned-${{ github.sha }}
+          path: |
+            clients/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            clients/desktop/src-tauri/target/release/secret-broker-browser-host.exe
+            clients/browser/native-host/com.secretbroker.browser.json
+            clients/desktop/cargo-audit.json
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop-linux:
+    name: Ubuntu desktop client
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: clients/desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: clients/desktop/package-lock.json
+      - name: Refresh only the Ubuntu package index
+        run: >-
+          sudo apt-get update
+          -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+          -o Dir::Etc::sourceparts=-
+          -o APT::Get::List-Cleanup=0
+      - run: sudo apt-get install --yes libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.98.1
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: cargo build --release --manifest-path src-tauri/Cargo.toml --locked --bin secret-broker-browser-host
+      - run: npm run tauri -- build --bundles deb,appimage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-linux-unsigned-${{ github.sha }}
+          path: |
+            clients/desktop/src-tauri/target/release/bundle/deb/*.deb
+            clients/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            clients/desktop/src-tauri/target/release/secret-broker-browser-host
+            clients/browser/native-host/com.secretbroker.browser.json
+          if-no-files-found: error
+          retention-days: 7
+
+  terraform:
+    name: Terraform (${{ matrix.directory }})
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
-        dir: [infra/aliyun, infra/tencent]
+        directory: [infra/aliyun/broker, infra/tencent]
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         with:
-          terraform_version: 1.7.x
-      - name: terraform init (no backend) + validate
-        working-directory: ${{ matrix.dir }}
-        run: |
-          terraform init -backend=false
-          terraform validate
-          terraform fmt -check -recursive
+          terraform_version: '1.16.1'
+      - working-directory: ${{ matrix.directory }}
+        run: terraform fmt -check -recursive
+      - working-directory: ${{ matrix.directory }}
+        run: terraform init -backend=false -input=false -lockfile=readonly
+      - working-directory: ${{ matrix.directory }}
+        run: terraform validate
 
-  # ============================================================
-  # 6. Broker Docker 镜像构建
-  # ============================================================
-  broker-image:
-    name: Build broker image
-    runs-on: ubuntu-latest
-    needs: [broker-test, secret-scan]
+  deployment-config:
+    name: Helm and deployment scripts
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Build broker Docker image
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Lint Helm chart without rendering secret values
+        run: >-
+          helm lint deploy/helm/broker
+          --set secrets.configSecretName=broker-config
+          --set secrets.tlsSecretName=broker-tls
+          --set secrets.stateKeySecretName=broker-state-key
+          --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - name: Render Helm chart
+        run: >-
+          helm template broker deploy/helm/broker
+          --set secrets.configSecretName=broker-config
+          --set secrets.tlsSecretName=broker-tls
+          --set secrets.stateKeySecretName=broker-state-key
+          --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          > /tmp/broker-rendered.yaml
+      - run: bash -n deploy/bin/secret-broker-deploy
+      - run: node --check deploy/bin/secret-broker-production-preflight.mjs
+      - run: node broker-test/test-production-preflight.js
+      - name: Verify deployment helper fail-closed invariants
         run: |
-          docker build -t sops-age-template/broker:${{ github.sha }} broker/
-          docker build -t sops-age-template/broker:latest broker/
-          echo "Built: sops-age-template/broker:${{ github.sha }}"
-      - name: Verify image layers
+          grep -Fq 'policy core is not active' deploy/bin/secret-broker-deploy
+          grep -Fq 'proxy_ssl_verify[[:space:]]+off' deploy/bin/secret-broker-deploy
+          grep -Fq '/etc/secret-broker/pki/ca' deploy/bin/secret-broker-deploy
+          grep -Fq '/etc/secret-broker/pki/clients' deploy/bin/secret-broker-deploy
+          grep -Fq '/opt/secret-broker/pki' deploy/bin/secret-broker-deploy
+
+  image:
+    name: Production image
+    runs-on: ubuntu-24.04
+    needs: [secret-scan, codeql, repository-security, broker, python-sdk, documentation, go-sdk, go-core, vscode-sdk, android, ios, browser-helper, desktop-windows, desktop-linux, terraform, deployment-config]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        id: build
+        with:
+          context: .
+          target: production
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          load: true
+          tags: |
+            secret-broker:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - name: Verify runtime identity and filesystem policy
         run: |
-          # 防止 .env/.key 误入镜像
-          docker run --rm sops-age-template/broker:latest sh -c "ls /opt/broker" || true
-          docker run --rm sops-age-template/broker:latest sh -c "test ! -f /opt/broker/.env && echo 'OK no .env in image'"
+          test "$(docker image inspect secret-broker:${{ github.sha }} --format '{{.Config.User}}')" = "65532:65532"
+          CONTAINER_ID=$(docker create secret-broker:${{ github.sha }})
+          docker export "$CONTAINER_ID" --output rootfs.tar
+          docker rm "$CONTAINER_ID"
+          if tar -tf rootfs.tar | grep -E '(^|/)app/(secrets|pki|age)(/|$)'; then
+            echo 'Forbidden credential directory found in image'
+            exit 1
+          fi
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && format('ghcr.io/{0}@{1}', github.repository, steps.build.outputs.digest) || format('secret-broker:{0}', github.sha) }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+      - uses: anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3
+        with:
+          image: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && format('ghcr.io/{0}@{1}', github.repository, steps.build.outputs.digest) || format('secret-broker:{0}', github.sha) }}
+          format: spdx-json
+          output-file: secret-broker-${{ github.sha }}.spdx.json
+          artifact-name: sbom-${{ github.sha }}
+          upload-release-assets: false
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: secret-broker-${{ github.sha }}.spdx.json
+          push-to-registry: true

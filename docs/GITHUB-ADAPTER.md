@@ -1,6 +1,6 @@
 # GitHub repository adapter
 
-The GitHub provider currently implements four credential-isolated, read-only
+The GitHub provider currently implements five credential-isolated, read-only
 operations:
 
 - `github.repository.read@1.0.0` calls `GET /repos/{owner}/{repo}` and returns
@@ -21,6 +21,12 @@ operations:
   endpoint, `item_kind` explicitly selects issues, pull requests or both. Each
   title is marked `untrusted_external`; bodies, comments, email addresses and
   credentials are never projected.
+- `github.workflow-runs.list@1.0.0` calls
+  `GET /repos/{owner}/{repo}/actions/runs` using only `Actions: read`. Actor,
+  branch, event, status, head SHA, pull-request exclusion, check-suite and
+  pagination filters are typed and bounded. Workflow names are marked
+  `untrusted_external`; pull-request payloads, jobs, logs and artifacts are not
+  projected.
 
 The adapter fixes the origin to `https://api.github.com`, the method to `GET`,
 redirect handling to manual denial, the response limit to 1 MiB and the API
@@ -43,8 +49,9 @@ JWT and requests a token for exactly one repository. Its required permissions
 are fixed when the provider is constructed, accept explicit read-only grants
 only, and are checked exactly in the GitHub response and returned lease.
 Repository metadata uses only `Metadata: read`; branch and commit listing use
-only `Contents: read`; issue listing uses only `Issues: read`. Account bindings must also match the requested
-environment and repository.
+only `Contents: read`; issue listing uses only `Issues: read`; workflow-run
+listing uses only `Actions: read`. Account bindings must also match the
+requested environment and repository.
 
 The signer receives only the JWT signing input and binding metadata. It must
 return signature bytes; the provider has no private-key loading API. The shared
@@ -87,14 +94,16 @@ source, ordinary configuration, logs or an Agent response is prohibited.
 Unit contract tests cover path and target injection, typed pagination and
 filtering, bounded branch and commit projections, execution-binding
 tampering, issue-versus-pull-request classification, untrusted-content marking,
+workflow-run filter validation and bounded status projection,
 App/account/environment/repository binding, JWT claims and algorithm,
 invalid signer results, fixed-socket ownership and protocol failures,
 configuration reload removal, fixed read-only token permissions, missing/wrong/expired/overlong
 leases, redirect denial, upstream status mapping, invalid and oversized
 responses, bounded projection and error redaction. The provider manifest
 remains `contract_required` until a production-grade signer and account binding
-are configured, the transport is wired into the runtime, and an isolated GitHub
-App account passes a real request and revocation test.
+are configured and an isolated GitHub App account passes a real request and
+revocation test. Runtime wiring is covered by deterministic integration tests;
+that evidence is not a substitute for the external contract test.
 
 Official references checked on 2026-09-10:
 
@@ -106,3 +115,4 @@ Official references checked on 2026-09-10:
 - [List branches](https://docs.github.com/en/rest/branches/branches#list-branches)
 - [List commits](https://docs.github.com/en/rest/commits/commits#list-commits)
 - [List repository issues](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
+- [List workflow runs for a repository](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository)

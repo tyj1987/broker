@@ -23,6 +23,7 @@ const validConfig = () => ({
     github: {
       'repo.read': { ...basePolicy },
       'issues.list': { ...basePolicy },
+      'workflow_runs.list': { ...basePolicy },
     },
   },
   provider_accounts: {
@@ -108,6 +109,7 @@ const executors = await prepareGitHubRuntimeExecutors({
 assert.deepEqual([...executors.keys()], [
   'github.repository.read@1.0.0',
   'github.issues.list@1.0.0',
+  'github.workflow-runs.list@1.0.0',
 ]);
 assert.equal(signerFactoryCalls, 1);
 assert.equal(signerProbeCalls, 1);
@@ -231,7 +233,7 @@ assert.throws(() => commitGitHubRuntimeExecutors({}, executors), TypeError);
 assert.throws(() => commitGitHubRuntimeExecutors(target, {}), TypeError);
 
 assert.deepEqual(GITHUB_RUNTIME_CONTRACT, {
-  supported_operations: ['repo.read', 'branches.list', 'commits.list', 'issues.list'],
+  supported_operations: ['repo.read', 'branches.list', 'commits.list', 'issues.list', 'workflow_runs.list'],
   account_binding_fields: ['client_id', 'installation_id', 'environments', 'repositories'],
   maximum_accounts: 64,
   maximum_repositories_per_account: 100,

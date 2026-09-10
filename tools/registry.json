@@ -164,6 +164,24 @@
       "agent_execution": true
     },
     {
+      "name": "github.workflow-runs.list",
+      "version": "1.0.0",
+      "description": "List bounded GitHub Actions workflow-run status through a repository-scoped GitHub App installation.",
+      "provider": "github",
+      "operation_id": "workflow_runs.list",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "owner", "repo"], "properties": { "resource_ref": { "type": "string" }, "owner": { "type": "string" }, "repo": { "type": "string" }, "actor": { "type": "string" }, "branch": { "type": "string" }, "event": { "type": "string" }, "status": { "type": "string" }, "head_sha": { "type": "string" }, "exclude_pull_requests": { "type": "boolean" }, "check_suite_id": { "type": "integer" }, "page": { "type": "integer" }, "per_page": { "type": "integer" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["workflow_runs", "total_count", "page", "per_page", "has_more"], "properties": { "workflow_runs": { "type": "array" }, "total_count": { "type": "integer" }, "page": { "type": "integer" }, "per_page": { "type": "integer" }, "has_more": { "type": "boolean" } } },
+      "required_role": "developer",
+      "risk_level": "LOW",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "github-repository", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 60, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "installation_token", "pull_requests", "jobs", "logs", "artifacts"] },
+      "agent_execution": true
+    },
+    {
       "name": "cloudflare.zones.list",
       "version": "1.0.0",
       "description": "List Cloudflare zones visible to a scoped service token.",

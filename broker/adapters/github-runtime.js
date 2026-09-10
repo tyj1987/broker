@@ -2,6 +2,7 @@ import { createGitHubBranchesListExecutor } from './github-branches-list-executo
 import { createGitHubCommitsListExecutor } from './github-commits-list-executor.js';
 import { createGitHubIssuesListExecutor } from './github-issues-list-executor.js';
 import { createGitHubRepositoryReadExecutor } from './github-repository-read-executor.js';
+import { createGitHubWorkflowRunsListExecutor } from './github-workflow-runs-list-executor.js';
 import { createLocalSignerClient } from '../lib/local-signer-client.js';
 
 const ACCOUNT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -14,6 +15,7 @@ const EXECUTORS = new Map([
   ['branches.list', ['github.branches.list@1.0.0', createGitHubBranchesListExecutor]],
   ['commits.list', ['github.commits.list@1.0.0', createGitHubCommitsListExecutor]],
   ['issues.list', ['github.issues.list@1.0.0', createGitHubIssuesListExecutor]],
+  ['workflow_runs.list', ['github.workflow-runs.list@1.0.0', createGitHubWorkflowRunsListExecutor]],
 ]);
 
 export class GitHubRuntimeConfigError extends Error {

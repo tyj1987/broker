@@ -34,6 +34,8 @@ assert.match(migration, /not approved for production scheduling/i);
 assert.doesNotMatch(service, /CONTROL_PLANE_STATE_KEY=/);
 assert.match(workflow, /Dir::Etc::sourcelist=\/etc\/apt\/sources\.list\.d\/ubuntu\.sources/);
 assert.match(workflow, /secrets\.stateKeySecretName=broker-state-key/);
+assert.doesNotMatch(workflow, /branches:\s*\[master,\s*'codex\/\*\*'\]/);
+assert.match(workflow, /^  workflow_dispatch:$/m);
 assert.match(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.2/);
 assert.doesNotMatch(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.1/);
 

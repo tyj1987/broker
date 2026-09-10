@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [master, 'codex/**']
+    branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -401,6 +402,8 @@ jobs:
           --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
           > /tmp/broker-rendered.yaml
       - run: bash -n deploy/bin/secret-broker-deploy
+      - run: node --check deploy/bin/secret-broker-production-preflight.mjs
+      - run: node broker-test/test-production-preflight.js
       - name: Verify deployment helper fail-closed invariants
         run: |
           grep -Fq 'policy core is not active' deploy/bin/secret-broker-deploy

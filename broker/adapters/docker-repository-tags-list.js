@@ -3,6 +3,8 @@ import { V2Error } from '../lib/operations-v2.js';
 const TOOL = 'docker.repository.tags.list@1.0.0';
 const ORIGIN = 'https://registry-1.docker.io';
 const COMPONENT_RE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const TAG_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TAGS = 100;
@@ -100,7 +102,9 @@ export function createDockerRepositoryTagsListAdapter({
     if (
       context.execution?.tool !== TOOL ||
       context.execution?.target !== repositoryRef ||
-      context.execution?.environment !== context.environment
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
     ) {
       fail(
         'docker_execution_binding_mismatch',
@@ -119,6 +123,8 @@ export function createDockerRepositoryTagsListAdapter({
         environment: context.environment,
         repository: repositoryRef,
         scope: `repository:${repositoryRef}:pull`,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
         signal: context.signal,
       });
     } catch {

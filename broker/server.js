@@ -98,6 +98,30 @@ import {
   prepareGitHubRuntimeExecutors,
 } from './adapters/github-runtime.js';
 import {
+  commitCloudflareRuntimeExecutors,
+  prepareCloudflareRuntimeExecutors,
+} from './adapters/cloudflare-runtime.js';
+import {
+  commitDockerRuntimeExecutors,
+  prepareDockerRuntimeExecutors,
+} from './adapters/docker-runtime.js';
+import {
+  commitAliyunRuntimeExecutors,
+  prepareAliyunRuntimeExecutors,
+} from './adapters/aliyun-runtime.js';
+import {
+  commitDeepSeekRuntimeExecutors,
+  prepareDeepSeekRuntimeExecutors,
+} from './adapters/deepseek-runtime.js';
+import {
+  commitOpenAIRuntimeExecutors,
+  prepareOpenAIRuntimeExecutors,
+} from './adapters/openai-runtime.js';
+import {
+  commitTencentRuntimeExecutors,
+  prepareTencentRuntimeExecutors,
+} from './adapters/tencent-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -388,16 +412,34 @@ async function prepareConfig() {
   requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
   toolRegistry.validateConfiguration(cfg);
   const githubExecutors = await prepareGitHubRuntimeExecutors({ config: cfg });
+  const cloudflareExecutors = await prepareCloudflareRuntimeExecutors({ config: cfg });
+  const dockerExecutors = await prepareDockerRuntimeExecutors({ config: cfg });
+  const aliyunExecutors = await prepareAliyunRuntimeExecutors({ config: cfg });
+  const deepseekExecutors = await prepareDeepSeekRuntimeExecutors({ config: cfg });
+  const openaiExecutors = await prepareOpenAIRuntimeExecutors({ config: cfg });
+  const tencentExecutors = await prepareTencentRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
     githubExecutors,
+    cloudflareExecutors,
+    dockerExecutors,
+    aliyunExecutors,
+    deepseekExecutors,
+    openaiExecutors,
+    tencentExecutors,
   };
 }
 
 function applyConfig(prepared) {
   operationBroker.commitDeviceRegistry(prepared.devices);
   commitGitHubRuntimeExecutors(taskExecutors, prepared.githubExecutors);
+  commitCloudflareRuntimeExecutors(taskExecutors, prepared.cloudflareExecutors);
+  commitDockerRuntimeExecutors(taskExecutors, prepared.dockerExecutors);
+  commitAliyunRuntimeExecutors(taskExecutors, prepared.aliyunExecutors);
+  commitDeepSeekRuntimeExecutors(taskExecutors, prepared.deepseekExecutors);
+  commitOpenAIRuntimeExecutors(taskExecutors, prepared.openaiExecutors);
+  commitTencentRuntimeExecutors(taskExecutors, prepared.tencentExecutors);
   CONFIG = prepared.document;
 }
 

@@ -5,6 +5,75 @@ agents. A caller names a registered tool and supplies schema-checked parameters;
 it cannot supply a URL, authentication header, credential, command or adapter
 implementation.
 
+## Implementation and rollout status
+
+The task model, lifecycle, typed MCP bridge, risk routing, approval binding,
+single-use execution capability, durable single-node checkpoint and structured
+transition audit are implemented, regression-tested and deployed in
+`master@fdf0ada1976c5762f7373725f3b0502c76ecdf2b`. The deployed executable
+catalog is intentionally smaller than the source registry: a registered
+manifest is not visible until a runtime executor and reviewed policy are both
+available.
+
+The current safe acceptance operation is
+`broker.tools.inspect@1.0.0`. The next rollout checkpoint is a seven-day,
+file-delivered MCP key constrained to that one operation, the `control-plane`
+account, the `tool-registry` resource and the production environment, followed
+by live `initialize`, `tools/list`, allowed execution and wrong
+account/resource/environment denial tests. Provider operations remain disabled
+until their isolated account binding and real contract evidence are available.
+
+The development branch also contains a Go implementation of the local
+short-lived credential protocol used by the Cloudflare, Docker and DeepSeek
+runtimes. It validates the Linux peer and the complete requested binding before
+calling an injected lease issuer, then constrains the returned capability to a
+five-minute maximum lifetime. It has no production credential backend and does
+not change the deployed executable catalog.
+
+Protocol version 2 also binds each lease exchange to the consumed task
+`execution_id` and canonical `request_binding`. The adapter, local client and Go
+service independently validate these values, and the service echoes them in its
+response so the client rejects a swapped lease. A production credential
+authority must additionally validate the execution against durable control-plane
+state before issuing a capability.
+
+The GitHub signer protocol now applies the same execution binding before the
+non-exportable backend signs a GitHub App JWT. Its version 2 response echoes the
+binding, and the local client rejects substitution before the installation-token
+request can run.
+
+The source branch also registers `github.pull-request.create@1.0.0` as a HIGH
+risk, draft-by-default operation. Its deterministic end-to-end test proves that
+the requester cannot execute before a separate WebAuthn-stepped-up human
+approval, and that a completed task cannot replay the upstream call. The
+operation is not production-enabled while DQ-004 and the isolated GitHub App
+contract test remain open.
+
+The source branch now also registers
+`cloudflare.dns.records.list@1.0.0` as a bounded read-only inventory operation.
+It requires the same exact 32-character zone identifier in the task resource
+and typed parameters, enforces an account allowlist before acquiring an
+execution-bound credential lease, and fixes the outbound request to Cloudflare's
+HTTPS DNS-records endpoint. Only record identifiers, type, name, TTL, proxied
+state and bounded pagination metadata may leave the adapter; record content,
+comments, tags and settings are deliberately excluded. It remains source-only
+and `contract_required` until the isolated Cloudflare account test and
+production credential authority are accepted.
+
+The source branch also wires `openai.models.list@1.0.0` through an isolated
+credential lease and a project-bound runtime. The fixed `GET /v1/models`
+request accepts no free URL or headers and releases model identifiers only.
+The preferred authority is OpenAI workload identity federation mapped to a
+dedicated project service account; a bounded project service-account token is
+the fallback. The operation remains source-only and `contract_required` until
+the identity exchange and isolated project contract are verified.
+
+This changes the active implementation plan from building another task model
+to validating the deployed orchestration boundary, then enabling providers one
+bounded read-only operation at a time. It does not authorize a second task API,
+an arbitrary proxy compatibility route, a remote MCP listener, or bulk provider
+activation.
+
 This typed boundary supersedes the early `/api/v1/tools/:name/invoke`
 placeholder in the P0 tracking issue. The unrestricted compatibility route is
 intentionally not implemented.
@@ -162,6 +231,11 @@ are rolled back before an API success can be returned. A failure after atomic
 replacement is reported as `state_commit_indeterminate`; the matching in-memory
 mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
+
+Expiry discovered by a task or event read is also committed synchronously before
+the response is returned. A pre-replacement checkpoint failure restores both the
+task and its approval state; an indeterminate replacement keeps the expired
+state so a restart cannot reopen an execution window.
 
 The operation component is included in every global checkpoint and shutdown
 checkpoint. Operation creation, device replay-nonce consumption, OTP receipt,

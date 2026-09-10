@@ -1,6 +1,7 @@
 import { createGitHubBranchesListExecutor } from './github-branches-list-executor.js';
 import { createGitHubCommitsListExecutor } from './github-commits-list-executor.js';
 import { createGitHubIssuesListExecutor } from './github-issues-list-executor.js';
+import { createGitHubPullRequestCreateExecutor } from './github-pull-request-create-executor.js';
 import { createGitHubRepositoryReadExecutor } from './github-repository-read-executor.js';
 import { createGitHubWorkflowRunsListExecutor } from './github-workflow-runs-list-executor.js';
 import { createLocalSignerClient } from '../lib/local-signer-client.js';
@@ -15,6 +16,10 @@ const EXECUTORS = new Map([
   ['branches.list', ['github.branches.list@1.0.0', createGitHubBranchesListExecutor]],
   ['commits.list', ['github.commits.list@1.0.0', createGitHubCommitsListExecutor]],
   ['issues.list', ['github.issues.list@1.0.0', createGitHubIssuesListExecutor]],
+  [
+    'pull_request.create',
+    ['github.pull-request.create@1.0.0', createGitHubPullRequestCreateExecutor],
+  ],
   ['workflow_runs.list', ['github.workflow-runs.list@1.0.0', createGitHubWorkflowRunsListExecutor]],
 ]);
 
@@ -85,21 +90,26 @@ function normalizeAccounts(config, active) {
       invalid('GitHub provider account binding is invalid');
     }
     const environments = [...new Set(binding.environments)];
-    const repositories = [...new Map(
-      binding.repositories.map((repository) => [repository.toLowerCase(), repository]),
-    ).values()];
+    const repositories = [
+      ...new Map(
+        binding.repositories.map((repository) => [repository.toLowerCase(), repository]),
+      ).values(),
+    ];
     if (
       environments.length !== binding.environments.length ||
       repositories.length !== binding.repositories.length
     ) {
       invalid('GitHub provider account binding contains duplicates');
     }
-    normalized.set(accountRef, Object.freeze({
-      client_id: binding.client_id,
-      installation_id: binding.installation_id,
-      environments: Object.freeze(environments),
-      repositories: Object.freeze(repositories),
-    }));
+    normalized.set(
+      accountRef,
+      Object.freeze({
+        client_id: binding.client_id,
+        installation_id: binding.installation_id,
+        environments: Object.freeze(environments),
+        repositories: Object.freeze(repositories),
+      }),
+    );
   }
   for (const operation of active) {
     if (operation.accounts.some((accountRef) => !normalized.has(accountRef))) {
@@ -115,7 +125,9 @@ function createAccountResolver(accounts) {
     if (
       !binding ||
       !binding.environments.includes(environment) ||
-      !binding.repositories.some((candidate) => candidate.toLowerCase() === repository.toLowerCase())
+      !binding.repositories.some(
+        (candidate) => candidate.toLowerCase() === repository.toLowerCase(),
+      )
     ) {
       throw new GitHubRuntimeConfigError('GitHub provider account binding is unavailable');
     }
@@ -162,14 +174,17 @@ export async function prepareGitHubRuntimeExecutors({
   const executors = new Map();
   for (const { operationId } of active) {
     const [tool, factory] = EXECUTORS.get(operationId);
-    executors.set(tool, factory({
-      signer: signerClient.sign,
-      accountResolver,
-      resolveHost,
-      requestImpl,
-      now,
-      timeoutMs,
-    }));
+    executors.set(
+      tool,
+      factory({
+        signer: signerClient.sign,
+        accountResolver,
+        resolveHost,
+        requestImpl,
+        now,
+        timeoutMs,
+      }),
+    );
   }
   return executors;
 }

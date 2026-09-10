@@ -16,6 +16,11 @@ import (
 
 var testNow = time.Unix(2_000_000_000, 0).UTC()
 
+const (
+	testExecutionID    = "12345678-1234-4123-8123-123456789abc"
+	testRequestBinding = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
 type memoryConn struct {
 	input    *bytes.Reader
 	output   bytes.Buffer
@@ -69,12 +74,14 @@ func signingInput(t *testing.T, mutate func(map[string]any, map[string]any)) str
 func requestLine(t *testing.T, mutate func(map[string]any)) string {
 	t.Helper()
 	request := map[string]any{
-		"version":       ProtocolVersion,
-		"algorithm":     "RS256",
-		"signing_input": signingInput(t, nil),
-		"account_ref":   "github-primary",
-		"environment":   "production",
-		"client_id":     "Iv1.protocol-test",
+		"version":         ProtocolVersion,
+		"algorithm":       "RS256",
+		"signing_input":   signingInput(t, nil),
+		"account_ref":     "github-primary",
+		"environment":     "production",
+		"client_id":       "Iv1.protocol-test",
+		"execution_id":    testExecutionID,
+		"request_binding": testRequestBinding,
 	}
 	if mutate != nil {
 		mutate(request)
@@ -147,14 +154,16 @@ func TestServeConnSignsOnlyValidatedDigest(t *testing.T) {
 	}
 	expectedDigest := sha256.Sum256([]byte(signingInput(t, nil)))
 	if backendRequest.Digest != expectedDigest || backendRequest.AccountRef != "github-primary" ||
-		backendRequest.Environment != "production" || backendRequest.ClientID != "Iv1.protocol-test" {
+		backendRequest.Environment != "production" || backendRequest.ClientID != "Iv1.protocol-test" ||
+		backendRequest.ExecutionID != testExecutionID || backendRequest.RequestBinding != testRequestBinding {
 		t.Fatalf("unexpected digest request %#v", backendRequest)
 	}
 	var response wireResponse
 	if err := json.Unmarshal(connection.output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Version != ProtocolVersion || response.Signature != base64.RawURLEncoding.EncodeToString(signature) {
+	if response.Version != ProtocolVersion || response.Signature != base64.RawURLEncoding.EncodeToString(signature) ||
+		response.ExecutionID != testExecutionID || response.RequestBinding != testRequestBinding {
 		t.Fatalf("unexpected response %#v", response)
 	}
 	output := connection.output.String()
@@ -244,16 +253,18 @@ func TestRequestAndJWTValidation(t *testing.T) {
 	allowBinding := BindingAuthorizerFunc(func(context.Context, string, string, string) error { return nil })
 	allowPeer := PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil })
 	tests := map[string]struct{ line, code string }{
-		"no newline":      {strings.TrimSuffix(requestLine(t, nil), "\n"), "request_invalid"},
-		"crlf":            {strings.TrimSuffix(requestLine(t, nil), "\n") + "\r\n", "request_invalid"},
-		"trailing":        {requestLine(t, nil) + "{}\n", "request_invalid"},
-		"oversized":       {strings.Repeat("x", MaxRequestBytes+1) + "\n", "request_invalid"},
-		"unknown field":   {requestLine(t, func(value map[string]any) { value["private_key"] = "canary" }), "request_invalid"},
-		"wrong version":   {requestLine(t, func(value map[string]any) { value["version"] = 2 }), "request_invalid"},
-		"wrong algorithm": {requestLine(t, func(value map[string]any) { value["algorithm"] = "none" }), "request_invalid"},
-		"bad account":     {requestLine(t, func(value map[string]any) { value["account_ref"] = "../root" }), "request_invalid"},
-		"bad environment": {requestLine(t, func(value map[string]any) { value["environment"] = "Production" }), "request_invalid"},
-		"bad client":      {requestLine(t, func(value map[string]any) { value["client_id"] = "x" }), "request_invalid"},
+		"no newline":          {strings.TrimSuffix(requestLine(t, nil), "\n"), "request_invalid"},
+		"crlf":                {strings.TrimSuffix(requestLine(t, nil), "\n") + "\r\n", "request_invalid"},
+		"trailing":            {requestLine(t, nil) + "{}\n", "request_invalid"},
+		"oversized":           {strings.Repeat("x", MaxRequestBytes+1) + "\n", "request_invalid"},
+		"unknown field":       {requestLine(t, func(value map[string]any) { value["private_key"] = "canary" }), "request_invalid"},
+		"wrong version":       {requestLine(t, func(value map[string]any) { value["version"] = 1 }), "request_invalid"},
+		"wrong algorithm":     {requestLine(t, func(value map[string]any) { value["algorithm"] = "none" }), "request_invalid"},
+		"bad account":         {requestLine(t, func(value map[string]any) { value["account_ref"] = "../root" }), "request_invalid"},
+		"bad environment":     {requestLine(t, func(value map[string]any) { value["environment"] = "Production" }), "request_invalid"},
+		"bad client":          {requestLine(t, func(value map[string]any) { value["client_id"] = "x" }), "request_invalid"},
+		"bad execution":       {requestLine(t, func(value map[string]any) { value["execution_id"] = "wrong" }), "request_invalid"},
+		"bad request binding": {requestLine(t, func(value map[string]any) { value["request_binding"] = "wrong" }), "request_invalid"},
 		"wrong issuer": {requestLine(t, func(value map[string]any) {
 			value["signing_input"] = signingInput(t, func(_ map[string]any, claims map[string]any) { claims["iss"] = "Iv1.other" })
 		}), "jwt_invalid"},

@@ -10,11 +10,19 @@ import { createCloudflareZonesListExecutor } from '../broker/adapters/cloudflare
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const parameters = { resource_ref: ACCOUNT_ID, name: 'example.com', page: 2, per_page: 10 };
 const context = {
   accountRef: 'cloudflare-primary',
   environment: 'production',
-  execution: { tool: 'cloudflare.zones.list@1.0.0', target: ACCOUNT_ID, environment: 'production' },
+  execution: {
+    tool: 'cloudflare.zones.list@1.0.0',
+    target: ACCOUNT_ID,
+    environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+  },
   signal: new AbortController().signal,
 };
 const validBody = () => ({
@@ -66,6 +74,8 @@ assert.deepEqual(tokenInput, {
   account_ref: 'cloudflare-primary',
   environment: 'production',
   account_id: ACCOUNT_ID,
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: context.signal,
 });
 const requestUrl = new URL(requestInput.path, requestInput.origin);
@@ -102,6 +112,8 @@ for (const execution of [
   { ...context.execution, target: 'abcdef0123456789abcdef0123456789' },
   { ...context.execution, target: 123 },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ])
   await assert.rejects(
     adapter(parameters, { ...context, execution }),

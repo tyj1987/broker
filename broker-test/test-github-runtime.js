@@ -12,6 +12,8 @@ import {
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const basePolicy = {
   enabled: true,
   contract_verified: true,
@@ -24,6 +26,7 @@ const validConfig = () => ({
       'repo.read': { ...basePolicy },
       'issues.list': { ...basePolicy },
       'workflow_runs.list': { ...basePolicy },
+      'pull_request.create': { ...basePolicy },
     },
   },
   provider_accounts: {
@@ -63,6 +66,7 @@ const requestImpl = (options, callback) => {
   request.end = (body) => {
     requests.push({ options, body: body?.toString() });
     const tokenRequest = options.path.includes('/access_tokens');
+    const pullRequestCreate = options.method === 'POST' && options.path.endsWith('/pulls');
     const permission = options.path.includes('/issues') ? 'issues' : 'metadata';
     const responseBody = tokenRequest
       ? {
@@ -71,11 +75,19 @@ const requestImpl = (options, callback) => {
           permissions: JSON.parse(body).permissions,
           repositories: [{ full_name: 'tyj1987/broker' }],
         }
-      : permission === 'issues'
-        ? []
-        : { id: 123, full_name: 'tyj1987/broker', visibility: 'public', archived: false };
+      : pullRequestCreate
+        ? {
+            number: 73,
+            state: 'open',
+            draft: true,
+            head: { ref: 'codex/runtime-test' },
+            base: { ref: 'master' },
+          }
+        : permission === 'issues'
+          ? []
+          : { id: 123, full_name: 'tyj1987/broker', visibility: 'public', archived: false };
     const response = Readable.from([JSON.stringify(responseBody)]);
-    response.statusCode = tokenRequest ? 201 : 200;
+    response.statusCode = tokenRequest || pullRequestCreate ? 201 : 200;
     response.headers = { 'content-type': 'application/json' };
     queueMicrotask(() => callback(response));
   };
@@ -106,11 +118,15 @@ const executors = await prepareGitHubRuntimeExecutors({
   requestImpl,
   now: () => NOW,
 });
-assert.deepEqual([...executors.keys()], [
-  'github.repository.read@1.0.0',
-  'github.issues.list@1.0.0',
-  'github.workflow-runs.list@1.0.0',
-]);
+assert.deepEqual(
+  [...executors.keys()],
+  [
+    'github.repository.read@1.0.0',
+    'github.issues.list@1.0.0',
+    'github.workflow-runs.list@1.0.0',
+    'github.pull-request.create@1.0.0',
+  ],
+);
 assert.equal(signerFactoryCalls, 1);
 assert.equal(signerProbeCalls, 1);
 
@@ -123,6 +139,8 @@ const repository = await executors.get('github.repository.read@1.0.0')(
       tool: 'github.repository.read@1.0.0',
       target: 'tyj1987/broker',
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -136,8 +154,43 @@ assert.equal(signerInputs.length, 1);
 assert.equal(signerInputs[0].account_ref, 'github-primary');
 assert.equal(signerInputs[0].environment, 'production');
 assert.equal(signerInputs[0].algorithm, 'RS256');
+assert.equal(signerInputs[0].execution_id, EXECUTION_ID);
+assert.equal(signerInputs[0].request_binding, REQUEST_BINDING);
 assert.equal(JSON.parse(requests[0].body).permissions.metadata, 'read');
 assert.equal(requests[1].options.headers.authorization, 'Bearer runtime-installation-token');
+
+const pullRequest = await executors.get('github.pull-request.create@1.0.0')(
+  {
+    resource_ref: 'tyj1987/broker',
+    owner: 'tyj1987',
+    repo: 'broker',
+    title: 'Runtime contract test',
+    head: 'codex/runtime-test',
+    base: 'master',
+  },
+  {
+    accountRef: 'github-primary',
+    environment: 'production',
+    execution: {
+      tool: 'github.pull-request.create@1.0.0',
+      target: 'tyj1987/broker',
+      environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
+    },
+  },
+);
+assert.deepEqual(pullRequest, {
+  number: 73,
+  state: 'open',
+  draft: true,
+  head: 'codex/runtime-test',
+  base: 'master',
+  url: 'https://github.com/tyj1987/broker/pull/73',
+});
+assert.deepEqual(JSON.parse(requests[2].body).permissions, { pull_requests: 'write' });
+assert.equal(requests[3].options.path, '/repos/tyj1987/broker/pulls');
+assert.equal(requests[3].options.headers.authorization, 'Bearer runtime-installation-token');
 
 await assert.rejects(
   executors.get('github.repository.read@1.0.0')(
@@ -149,6 +202,8 @@ await assert.rejects(
         tool: 'github.repository.read@1.0.0',
         target: 'other/repo',
         environment: 'production',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ),
@@ -156,21 +211,54 @@ await assert.rejects(
 );
 
 for (const mutate of [
-  (config) => { config.operation_policies.github['repo.read'].execution_mode = 'browser'; },
-  (config) => { config.operation_policies.github['unknown.read'] = { ...basePolicy }; },
-  (config) => { config.operation_policies.github['repo.read'].accounts = []; },
-  (config) => { delete config.provider_accounts; },
-  (config) => { config.provider_accounts.github = []; },
-  (config) => { config.provider_accounts.github['github-primary'].private_key = 'forbidden'; },
-  (config) => { config.provider_accounts.github['github-primary'].client_id = 'x'; },
-  (config) => { config.provider_accounts.github['github-primary'].installation_id = 0; },
-  (config) => { config.provider_accounts.github['github-primary'].environments = []; },
-  (config) => { config.provider_accounts.github['github-primary'].environments = ['Production']; },
-  (config) => { config.provider_accounts.github['github-primary'].repositories = []; },
-  (config) => { config.provider_accounts.github['github-primary'].repositories = ['../repo']; },
-  (config) => { config.provider_accounts.github['github-primary'].repositories = ['tyj1987/broker', 'TYJ1987/BROKER']; },
-  (config) => { config.provider_accounts.github['github-primary'].environments = ['production', 'production']; },
-  (config) => { config.operation_policies.github['repo.read'].accounts = ['missing']; },
+  (config) => {
+    config.operation_policies.github['repo.read'].execution_mode = 'browser';
+  },
+  (config) => {
+    config.operation_policies.github['unknown.read'] = { ...basePolicy };
+  },
+  (config) => {
+    config.operation_policies.github['repo.read'].accounts = [];
+  },
+  (config) => {
+    delete config.provider_accounts;
+  },
+  (config) => {
+    config.provider_accounts.github = [];
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].private_key = 'forbidden';
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].client_id = 'x';
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].installation_id = 0;
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].environments = [];
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].environments = ['Production'];
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].repositories = [];
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].repositories = ['../repo'];
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].repositories = [
+      'tyj1987/broker',
+      'TYJ1987/BROKER',
+    ];
+  },
+  (config) => {
+    config.provider_accounts.github['github-primary'].environments = ['production', 'production'];
+  },
+  (config) => {
+    config.operation_policies.github['repo.read'].accounts = ['missing'];
+  },
 ]) {
   const config = validConfig();
   mutate(config);
@@ -182,12 +270,15 @@ for (const mutate of [
 
 const tooManyAccounts = validConfig();
 tooManyAccounts.provider_accounts.github = Object.fromEntries(
-  Array.from({ length: 65 }, (_, index) => [`account-${index}`, {
-    client_id: 'Iv1.runtime-test',
-    installation_id: index + 1,
-    environments: ['production'],
-    repositories: ['tyj1987/broker'],
-  }]),
+  Array.from({ length: 65 }, (_, index) => [
+    `account-${index}`,
+    {
+      client_id: 'Iv1.runtime-test',
+      installation_id: index + 1,
+      environments: ['production'],
+      repositories: ['tyj1987/broker'],
+    },
+  ]),
 );
 await assert.rejects(
   prepareGitHubRuntimeExecutors({ config: tooManyAccounts, createSignerClient }),
@@ -214,7 +305,9 @@ await assert.rejects(
   prepareGitHubRuntimeExecutors({
     config: validConfig(),
     createSignerClient: () => ({
-      probe: async () => { throw new Error('canary-probe'); },
+      probe: async () => {
+        throw new Error('canary-probe');
+      },
       sign: async () => Buffer.alloc(256),
     }),
   }),
@@ -233,7 +326,14 @@ assert.throws(() => commitGitHubRuntimeExecutors({}, executors), TypeError);
 assert.throws(() => commitGitHubRuntimeExecutors(target, {}), TypeError);
 
 assert.deepEqual(GITHUB_RUNTIME_CONTRACT, {
-  supported_operations: ['repo.read', 'branches.list', 'commits.list', 'issues.list', 'workflow_runs.list'],
+  supported_operations: [
+    'repo.read',
+    'branches.list',
+    'commits.list',
+    'issues.list',
+    'pull_request.create',
+    'workflow_runs.list',
+  ],
   account_binding_fields: ['client_id', 'installation_id', 'environments', 'repositories'],
   maximum_accounts: 64,
   maximum_repositories_per_account: 100,
@@ -243,6 +343,11 @@ assert.deepEqual(GITHUB_RUNTIME_CONTRACT, {
 
 const serverSource = readFileSync(new URL('../broker/server.js', import.meta.url), 'utf8');
 assert.match(serverSource, /await prepareGitHubRuntimeExecutors\(\{ config: cfg \}\)/);
-assert.match(serverSource, /commitGitHubRuntimeExecutors\(taskExecutors, prepared\.githubExecutors\)/);
+assert.match(
+  serverSource,
+  /commitGitHubRuntimeExecutors\(taskExecutors, prepared\.githubExecutors\)/,
+);
 
-console.log('github runtime: verified policies, account binding, signer probe and atomic executor commit passed');
+console.log(
+  'github runtime: verified policies, account binding, signer probe and atomic executor commit passed',
+);

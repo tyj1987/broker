@@ -125,3 +125,20 @@ continue.
   values cannot be reused. Master keys, environment credentials, secret
   resolution, arbitrary proxying and external MCP healthcheck execution are
   denied.
+
+## DQ-009: production trust-domain cutover
+
+- Status: open
+- Needed before: the first protected ECS CD deployment
+- Decision: approve a maintenance window and name the offline CA or HSM
+  authority, the second verified management path, the client re-enrollment
+  owners, and the rollback boundary for replacing the currently co-located CA
+  and final-client private keys. Rollback must not restore the compromised trust
+  domain after new identities have been accepted.
+- Required evidence: pre-cutover snapshot and hashes, independently verified
+  SSH host identity, new nginx workload identity, exact trusted-proxy binding,
+  rejection of every old identity, successful read-only typed operation,
+  secret-free audit output, and a timed rollback rehearsal.
+- Current safe default: keep the legacy service available for existing users,
+  deny protected CD, and continue source/staging work. Do not copy the old key
+  hierarchy into the hardened layout or use it to satisfy the preflight.

@@ -70,6 +70,29 @@ environment files and credential values were not opened or printed.
 
 Production remains **not approved**. No deployment was attempted because P0/P1 gates, repository CI, credential rotation evidence, signed artifacts, provider contract tests, Android physical-device tests, and disaster-recovery rehearsal are incomplete.
 
+### 2026-09-10 CD preflight checkpoint
+
+The versioned read-only production preflight introduced at local checkpoint
+`4527732` was streamed over the existing strictly verified SSH connection and
+executed without being installed or changing the host. It reports only named
+pass/fail gates and returned `production_cd_ready=no`.
+
+The running Broker service and nginx configuration parse check passed. The
+following release invariants failed and therefore block the protected CD
+workflow: dedicated Broker user and group, active Go policy core, managed
+release symlink, executable deployment helper, dedicated deployment account,
+enabled nginx upstream certificate verification with no disabled location,
+absence of co-located CA/final-client private keys, encrypted control-plane
+state and protected key, protected policy socket, and loopback port 9080 health.
+No credential value, certificate body, private key, environment file or nginx
+configuration body was emitted by the preflight.
+
+Local regression at this checkpoint passed the complete Node verification and
+coverage gate: 97.58% lines, 91.62% branches and 98.41% functions. The preflight
+also has deterministic success, per-gate failure and output non-disclosure
+tests. This is source and read-only runtime evidence; it is not a migration or
+release approval.
+
 ## Local evidence obtained on the upgrade branch
 
 - Tool discovery now exposes only capabilities with an executor registered in

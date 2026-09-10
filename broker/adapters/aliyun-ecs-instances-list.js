@@ -208,12 +208,14 @@ export function createAliyunEcsInstancesListAdapter({ request, signRequest, now 
 
     let response;
     try {
+      const outboundHeaders = { ...signed };
+      delete outboundHeaders.host;
       response = await request({
         origin: `https://ecs.${validated.regionId}.aliyuncs.com`,
         method: METHOD,
         path: `/?${new URLSearchParams(query)}`,
         headers: {
-          ...signed,
+          ...outboundHeaders,
           Accept: 'application/json',
           'User-Agent': `secret-broker/${BROKER_VERSION}`,
         },

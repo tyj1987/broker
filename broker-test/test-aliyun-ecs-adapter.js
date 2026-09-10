@@ -118,6 +118,7 @@ assert.equal(requestInput.path, '/?MaxResults=20&RegionId=cn-hangzhou');
 assert.equal(requestInput.redirect, 'manual');
 assert.equal(requestInput.max_response_bytes, 2 * 1024 * 1024);
 assert.equal(requestInput.headers.Authorization, signedResult().headers.Authorization);
+assert.equal(Object.hasOwn(requestInput.headers, 'host'), false);
 assert.equal(JSON.stringify(result).includes('198.51.100.8'), false);
 assert.equal(JSON.stringify(result).includes('RequestId'), false);
 assert.equal(Object.hasOwn(signerInput, 'access_key_secret'), false);

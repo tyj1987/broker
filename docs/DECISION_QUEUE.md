@@ -75,8 +75,11 @@ continue.
   local primitive only. A typed `ecs.instances.list` adapter now fixes the
   regional endpoint and API metadata, uses the current token-based pagination,
   releases only bounded inventory fields and accepts only an isolated signed
-  request capability. No Alibaba Cloud account binding, signer sidecar or
-  production executor is enabled while this decision is open.
+  request capability. A fixed, ownership-checked Unix socket and exact
+  account/environment/region/resource runtime binding are implemented; a
+  verified policy fails startup when that signer is absent. No signer service,
+  authoritative account store or production operation is enabled while this
+  decision is open.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

@@ -106,6 +106,10 @@ import {
   prepareDockerRuntimeExecutors,
 } from './adapters/docker-runtime.js';
 import {
+  commitAliyunRuntimeExecutors,
+  prepareAliyunRuntimeExecutors,
+} from './adapters/aliyun-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -398,12 +402,14 @@ async function prepareConfig() {
   const githubExecutors = await prepareGitHubRuntimeExecutors({ config: cfg });
   const cloudflareExecutors = await prepareCloudflareRuntimeExecutors({ config: cfg });
   const dockerExecutors = await prepareDockerRuntimeExecutors({ config: cfg });
+  const aliyunExecutors = await prepareAliyunRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
     githubExecutors,
     cloudflareExecutors,
     dockerExecutors,
+    aliyunExecutors,
   };
 }
 
@@ -412,6 +418,7 @@ function applyConfig(prepared) {
   commitGitHubRuntimeExecutors(taskExecutors, prepared.githubExecutors);
   commitCloudflareRuntimeExecutors(taskExecutors, prepared.cloudflareExecutors);
   commitDockerRuntimeExecutors(taskExecutors, prepared.dockerExecutors);
+  commitAliyunRuntimeExecutors(taskExecutors, prepared.aliyunExecutors);
   CONFIG = prepared.document;
 }
 

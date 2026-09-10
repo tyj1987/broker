@@ -22,7 +22,7 @@ operations:
     permission: ecs:DescribeInstances
     mutating: false
     approval: none
-    parameters: { RegionId: { type: string }, PageNumber: { type: integer }, PageSize: { type: integer } }
+    parameters: { RegionId: { type: string }, NextToken: { type: string }, MaxResults: { type: integer, maximum: 100 } }
     fixed_headers: { x-acs-action: DescribeInstances, x-acs-version: "2014-05-26" }
     maximum_response_bytes: 2097152
 redaction: [Authorization, AccessKeyId, AccessKeySecret, SecurityToken, Signature]

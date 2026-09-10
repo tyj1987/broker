@@ -72,7 +72,10 @@ continue.
   every provider remains `contract_required`. Alibaba Cloud Signature V3 now
   matches the current official byte-level example, uses ISO 8601 time and a
   per-request nonce, and signs temporary STS security tokens. This corrects the
-  local primitive only; no Alibaba Cloud account binding, credential sidecar or
+  local primitive only. A typed `ecs.instances.list` adapter now fixes the
+  regional endpoint and API metadata, uses the current token-based pagination,
+  releases only bounded inventory fields and accepts only an isolated signed
+  request capability. No Alibaba Cloud account binding, signer sidecar or
   production executor is enabled while this decision is open.
 
 ## DQ-005: SSH target, host-key and certificate authority

@@ -4,12 +4,15 @@ import net from 'node:net';
 const SOCKET_DIRECTORY = '/run/secret-broker-credentials';
 const SOCKETS = Object.freeze({
   cloudflare: `${SOCKET_DIRECTORY}/cloudflare.sock`,
+  docker: `${SOCKET_DIRECTORY}/docker.sock`,
 });
 const MAX_REQUEST_BYTES = 4 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024;
 const MAX_LEASE_TTL_MS = 5 * 60_000;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const CLOUDFLARE_ACCOUNT_ID_RE = /^[a-f0-9]{32}$/;
+const DOCKER_COMPONENT_RE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 
 export class LocalProviderCredentialError extends Error {
   constructor(code, message) {
@@ -21,6 +24,16 @@ export class LocalProviderCredentialError extends Error {
 
 function fail(code, message) {
   throw new LocalProviderCredentialError(code, message);
+}
+
+function validResource(provider, value) {
+  if (provider === 'cloudflare') return CLOUDFLARE_ACCOUNT_ID_RE.test(value || '');
+  if (provider === 'docker') {
+    if (typeof value !== 'string' || value.length >= 256) return false;
+    const parts = value.split('/');
+    return parts.length === 2 && parts.every((part) => DOCKER_COMPONENT_RE.test(part));
+  }
+  return false;
 }
 
 function validateRequest(provider, input) {
@@ -35,7 +48,7 @@ function validateRequest(provider, input) {
     !ID_RE.test(input.operation_id || '') ||
     !ID_RE.test(input.account_ref || '') ||
     !ENVIRONMENT_RE.test(input.environment || '') ||
-    !ID_RE.test(input.resource_ref || '') ||
+    !validResource(provider, input.resource_ref) ||
     (input.signal !== undefined && !(input.signal instanceof AbortSignal)) ||
     !Object.hasOwn(SOCKETS, provider)
   ) {

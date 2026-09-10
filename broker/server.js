@@ -102,6 +102,10 @@ import {
   prepareCloudflareRuntimeExecutors,
 } from './adapters/cloudflare-runtime.js';
 import {
+  commitDockerRuntimeExecutors,
+  prepareDockerRuntimeExecutors,
+} from './adapters/docker-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -393,11 +397,13 @@ async function prepareConfig() {
   toolRegistry.validateConfiguration(cfg);
   const githubExecutors = await prepareGitHubRuntimeExecutors({ config: cfg });
   const cloudflareExecutors = await prepareCloudflareRuntimeExecutors({ config: cfg });
+  const dockerExecutors = await prepareDockerRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
     githubExecutors,
     cloudflareExecutors,
+    dockerExecutors,
   };
 }
 
@@ -405,6 +411,7 @@ function applyConfig(prepared) {
   operationBroker.commitDeviceRegistry(prepared.devices);
   commitGitHubRuntimeExecutors(taskExecutors, prepared.githubExecutors);
   commitCloudflareRuntimeExecutors(taskExecutors, prepared.cloudflareExecutors);
+  commitDockerRuntimeExecutors(taskExecutors, prepared.dockerExecutors);
   CONFIG = prepared.document;
 }
 

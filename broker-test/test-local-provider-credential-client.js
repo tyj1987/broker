@@ -106,6 +106,34 @@ assert.deepEqual(JSON.parse(harness.state.payload), {
 });
 assert.doesNotMatch(harness.state.payload, /token|secret|authorization/i);
 
+const dockerHarness = socketHarness({
+  response: JSON.stringify({
+    version: 1,
+    provider: 'docker',
+    operation_id: 'repository.tags.list',
+    account_ref: 'docker-primary',
+    environment: 'production',
+    resource_ref: 'tyj1987/broker',
+    token: 'unit-docker-token',
+    expires_at: new Date(NOW + 60_000).toISOString(),
+  }),
+});
+const dockerClient = createLocalProviderCredentialClient({
+  provider: 'docker',
+  connect: dockerHarness.connect,
+  stat: safeStat,
+  now: () => NOW,
+  processUid: 1000,
+  processGroups: [3000],
+});
+await dockerClient.lease({
+  operation_id: 'repository.tags.list',
+  account_ref: 'docker-primary',
+  environment: 'production',
+  resource_ref: 'tyj1987/broker',
+});
+assert.equal(dockerHarness.state.options.path, `${SOCKET_DIRECTORY}/docker.sock`);
+
 for (const options of [
   {},
   { provider: 'unknown' },
@@ -237,7 +265,7 @@ await assert.rejects(pending, expectCode('credential_request_aborted'));
 
 assert.deepEqual(LOCAL_PROVIDER_CREDENTIAL_CONTRACT, {
   socket_directory: SOCKET_DIRECTORY,
-  socket_paths: { cloudflare: SOCKET },
+  socket_paths: { cloudflare: SOCKET, docker: `${SOCKET_DIRECTORY}/docker.sock` },
   protocol_version: 1,
   maximum_request_bytes: 4096,
   maximum_response_bytes: 8192,

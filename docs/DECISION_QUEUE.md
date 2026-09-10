@@ -66,8 +66,10 @@ continue.
   KMS/HSM authority has been selected. The Cloudflare runtime now has a fixed,
   ownership-checked Unix-socket credential lease client and refuses plaintext
   token configuration; only exact five-minute account/environment/resource
-  leases are accepted. The external credential-service implementation and its
-  authority remain undecided, so every provider remains `contract_required`.
+  leases are accepted. Docker now uses the same isolated boundary with exact
+  repository bindings and a second expiry check in the adapter. The external
+  credential-service implementation and its authority remain undecided, so
+  every provider remains `contract_required`.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

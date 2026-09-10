@@ -9,9 +9,14 @@ const CLIENT_ID_RE = /^[A-Za-z0-9._-]{3,128}$/;
 const ACCOUNT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const REPOSITORY_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
-const READ_ONLY_PERMISSIONS = new Set([
-  'actions', 'contents', 'deployments', 'issues', 'metadata', 'pull_requests',
-]);
+const PERMISSION_LEVELS = Object.freeze({
+  actions: Object.freeze(['read']),
+  contents: Object.freeze(['read']),
+  deployments: Object.freeze(['read']),
+  issues: Object.freeze(['read']),
+  metadata: Object.freeze(['read']),
+  pull_requests: Object.freeze(['read', 'write']),
+});
 
 function fail(code, message, status = 400) {
   throw new V2Error(code, message, status);
@@ -84,11 +89,19 @@ function normalizePermissions(value) {
     throw new TypeError('GitHub token provider permissions must be a non-empty object');
   }
   const entries = Object.entries(value);
-  if (entries.length < 1) throw new TypeError('GitHub token provider permissions must be a non-empty object');
-  if (entries.some(([key, level]) => !READ_ONLY_PERMISSIONS.has(key) || level !== 'read')) {
-    throw new TypeError('GitHub token provider supports explicit read-only permissions only');
+  if (entries.length < 1)
+    throw new TypeError('GitHub token provider permissions must be a non-empty object');
+  if (
+    entries.some(
+      ([key, level]) =>
+        !Object.hasOwn(PERMISSION_LEVELS, key) || !PERMISSION_LEVELS[key].includes(level),
+    )
+  ) {
+    throw new TypeError('GitHub token provider permissions exceed the supported operation set');
   }
-  return Object.freeze(Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))));
+  return Object.freeze(
+    Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))),
+  );
 }
 
 function validateTokenResponse(response, repository, now, requiredPermissions) {
@@ -111,8 +124,11 @@ function validateTokenResponse(response, repository, now, requiredPermissions) {
     !permissions ||
     typeof permissions !== 'object' ||
     Array.isArray(permissions) ||
-    JSON.stringify(Object.fromEntries(Object.entries(permissions).sort(([left], [right]) => left.localeCompare(right))))
-      !== JSON.stringify(requiredPermissions)
+    JSON.stringify(
+      Object.fromEntries(
+        Object.entries(permissions).sort(([left], [right]) => left.localeCompare(right)),
+      ),
+    ) !== JSON.stringify(requiredPermissions)
   ) {
     fail(
       'github_token_scope_mismatch',
@@ -120,7 +136,12 @@ function validateTokenResponse(response, repository, now, requiredPermissions) {
       502,
     );
   }
-  return { token: body.token, repository, expires_at: body.expires_at, permissions: { ...requiredPermissions } };
+  return {
+    token: body.token,
+    repository,
+    expires_at: body.expires_at,
+    permissions: { ...requiredPermissions },
+  };
 }
 
 export function createGitHubAppInstallationTokenProvider({

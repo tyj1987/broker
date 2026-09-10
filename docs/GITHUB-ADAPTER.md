@@ -1,7 +1,7 @@
 # GitHub repository adapter
 
-The GitHub provider currently implements five credential-isolated, read-only
-operations:
+The GitHub provider implements five credential-isolated read-only operations
+and one approval-gated write operation:
 
 - `github.repository.read@1.0.0` calls `GET /repos/{owner}/{repo}` and returns
   the bounded `id`, `full_name`, `visibility` and `archived` projection.
@@ -27,10 +27,17 @@ operations:
   pagination filters are typed and bounded. Workflow names are marked
   `untrusted_external`; pull-request payloads, jobs, logs and artifacts are not
   projected.
+- `github.pull-request.create@1.0.0` calls
+  `POST /repos/{owner}/{repo}/pulls` with an installation token limited to
+  `pull_requests:write`. It accepts only a bounded title/body, validated head
+  and base refs and a repository-matching `resource_ref`. Pull requests default
+  to draft. The Tool Registry classifies this as HIGH and requires a human
+  approval bound to the complete request before the executor can run.
 
-The adapter fixes the origin to `https://api.github.com`, the method to `GET`,
-redirect handling to manual denial, the response limit to 1 MiB and the API
-version to `2026-03-10`. Owner and repository values are validated as path
+The adapters fix the origin to `https://api.github.com`; read operations use
+`GET` and pull-request creation uses `POST` on its single registered path.
+Redirect handling is denied, responses are limited to 1 MiB and the API version
+is fixed to `2026-03-10`. Owner and repository values are validated as path
 segments. `resource_ref` must equal `owner/repo`, and the verified execution
 capability must bind the same tool and target.
 
@@ -46,8 +53,9 @@ business result or included in safe errors.
 three injected capabilities: a pinned request transport, an account-binding
 resolver and a non-exportable RS256 signer. The provider creates a short App
 JWT and requests a token for exactly one repository. Its required permissions
-are fixed when the provider is constructed, accept explicit read-only grants
-only, and are checked exactly in the GitHub response and returned lease.
+are fixed when the provider is constructed and are checked exactly in the
+GitHub response and returned lease. Only reviewed read grants are accepted,
+except for the explicit `pull_requests:write` grant used by the HIGH operation.
 Repository metadata uses only `Metadata: read`; branch and commit listing use
 only `Contents: read`; issue listing uses only `Issues: read`; workflow-run
 listing uses only `Actions: read`. Account bindings must also match the
@@ -101,15 +109,16 @@ workflow-run filter validation and bounded status projection,
 App/account/environment/repository binding, JWT claims and algorithm,
 invalid signer results, fixed-socket ownership and protocol failures,
 strict signer-side JWT validation, peer and binding denial, digest-only backend calls,
-configuration reload removal, fixed read-only token permissions, missing/wrong/expired/overlong
-leases, redirect denial, upstream status mapping, invalid and oversized
-responses, bounded projection and error redaction. The provider manifest
+configuration reload removal, fixed least-privilege token permissions,
+step-up approval and single-execution enforcement for pull-request creation,
+missing/wrong/expired/overlong leases, redirect denial, upstream status mapping,
+invalid and oversized responses, bounded projection and error redaction. The provider manifest
 remains `contract_required` until a production-grade signer and account binding
 are configured and an isolated GitHub App account passes a real request and
 revocation test. Runtime wiring is covered by deterministic integration tests;
 that evidence is not a substitute for the external contract test.
 
-Official references checked on 2026-09-10:
+Official references checked on 2026-09-11:
 
 - [Get a repository](https://docs.github.com/en/rest/repos/repos#get-a-repository)
 - [Generate a JSON Web Token for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
@@ -120,3 +129,4 @@ Official references checked on 2026-09-10:
 - [List commits](https://docs.github.com/en/rest/commits/commits#list-commits)
 - [List repository issues](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
 - [List workflow runs for a repository](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository)
+- [Create a pull request](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request)

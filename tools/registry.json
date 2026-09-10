@@ -200,6 +200,24 @@
       "agent_execution": true
     },
     {
+      "name": "github.pull-request.create",
+      "version": "1.0.0",
+      "description": "Create one draft-by-default pull request after a human approval bound to the repository and typed request.",
+      "provider": "github",
+      "operation_id": "pull_request.create",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "owner", "repo", "title", "head", "base"], "properties": { "resource_ref": { "type": "string" }, "owner": { "type": "string" }, "repo": { "type": "string" }, "title": { "type": "string", "minLength": 1, "maxLength": 256 }, "body": { "type": "string", "minLength": 1, "maxLength": 10000 }, "head": { "type": "string", "minLength": 1, "maxLength": 255 }, "base": { "type": "string", "minLength": 1, "maxLength": 255 }, "draft": { "type": "boolean" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["number", "state", "draft", "head", "base", "url"], "properties": { "number": { "type": "integer" }, "state": { "type": "string", "const": "open" }, "draft": { "type": "boolean" }, "head": { "type": "string" }, "base": { "type": "string" }, "url": { "type": "string" } } },
+      "required_role": "developer",
+      "risk_level": "HIGH",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "github-repository", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 10, "window_seconds": 3600 },
+      "approval_policy": { "mode": "step_up", "approvals_required": 1 },
+      "audit_policy": { "required": true, "redact": ["authorization", "installation_token", "body"] },
+      "agent_execution": true
+    },
+    {
       "name": "cloudflare.zones.list",
       "version": "1.0.0",
       "description": "List Cloudflare zones visible to a scoped service token.",

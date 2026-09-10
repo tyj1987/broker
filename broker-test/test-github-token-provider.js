@@ -114,16 +114,54 @@ assert.throws(
     createGitHubAppInstallationTokenProvider({ request: async () => {}, signer: async () => {} }),
   TypeError,
 );
-assert.throws(() => createGitHubAppInstallationTokenProvider({
-  request: async () => {}, signer: async () => {}, accountResolver: async () => {},
-  permissions: { contents: 'write' },
-}), /read-only/);
-assert.throws(() => createGitHubAppInstallationTokenProvider({
-  request: async () => {}, signer: async () => {}, accountResolver: async () => {}, permissions: {},
-}), /non-empty/);
-assert.throws(() => createGitHubAppInstallationTokenProvider({
-  request: async () => {}, signer: async () => {}, accountResolver: async () => {}, permissions: null,
-}), /non-empty/);
+assert.throws(
+  () =>
+    createGitHubAppInstallationTokenProvider({
+      request: async () => {},
+      signer: async () => {},
+      accountResolver: async () => {},
+      permissions: { contents: 'write' },
+    }),
+  /exceed/,
+);
+assert.throws(
+  () =>
+    createGitHubAppInstallationTokenProvider({
+      request: async () => {},
+      signer: async () => {},
+      accountResolver: async () => {},
+      permissions: { issues: 'write' },
+    }),
+  /exceed/,
+);
+assert.doesNotThrow(() =>
+  createGitHubAppInstallationTokenProvider({
+    request: async () => {},
+    signer: async () => {},
+    accountResolver: async () => {},
+    permissions: { pull_requests: 'write' },
+  }),
+);
+assert.throws(
+  () =>
+    createGitHubAppInstallationTokenProvider({
+      request: async () => {},
+      signer: async () => {},
+      accountResolver: async () => {},
+      permissions: {},
+    }),
+  /non-empty/,
+);
+assert.throws(
+  () =>
+    createGitHubAppInstallationTokenProvider({
+      request: async () => {},
+      signer: async () => {},
+      accountResolver: async () => {},
+      permissions: null,
+    }),
+  /non-empty/,
+);
 const makeProvider = ({
   resolved = binding,
   signed = Buffer.alloc(256),

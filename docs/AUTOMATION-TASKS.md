@@ -30,6 +30,13 @@ calling an injected lease issuer, then constrains the returned capability to a
 five-minute maximum lifetime. It has no production credential backend and does
 not change the deployed executable catalog.
 
+The source branch also registers `github.pull-request.create@1.0.0` as a HIGH
+risk, draft-by-default operation. Its deterministic end-to-end test proves that
+the requester cannot execute before a separate WebAuthn-stepped-up human
+approval, and that a completed task cannot replay the upstream call. The
+operation is not production-enabled while DQ-004 and the isolated GitHub App
+contract test remain open.
+
 This changes the active implementation plan from building another task model
 to validating the deployed orchestration boundary, then enabling providers one
 bounded read-only operation at a time. It does not authorize a second task API,

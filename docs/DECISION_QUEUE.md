@@ -63,7 +63,11 @@ continue.
   the bounded GitHub App JWT before giving only a SHA-256 digest to an injected
   non-exportable backend. Linux peer identity is verified with `SO_PEERCRED`
   against an explicit non-root Broker UID. No production signer workload or
-  KMS/HSM authority has been selected. The Cloudflare runtime now has a fixed,
+  KMS/HSM authority has been selected. A source-only GitHub pull-request
+  creation operation now exercises the same boundary with a fixed API path, a
+  draft-by-default request, and WebAuthn step-up approval, but remains disabled
+  in production until this decision and its isolated GitHub App contract test
+  are closed. The Cloudflare runtime now has a fixed,
   ownership-checked Unix-socket credential lease client and refuses plaintext
   token configuration; only exact five-minute account/environment/resource
   leases are accepted. Docker now uses the same isolated boundary with exact

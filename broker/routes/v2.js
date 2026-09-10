@@ -321,14 +321,23 @@ export function createV2Routes(deps) {
           if (claim) approvalBroker.markFailed(claim.id);
           throw error;
         }
+        let approvalSucceeded = false;
         try {
           mandatoryAudit({ action: 'v2_operation_create', status: 'ok', cn: ctx.cn, operation_id: result.id, provider: result.provider });
+          if (claim) {
+            approvalBroker.markSucceeded(claim.id);
+            approvalSucceeded = true;
+          }
+          mandatoryCheckpoint('operation_created');
         } catch (error) {
+          if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
           operationBroker.rollbackOperationCreation(identity, result.id);
-          if (claim) approvalBroker.releaseClaim(claim.id);
+          if (claim) {
+            if (approvalSucceeded) approvalBroker.rollbackSucceeded(claim.id);
+            approvalBroker.releaseClaim(claim.id);
+          }
           throw error;
         }
-        if (claim) approvalBroker.markSucceeded(claim.id);
         send(res, 202, result);
         return true;
       }
@@ -442,6 +451,7 @@ export function createV2Routes(deps) {
         mandatoryAudit({ action: 'v2_browser_otp_claim_intent', status: 'authorized', cn: ctx.cn });
         const result = operationBroker.claimBrowserOtpAndAudit(identity, body, (claim) => {
           mandatoryAudit({ action: 'v2_browser_otp_claim', status: 'ok', cn: ctx.cn, provider: claim.provider, operation_id: claim.operation_id });
+          mandatoryCheckpoint('browser_otp_claimed');
         });
         send(res, 200, result);
         return true;
@@ -460,6 +470,7 @@ export function createV2Routes(deps) {
             action: 'v2_browser_otp_finish', status: completion.status, cn: ctx.cn,
             operation_id: completion.operation_id,
           });
+          mandatoryCheckpoint('browser_otp_finished');
         });
         send(res, 200, result);
         return true;
@@ -566,6 +577,7 @@ export function createV2Routes(deps) {
         }
         const deviceId = selfSuspendMatch[1];
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryCheckpoint('device_nonce_consumed');
         mandatoryAudit({ action: 'v2_device_self_suspend_intent', status: 'authorized', device_id: deviceId });
         const result = await operationBroker.suspendDevice(deviceId);
         audit({ action: 'v2_device_self_suspend', status: 'ok', device_id: deviceId });
@@ -577,6 +589,7 @@ export function createV2Routes(deps) {
       if (method === 'GET' && taskListMatch) {
         const deviceId = taskListMatch[1];
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname));
+        mandatoryCheckpoint('device_nonce_consumed');
         const tasks = operationBroker.listDeviceOtpTasks(deviceId);
         audit({ action: 'v2_device_otp_task_list', status: 'ok', device_id: deviceId, count: tasks.length });
         send(res, 200, { tasks });
@@ -588,9 +601,11 @@ export function createV2Routes(deps) {
         const body = await readBody(req);
         const [deviceId, taskId] = submitMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryCheckpoint('device_nonce_consumed');
         mandatoryAudit({ action: 'v2_otp_submit_intent', status: 'authorized', device_id: deviceId, operation_id: taskId });
         const result = operationBroker.submitOtpAndAudit(deviceId, taskId, body || {}, (received) => {
           mandatoryAudit({ action: 'v2_otp_received', status: 'ok', device_id: deviceId, operation_id: received.operation_id });
+          mandatoryCheckpoint('otp_received');
         });
         send(res, 202, result);
         return true;
@@ -601,9 +616,11 @@ export function createV2Routes(deps) {
         const body = await readBody(req);
         const deviceId = workerClaimMatch[1];
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryCheckpoint('device_nonce_consumed');
         mandatoryAudit({ action: 'v2_browser_lease_claim_intent', status: 'authorized', device_id: deviceId });
         const result = operationBroker.claimBrowserOperationAndAudit(deviceId, (lease) => {
           mandatoryAudit({ action: 'v2_browser_lease_claim', status: 'ok', device_id: deviceId, operation_id: lease.operation.id });
+          mandatoryCheckpoint('browser_lease_claimed');
         });
         send(res, 200, result);
         return true;
@@ -614,9 +631,11 @@ export function createV2Routes(deps) {
         const body = await readBody(req);
         const [deviceId, leaseId] = workerOtpMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryCheckpoint('device_nonce_consumed');
         mandatoryAudit({ action: 'v2_browser_lease_otp_intent', status: 'authorized', device_id: deviceId, lease_id: leaseId });
         const result = operationBroker.claimBrowserOperationOtpAndAudit(deviceId, leaseId, body?.receipt, () => {
           mandatoryAudit({ action: 'v2_browser_lease_otp', status: 'ok', device_id: deviceId, lease_id: leaseId });
+          mandatoryCheckpoint('browser_lease_otp_claimed');
         });
         send(res, 200, result);
         return true;
@@ -627,9 +646,11 @@ export function createV2Routes(deps) {
         const body = await readBody(req);
         const [deviceId, leaseId] = workerCompleteMatch.slice(1);
         operationBroker.verifyDeviceRequest(deviceId, signedRequest(req, pathname, body));
+        mandatoryCheckpoint('device_nonce_consumed');
         mandatoryAudit({ action: 'v2_browser_lease_complete_intent', status: 'authorized', device_id: deviceId, lease_id: leaseId });
         const result = operationBroker.completeBrowserOperationAndAudit(deviceId, leaseId, body, (completion) => {
           mandatoryAudit({ action: 'v2_browser_lease_complete', status: completion.status, device_id: deviceId, operation_id: completion.operation_id });
+          mandatoryCheckpoint('browser_lease_completed');
         });
         send(res, 200, result);
         return true;

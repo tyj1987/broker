@@ -192,6 +192,7 @@ assert.equal(claim.grants.length, 2);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: request.id }), expectCode('approval_mismatch'));
 broker.markFailed(claim.id);
 assert.throws(() => broker.claimFor(requester, { ...input, approval_request_id: request.id }), expectCode('invalid_state'));
+assert.throws(() => broker.rollbackSucceeded(request.id), expectCode('approval_mismatch'));
 
 const successful = broker.create(requester, input);
 broker.decide(approver('admin-a'), successful.id, 'approve');
@@ -208,8 +209,14 @@ broker.releaseClaim(retryable.id);
 assert.equal(broker.list(requester).find((item) => item.id === retryable.id).status, 'APPROVED');
 const retryClaim = broker.claimFor(requester, { ...input, approval_request_id: retryable.id });
 broker.markSucceeded(retryClaim.id);
+broker.rollbackSucceeded(retryClaim.id);
+broker.releaseClaim(retryClaim.id);
+assert.equal(broker.list(requester).find((item) => item.id === retryable.id).status, 'APPROVED');
+const finalRetryClaim = broker.claimFor(requester, { ...input, approval_request_id: retryable.id });
+broker.markSucceeded(finalRetryClaim.id);
+broker.rollbackSucceeded(null);
 broker.releaseClaim(null);
-assert.throws(() => broker.releaseClaim(retryClaim.id), expectCode('approval_mismatch'));
+assert.throws(() => broker.releaseClaim(finalRetryClaim.id), expectCode('approval_mismatch'));
 
 const taskBound = broker.create(requester, input);
 broker.decide(approver('admin-a'), taskBound.id, 'approve');

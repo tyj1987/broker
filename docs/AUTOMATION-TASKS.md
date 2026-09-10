@@ -142,10 +142,13 @@ mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
 
 The operation component is included in every global checkpoint and shutdown
-checkpoint. Per-mutation checkpoints for every operation, OTP and browser lease
-transition are the next required increment; until those routes are wired, an
-abrupt process loss can still discard changes made after the last global
-checkpoint.
+checkpoint. Operation creation, device replay-nonce consumption, OTP receipt,
+browser-extension claims and completions, and isolated-browser lease claims,
+OTP release and completion all require a synchronous checkpoint before the API
+can report success. A pre-replacement write failure rolls back the affected
+operation or approval transition. A post-replacement
+`state_commit_indeterminate` result retains the in-memory transition so restart
+reconciliation observes the same state instead of reopening a replay window.
 
 A restored `EXECUTING` task remains indeterminate and cannot be retried because
 the upstream side effect may already have occurred. The current file-backed

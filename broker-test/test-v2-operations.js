@@ -7,6 +7,10 @@ import {
   canonicalJson,
 } from '../broker/lib/operations-v2.js';
 
+const indeterminateCheckpoint = () => {
+  throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+};
+
 let now = 1_800_000_000_000;
 const broker = new OperationBroker({
   now: () => now,
@@ -164,6 +168,14 @@ assert.throws(
   (error) => error instanceof V2Error && error.code === 'replay',
 );
 
+const beforeIndeterminateSubmit = broker.exportState();
+assert.throws(
+  () => broker.submitOtpAndAudit(device.id, operation.otp_task_id, body, indeterminateCheckpoint),
+  (error) => error instanceof V2Error && error.code === 'state_commit_indeterminate',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, operation.id).status, 'received');
+broker.restoreState(beforeIndeterminateSubmit);
+
 assert.throws(
   () => broker.submitOtpAndAudit(device.id, operation.otp_task_id, body, () => {
     throw new Error('audit unavailable');
@@ -268,6 +280,13 @@ assert.throws(
 const browserClaimInput = {
   provider: 'aliyun', account_ref: 'primary', origin: 'https://account.aliyun.com', tab_id: 1, frame_id: 0, document_id: 'doc-1',
 };
+const beforeIndeterminateBrowserClaim = broker.exportState();
+assert.throws(
+  () => broker.claimBrowserOtpAndAudit(browserIdentity, browserClaimInput, indeterminateCheckpoint),
+  (error) => error instanceof V2Error && error.code === 'state_commit_indeterminate',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, browserOperation.id).status, 'consuming');
+broker.restoreState(beforeIndeterminateBrowserClaim);
 assert.throws(
   () => broker.claimBrowserOtpAndAudit(browserIdentity, browserClaimInput, () => {
     throw new Error('audit unavailable');
@@ -286,6 +305,17 @@ assert.throws(
   () => broker.finishBrowserOtp(browserIdentity, { receipt: claim.receipt, completed: true, ignored: true }),
   (error) => error instanceof V2Error && error.code === 'invalid_request',
 );
+const beforeIndeterminateBrowserFinish = broker.exportState();
+assert.throws(
+  () => broker.finishBrowserOtpAndAudit(
+    browserIdentity,
+    { receipt: claim.receipt, completed: true },
+    indeterminateCheckpoint,
+  ),
+  (error) => error instanceof V2Error && error.code === 'state_commit_indeterminate',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, browserOperation.id).status, 'completed');
+broker.restoreState(beforeIndeterminateBrowserFinish);
 assert.throws(
   () => broker.claimBrowserOtp(browserIdentity, {
     provider: 'aliyun', account_ref: 'primary', origin: 'https://account.aliyun.com', tab_id: 1, frame_id: 0, document_id: 'doc-1',
@@ -425,6 +455,13 @@ const workerOperation = await workerBroker.createOperation({ name: 'owner-4' }, 
   typed_parameters: { resource_ref: 'summary' },
 });
 assert.equal(workerOperation.execution_mode, 'browser');
+const beforeIndeterminateLeaseClaim = workerBroker.exportState();
+assert.throws(
+  () => workerBroker.claimBrowserOperationAndAudit(workerDevice.id, indeterminateCheckpoint),
+  (error) => error instanceof V2Error && error.code === 'state_commit_indeterminate',
+);
+assert.equal(workerBroker.getOperation({ name: 'owner-4' }, workerOperation.id).status, 'consuming');
+workerBroker.restoreState(beforeIndeterminateLeaseClaim);
 assert.throws(
   () => workerBroker.claimBrowserOperationAndAudit(workerDevice.id, () => {
     throw new Error('audit unavailable');
@@ -472,6 +509,15 @@ assert.equal(
   'consuming',
   'a failed completion audit retains the active lease for a safe report retry',
 );
+const beforeIndeterminateCompletion = workerBroker.exportState();
+assert.throws(
+  () => workerBroker.completeBrowserOperationAndAudit(workerDevice.id, lease.id, {
+    receipt: lease.receipt, status: 'completed', result: { status: 'ok', records: 1 },
+  }, indeterminateCheckpoint),
+  (error) => error instanceof V2Error && error.code === 'state_commit_indeterminate',
+);
+assert.equal(workerBroker.getOperation({ name: 'owner-4' }, workerOperation.id).status, 'completed');
+workerBroker.restoreState(beforeIndeterminateCompletion);
 let completionAuditCommitted = false;
 const workerCompleted = workerBroker.completeBrowserOperationAndAudit(workerDevice.id, lease.id, {
   receipt: lease.receipt, status: 'completed', result: { status: 'ok', records: 1 },
@@ -524,6 +570,17 @@ const otpWorkerTask = otpWorkerBroker.listDeviceOtpTasks(otpWorkerPhone.id)[0];
 const otpWorkerBody = { code: '927461', sim_binding: 'sim-worker', challenge: otpWorkerTask.challenge };
 otpWorkerBroker.submitOtp(otpWorkerPhone.id, otpWorkerTask.id, otpWorkerBody);
 const otpWorkerLease = otpWorkerBroker.claimBrowserOperation(otpBrowserWorker.id);
+const beforeIndeterminateOtpRelease = otpWorkerBroker.exportState();
+assert.throws(
+  () => otpWorkerBroker.claimBrowserOperationOtpAndAudit(
+    otpBrowserWorker.id,
+    otpWorkerLease.id,
+    otpWorkerLease.receipt,
+    indeterminateCheckpoint,
+  ),
+  (error) => error instanceof V2Error && error.code === 'state_commit_indeterminate',
+);
+otpWorkerBroker.restoreState(beforeIndeterminateOtpRelease);
 assert.throws(
   () => otpWorkerBroker.claimBrowserOperationOtpAndAudit(
     otpBrowserWorker.id,

@@ -154,6 +154,7 @@ const handler = createV2Routes({
       return { id: input.approval_request_id, grants };
     },
     markSucceeded(id) { calls.push(['approval-succeeded', id]); },
+    rollbackSucceeded(id) { calls.push(['approval-succeeded-rollback', id]); },
     markFailed(id) { calls.push(['approval-failed', id]); },
     releaseClaim(id) { calls.push(['approval-released', id]); },
     cancel(subject, id) {
@@ -406,11 +407,15 @@ assert.ok(calls.some((item) => item[0] === 'claim'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_claim_intent'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_claim'
   && event.operation_id === 'operation-id'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'browser_otp_claimed'));
 const extensionClaimsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'claim').length;
 auditFailureAction = 'v2_browser_otp_claim';
 assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'audit_unavailable');
 auditFailureAction = null;
 assert.equal(calls.filter((item) => item[0] === 'claim').length, extensionClaimsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'browser_otp_claimed';
+assert.equal((await route('/api/v2/browser/otp/claim')).value.error, 'state_unavailable');
+checkpointFailurePhase = null;
 
 body = { receipt: 'receipt', completed: true };
 assert.equal((await route('/api/v2/browser/otp/finish')).value.status, 'completed');
@@ -418,11 +423,15 @@ assert.ok(calls.some((item) => item[0] === 'finish'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_finish_intent'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_otp_finish'
   && event.status === 'completed'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'browser_otp_finished'));
 const extensionFinishesBeforeResultAuditFailure = calls.filter((item) => item[0] === 'finish').length;
 auditFailureAction = 'v2_browser_otp_finish';
 assert.equal((await route('/api/v2/browser/otp/finish')).value.error, 'audit_unavailable');
 auditFailureAction = null;
 assert.equal(calls.filter((item) => item[0] === 'finish').length, extensionFinishesBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'browser_otp_finished';
+assert.equal((await route('/api/v2/browser/otp/finish')).value.error, 'state_unavailable');
+checkpointFailurePhase = null;
 
 identity = { clientName: 'requester', via: 'api_key', client: { role: 'developer' }, apiKey: { scopes: ['operations:execute'] } };
 body = { provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', typed_parameters: { resource_ref: 'summary' } };
@@ -515,6 +524,7 @@ assert.equal((await route('/api/v2/operations')).status, 202);
 assert.equal(calls.find((item) => item[0] === 'operation')[3].length, 1);
 assert.ok(calls.some((item) => item[0] === 'approval-succeeded'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_operation_create' && event.status === 'ok'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'operation_created'));
 
 const operationsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'operation').length;
 auditFailureAction = 'v2_operation_create';
@@ -523,6 +533,22 @@ auditFailureAction = null;
 assert.equal(calls.filter((item) => item[0] === 'operation').length, operationsBeforeResultAuditFailure + 1);
 assert.ok(calls.some((item) => item[0] === 'operation-rollback' && item[2] === 'operation-id'));
 assert.ok(calls.some((item) => item[0] === 'approval-released' && item[1] === 'approval-id'));
+
+const operationRollbacksBeforeCheckpointFailure = calls.filter((item) => item[0] === 'operation-rollback').length;
+checkpointFailurePhase = 'operation_created';
+assert.equal((await route('/api/v2/operations')).value.error, 'state_unavailable');
+checkpointFailurePhase = null;
+assert.equal(calls.filter((item) => item[0] === 'operation-rollback').length, operationRollbacksBeforeCheckpointFailure + 1);
+assert.ok(calls.some((item) => item[0] === 'approval-succeeded-rollback' && item[1] === 'approval-id'));
+const operationRollbacksBeforeIndeterminate = calls.filter((item) => item[0] === 'operation-rollback').length;
+indeterminateCheckpointPhase = 'operation_created';
+assert.equal((await route('/api/v2/operations')).value.error, 'state_commit_indeterminate');
+indeterminateCheckpointPhase = null;
+assert.equal(
+  calls.filter((item) => item[0] === 'operation-rollback').length,
+  operationRollbacksBeforeIndeterminate,
+  'an indeterminate operation commit must remain in memory for reconciliation',
+);
 
 identity = {
   clientName: 'admin-a', via: 'session', authFactors: ['webauthn'],
@@ -648,6 +674,7 @@ await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', 
 assert.equal(response.status, 200);
 assert.equal(response.value.state, 'suspended');
 assert.ok(calls.some((item) => item[0] === 'device-self-suspend'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'device_nonce_consumed'));
 const suspendVerify = calls.findLast((item) => item[0] === 'device-verify');
 assert.equal(suspendVerify[2].body, '{}');
 
@@ -655,6 +682,15 @@ body = { state: 'active' };
 response = null;
 await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/suspend` });
 assert.equal(response.value.error, 'invalid_request');
+
+checkpointFailurePhase = 'device_nonce_consumed';
+const suspensionsBeforeNonceCheckpointFailure = calls.filter((item) => item[0] === 'device-self-suspend').length;
+body = {};
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/suspend` });
+checkpointFailurePhase = null;
+assert.equal(response.value.error, 'state_unavailable');
+assert.equal(calls.filter((item) => item[0] === 'device-self-suspend').length, suspensionsBeforeNonceCheckpointFailure);
 
 auditFailure = true;
 const suspensionsBeforeAuditFailure = calls.filter((item) => item[0] === 'device-self-suspend').length;
@@ -675,6 +711,7 @@ assert.equal(claimVerify[2].nonce, 'route-nonce');
 assert.ok(calls.some((item) => item[0] === 'worker-claim'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_lease_claim'
   && event.operation_id === 'operation-id'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'browser_lease_claimed'));
 const claimsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'worker-claim').length;
 auditFailureAction = 'v2_browser_lease_claim';
 response = null;
@@ -682,6 +719,11 @@ await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', 
 auditFailureAction = null;
 assert.equal(response.value.error, 'audit_unavailable');
 assert.equal(calls.filter((item) => item[0] === 'worker-claim').length, claimsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'browser_lease_claimed';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/claim` });
+checkpointFailurePhase = null;
+assert.equal(response.value.error, 'state_unavailable');
 
 response = null;
 await handler({ method: 'GET', headers: signedHeaders }, {}, { method: 'GET', pathname: `/api/v2/devices/${deviceId}/otp-tasks` });
@@ -697,6 +739,7 @@ await handler({ method: 'POST', headers: signedHeaders }, {}, {
 assert.equal(response.status, 202);
 assert.ok(auditEvents.some((event) => event.action === 'v2_otp_received'
   && event.operation_id === 'operation-id'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'otp_received'));
 const submissionsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'otp-submit').length;
 auditFailureAction = 'v2_otp_received';
 response = null;
@@ -706,6 +749,13 @@ await handler({ method: 'POST', headers: signedHeaders }, {}, {
 auditFailureAction = null;
 assert.equal(response.value.error, 'audit_unavailable');
 assert.equal(calls.filter((item) => item[0] === 'otp-submit').length, submissionsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'otp_received';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, {
+  method: 'POST', pathname: `/api/v2/devices/${deviceId}/otp-tasks/${leaseId}/submit`,
+});
+checkpointFailurePhase = null;
+assert.equal(response.value.error, 'state_unavailable');
 
 body = { receipt: 'a'.repeat(43) };
 response = null;
@@ -714,6 +764,7 @@ assert.equal(response.status, 200);
 assert.ok(calls.some((item) => item[0] === 'worker-otp' && item[3] === body.receipt));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_lease_otp'
   && event.lease_id === leaseId));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'browser_lease_otp_claimed'));
 const otpClaimsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'worker-otp').length;
 auditFailureAction = 'v2_browser_lease_otp';
 response = null;
@@ -721,6 +772,11 @@ await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', 
 auditFailureAction = null;
 assert.equal(response.value.error, 'audit_unavailable');
 assert.equal(calls.filter((item) => item[0] === 'worker-otp').length, otpClaimsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'browser_lease_otp_claimed';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/${leaseId}/otp` });
+checkpointFailurePhase = null;
+assert.equal(response.value.error, 'state_unavailable');
 
 body = { receipt: 'b'.repeat(43), status: 'completed', result: { count: 1 } };
 response = null;
@@ -729,6 +785,7 @@ assert.equal(response.status, 200);
 assert.ok(calls.some((item) => item[0] === 'worker-complete' && item[3].status === 'completed'));
 assert.ok(auditEvents.some((event) => event.action === 'v2_browser_lease_complete'
   && event.status === 'completed'));
+assert.ok(calls.some((item) => item[0] === 'checkpoint' && item[1] === 'browser_lease_completed'));
 const completionsBeforeResultAuditFailure = calls.filter((item) => item[0] === 'worker-complete').length;
 auditFailureAction = 'v2_browser_lease_complete';
 response = null;
@@ -736,6 +793,11 @@ await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', 
 auditFailureAction = null;
 assert.equal(response.value.error, 'audit_unavailable');
 assert.equal(calls.filter((item) => item[0] === 'worker-complete').length, completionsBeforeResultAuditFailure + 1);
+checkpointFailurePhase = 'browser_lease_completed';
+response = null;
+await handler({ method: 'POST', headers: signedHeaders }, {}, { method: 'POST', pathname: `/api/v2/devices/${deviceId}/browser-leases/${leaseId}/complete` });
+checkpointFailurePhase = null;
+assert.equal(response.value.error, 'state_unavailable');
 
 auditFailure = true;
 const claimsBeforeAuditFailure = calls.filter((item) => item[0] === 'worker-claim').length;

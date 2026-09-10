@@ -305,6 +305,15 @@ export class ApprovalBroker {
     record.status = 'SUCCEEDED';
   }
 
+  rollbackSucceeded(id) {
+    if (!id) return;
+    const record = this.records.get(id);
+    if (!record || record.status !== 'SUCCEEDED') {
+      throw new V2Error('approval_mismatch', 'approval outcome cannot be rolled back', 409);
+    }
+    record.status = 'EXECUTING';
+  }
+
   markFailed(id) {
     if (!id) return;
     const record = this.records.get(id);

@@ -802,6 +802,7 @@ export class OperationBroker {
     try {
       commitAudit(result);
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       if (!previous || this.otpTasks.get(taskId) !== task
         || (operation && this.operations.get(operation.id) !== operation)) {
         throw new V2Error('audit_rollback_failed', 'OTP audit rollback failed', 503);
@@ -930,6 +931,7 @@ export class OperationBroker {
     try {
       commitAudit({ provider: result.provider, operation_id: operation?.id });
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       if (!claim || this.browserClaims.get(claimKey) !== claim || !task || !operation) {
         throw new V2Error('audit_rollback_failed', 'browser OTP claim audit rollback failed', 503);
       }
@@ -953,11 +955,39 @@ export class OperationBroker {
       throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
     }
     const completion = this.prepareBrowserOtpFinish(identity, input);
-    commitAudit({
-      operation_id: completion.operation.id,
-      status: completion.completed ? 'completed' : 'failed',
-    });
-    return this.commitBrowserOtpFinish(completion);
+    const previous = {
+      claimCode: completion.claim.code,
+      taskStatus: completion.task.status,
+      operationStatus: completion.operation.status,
+      operationResult: structuredClone(completion.operation.result),
+      operationError: completion.operation.error,
+      operationUpdatedAt: completion.operation.updatedAt,
+      lockActive: this.activeOtpLocks.get(completion.task.lockKey) === completion.task.id,
+    };
+    const result = this.commitBrowserOtpFinish(completion);
+    try {
+      commitAudit({
+        operation_id: completion.operation.id,
+        status: completion.completed ? 'completed' : 'failed',
+      });
+    } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+      if (this.browserClaims.has(completion.claimKey)
+        || this.otpTasks.get(completion.task.id) !== completion.task
+        || this.operations.get(completion.operation.id) !== completion.operation) {
+        throw new V2Error('audit_rollback_failed', 'browser OTP finish audit rollback failed', 503);
+      }
+      completion.claim.code = previous.claimCode;
+      this.browserClaims.set(completion.claimKey, completion.claim);
+      completion.task.status = previous.taskStatus;
+      if (previous.lockActive) this.activeOtpLocks.set(completion.task.lockKey, completion.task.id);
+      completion.operation.status = previous.operationStatus;
+      completion.operation.result = previous.operationResult;
+      completion.operation.error = previous.operationError;
+      completion.operation.updatedAt = previous.operationUpdatedAt;
+      throw error;
+    }
+    return result;
   }
 
   prepareBrowserOtpFinish(identity, input) {
@@ -1043,6 +1073,7 @@ export class OperationBroker {
     try {
       commitAudit(result);
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       if (!lease || this.browserLeases.get(result.id) !== lease || !operation) {
         throw new V2Error('audit_rollback_failed', 'browser lease audit rollback failed', 503);
       }
@@ -1082,6 +1113,7 @@ export class OperationBroker {
     try {
       commitAudit({ expires_at: result.expires_at });
     } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
       if (!previous || this.browserLeases.get(leaseId) !== lease
         || this.otpTasks.get(task.id) !== task) {
         throw new V2Error('audit_rollback_failed', 'browser OTP audit rollback failed', 503);
@@ -1130,8 +1162,38 @@ export class OperationBroker {
       }
     }
     const errorCode = completed ? null : requireId(input?.error_code || 'browser_operation_failed', 'error_code');
-    commitAudit({ operation_id: operation.id, status: completed ? 'completed' : 'failed' });
-    return this.commitBrowserCompletion({ lease, operation, completed, result, errorCode });
+    const task = operation.otpTaskId ? this.otpTasks.get(operation.otpTaskId) : null;
+    const previous = {
+      operationStatus: operation.status,
+      operationResult: structuredClone(operation.result),
+      operationError: operation.error,
+      operationUpdatedAt: operation.updatedAt,
+      taskStatus: task?.status,
+      taskCode: task?.code,
+      lockActive: task ? this.activeOtpLocks.get(task.lockKey) === task.id : false,
+    };
+    const completion = this.commitBrowserCompletion({ lease, operation, completed, result, errorCode });
+    try {
+      commitAudit({ operation_id: operation.id, status: completed ? 'completed' : 'failed' });
+    } catch (error) {
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+      if (this.browserLeases.has(lease.id) || this.operations.get(operation.id) !== operation
+        || (task && this.otpTasks.get(task.id) !== task)) {
+        throw new V2Error('audit_rollback_failed', 'browser completion audit rollback failed', 503);
+      }
+      this.browserLeases.set(lease.id, lease);
+      operation.status = previous.operationStatus;
+      operation.result = previous.operationResult;
+      operation.error = previous.operationError;
+      operation.updatedAt = previous.operationUpdatedAt;
+      if (task) {
+        task.status = previous.taskStatus;
+        task.code = previous.taskCode;
+        if (previous.lockActive) this.activeOtpLocks.set(task.lockKey, task.id);
+      }
+      throw error;
+    }
+    return completion;
   }
 
   commitBrowserCompletion({ lease, operation, completed, result, errorCode }) {

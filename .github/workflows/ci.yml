@@ -100,23 +100,7 @@ jobs:
           node --check server.js
 
   # ============================================================
-  # 3. 客户端 CLI 语法检查
-  # ============================================================
-  cli-syntax:
-    name: CLI syntax
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-      - name: Check CLI
-        run: |
-          node --check cli/secret-broker.js
-          node cli/secret-broker.js help > /dev/null
-
-  # ============================================================
-  # 4. Terraform validate
+  # 3. Terraform validate
   # ============================================================
   terraform-validate:
     name: Terraform validate

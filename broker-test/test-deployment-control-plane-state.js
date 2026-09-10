@@ -6,6 +6,7 @@ const service = read('../deploy/systemd/secret-broker.service');
 const deployment = read('../deploy/helm/broker/templates/deployment.yaml');
 const values = read('../deploy/helm/broker/values.yaml');
 const migration = read('../deploy/PRODUCTION-MIGRATION.md');
+const deployHelper = read('../deploy/bin/secret-broker-deploy');
 const workflow = read('../.github/workflows/ci.yml');
 const dockerfile = read('../Dockerfile');
 
@@ -32,6 +33,14 @@ assert.match(migration, /initializer refuses to overwrite an existing state file
 assert.match(migration, /production startup must fail closed/i);
 assert.match(migration, /not approved for production scheduling/i);
 assert.doesNotMatch(service, /CONTROL_PLANE_STATE_KEY=/);
+assert.match(service, /ExecStart=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
+assert.match(migration, /`root:broker`, `0750`/);
+assert.match(migration, /Separately extract the verified candidate artifact/);
+assert.match(deployHelper, /readonly NODE_RUNTIME=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
+assert.match(deployHelper, /chown -R root:broker/);
+assert.match(deployHelper, /find "\$RELEASE" -type d -exec chmod 0550/);
+assert.match(deployHelper, /for _ in \{1\.\.20\}/);
+assert.doesNotMatch(deployHelper, /chown -R broker:broker/);
 assert.match(workflow, /Dir::Etc::sourcelist=\/etc\/apt\/sources\.list\.d\/ubuntu\.sources/);
 assert.match(workflow, /secrets\.stateKeySecretName=broker-state-key/);
 assert.doesNotMatch(workflow, /branches:\s*\[master,\s*'codex\/\*\*'\]/);

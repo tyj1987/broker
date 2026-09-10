@@ -4,6 +4,10 @@
 *.ps1 text eol=crlf whitespace=cr-at-eol
 *.sh text eol=lf
 *.go text eol=lf
+*.sh text eol=lf
+*.service text eol=lf
+deploy/bin/* text eol=lf
+deploy/sudoers/* text eol=lf
 
 *.ico binary
 *.jar binary

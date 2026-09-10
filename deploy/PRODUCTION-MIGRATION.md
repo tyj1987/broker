@@ -25,7 +25,8 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 
 | Path | Owner/mode | Purpose |
 |---|---|---|
-| `/opt/secret-broker/releases` | `root:broker-deploy`, `0750` | Immutable application releases |
+| `/opt/secret-broker/releases` | `root:broker`, `0750` | Immutable application releases; the runtime group needs traversal, while the deployment account writes only through the root helper |
+| `/opt/secret-broker/runtime/node` | root-managed symlink | Pinned Node 24 runtime verified against the vendor checksum |
 | `/opt/secret-broker/broker` | root-managed symlink | Active release |
 | `/var/lib/secret-broker` | `broker:broker`, `0700` | Encrypted secret data and audit output |
 | `/etc/secret-broker/pki/ca/ca.crt` | `root:broker`, `0440` | CA public certificate only |
@@ -49,7 +50,7 @@ sudo systemd-run --unit=secret-broker-state-init --wait --pipe --collect \
   --setenv=CONTROL_PLANE_STATE_PATH=/var/lib/secret-broker/control-plane-state.enc \
   --setenv=CONTROL_PLANE_STATE_KEY_FILE=/run/credentials/secret-broker-state-init.service/control-plane-state.key \
   --working-directory=/opt/secret-broker/broker \
-  /usr/bin/node bin/control-plane-state-init.js
+  /opt/secret-broker/runtime/node/bin/node bin/control-plane-state-init.js
 ```
 
 The initializer refuses to overwrite an existing state file. Back up the encrypted state and its key through separate protected channels. If the file later disappears, is corrupted, or cannot be authenticated, production startup must fail closed; do not rerun initialization as an availability workaround. Cold-start rollback detection still requires the external monotonic anchor recorded in DQ-001, so the file-backed mode is not approved for production scheduling.
@@ -58,10 +59,10 @@ The initializer refuses to overwrite an existing state file. Back up the encrypt
 
 1. Create the locked `broker` and `broker-core` service accounts, put `broker-core` in the `broker` group, and create the separate `broker-deploy` login account.
 2. Create the target directories with the ownership and modes above.
-3. Copy—not move—the currently deployed application to a versioned release directory named by its verified commit. Refuse to invent a commit when provenance is unknown; use a quarantine label and do not enable CI deployment.
+3. Copy—not move—the currently deployed application to a versioned rollback directory named by its verified commit. Refuse to invent a commit when provenance is unknown; use a quarantine label and do not enable CI deployment. Separately extract the verified candidate artifact into its own versioned release directory, validate its manifest and compiled policy binary, then make that candidate the managed release symlink. Release directories are owned by `root:broker`; directories are `0550`, ordinary files are `0440`, and only reviewed executables are `0550`.
 4. Copy encrypted data and only the runtime PKI files listed above to the target paths without printing them. The CA private key and all client private keys must remain offline and must not exist on the Broker host. Verify ownership and permissions with metadata-only commands.
-5. Replace `/opt/secret-broker/broker` with a relative symlink to the versioned release.
-6. Install and start both hardened systemd units. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. If a GitHub operation is enabled, provision the independently reviewed signer workload under `/run/secret-broker-signer`; the Broker user must not own or be able to replace that directory or socket. A missing policy core, signer, or unavailable control-plane state must make the affected production operations fail closed.
+5. Install the checksum-pinned Node 24 runtime below `/opt/secret-broker/runtime`, then replace `/opt/secret-broker/broker` with a relative symlink to the verified candidate release.
+6. Install and start both hardened systemd units. This one-time bootstrap is manual because the normal deploy helper intentionally requires an already-active policy core and managed symlink. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. If a GitHub operation is enabled, provision the independently reviewed signer workload under `/run/secret-broker-signer`; the Broker user must not own or be able to replace that directory or socket. A missing policy core, signer, or unavailable control-plane state must make the affected production operations fail closed.
 7. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
 8. Install the deploy helper, production preflight, and sudoers fragment. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command. Run the preflight locally as root and retain its pass/fail-only output with the release evidence.
 9. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.
@@ -69,6 +70,6 @@ The initializer refuses to overwrite an existing state file. Back up the encrypt
 
 ## Rollback
 
-Stop the new service, restore the prior systemd/nginx files, atomically point the symlink to the recorded prior release, and restart. Re-run loopback and public read-only health checks. Preserve failed release logs after redaction; do not copy raw environment or secret files into the incident record.
+Stop the new service, restore the prior systemd/nginx files, atomically restore the recorded prior release layout, run `systemctl daemon-reload`, and restart the units that belonged to that release. Disable the new policy unit when the prior release did not use it. Re-run the prior release's loopback and public read-only health checks. Restoring a legacy configuration that contains a known P0 is availability rollback only and must not be reported as security acceptance. Preserve failed release logs after redaction; do not copy raw environment or secret files into the incident record.
 
 Migration does not by itself approve production. The release gates in [production acceptance](../docs/PRODUCTION-ACCEPTANCE.md) still apply.

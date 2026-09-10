@@ -35,7 +35,8 @@ const CHECKS = Object.freeze([
   ['control_plane_state_present', (snapshot) => snapshot.controlPlaneStatePresent === true],
   ['control_plane_state_key_protected', (snapshot) => snapshot.controlPlaneStateKeyProtected === true],
   ['policy_socket_protected', (snapshot) => snapshot.policySocketProtected === true],
-  ['github_signer_socket_protected', (snapshot) => snapshot.githubSignerSocketProtected === true],
+  ['github_signer_socket_protected', (snapshot) =>
+    snapshot.githubSignerRequired !== true || snapshot.githubSignerSocketProtected === true],
   ['loopback_health', (snapshot) => snapshot.loopbackHealth === true],
 ]);
 
@@ -128,6 +129,7 @@ export async function collectProductionSnapshot({
   isExecutableImpl = isExecutable,
   countPrivateKeysImpl = countPrivateKeys,
   loopbackHealthImpl = loopbackHealth,
+  githubSignerRequired = process.env.BROKER_REQUIRE_GITHUB_SIGNER === '1',
 } = {}) {
   const brokerUser = command('systemctl', ['show', 'secret-broker.service', '-p', 'User', '--value']);
   const brokerGroup = command('systemctl', ['show', 'secret-broker.service', '-p', 'Group', '--value']);
@@ -189,6 +191,7 @@ export async function collectProductionSnapshot({
       githubSignerSocket.gid === githubSignerDirectory.gid &&
       brokerGroups.includes(githubSignerSocket.gid) &&
       (githubSignerSocket.mode & 0o060) === 0o060,
+    githubSignerRequired,
     loopbackHealth: await loopbackHealthImpl(fetchImpl),
   };
 }

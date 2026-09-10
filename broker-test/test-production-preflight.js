@@ -24,6 +24,7 @@ const readySnapshot = {
   controlPlaneStateKeyProtected: true,
   policySocketProtected: true,
   githubSignerSocketProtected: true,
+  githubSignerRequired: false,
   loopbackHealth: true,
 };
 
@@ -32,6 +33,18 @@ assert.equal(ready.ready, true);
 assert.equal(ready.checks.length, 16);
 assert.ok(ready.checks.every((check) => check.passed));
 assert.match(renderProductionReadiness(ready), /production_cd_ready=yes\n$/);
+
+const signerNotRequired = evaluateProductionReadiness({
+  ...readySnapshot,
+  githubSignerSocketProtected: false,
+});
+assert.equal(signerNotRequired.ready, true);
+const signerRequired = evaluateProductionReadiness({
+  ...readySnapshot,
+  githubSignerRequired: true,
+  githubSignerSocketProtected: false,
+});
+assert.equal(signerRequired.ready, false);
 
 for (const [field, unsafeValue] of [
   ['brokerUser', 'root'],
@@ -51,7 +64,11 @@ for (const [field, unsafeValue] of [
   ['githubSignerSocketProtected', false],
   ['loopbackHealth', false],
 ]) {
-  const result = evaluateProductionReadiness({ ...readySnapshot, [field]: unsafeValue });
+  const result = evaluateProductionReadiness({
+    ...readySnapshot,
+    ...(field === 'githubSignerSocketProtected' ? { githubSignerRequired: true } : {}),
+    [field]: unsafeValue,
+  });
   assert.equal(result.ready, false, `${field} must block production CD`);
   assert.match(renderProductionReadiness(result), /production_cd_ready=no\n$/);
 }
@@ -106,6 +123,7 @@ const collected = await collectWithStats(fakeStats);
 assert.equal(evaluateProductionReadiness(collected).ready, true);
 assert.equal(collected.nginxVerifyOnCount, 1);
 assert.equal(collected.nginxVerifyOffCount, 0);
+assert.equal(collected.githubSignerRequired, false);
 for (const [path, replacement] of [
   ['/signer', { ...fakeStats.get('/signer'), gid: 9999 }],
   ['/signer', { ...fakeStats.get('/signer'), mode: 0o040740 }],

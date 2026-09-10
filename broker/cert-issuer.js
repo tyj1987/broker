@@ -33,12 +33,14 @@ function pickClientsDir() {
   return null;
 }
 
-const CA_CRT   = findFirst(process.env.CA_CERT_PATH, process.env.TLS_CA);
+const CA_CRT   = findFirst(
+  process.env.CA_CERT_PATH,
+  process.env.TLS_CA,
+  process.env.PKI_DIR && join(process.env.PKI_DIR, 'ca', 'ca.crt'),
+  process.env.PKI_DIR && join(process.env.PKI_DIR, 'ca.crt'),
+);
 const CA_KEY   = findFirst(process.env.CA_KEY_PATH, CA_CRT && CA_CRT.replace(/ca\.crt$/, 'ca.key'));
 const CLIENTS_DIR = pickClientsDir();
-if (!CA_CRT) throw new Error('CA cert not found: set CA_CERT_PATH or TLS_CA env');
-if (!CA_KEY) throw new Error('CA key not found: set CA_KEY_PATH or place ca.key next to ca.crt');
-if (!CLIENTS_DIR) throw new Error('CLIENTS_DIR not set and PKI_DIR not provided');
 
 // Resolve openssl binary. On Windows, `spawn` won't auto-append .exe, so we
 // honor OPENSSL_BIN env first, then probe the executable extension.
@@ -74,6 +76,7 @@ function run(cmd, args, opts = {}) {
 }
 
 function clientPaths(cn) {
+  if (!CLIENTS_DIR) throw new Error('client certificate storage is unavailable');
   return {
     key:  join(CLIENTS_DIR, `${cn}.key`),
     csr:  join(CLIENTS_DIR, `${cn}.csr`),
@@ -112,8 +115,9 @@ function ensureWritableSerial() {
 // to bundle into the install zip; cert_pem is also bundled; fingerprint
 // goes into broker.yaml for the server to recognize the new cert.
 export async function issueClientCert(cn, { days = DEFAULT_CERT_DAYS } = {}) {
-  if (!existsSync(CA_KEY)) throw new Error(`CA key not found: ${CA_KEY}`);
-  if (!existsSync(CA_CRT)) throw new Error(`CA cert not found: ${CA_CRT}`);
+  if (!CA_KEY || !existsSync(CA_KEY)) throw new Error('offline CA key is unavailable');
+  if (!CA_CRT || !existsSync(CA_CRT)) throw new Error('CA certificate is unavailable');
+  if (!CLIENTS_DIR) throw new Error('client certificate storage is unavailable');
   if (!existsSync(CLIENTS_DIR)) mkdirSync(CLIENTS_DIR, { recursive: true });
 
   const p = clientPaths(cn);
@@ -182,7 +186,7 @@ export function deleteClientCertFiles(cn) {
 
 // Read CA cert PEM (for bundle).
 export function readCaCertPem() {
-  if (!existsSync(CA_CRT)) throw new Error(`CA cert not found: ${CA_CRT}`);
+  if (!CA_CRT || !existsSync(CA_CRT)) throw new Error('CA certificate is unavailable');
   return readFileSync(CA_CRT, 'utf8');
 }
 

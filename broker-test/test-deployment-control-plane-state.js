@@ -34,6 +34,8 @@ assert.match(migration, /production startup must fail closed/i);
 assert.match(migration, /not approved for production scheduling/i);
 assert.doesNotMatch(service, /CONTROL_PLANE_STATE_KEY=/);
 assert.match(service, /ExecStart=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
+assert.match(service, /Environment=TLS_CA=\/etc\/secret-broker\/pki\/ca\/ca\.crt/);
+assert.match(service, /Environment=TLS_KEY=\/etc\/secret-broker\/pki\/server\/server\.key/);
 assert.match(migration, /`root:broker`, `0750`/);
 assert.match(migration, /Separately extract the verified candidate artifact/);
 assert.match(deployHelper, /readonly NODE_RUNTIME=\/opt\/secret-broker\/runtime\/node\/bin\/node/);

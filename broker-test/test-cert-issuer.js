@@ -209,6 +209,30 @@ section('15. Fingerprint format is uppercase hex with colons');
 ok('64 hex + 31 colons = 95 chars', r1.fingerprint_sha256.length === 95);
 ok('all uppercase hex', /^[A-F0-9:]+$/.test(r1.fingerprint_sha256));
 
+section('16. offline CA boundary permits startup and denies issuance');
+
+{
+  const certOnlyRoot = join(WORK, 'cert-only-pki');
+  const certOnlyCa = join(certOnlyRoot, 'ca');
+  mkdirSync(certOnlyCa, { recursive: true });
+  writeFileSync(join(certOnlyCa, 'ca.crt'), readFileSync(CA_CERT_PATH));
+  const moduleUrl = new URL('../broker/cert-issuer.js', import.meta.url).href;
+  const script = [
+    'const m = await import(process.argv[1]);',
+    'try { await m.issueClientCert("client.must-fail"); process.exit(3); }',
+    'catch (error) { if (!/offline CA key is unavailable/.test(error.message)) process.exit(4); }',
+  ].join(' ');
+  execFileSync(process.execPath, ['--input-type=module', '-e', script, moduleUrl], {
+    env: {
+      PATH: process.env.PATH,
+      OPENSSL_BIN,
+      PKI_DIR: certOnlyRoot,
+    },
+    stdio: 'pipe',
+  });
+  ok('module imports without a CA private key and issuance fails closed', true);
+}
+
 // ---------- summary ----------
 
 console.log(`\n=== ${pass} pass / ${fail} fail ===`);

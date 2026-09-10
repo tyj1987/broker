@@ -84,6 +84,7 @@ export {
 } from './audit-hash-chain.js';
 export {
   validateBrokerConfig,
+  requireValidBrokerConfig,
   preflightPaths,
   formatValidationReport,
 } from './config-validate.js';

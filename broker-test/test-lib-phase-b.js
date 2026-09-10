@@ -6,12 +6,17 @@ import { buildZip, computeCrc32 } from '../broker/lib/zip.js';
 import { createAudit } from '../broker/lib/audit.js';
 import { send, jsonError } from '../broker/lib/http.js';
 import { BROKER_VERSION } from '../broker/version.js';
+import { requireValidBrokerConfig } from '../broker/lib/index.js';
 import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 let passed = 0;
 let failed = 0;
+
+if (typeof requireValidBrokerConfig !== 'function') {
+  throw new Error('lib index must export requireValidBrokerConfig used by server startup');
+}
 
 function assert(cond, msg) {
   if (cond) { passed++; console.log('  OK  ', msg); }

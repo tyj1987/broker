@@ -133,7 +133,9 @@ section('Azure AD');
   // mock fetch
   const origFetch = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
-    if (url.includes('login.microsoftonline.com') && url.includes('oauth2/v2.0/token')) {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'https:' && parsed.hostname === 'login.microsoftonline.com'
+      && parsed.pathname.endsWith('/oauth2/v2.0/token')) {
       return new Response(JSON.stringify({ access_token: 'mock-azure-token', expires_in: 3600 }), {
         status: 200,
         headers: { 'content-type': 'application/json' },

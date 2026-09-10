@@ -146,9 +146,8 @@ function generateRecoveryCodes() {
   const codes = [];
   for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
     let s = '';
-    const buf = crypto.randomBytes(RECOVERY_CODE_LEN);
     for (let j = 0; j < RECOVERY_CODE_LEN; j++) {
-      s += RECOVERY_CODE_ALPHABET[buf[j] % RECOVERY_CODE_ALPHABET.length];
+      s += RECOVERY_CODE_ALPHABET[crypto.randomInt(RECOVERY_CODE_ALPHABET.length)];
     }
     // 格式化成 "XXXX-XXXX" 易读
     codes.push(`${s.slice(0, 4)}-${s.slice(4)}`);

@@ -13,6 +13,12 @@ function log(message: string): void {
 function getClient(): BrokerClient {
   if (client) return client;
   const config = vscode.workspace.getConfiguration('secretBroker');
+  for (const name of ['endpoint', 'clientCert', 'clientKey', 'caCert']) {
+    const inspected = config.inspect(name);
+    if (inspected?.workspaceValue !== undefined || inspected?.workspaceFolderValue !== undefined) {
+      throw new Error(`secretBroker.${name} must be configured at machine scope`);
+    }
+  }
   client = new BrokerClient({
     endpoint: config.get<string>('endpoint') || 'https://127.0.0.1:8443',
     clientCert: config.get<string>('clientCert') || '',

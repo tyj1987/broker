@@ -11,7 +11,17 @@
 //
 // All sinks are best-effort; a sink failure never blocks the broker.
 
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
@@ -47,10 +57,17 @@ class FileSink {
     if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true });
   }
   write(level, msg, fields, line) {
+    let descriptor;
     try {
-      const stat = existsSync(this.path) ? statSync(this.path) : { size: 0 };
+      const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND
+        | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+      descriptor = openSync(this.path, flags, 0o600);
+      const stat = fstatSync(descriptor);
+      if (!stat.isFile()) throw new Error('log target is not a regular file');
       this.bytes = stat.size;
-      appendFileSync(this.path, line + '\n');
+      appendFileSync(descriptor, line + '\n', 'utf8');
+      closeSync(descriptor);
+      descriptor = undefined;
       this.bytes += Buffer.byteLength(line, 'utf8') + 1;
       if (this.bytes > 50 * 1024 * 1024) {
         const rotated = this.path + '.1';
@@ -60,6 +77,10 @@ class FileSink {
       }
     } catch (err) {
       console.error(`[log-sink ${this.name}] write failed:`, err.message);
+    } finally {
+      if (descriptor !== undefined) {
+        try { closeSync(descriptor); } catch { /* best effort */ }
+      }
     }
   }
 }

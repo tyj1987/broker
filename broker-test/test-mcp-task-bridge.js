@@ -35,17 +35,21 @@ assert.throws(() => parseArgs(['node', 'mcp', 'value']), /positional/);
 assert.throws(() => parseArgs(['node', 'mcp', '--port']), /Missing/);
 assert.throws(() => parseArgs(['node', 'mcp', '--port', '1', '--port', '2']), /duplicate/);
 assert.throws(() => parseArgs(['node', 'mcp', '--', 'value']), /duplicate/);
-assert.equal(normalizeBrokerOrigin('https://broker.example:8443'), 'https://broker.example:8443');
+assert.equal(normalizeBrokerOrigin('https://broker.52trz.com'), 'https://broker.52trz.com');
+assert.equal(normalizeBrokerOrigin('https://127.0.0.1:18443'), 'https://127.0.0.1:18443');
 for (const value of [
-  'http://broker.example',
-  'https://user@broker.example',
-  'https://broker.example/path',
-  'https://broker.example?token=x',
-  'https://broker.example#fragment',
+  'http://broker.52trz.com',
+  'https://user@broker.52trz.com',
+  'https://broker.52trz.com/path',
+  'https://broker.52trz.com?token=x',
+  'https://broker.52trz.com#fragment',
 ]) {
   assert.throws(() => normalizeBrokerOrigin(value), /HTTPS origin/);
 }
 assert.throws(() => normalizeBrokerOrigin('not a url'), /invalid/);
+for (const value of ['https://evil.example', 'https://169.254.169.254', 'https://127.0.0.1:8443']) {
+  assert.throws(() => normalizeBrokerOrigin(value), /approved origin/);
+}
 
 const calls = [];
 let createState = 'READY';
@@ -167,32 +171,32 @@ const requestImpl = (options, callback) => {
   return request;
 };
 const client = createBrokerClient({
-  origin: 'https://broker.example:8443',
+  origin: 'https://127.0.0.1:18443',
   apiKey: API_KEY,
   requestImpl,
 });
 assert.deepEqual(await client('/api/v2/tools'), { registry_version: 1, tools: [] });
 assert.equal(requestOptions.rejectUnauthorized, true);
-assert.equal(requestOptions.servername, 'broker.example');
+assert.equal(requestOptions.servername, '127.0.0.1');
 assert.equal(requestOptions.headers.Authorization, `Bearer ${API_KEY}`);
 await assert.rejects(client('https://attacker.invalid/api/v2/tools'), /not allowed/);
 await assert.rejects(client('/api/v1/secrets/resolve'), /not allowed/);
 assert.throws(
-  () => createBrokerClient({ origin: 'https://broker.example', apiKey: 'mb_live_master' }),
+  () => createBrokerClient({ origin: 'https://broker.52trz.com', apiKey: 'mb_live_master' }),
   /valid scoped/,
 );
 assert.throws(
-  () => createBrokerClient({ origin: 'https://broker.example', apiKey: API_KEY, requestImpl: 1 }),
+  () => createBrokerClient({ origin: 'https://broker.52trz.com', apiKey: API_KEY, requestImpl: 1 }),
   /implementation/,
 );
 for (const timeoutMs of [99, 60_001, 100.5]) {
   assert.throws(
-    () => createBrokerClient({ origin: 'https://broker.example', apiKey: API_KEY, timeoutMs }),
+    () => createBrokerClient({ origin: 'https://broker.52trz.com', apiKey: API_KEY, timeoutMs }),
     /timeout/,
   );
 }
 assert.throws(
-  () => createBrokerClient({ origin: 'https://broker.example', apiKey: API_KEY, cert: 'cert' }),
+  () => createBrokerClient({ origin: 'https://broker.52trz.com', apiKey: API_KEY, cert: 'cert' }),
   /configured together/,
 );
 await assert.rejects(client('/api/v2/tools', { method: 'DELETE' }), /method/);
@@ -209,7 +213,7 @@ function brokerClientForResponse({
   requestError,
 }) {
   return createBrokerClient({
-    origin: 'https://broker.example',
+    origin: 'https://broker.52trz.com',
     apiKey: API_KEY,
     requestImpl: (_options, callback) => {
       const request = new EventEmitter();
@@ -273,7 +277,7 @@ await assert.rejects(
   /response is too large/,
 );
 const throwingClient = createBrokerClient({
-  origin: 'https://broker.example',
+  origin: 'https://broker.52trz.com',
   apiKey: API_KEY,
   requestImpl: () => {
     throw new Error('sensitive request detail');
@@ -448,7 +452,7 @@ const bootServer = await boot(
     '--ca-file',
     'ca',
     '--broker',
-    'https://broker.example',
+    'https://broker.52trz.com',
     '--port',
     '3002',
     '--host',

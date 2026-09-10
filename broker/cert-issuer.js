@@ -14,7 +14,19 @@
 // v3.2: default cert validity is 90 days (was 365) to enforce rotation culture.
 
 import { spawn } from 'node:child_process';
-import { existsSync, unlinkSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 // Path resolution. We accept two layouts:
@@ -99,12 +111,42 @@ function writableSerialPath() {
 function ensureWritableSerial() {
   const dest = writableSerialPath();
   if (!existsSync(CLIENTS_DIR)) mkdirSync(CLIENTS_DIR, { recursive: true });
-  if (existsSync(dest)) return dest;
   const besideCa = CA_CRT ? CA_CRT.replace(/ca\.crt$/i, 'ca.srl') : null;
-  if (besideCa && existsSync(besideCa)) {
-    writeFileSync(dest, readFileSync(besideCa));
-  } else {
-    writeFileSync(dest, '01\n');
+  let destination;
+  let source;
+  let initialized = false;
+  try {
+    destination = openSync(dest, 'wx', 0o644);
+  } catch (error) {
+    if (error?.code === 'EEXIST') return dest;
+    throw error;
+  }
+  try {
+    let initial = Buffer.from('01\n', 'utf8');
+    if (besideCa) {
+      try {
+        const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+        source = openSync(besideCa, flags);
+        const metadata = fstatSync(source);
+        if (!metadata.isFile() || metadata.size < 1 || metadata.size > 4096) throw new Error('invalid CA serial');
+        initial = readFileSync(source);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      } finally {
+        if (source !== undefined) {
+          closeSync(source);
+          source = undefined;
+        }
+      }
+    }
+    writeFileSync(destination, initial);
+    fsyncSync(destination);
+    initialized = true;
+  } finally {
+    closeSync(destination);
+    if (!initialized) {
+      try { unlinkSync(dest); } catch { /* best effort */ }
+    }
   }
   try { chmodSync(dest, 0o644); } catch {}
   return dest;

@@ -241,7 +241,7 @@ console.log(`  Port:           ${PORT}`);
 console.log(`  Config:         ${CONFIG_PATH}`);
 console.log(`  Secrets:        ${SECRETS_PATH}`);
 console.log(`  PKI dir:        ${PKI_DIR}`);
-console.log(`  TLS cert:       ${TLS_CERT}`);
+console.log(`  TLS cert:       ${TLS_CERT ? 'configured' : 'missing'}`);
 console.log(`  CA:             ${TLS_CA}`);
 console.log(`  Audit dir:      ${AUDIT_DIR}`);
 console.log(`  Age key:        ${AGE_KEY_FILE || '(not set)'}`);
@@ -665,8 +665,9 @@ function lastSeenAgo(name) {
 // start with a letter. Max 64 chars (shorter than secrets because services
 // are referenced in URL paths like /api/v1/proxy/:name).
 const SERVICE_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function isValidServiceName(name) {
-  return typeof name === 'string' && SERVICE_NAME_RE.test(name);
+  return typeof name === 'string' && SERVICE_NAME_RE.test(name) && !RESERVED_OBJECT_KEYS.has(name);
 }
 
 // Sanitize a service config that came from the API. We never accept `secret`
@@ -690,13 +691,18 @@ function normalizeServiceConfig(body) {
   // Aliyun OpenAPI v2: structured secret name (with access_key_id + access_key_secret fields)
   if (body.ak_secret !== undefined) out.ak_secret = String(body.ak_secret);
   // inject_headers: must be a flat string->string map
-  if (body.inject_headers && typeof body.inject_headers === 'object') {
-    const h = {};
+  if (body.inject_headers && typeof body.inject_headers === 'object' && !Array.isArray(body.inject_headers)) {
+    const entries = [];
     for (const [k, v] of Object.entries(body.inject_headers)) {
       if (v == null) continue;
-      h[String(k)] = String(v);
+      const name = String(k);
+      if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)
+        || ['__proto__', 'constructor', 'prototype'].includes(name.toLowerCase())) continue;
+      const value = String(v);
+      if (/[\r\n]/.test(value)) continue;
+      entries.push([name, value]);
     }
-    if (Object.keys(h).length > 0) out.inject_headers = h;
+    if (entries.length > 0) out.inject_headers = Object.fromEntries(entries);
   }
   // For type: header — extra fields
   if (body.header_name !== undefined) out.header_name = String(body.header_name);
@@ -2458,11 +2464,12 @@ async function handle(req, res) {
       audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
       return jsonError(res, 409, `Service ${name} already exists. Use PUT to update.`);
     }
-    CONFIG.services[name] = cfg;
+    const previousServices = CONFIG.services;
+    CONFIG.services = Object.fromEntries([...Object.entries(previousServices), [name, cfg]]);
     try {
       await persistConfig();
     } catch (e) {
-      delete CONFIG.services[name];
+      CONFIG.services = previousServices;
       audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
@@ -2498,12 +2505,16 @@ async function handle(req, res) {
       audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
       return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
     }
-    const prev = { ...existing };
-    CONFIG.services[name] = next;
+    const previousServices = CONFIG.services;
+    CONFIG.services = Object.fromEntries(
+      Object.entries(previousServices).map(([serviceName, service]) => (
+        serviceName === name ? [serviceName, next] : [serviceName, service]
+      )),
+    );
     try {
       await persistConfig();
     } catch (e) {
-      CONFIG.services[name] = prev;
+      CONFIG.services = previousServices;
       audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }
@@ -2517,11 +2528,14 @@ async function handle(req, res) {
     const name = svcMatch[1];
     const existing = CONFIG.services[name];
     if (!existing) return jsonError(res, 404, `Service ${name} not found`);
-    delete CONFIG.services[name];
+    const previousServices = CONFIG.services;
+    CONFIG.services = Object.fromEntries(
+      Object.entries(previousServices).filter(([serviceName]) => serviceName !== name),
+    );
     try {
       await persistConfig();
     } catch (e) {
-      CONFIG.services[name] = existing;
+      CONFIG.services = previousServices;
       audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
       return jsonError(res, 500, `Persist failed: ${e.message}`);
     }

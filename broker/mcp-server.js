@@ -13,6 +13,10 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const API_KEY_RE = /^mb_(?:live|test)_[0-9A-Za-z]{32}$/;
 const LISTENER_TOKEN_RE = /^[A-Za-z0-9_-]{43,128}$/;
 const TASK_PATH_RE = /^\/api\/v2\/(?:tools|tasks(?:\/[a-f0-9-]+(?:\/(?:run|cancel|events))?)?)$/;
+const ALLOWED_BROKER_ORIGINS = new Set([
+  'https://127.0.0.1:18443',
+  'https://broker.52trz.com',
+]);
 const SERVER_INFO = Object.freeze({
   name: 'secret-broker-mcp-server',
   version: '4.2.0',
@@ -56,6 +60,9 @@ export function normalizeBrokerOrigin(value) {
     url.hash
   ) {
     throw new Error('Broker URL must be an HTTPS origin');
+  }
+  if (!ALLOWED_BROKER_ORIGINS.has(url.origin)) {
+    throw new Error('Broker URL is not an approved origin');
   }
   return url.origin;
 }

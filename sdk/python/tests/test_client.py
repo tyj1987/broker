@@ -205,6 +205,7 @@ def _start_mock_broker():
 
     httpd = HTTPServer(("127.0.0.1", port), MockBrokerHandler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert_path, keyfile=key_path)
     httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)

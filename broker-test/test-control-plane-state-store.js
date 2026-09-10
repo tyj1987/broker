@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -132,6 +132,9 @@ try {
   assert.throws(() => loadControlPlaneStateKey(invalidKeyPath), code('state_key_invalid'));
   assert.throws(() => loadControlPlaneStateKey('relative.key'), code('state_key_invalid'));
   if (process.platform !== 'win32') {
+    const keyLink = join(directory, 'encoded-link.key');
+    symlinkSync(encodedKeyPath, keyLink);
+    assert.throws(() => loadControlPlaneStateKey(keyLink), code('state_key_unavailable'));
     chmodSync(encodedKeyPath, 0o644);
     assert.throws(() => loadControlPlaneStateKey(encodedKeyPath), code('state_key_unavailable'));
   }
@@ -206,6 +209,12 @@ try {
   assert.throws(() => invalidStore.load(), code('state_corrupt'));
   const directoryStore = new EncryptedControlPlaneStateStore({ path: directory, key, coordinator: freshCoordinator });
   assert.throws(() => directoryStore.load(), code('state_unavailable'));
+  if (process.platform !== 'win32') {
+    const stateLink = join(directory, 'state-link');
+    symlinkSync(statePath, stateLink);
+    const linkedStore = new EncryptedControlPlaneStateStore({ path: stateLink, key, coordinator: freshCoordinator });
+    assert.throws(() => linkedStore.load(), code('state_unavailable'));
+  }
   const unwritableStore = new EncryptedControlPlaneStateStore({
     path: join(directory, 'missing-parent', 'state'), key, coordinator: freshCoordinator,
   });

@@ -20,7 +20,7 @@
 //
 // Auth: session/mTLS (走 ctx.client) 或 Bearer (自己处理)
 
-import { randomBytes, createHash } from 'node:crypto';
+import { randomInt, createHash } from 'node:crypto';
 import { isIpAllowed, normalizeIp } from './lib/ip-allowlist.js';
 
 const ENV = process.env.NODE_ENV === 'production' ? 'live' : 'test';
@@ -72,9 +72,8 @@ export function normalizeRateLimit(rl) {
 function genRandomBase62(len) {
   // base62 = 0-9 a-z A-Z
   const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const buf = randomBytes(len);
   let s = '';
-  for (let i = 0; i < len; i++) s += alphabet[buf[i] % alphabet.length];
+  for (let i = 0; i < len; i++) s += alphabet[randomInt(alphabet.length)];
   return s;
 }
 

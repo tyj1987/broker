@@ -72,6 +72,11 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   }
   assert(apiKeysUi.includes("includes('*')"), 'API key form rejects wildcard grants');
   assert(apiKeysUi.includes("scopes.push('operations:execute')"), 'API key request uses typed operation scope');
+  const serverSource = readFileSync(join(root, '..', 'server.js'), 'utf8');
+  assert(serverSource.includes("RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype'])"), 'service names reject prototype keys');
+  assert(serverSource.includes("if (/[\\r\\n]/.test(value)) continue"), 'injected header values reject CRLF');
+  assert(!serverSource.includes('CONFIG.services[name] ='), 'service CRUD avoids remote property writes');
+  assert(!serverSource.includes('delete CONFIG.services[name]'), 'service CRUD avoids remote property deletion');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

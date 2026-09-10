@@ -20,6 +20,24 @@ export interface BrokerConfig {
   insecureSkipVerify?: boolean;
 }
 
+const ALLOWED_BROKER_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', 'broker.52trz.com']);
+
+export function normalizeBrokerEndpoint(value: string): string {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new Error('endpoint must be a valid https origin');
+  }
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password
+    || endpoint.pathname !== '/' || endpoint.search || endpoint.hash
+    || !ALLOWED_BROKER_HOSTS.has(endpoint.hostname)
+    || (endpoint.hostname === 'broker.52trz.com' && endpoint.port && endpoint.port !== '443')) {
+    throw new Error('endpoint must be an approved https origin');
+  }
+  return endpoint.origin;
+}
+
 export interface SecretListItem {
   name: string;
   type: string;
@@ -155,10 +173,7 @@ export class BrokerClient {
   private sessionCookie: string | null = null;
 
   constructor(private config: BrokerConfig) {
-    if (!config.endpoint) throw new Error('endpoint required');
-    if (!config.endpoint.startsWith('https://')) {
-      throw new Error('endpoint must be https://');
-    }
+    this.config = { ...config, endpoint: normalizeBrokerEndpoint(config.endpoint) };
   }
 
   private isVerifyDisabled(): boolean {
@@ -178,6 +193,9 @@ export class BrokerClient {
     query?: Record<string, string | number | undefined>
   ): Promise<{ status: number; body: T | string }> {
     const u = new URL(path, this.config.endpoint);
+    if (!path.startsWith('/') || path.startsWith('//') || u.origin !== this.config.endpoint) {
+      throw new Error('request path must stay on the approved Broker origin');
+    }
     if (query) {
       for (const [k, v] of Object.entries(query)) {
         if (v !== undefined) u.searchParams.set(k, String(v));

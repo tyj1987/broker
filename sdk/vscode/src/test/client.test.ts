@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { BrokerClient, BrokerConnectionError, BrokerError, redact } from '../client';
+import { BrokerClient, BrokerConnectionError, BrokerError, normalizeBrokerEndpoint, redact } from '../client';
 import { startMockBroker } from './mock_broker';
 
 test('redaction covers supported credential forms', () => {
@@ -16,12 +16,20 @@ test('redaction covers supported credential forms', () => {
 test('client rejects insecure endpoint configuration', () => {
   assert.throws(
     () => new BrokerClient({ endpoint: 'http://insecure', clientCert: '', clientKey: '', caCert: '' }),
-    /must be https/,
+    /approved https origin/,
   );
   assert.throws(
     () => new BrokerClient({ endpoint: '', clientCert: '', clientKey: '', caCert: '' }),
-    /endpoint required/,
+    /valid https origin/,
   );
+  for (const endpoint of [
+    'https://evil.example',
+    'https://169.254.169.254',
+    'https://user@broker.52trz.com',
+    'https://broker.52trz.com/path',
+  ]) assert.throws(() => normalizeBrokerEndpoint(endpoint), /approved https origin/);
+  assert.equal(normalizeBrokerEndpoint('https://broker.52trz.com'), 'https://broker.52trz.com');
+  assert.equal(normalizeBrokerEndpoint('https://127.0.0.1:8443'), 'https://127.0.0.1:8443');
 });
 
 test('error types retain safe diagnostic context', () => {

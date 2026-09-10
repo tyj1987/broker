@@ -1,9 +1,10 @@
 import {
   chmodSync,
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
-  lstatSync,
   openSync,
   readFileSync,
   renameSync,
@@ -138,14 +139,19 @@ export function loadControlPlaneStateKey(path) {
   if (typeof path !== 'string' || !isAbsolute(path)) {
     throw failure('state_key_invalid', 'control-plane state key path must be absolute');
   }
+  let descriptor;
   try {
-    const metadata = lstatSync(path);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('not a regular file');
+    const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+    descriptor = openSync(path, flags);
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile()) throw new Error('not a regular file');
     if (process.platform !== 'win32' && (metadata.mode & 0o077) !== 0) throw new Error('permissions are too broad');
-    return decodeKey(readFileSync(path));
+    return decodeKey(readFileSync(descriptor));
   } catch (error) {
     if (error instanceof V2Error) throw error;
     throw failure('state_key_unavailable', 'control-plane state key is unavailable');
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
@@ -266,18 +272,20 @@ export class EncryptedControlPlaneStateStore {
   load({ required = true } = {}) {
     this.assertOpen();
     if (typeof required !== 'boolean') throw failure('invalid_request', 'required must be boolean', 400);
-    if (!existsSync(this.path)) {
-      if (required) throw failure('state_unavailable', 'control-plane state is unavailable', 503);
-      return false;
-    }
     let serialized;
+    let descriptor;
     try {
-      const metadata = lstatSync(this.path);
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1
+      const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+      descriptor = openSync(this.path, flags);
+      const metadata = fstatSync(descriptor);
+      if (!metadata.isFile() || metadata.size < 1
         || metadata.size > Math.ceil(MAX_STATE_BYTES * 1.5)) throw new Error('invalid state file');
-      serialized = readFileSync(this.path, 'utf8');
-    } catch {
+      serialized = readFileSync(descriptor, 'utf8');
+    } catch (error) {
+      if (!required && error?.code === 'ENOENT') return false;
       throw failure('state_unavailable', 'control-plane state is unavailable', 503);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
     }
     const { envelope, iv, tag, ciphertext } = parseEnvelope(serialized);
     let plaintext;

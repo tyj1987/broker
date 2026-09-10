@@ -18,7 +18,7 @@ import {
   pruneAuditFiles,
   auditPolicyFromEnv,
 } from '../broker/lib/audit-policy.js';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BROKER_VERSION } from '../broker/version.js';
@@ -88,8 +88,7 @@ console.log('=== audit sampling ===');
 
 console.log('=== pruneAuditFiles ===');
 {
-  const dir = join(tmpdir(), 'broker-audit-test-' + Date.now());
-  mkdirSync(dir, { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), 'broker-audit-test-'));
   writeFileSync(join(dir, 'audit-2020-01-01.jsonl'), '{}\n');
   writeFileSync(join(dir, 'audit-2099-01-01.jsonl'), '{}\n');
   const r = pruneAuditFiles(dir, 30);

@@ -52,10 +52,17 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   assert(!/loadServices\(\)\.catch/.test(app.split('async function boot')[1] || ''), 'boot does not eager-load services');
   const html = readFileSync(join(root, 'index.html'), 'utf8');
   const auditUi = readFileSync(join(root, 'admin/audit.js'), 'utf8');
+  const clientsUi = readFileSync(join(root, 'admin/clients.js'), 'utf8');
   const server = readFileSync(join(root, '..', 'server.js'), 'utf8');
   assert(!html.includes('btn-audit-clear'), 'dashboard has no audit deletion control');
   assert(!auditUi.includes('clearAuditLogs'), 'dashboard cannot request audit deletion');
   assert(server.includes("jsonError(res, 405, 'Audit records are immutable')"), 'server denies audit deletion');
+  assert(!clientsUi.includes('配置有 fp, 文件缺失'), 'clients UI does not misreport externally managed certificates as missing');
+  assert(clientsUi.includes('已注册（外部管理）'), 'clients UI labels registered certificates in external-management mode');
+  assert(clientsUi.includes('if (!pkiWritable)'), 'external-management label is limited to read-only PKI mode');
+  assert(clientsUi.includes('⚠ 证书副本缺失'), 'writable PKI mode still warns when its certificate copy is missing');
+  assert(html.includes('Broker 只保存已授权证书指纹，不保存客户端私钥'), 'read-only PKI banner explains the production trust boundary');
+  assert(!html.includes('scripts/issue-client-cert.sh'), 'dashboard does not recommend a missing production script');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

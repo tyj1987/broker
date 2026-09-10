@@ -81,11 +81,9 @@
       const fpShort = c.cert_fingerprint_sha256
         ? c.cert_fingerprint_sha256.split(':').slice(0, 3).join(':') + '...'
         : '<span class="muted-cell">无</span>';
-      const certStatus = c.cert_present_on_disk
-        ? '<span class="badge-ok">✓ 已签发</span>'
-        : (c.cert_fingerprint_sha256 ? '<span class="badge-warn">⚠ 配置有 fp, 文件缺失</span>' : '<span class="muted-cell">未签发</span>');
-      // When pki/ is read-only, disable buttons that would write a new cert.
-      // Operator should use scripts/issue-client-cert.sh instead.
+      const certStatus = renderCertificateStatus(c);
+      // When pki/ is read-only, certificate material is managed by the
+      // trusted offline operator rather than by the web process.
       const dis = (cond) => cond ? '' : 'disabled';
       const readonlyDis = pkiWritable ? '' : 'disabled';
       tr.innerHTML = `
@@ -117,6 +115,19 @@
         else if (act === 'bundle') downloadBundle(name);
       });
     });
+  }
+
+  function renderCertificateStatus(client) {
+    if (client.cert_present_on_disk) {
+      return '<span class="badge-ok">✓ 已签发</span>';
+    }
+    if (!client.cert_fingerprint_sha256) {
+      return '<span class="muted-cell">未签发</span>';
+    }
+    if (!pkiWritable) {
+      return '<span class="badge-ok" title="生产服务仅保存已授权指纹，不保存客户端私钥">✓ 已注册（外部管理）</span>';
+    }
+    return '<span class="badge-warn">⚠ 证书副本缺失</span>';
   }
 
   function showTableError(msg) {

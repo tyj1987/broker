@@ -602,7 +602,7 @@
           <h2>设备管理 / Devices (Clients)</h2>
           <p>每台设备一个 mTLS client cert。客户端名规范：<code>[a-z][a-z0-9_.-]{0,63}</code>。</p>
           <p class="hint">证书签发后必须<b>离线</b>把 zip 包送达设备——里面包含私钥，泄露后必须立即撤销。</p>
-          <p id="pki-readonly-banner" class="badge-warn" hidden>⚠ 当前 <code>pki/clients/</code> 不可写（生产环境典型情况）。"签发/补发"和"轮换"按钮已禁用。请在 ECS 上跑 <code>scripts/issue-client-cert.sh &lt;name&gt;</code>。</p>
+          <p id="pki-readonly-banner" class="badge-ok" hidden>🔒 当前使用生产外部管理模式：Broker 只保存已授权证书指纹，不保存客户端私钥。签发、轮换和证书包下载须由受信运维端离线完成。</p>
         </div>
         <div class="card admin-only" hidden>
           <div class="admin-toolbar">
@@ -809,7 +809,7 @@ secret-broker get github.pat</code></pre>
   <script src="api-keys.js?v=4.1.5"></script>
   <script src="admin/secrets.js?v=4.1.5"></script>
   <script src="admin/services.js?v=4.1.5"></script>
-  <script src="admin/clients.js?v=4.1.5"></script>
+  <script src="admin/clients.js?v=4.2.0"></script>
   <script src="admin/audit.js?v=4.1.5"></script>
 </body>
 </html>

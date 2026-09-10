@@ -8,6 +8,7 @@ const values = read('../deploy/helm/broker/values.yaml');
 const migration = read('../deploy/PRODUCTION-MIGRATION.md');
 const deployHelper = read('../deploy/bin/secret-broker-deploy');
 const workflow = read('../.github/workflows/ci.yml');
+const deployWorkflow = read('../.github/workflows/deploy-ecs.yml');
 const dockerfile = read('../Dockerfile');
 
 assert.match(service, /LoadCredential=control-plane-state\.key:/);
@@ -42,7 +43,9 @@ assert.match(deployHelper, /readonly NODE_RUNTIME=\/opt\/secret-broker\/runtime\
 assert.match(deployHelper, /chown -R root:broker/);
 assert.match(deployHelper, /find "\$RELEASE" -type d -exec chmod 0550/);
 assert.match(deployHelper, /for _ in \{1\.\.20\}/);
+assert.match(deployHelper, /-f "\$RELEASE\/tools\/registry\.json"/);
 assert.doesNotMatch(deployHelper, /chown -R broker:broker/);
+assert.match(deployWorkflow, /cp -R tools broker\/tools/);
 assert.match(workflow, /Dir::Etc::sourcelist=\/etc\/apt\/sources\.list\.d\/ubuntu\.sources/);
 assert.match(workflow, /secrets\.stateKeySecretName=broker-state-key/);
 assert.doesNotMatch(workflow, /branches:\s*\[master,\s*'codex\/\*\*'\]/);

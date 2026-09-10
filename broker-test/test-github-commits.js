@@ -16,6 +16,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 const NOW = 2_000_000_000_000;
 const SHA = 'a'.repeat(40);
 const SHA_256 = 'b'.repeat(64);
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
 const parameters = {
   resource_ref: 'tyj1987/broker',
@@ -37,6 +39,8 @@ const context = {
     tool: 'github.commits.list@1.0.0',
     target: 'tyj1987/broker',
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
   signal: new AbortController().signal,
 };
@@ -103,6 +107,8 @@ assert.deepEqual(
     environment: tokenInput.environment,
     repository: tokenInput.repository,
     signal: tokenInput.signal,
+    execution_id: tokenInput.execution_id,
+    request_binding: tokenInput.request_binding,
     origin: requestInput.origin,
     method: requestInput.method,
     path: requestInput.path,
@@ -114,6 +120,8 @@ assert.deepEqual(
     environment: 'production',
     repository: 'tyj1987/broker',
     signal: context.signal,
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
     origin: 'https://api.github.com',
     method: 'GET',
     path: '/repos/tyj1987/broker/commits?per_page=2&page=3&sha=master&path=broker%2Fserver.js&author=octocat%40example.test&committer=github-actions%5Bbot%5D&since=2026-01-01T00%3A00%3A00Z&until=2026-09-10T23%3A59%3A59Z',
@@ -199,6 +207,8 @@ for (const execution of [
   { ...context.execution, tool: 'github.repository.read@1.0.0' },
   { ...context.execution, target: 'other/repo' },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ]) {
   await assert.rejects(
     adapter(parameters, { ...context, execution }),

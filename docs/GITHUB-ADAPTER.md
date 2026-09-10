@@ -106,7 +106,8 @@ Unit contract tests cover path and target injection, typed pagination and
 filtering, bounded branch and commit projections, execution-binding
 tampering, issue-versus-pull-request classification, untrusted-content marking,
 workflow-run filter validation and bounded status projection,
-App/account/environment/repository binding, JWT claims and algorithm,
+App/account/environment/repository binding, task execution and canonical request
+binding across the adapter, token provider and signer, JWT claims and algorithm,
 invalid signer results, fixed-socket ownership and protocol failures,
 strict signer-side JWT validation, peer and binding denial, digest-only backend calls,
 configuration reload removal, fixed least-privilege token permissions,

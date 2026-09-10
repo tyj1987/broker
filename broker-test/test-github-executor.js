@@ -5,7 +5,10 @@ import { Readable } from 'node:stream';
 import { createGitHubRepositoryReadExecutor } from '../broker/adapters/github-repository-read-executor.js';
 
 const NOW = 2_000_000_000_000;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const calls = [];
+let signerInput;
 const requestImpl = (options, callback) => {
   const request = new EventEmitter();
   request.setTimeout = () => {};
@@ -40,7 +43,10 @@ const executor = createGitHubRepositoryReadExecutor({
     installation_id: 12345,
     repositories: ['tyj1987/broker'],
   }),
-  signer: async () => Buffer.alloc(256, 9),
+  signer: async (input) => {
+    signerInput = input;
+    return Buffer.alloc(256, 9);
+  },
 });
 const result = await executor(
   { resource_ref: 'tyj1987/broker', owner: 'tyj1987', repo: 'broker' },
@@ -51,6 +57,8 @@ const result = await executor(
       tool: 'github.repository.read@1.0.0',
       target: 'tyj1987/broker',
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -61,6 +69,8 @@ assert.deepEqual(result, {
   archived: false,
 });
 assert.equal(calls.length, 2);
+assert.equal(signerInput.execution_id, EXECUTION_ID);
+assert.equal(signerInput.request_binding, REQUEST_BINDING);
 assert.equal(calls[0].options.path, '/app/installations/12345/access_tokens');
 assert.deepEqual(JSON.parse(calls[0].body), {
   repositories: ['broker'],

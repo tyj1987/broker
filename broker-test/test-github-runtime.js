@@ -12,6 +12,8 @@ import {
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const basePolicy = {
   enabled: true,
   contract_verified: true,
@@ -137,6 +139,8 @@ const repository = await executors.get('github.repository.read@1.0.0')(
       tool: 'github.repository.read@1.0.0',
       target: 'tyj1987/broker',
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -150,6 +154,8 @@ assert.equal(signerInputs.length, 1);
 assert.equal(signerInputs[0].account_ref, 'github-primary');
 assert.equal(signerInputs[0].environment, 'production');
 assert.equal(signerInputs[0].algorithm, 'RS256');
+assert.equal(signerInputs[0].execution_id, EXECUTION_ID);
+assert.equal(signerInputs[0].request_binding, REQUEST_BINDING);
 assert.equal(JSON.parse(requests[0].body).permissions.metadata, 'read');
 assert.equal(requests[1].options.headers.authorization, 'Bearer runtime-installation-token');
 
@@ -169,6 +175,8 @@ const pullRequest = await executors.get('github.pull-request.create@1.0.0')(
       tool: 'github.pull-request.create@1.0.0',
       target: 'tyj1987/broker',
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -194,6 +202,8 @@ await assert.rejects(
         tool: 'github.repository.read@1.0.0',
         target: 'other/repo',
         environment: 'production',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ),

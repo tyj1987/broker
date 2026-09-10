@@ -37,6 +37,11 @@ response so the client rejects a swapped lease. A production credential
 authority must additionally validate the execution against durable control-plane
 state before issuing a capability.
 
+The GitHub signer protocol now applies the same execution binding before the
+non-exportable backend signs a GitHub App JWT. Its version 2 response echoes the
+binding, and the local client rejects substitution before the installation-token
+request can run.
+
 The source branch also registers `github.pull-request.create@1.0.0` as a HIGH
 risk, draft-by-default operation. Its deterministic end-to-end test proves that
 the requester cannot execute before a separate WebAuthn-stepped-up human

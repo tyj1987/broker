@@ -6,12 +6,16 @@ import {
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const input = {
   account_ref: 'github-primary',
   environment: 'production',
   repository: 'tyj1987/broker',
   owner: 'tyj1987',
   repo: 'broker',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: new AbortController().signal,
 };
 const binding = {
@@ -64,6 +68,8 @@ assert.equal(signingCall.algorithm, 'RS256');
 assert.equal(signingCall.account_ref, input.account_ref);
 assert.equal(signingCall.environment, input.environment);
 assert.equal(signingCall.client_id, binding.client_id);
+assert.equal(signingCall.execution_id, EXECUTION_ID);
+assert.equal(signingCall.request_binding, REQUEST_BINDING);
 assert.equal(signingCall.signal, input.signal);
 const [header, claims] = signingCall.signing_input
   .split('.')
@@ -178,6 +184,8 @@ for (const invalid of [
   { ...input, environment: 'Production' },
   { ...input, repository: 'bad' },
   { ...input, repo: 'other' },
+  { ...input, execution_id: 'wrong' },
+  { ...input, request_binding: 'wrong' },
 ])
   await assert.rejects(makeProvider()(invalid), expectCode('github_token_request_invalid'));
 for (const invalidBinding of [

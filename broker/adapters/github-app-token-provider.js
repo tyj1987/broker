@@ -8,6 +8,8 @@ const MAX_TOKEN_TTL_MS = 60 * 60_000 + 30_000;
 const CLIENT_ID_RE = /^[A-Za-z0-9._-]{3,128}$/;
 const ACCOUNT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const REPOSITORY_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 const PERMISSION_LEVELS = Object.freeze({
   actions: Object.freeze(['read']),
@@ -66,6 +68,8 @@ function validateRequest(input) {
   if (
     !ACCOUNT_REF_RE.test(input?.account_ref || '') ||
     !ENVIRONMENT_RE.test(input?.environment || '') ||
+    !EXECUTION_ID_RE.test(input?.execution_id || '') ||
+    !REQUEST_BINDING_RE.test(input?.request_binding || '') ||
     !REPOSITORY_RE.test(input?.repository || '') ||
     input.repository.toLowerCase() !== `${input.owner}/${input.repo}`.toLowerCase()
   ) {
@@ -191,6 +195,8 @@ export function createGitHubAppInstallationTokenProvider({
           account_ref: input.account_ref,
           environment: input.environment,
           client_id: binding.client_id,
+          execution_id: input.execution_id,
+          request_binding: input.request_binding,
           signal: input.signal,
         }),
       );

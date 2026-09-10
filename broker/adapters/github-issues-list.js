@@ -8,6 +8,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TOKEN_TTL_MS = 60 * 60_000 + 30_000;
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPO_RE = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const UNSAFE_TEXT_RE = /[\u0000-\u001f\u007f]/;
 
 function fail(code, message, status = 400) {
@@ -190,7 +192,11 @@ function projectIssues(body, maximumItems, itemKind) {
     );
 }
 
-export function createGitHubIssuesListAdapter({ request, tokenProvider, now = () => Date.now() } = {}) {
+export function createGitHubIssuesListAdapter({
+  request,
+  tokenProvider,
+  now = () => Date.now(),
+} = {}) {
   if (typeof request !== 'function')
     throw new TypeError('GitHub issues adapter requires a pinned request transport');
   if (typeof tokenProvider !== 'function')
@@ -207,7 +213,11 @@ export function createGitHubIssuesListAdapter({ request, tokenProvider, now = ()
       typeof parameters.resource_ref !== 'string' ||
       parameters.resource_ref.toLowerCase() !== target.toLowerCase()
     ) {
-      fail('github_target_mismatch', 'GitHub repository target does not match typed parameters', 403);
+      fail(
+        'github_target_mismatch',
+        'GitHub repository target does not match typed parameters',
+        403,
+      );
     }
     const state = enumValue(parameters.state, 'open', ['open', 'closed', 'all'], 'state');
     const sort = enumValue(parameters.sort, 'created', ['created', 'updated', 'comments'], 'sort');
@@ -228,9 +238,15 @@ export function createGitHubIssuesListAdapter({ request, tokenProvider, now = ()
     if (
       context.execution?.tool !== TOOL ||
       context.execution?.target?.toLowerCase() !== target.toLowerCase() ||
-      context.execution?.environment !== context.environment
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
     ) {
-      fail('github_execution_binding_mismatch', 'Execution capability is not bound to this GitHub repository', 403);
+      fail(
+        'github_execution_binding_mismatch',
+        'Execution capability is not bound to this GitHub repository',
+        403,
+      );
     }
     if (typeof context.accountRef !== 'string' || !context.accountRef) {
       fail('github_account_unavailable', 'GitHub account binding is unavailable', 503);
@@ -244,6 +260,8 @@ export function createGitHubIssuesListAdapter({ request, tokenProvider, now = ()
         owner,
         repo,
         repository: target,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
         signal: context.signal,
       });
     } catch {

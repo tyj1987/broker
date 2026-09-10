@@ -8,6 +8,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TOKEN_TTL_MS = 60 * 60_000 + 30_000;
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPO_RE = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const UNSAFE_TEXT_RE = /[\u0000-\u001f\u007f]/;
 
@@ -195,7 +197,9 @@ export function createGitHubCommitsListAdapter({
     if (
       context.execution?.tool !== TOOL ||
       context.execution?.target?.toLowerCase() !== target.toLowerCase() ||
-      context.execution?.environment !== context.environment
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
     ) {
       fail(
         'github_execution_binding_mismatch',
@@ -215,6 +219,8 @@ export function createGitHubCommitsListAdapter({
         owner,
         repo,
         repository: target,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
         signal: context.signal,
       });
     } catch {

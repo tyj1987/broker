@@ -7,6 +7,8 @@ import {
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const parameters = {
   resource_ref: 'tyj1987/broker',
   owner: 'tyj1987',
@@ -24,6 +26,8 @@ const context = {
     tool: 'github.pull-request.create@1.0.0',
     target: 'tyj1987/broker',
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
 };
 const lease = {
@@ -70,6 +74,8 @@ assert.deepEqual(tokenInput, {
   owner: 'tyj1987',
   repo: 'broker',
   repository: 'tyj1987/broker',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: context.signal,
 });
 assert.deepEqual(
@@ -157,6 +163,8 @@ for (const execution of [
   { ...context.execution, tool: 'github.repository.read@1.0.0' },
   { ...context.execution, target: 'other/repo' },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ]) {
   await assert.rejects(
     noRequest(parameters, { ...context, execution }),

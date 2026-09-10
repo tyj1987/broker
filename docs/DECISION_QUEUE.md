@@ -59,9 +59,11 @@ continue.
   by deterministic tests plus a fixed, signature-only Unix-socket client. The
   Broker runtime registers verified GitHub operations only after the socket and
   metadata bindings pass preflight. The Go signer protocol core independently
-  validates peer authorization, exact account/environment/client bindings and
-  the bounded GitHub App JWT before giving only a SHA-256 digest to an injected
-  non-exportable backend. Linux peer identity is verified with `SO_PEERCRED`
+  validates peer authorization, exact account/environment/client bindings, the
+  consumed task execution ID, the canonical request binding, and the bounded
+  GitHub App JWT before giving only a SHA-256 digest plus those non-secret
+  execution bindings to an injected non-exportable backend. Linux peer identity
+  is verified with `SO_PEERCRED`
   against an explicit non-root Broker UID. No production signer workload or
   KMS/HSM authority has been selected. A source-only GitHub pull-request
   creation operation now exercises the same boundary with a fixed API path, a

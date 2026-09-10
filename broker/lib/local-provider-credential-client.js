@@ -7,6 +7,11 @@ const SOCKETS = Object.freeze({
   deepseek: `${SOCKET_DIRECTORY}/deepseek.sock`,
   docker: `${SOCKET_DIRECTORY}/docker.sock`,
 });
+const OPERATIONS = Object.freeze({
+  cloudflare: 'zones.list',
+  deepseek: 'models.list',
+  docker: 'repository.tags.list',
+});
 const MAX_REQUEST_BYTES = 4 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024;
 const MAX_LEASE_TTL_MS = 5 * 60_000;
@@ -27,7 +32,8 @@ function fail(code, message) {
   throw new LocalProviderCredentialError(code, message);
 }
 
-function validResource(provider, value) {
+function validResource(provider, operationId, value) {
+  if (operationId !== OPERATIONS[provider]) return false;
   if (provider === 'cloudflare') return CLOUDFLARE_ACCOUNT_ID_RE.test(value || '');
   if (provider === 'deepseek') return value === 'model-catalog';
   if (provider === 'docker') {
@@ -50,7 +56,7 @@ function validateRequest(provider, input) {
     !ID_RE.test(input.operation_id || '') ||
     !ID_RE.test(input.account_ref || '') ||
     !ENVIRONMENT_RE.test(input.environment || '') ||
-    !validResource(provider, input.resource_ref) ||
+    !validResource(provider, input.operation_id, input.resource_ref) ||
     (input.signal !== undefined && !(input.signal instanceof AbortSignal)) ||
     !Object.hasOwn(SOCKETS, provider)
   ) {
@@ -257,6 +263,7 @@ export function createLocalProviderCredentialClient({
 export const LOCAL_PROVIDER_CREDENTIAL_CONTRACT = Object.freeze({
   socket_directory: SOCKET_DIRECTORY,
   socket_paths: SOCKETS,
+  allowed_operations: OPERATIONS,
   protocol_version: 1,
   maximum_request_bytes: MAX_REQUEST_BYTES,
   maximum_response_bytes: MAX_RESPONSE_BYTES,

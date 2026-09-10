@@ -23,6 +23,13 @@ by live `initialize`, `tools/list`, allowed execution and wrong
 account/resource/environment denial tests. Provider operations remain disabled
 until their isolated account binding and real contract evidence are available.
 
+The development branch also contains a Go implementation of the local
+short-lived credential protocol used by the Cloudflare, Docker and DeepSeek
+runtimes. It validates the Linux peer and the complete requested binding before
+calling an injected lease issuer, then constrains the returned capability to a
+five-minute maximum lifetime. It has no production credential backend and does
+not change the deployed executable catalog.
+
 This changes the active implementation plan from building another task model
 to validating the deployed orchestration boundary, then enabling providers one
 bounded read-only operation at a time. It does not authorize a second task API,

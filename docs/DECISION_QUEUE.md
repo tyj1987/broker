@@ -79,7 +79,13 @@ continue.
   account/environment/region/resource runtime binding are implemented; a
   verified policy fails startup when that signer is absent. No signer service,
   authoritative account store or production operation is enabled while this
-  decision is open.
+  decision is open. A separate Go credential-service protocol core now validates
+  Linux peer identity, the exact provider/operation/account/environment/resource
+  tuple and a maximum five-minute printable lease before returning it to the
+  Broker runtime. It supports only the bounded Cloudflare, Docker and DeepSeek
+  resource shapes already enforced by the Node client. Its issuer remains
+  dependency-injected: this protocol boundary is not a credential store and
+  does not enable a provider by itself.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

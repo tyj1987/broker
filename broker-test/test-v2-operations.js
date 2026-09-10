@@ -488,6 +488,24 @@ assert.throws(
   }),
   (error) => error instanceof V2Error && error.code === 'unsafe_result',
 );
+const tooDeepResult = {};
+let deepCursor = tooDeepResult;
+for (let depth = 0; depth < 10; depth += 1) {
+  deepCursor.next = {};
+  deepCursor = deepCursor.next;
+}
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+    receipt: lease.receipt, status: 'completed', result: tooDeepResult,
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_result',
+);
+assert.throws(
+  () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
+    receipt: lease.receipt, status: 'completed', result: { unsupported: undefined },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_result',
+);
 assert.throws(
   () => workerBroker.completeBrowserOperation(workerDevice.id, lease.id, {
     receipt: lease.receipt,

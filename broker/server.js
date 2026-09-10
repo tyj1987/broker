@@ -98,6 +98,10 @@ import {
   prepareGitHubRuntimeExecutors,
 } from './adapters/github-runtime.js';
 import {
+  commitCloudflareRuntimeExecutors,
+  prepareCloudflareRuntimeExecutors,
+} from './adapters/cloudflare-runtime.js';
+import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
@@ -388,16 +392,19 @@ async function prepareConfig() {
   requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });
   toolRegistry.validateConfiguration(cfg);
   const githubExecutors = await prepareGitHubRuntimeExecutors({ config: cfg });
+  const cloudflareExecutors = await prepareCloudflareRuntimeExecutors({ config: cfg });
   return {
     document: cfg,
     devices: operationBroker.prepareDeviceRegistry(cfg.device_registry || []),
     githubExecutors,
+    cloudflareExecutors,
   };
 }
 
 function applyConfig(prepared) {
   operationBroker.commitDeviceRegistry(prepared.devices);
   commitGitHubRuntimeExecutors(taskExecutors, prepared.githubExecutors);
+  commitCloudflareRuntimeExecutors(taskExecutors, prepared.cloudflareExecutors);
   CONFIG = prepared.document;
 }
 

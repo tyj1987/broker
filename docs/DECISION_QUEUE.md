@@ -63,8 +63,11 @@ continue.
   the bounded GitHub App JWT before giving only a SHA-256 digest to an injected
   non-exportable backend. Linux peer identity is verified with `SO_PEERCRED`
   against an explicit non-root Broker UID. No production signer workload or
-  KMS/HSM authority has been selected, and every provider remains
-  `contract_required`.
+  KMS/HSM authority has been selected. The Cloudflare runtime now has a fixed,
+  ownership-checked Unix-socket credential lease client and refuses plaintext
+  token configuration; only exact five-minute account/environment/resource
+  leases are accepted. The external credential-service implementation and its
+  authority remain undecided, so every provider remains `contract_required`.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

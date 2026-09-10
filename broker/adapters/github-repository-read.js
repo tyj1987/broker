@@ -36,6 +36,10 @@ function validateLease(lease, expectedRepository, now) {
   if (typeof lease.repository !== 'string' || lease.repository.toLowerCase() !== expectedRepository.toLowerCase()) {
     fail('github_credential_scope_mismatch', 'GitHub installation credential is not repository scoped', 403);
   }
+  if (!lease.permissions || lease.permissions.metadata !== 'read'
+    || Object.keys(lease.permissions).some((key) => key !== 'metadata')) {
+    fail('github_credential_scope_mismatch', 'GitHub installation credential permission is invalid', 403);
+  }
   const expiresAt = Date.parse(lease.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= now || expiresAt - now > MAX_TOKEN_TTL_MS) {
     fail('github_credential_expired', 'GitHub installation credential lifetime is invalid', 503);

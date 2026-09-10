@@ -110,6 +110,24 @@
       "agent_execution": true
     },
     {
+      "name": "github.branches.list",
+      "version": "1.0.0",
+      "description": "List a bounded branch projection through a repository-scoped GitHub App installation.",
+      "provider": "github",
+      "operation_id": "branches.list",
+      "input_schema": { "type": "object", "additionalProperties": false, "required": ["resource_ref", "owner", "repo"], "properties": { "resource_ref": { "type": "string" }, "owner": { "type": "string" }, "repo": { "type": "string" }, "protected": { "type": "boolean" }, "page": { "type": "integer" }, "per_page": { "type": "integer" } } },
+      "output_schema": { "type": "object", "additionalProperties": false, "required": ["branches", "page", "per_page", "has_more"], "properties": { "branches": { "type": "array" }, "page": { "type": "integer" }, "per_page": { "type": "integer" }, "has_more": { "type": "boolean" } } },
+      "required_role": "developer",
+      "risk_level": "LOW",
+      "environments": ["development", "staging", "production"],
+      "target": { "kind": "github-repository", "resource_parameter": "resource_ref" },
+      "timeout_ms": 10000,
+      "rate_limit": { "requests": 60, "window_seconds": 60 },
+      "approval_policy": { "mode": "none", "approvals_required": 0 },
+      "audit_policy": { "required": true, "redact": ["authorization", "installation_token"] },
+      "agent_execution": true
+    },
+    {
       "name": "cloudflare.zones.list",
       "version": "1.0.0",
       "description": "List Cloudflare zones visible to a scoped service token.",

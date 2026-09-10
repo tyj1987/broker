@@ -9,6 +9,9 @@ const CLIENT_ID_RE = /^[A-Za-z0-9._-]{3,128}$/;
 const ACCOUNT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const REPOSITORY_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+const READ_ONLY_PERMISSIONS = new Set([
+  'actions', 'contents', 'deployments', 'issues', 'metadata', 'pull_requests',
+]);
 
 function fail(code, message, status = 400) {
   throw new V2Error(code, message, status);
@@ -76,7 +79,19 @@ function validateSignature(signature) {
   return Buffer.from(signature).toString('base64url');
 }
 
-function validateTokenResponse(response, repository, now) {
+function normalizePermissions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('GitHub token provider permissions must be a non-empty object');
+  }
+  const entries = Object.entries(value);
+  if (entries.length < 1) throw new TypeError('GitHub token provider permissions must be a non-empty object');
+  if (entries.some(([key, level]) => !READ_ONLY_PERMISSIONS.has(key) || level !== 'read')) {
+    throw new TypeError('GitHub token provider supports explicit read-only permissions only');
+  }
+  return Object.freeze(Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))));
+}
+
+function validateTokenResponse(response, repository, now, requiredPermissions) {
   if (response.status !== 201)
     fail('github_token_request_failed', 'GitHub installation token request failed', 502);
   const body = parseBody(response.body);
@@ -94,8 +109,10 @@ function validateTokenResponse(response, repository, now) {
     repositories.length !== 1 ||
     repositories[0]?.full_name?.toLowerCase() !== repository.toLowerCase() ||
     !permissions ||
-    permissions.metadata !== 'read' ||
-    Object.keys(permissions).some((key) => key !== 'metadata')
+    typeof permissions !== 'object' ||
+    Array.isArray(permissions) ||
+    JSON.stringify(Object.fromEntries(Object.entries(permissions).sort(([left], [right]) => left.localeCompare(right))))
+      !== JSON.stringify(requiredPermissions)
   ) {
     fail(
       'github_token_scope_mismatch',
@@ -103,7 +120,7 @@ function validateTokenResponse(response, repository, now) {
       502,
     );
   }
-  return { token: body.token, repository, expires_at: body.expires_at };
+  return { token: body.token, repository, expires_at: body.expires_at, permissions: { ...requiredPermissions } };
 }
 
 export function createGitHubAppInstallationTokenProvider({
@@ -111,6 +128,7 @@ export function createGitHubAppInstallationTokenProvider({
   signer,
   accountResolver,
   now = () => Date.now(),
+  permissions = { metadata: 'read' },
 } = {}) {
   if (typeof request !== 'function')
     throw new TypeError('GitHub token provider requires a pinned request transport');
@@ -118,6 +136,7 @@ export function createGitHubAppInstallationTokenProvider({
     throw new TypeError('GitHub token provider requires a non-exportable signing capability');
   if (typeof accountResolver !== 'function')
     throw new TypeError('GitHub token provider requires an account binding resolver');
+  const requiredPermissions = normalizePermissions(permissions);
 
   return async function provideInstallationToken(input) {
     validateRequest(input);
@@ -172,7 +191,7 @@ export function createGitHubAppInstallationTokenProvider({
           'X-GitHub-Api-Version': API_VERSION,
           'User-Agent': `secret-broker/${BROKER_VERSION}`,
         },
-        body: JSON.stringify({ repositories: [input.repo], permissions: { metadata: 'read' } }),
+        body: JSON.stringify({ repositories: [input.repo], permissions: requiredPermissions }),
         max_response_bytes: MAX_RESPONSE_BYTES,
         redirect: 'manual',
         signal: input.signal,
@@ -184,7 +203,7 @@ export function createGitHubAppInstallationTokenProvider({
     if ([301, 302, 303, 307, 308].includes(response?.status)) {
       fail('github_token_redirect_denied', 'GitHub installation token redirect was denied', 502);
     }
-    return validateTokenResponse(response || {}, input.repository, now());
+    return validateTokenResponse(response || {}, input.repository, now(), requiredPermissions);
   };
 }
 

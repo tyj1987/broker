@@ -6,6 +6,9 @@ const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registr
 const github = registry.find('github', 'repo.read');
 assert.equal(github.name, 'github.repository.read');
 assert.equal(github.risk_level, 'LOW');
+const githubBranches = registry.find('github', 'branches.list');
+assert.equal(githubBranches.name, 'github.branches.list');
+assert.equal(githubBranches.input_schema.properties.protected.type, 'boolean');
 const deviceEnroll = registry.find('broker', 'device.enroll');
 assert.equal(deviceEnroll.input_schema.properties.capabilities.maxItems, 32);
 assert.equal(deviceEnroll.input_schema.properties.capabilities.items.type, 'string');

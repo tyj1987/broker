@@ -16,6 +16,7 @@ const context = {
 };
 const validLease = () => ({
   token: 'unit-token', repository: 'tyj1987/broker', expires_at: new Date(NOW + 60_000).toISOString(),
+  permissions: { metadata: 'read' },
 });
 const validBody = () => ({
   id: 123, full_name: 'tyj1987/broker', visibility: 'public', archived: false,
@@ -69,6 +70,7 @@ const withLease = (lease) => createGitHubRepositoryReadAdapter({
 await assert.rejects(withLease(null)(parameters, context), expectCode('github_credential_unavailable'));
 await assert.rejects(withLease({ ...validLease(), token: '' })(parameters, context), expectCode('github_credential_unavailable'));
 await assert.rejects(withLease({ ...validLease(), repository: 'other/repo' })(parameters, context), expectCode('github_credential_scope_mismatch'));
+await assert.rejects(withLease({ ...validLease(), permissions: { contents: 'read' } })(parameters, context), expectCode('github_credential_scope_mismatch'));
 await assert.rejects(withLease({ ...validLease(), expires_at: new Date(NOW).toISOString() })(parameters, context), expectCode('github_credential_expired'));
 await assert.rejects(withLease({ ...validLease(), expires_at: new Date(NOW + 3_700_000).toISOString() })(parameters, context), expectCode('github_credential_expired'));
 await assert.rejects(createGitHubRepositoryReadAdapter({

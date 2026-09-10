@@ -47,6 +47,10 @@ assert.match(deployHelper, /for _ in \{1\.\.20\}/);
 assert.match(deployHelper, /-f "\$RELEASE\/tools\/registry\.json"/);
 assert.doesNotMatch(deployHelper, /chown -R broker:broker/);
 assert.match(deployWorkflow, /cp -R tools broker\/tools/);
+assert.match(
+  deployWorkflow,
+  /name: Build Go policy core[\s\S]*working-directory: core[\s\S]*-o \.\.\/broker\/bin\/secret-broker-policy \.\/cmd\/policy-server/,
+);
 assert.match(nginx, /ssl_certificate \/etc\/nginx\/cert\/broker\.52trz\.com\/fullchain\.pem/);
 assert.match(nginx, /proxy_ssl_verify on;/);
 assert.match(nginx, /proxy_ssl_protocols TLSv1\.3;/);

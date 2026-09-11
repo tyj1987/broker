@@ -175,6 +175,46 @@ section('8. No session → falls through (returns null when nothing else)');
   ok('returns null', id === null);
 }
 
+section('8b. Session is rebound to current client config');
+
+{
+  const cfg = makeConfig();
+  const deps = makeDeps({
+    config: cfg,
+    getSession: () => ({
+      cn: 'client.alice', fp: FP_LOWER, clientName: 'client.alice',
+      client: { role: 'admin', allowed_proxy: ['*'] },
+      cert: { subject: { CN: 'client.alice' } },
+    }),
+  });
+  cfg.clients['client.alice'].role = 'readonly';
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req());
+  ok('session uses current role instead of cached role', id?.client?.role === 'readonly');
+  ok('session keeps current policy object', id?.client === cfg.clients['client.alice']);
+}
+
+section('8c. Session is revoked when its client or certificate is revoked');
+
+{
+  const cfg = makeConfig();
+  const session = {
+    cn: 'client.alice', fp: FP_LOWER, clientName: 'client.alice',
+    client: cfg.clients['client.alice'], cert: { subject: { CN: 'client.alice' } },
+  };
+  const deps = makeDeps({ config: cfg, getSession: () => session });
+  const r = createIdentityResolver(deps);
+  delete cfg.clients['client.alice'];
+  ok('deleted client invalidates session', r.getIdentity(req()) === null);
+
+  const cfg2 = makeConfig();
+  const deps2 = makeDeps({ config: cfg2, getSession: () => session });
+  const r2 = createIdentityResolver(deps2);
+  cfg2.clients['client.alice'].cert_fingerprint_sha256 = PROXY_FP;
+  ok('rotated certificate invalidates certificate-bound session', r2.getIdentity(req()) === null);
+  ok('revocation is audited', deps2.auditEvents.some(e => e.reason === 'session_certificate_revoked'));
+}
+
 section('9. mTLS-header (nginx forwarded, SUCCESS)');
 
 {

@@ -656,6 +656,38 @@ assert.equal(unsafeOutputResult.state, 'FAILED');
 assert.deepEqual(unsafeOutputResult.error, { code: 'unsafe_result' });
 assert.equal(unsafeOutputResult.result, undefined, 'credential-like executor output is never retained');
 
+const signingKeyTool = {
+  ...registry.findByName('broker.tools.inspect', '1.0.0'),
+  output_schema: {
+    ...registry.findByName('broker.tools.inspect', '1.0.0').output_schema,
+    properties: {
+      ...registry.findByName('broker.tools.inspect', '1.0.0').output_schema.properties,
+      signing_key: { type: 'string' },
+    },
+  },
+};
+const signingKeyOutputBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === signingKeyTool.name && version === signingKeyTool.version
+        ? structuredClone(signingKeyTool) : null;
+    },
+  },
+  authorize,
+  approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => ({
+    name: 'safe-looking-result', version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect',
+    risk_level: 'LOW', agent_execution: true, signing_key: 'credential-canary',
+  })]]),
+});
+const signingKeyOutputTask = await signingKeyOutputBroker.create(human, {
+  ...lowInput, idempotency_key: 'unsafe-signing-key-task1',
+});
+const signingKeyOutput = await signingKeyOutputBroker.run(human, signingKeyOutputTask.id);
+assert.equal(signingKeyOutput.state, 'FAILED');
+assert.deepEqual(signingKeyOutput.error, { code: 'unsafe_result' });
+assert.equal(signingKeyOutput.result, undefined, 'signing key output is never retained');
+
 let auditedExecutionCalls = 0;
 const mandatoryAuditEvents = [];
 const auditFailureBroker = new AutomationTaskBroker({

@@ -62,6 +62,16 @@ ok('secret scope needs explicit secret allowlist', canResolveSecret({ scopes: ['
 ok('secret allowlist grants exact secret', canResolveSecret({ scopes: ['secrets:resolve'], allowed_secrets: ['token'] }, 'token') === true);
 ok('service scope needs explicit service allowlist', canProxyService({ scopes: ['services:proxy'], allowed_services: [] }, 'github') === false);
 ok('service allowlist grants exact service', canProxyService({ scopes: ['services:proxy'], allowed_services: ['github'] }, 'github') === true);
+let rejectedStringScopes = false;
+try { generateApiKey('bad-scopes', 'client-1', { scopes: 'secrets:resolve' }); } catch (error) {
+  rejectedStringScopes = /scopes must be an array/.test(error.message);
+}
+ok('string scopes cannot use substring matching', rejectedStringScopes);
+let rejectedStringChildScopes = false;
+try { generateApiKey('bad-child-scopes', 'client-1', { child_scopes: 'services:proxy' }); } catch (error) {
+  rejectedStringChildScopes = /child_scopes must be an array/.test(error.message);
+}
+ok('string child scopes are rejected', rejectedStringChildScopes);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');

@@ -82,6 +82,16 @@ function genRandomBase62(len) {
  * @returns {{ id, secret, fingerprint, key_obj }}
  */
 export function generateApiKey(name, client, opts = {}) {
+  const scopes = opts.scopes === undefined
+    ? (opts.is_master ? MASTER_KEY_SCOPES : DEFAULT_CHILD_SCOPES)
+    : opts.scopes;
+  const childScopes = opts.child_scopes === undefined ? DEFAULT_CHILD_SCOPES : opts.child_scopes;
+  if (!Array.isArray(scopes) || scopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
+    throw new TypeError('API key scopes must be an array of non-empty strings');
+  }
+  if (!Array.isArray(childScopes) || childScopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
+    throw new TypeError('API key child_scopes must be an array of non-empty strings');
+  }
   const random = genRandomBase62(KEY_RANDOM_LEN);
   const secret = `${KEY_PREFIX}_${ENV}_${random}`;
   const fingerprint = createHash('sha256').update(secret).digest('hex');
@@ -96,7 +106,7 @@ export function generateApiKey(name, client, opts = {}) {
     id,
     name: name || 'unnamed',
     client,  // 归属的 client name
-    scopes: opts.scopes || (opts.is_master ? MASTER_KEY_SCOPES : DEFAULT_CHILD_SCOPES),
+    scopes,
     allowed_secrets: opts.allowed_secrets || [],
     allowed_services: opts.allowed_services || [],
     allowed_operations: opts.allowed_operations || [],
@@ -116,7 +126,7 @@ export function generateApiKey(name, client, opts = {}) {
     is_master: !!opts.is_master,
     can_create_child: !!opts.is_master,  // 只能 master 创建 child
     default_child_ttl_seconds: opts.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS,
-    child_scopes: opts.child_scopes || DEFAULT_CHILD_SCOPES,
+    child_scopes: childScopes,
     parent_master_id: opts.parent_master_id || null,  // 子 key 记录归属 master
   };
   return { id, secret, fingerprint, key_obj };

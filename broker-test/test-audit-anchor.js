@@ -81,6 +81,22 @@ assert.equal(
   }).sequence,
   2,
 );
+assert.equal(
+  verifyAuditAnchorEnvelope(first, {
+    chainProof: {
+      files: 4,
+      count: 43,
+      lastHash: nextChainState.lastHash,
+      anchoredEventCount: first.payload.event_count,
+      hashAtAnchor: first.payload.chain_head,
+      filesAtAnchor: first.payload.file_count,
+    },
+    trustedKeyIds: new Set([keyId]),
+    verifySignature: verifier,
+  }).sequence,
+  1,
+  'a retained anchor verifies after later audit events and files are appended',
+);
 
 assert.throws(
   () => verifyAuditAnchorEnvelope(second, {
@@ -100,6 +116,45 @@ assert.throws(
   }),
   expectCode('chain_state_mismatch'),
   'complete local-chain deletion must not satisfy an external signed anchor',
+);
+assert.throws(
+  () => verifyAuditAnchorEnvelope(first, {
+    chainProof: {
+      files: 3,
+      count: first.payload.event_count,
+      lastHash: first.payload.chain_head,
+      anchoredEventCount: first.payload.event_count,
+      hashAtAnchor: 'c'.repeat(64),
+      filesAtAnchor: first.payload.file_count,
+    },
+    trustedKeyIds: new Set([keyId]),
+    verifySignature: verifier,
+  }),
+  expectCode('chain_state_mismatch'),
+  'a historical chain-head mismatch fails even when the event count is retained',
+);
+assert.throws(
+  () => verifyAuditAnchorEnvelope(first, {
+    chainState,
+    chainProof: {
+      files: 3, count: 42, lastHash: first.payload.chain_head,
+      anchoredEventCount: 42, hashAtAnchor: first.payload.chain_head, filesAtAnchor: 3,
+    },
+    trustedKeyIds: new Set([keyId]),
+    verifySignature: verifier,
+  }),
+  expectCode('invalid_chain_state'),
+);
+assert.throws(
+  () => verifyAuditAnchorEnvelope(first, {
+    chainProof: {
+      files: 0, count: 0, lastHash: GENESIS_HASH,
+      anchoredEventCount: 1, hashAtAnchor: null, filesAtAnchor: null,
+    },
+    trustedKeyIds: new Set([keyId]),
+    verifySignature: verifier,
+  }),
+  expectCode('invalid_chain_state'),
 );
 assert.throws(
   () => verifyAuditAnchorEnvelope(first, {
@@ -226,6 +281,12 @@ assert.throws(
 );
 assert.throws(
   () => createAuditAnchorRequest({ ...chainState, lastHash: GENESIS_HASH }, {
+    streamId: 'broker-production', sequence: 1,
+  }),
+  expectCode('invalid_chain_state'),
+);
+assert.throws(
+  () => createAuditAnchorRequest({ files: 1, count: 0, lastHash: GENESIS_HASH }, {
     streamId: 'broker-production', sequence: 1,
   }),
   expectCode('invalid_chain_state'),

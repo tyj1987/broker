@@ -62,6 +62,12 @@ backwards, or the restored local chain state differs from the signed head. An
 externally retained envelope can therefore detect an exact recovery that is
 missing a valid suffix or the complete local chain.
 
+`loadAuditChainProofSync` also resolves the hash and file count at a retained
+anchor's historical event count after newer files and events have been
+appended. Verification therefore does not require stopping the audit stream at
+the anchor boundary. A missing prefix, deleted suffix that crosses the retained
+count, or mismatched historical head still fails closed.
+
 Run the protocol and chain tests together:
 
 ```bash

@@ -79,6 +79,7 @@ export {
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainProofSync,
   loadAuditChainStateSync,
   GENESIS_HASH,
 } from './audit-hash-chain.js';

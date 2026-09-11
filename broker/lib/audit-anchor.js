@@ -68,10 +68,40 @@ function validateChainState(state) {
     !Number.isSafeInteger(state.count) ||
     state.count < 0 ||
     !HASH_RE.test(state.lastHash || '') ||
+    (state.count === 0 && state.files !== 0) ||
+    (state.count > 0 && state.files < 1) ||
     (state.count === 0 && state.lastHash !== GENESIS_HASH) ||
     (state.count > 0 && state.lastHash === GENESIS_HASH)
   ) {
     fail('invalid_chain_state', 'audit chain state is invalid');
+  }
+}
+
+function validateChainProof(proof) {
+  if (
+    !proof ||
+    typeof proof !== 'object' ||
+    Array.isArray(proof) ||
+    !Number.isSafeInteger(proof.files) ||
+    proof.files < 0 ||
+    !Number.isSafeInteger(proof.count) ||
+    proof.count < 0 ||
+    !HASH_RE.test(proof.lastHash || '') ||
+    !Number.isSafeInteger(proof.anchoredEventCount) ||
+    proof.anchoredEventCount < 0 ||
+    proof.anchoredEventCount > proof.count ||
+    !HASH_RE.test(proof.hashAtAnchor || '') ||
+    !Number.isSafeInteger(proof.filesAtAnchor) ||
+    proof.filesAtAnchor < 0 ||
+    proof.filesAtAnchor > proof.files ||
+    (proof.count === 0 && proof.lastHash !== GENESIS_HASH) ||
+    (proof.count > 0 && proof.lastHash === GENESIS_HASH) ||
+    (proof.anchoredEventCount === 0 &&
+      (proof.hashAtAnchor !== GENESIS_HASH || proof.filesAtAnchor !== 0)) ||
+    (proof.anchoredEventCount > 0 &&
+      (proof.hashAtAnchor === GENESIS_HASH || proof.filesAtAnchor < 1))
+  ) {
+    fail('invalid_chain_state', 'audit chain proof is invalid');
   }
 }
 
@@ -90,8 +120,10 @@ function validatePayload(payload) {
     !Number.isSafeInteger(payload.file_count) ||
     payload.file_count < 0 ||
     !HASH_RE.test(payload.previous_anchor_digest || '') ||
-    (payload.event_count === 0 && payload.chain_head !== GENESIS_HASH) ||
-    (payload.event_count > 0 && payload.chain_head === GENESIS_HASH) ||
+    (payload.event_count === 0 &&
+      (payload.chain_head !== GENESIS_HASH || payload.file_count !== 0)) ||
+    (payload.event_count > 0 &&
+      (payload.chain_head === GENESIS_HASH || payload.file_count < 1)) ||
     (payload.sequence === 1 && payload.previous_anchor_digest !== GENESIS_HASH) ||
     (payload.sequence > 1 && payload.previous_anchor_digest === GENESIS_HASH)
   ) {
@@ -220,7 +252,8 @@ function validatePreviousAnchor(envelope, previousEnvelope) {
 export function verifyAuditAnchorEnvelope(
   envelope,
   {
-    chainState,
+    chainState = null,
+    chainProof = null,
     previousEnvelope = null,
     trustedKeyIds,
     revokedKeyIds = new Set(),
@@ -228,7 +261,11 @@ export function verifyAuditAnchorEnvelope(
   } = {},
 ) {
   validateEnvelope(envelope);
-  validateChainState(chainState);
+  if ((chainState === null) === (chainProof === null)) {
+    fail('invalid_chain_state', 'exactly one audit chain verification input is required');
+  }
+  if (chainState !== null) validateChainState(chainState);
+  else validateChainProof(chainProof);
   if (!(trustedKeyIds instanceof Set) || trustedKeyIds.size === 0) {
     fail('trust_unavailable', 'trusted audit anchor signing keys are unavailable');
   }
@@ -269,11 +306,14 @@ export function verifyAuditAnchorEnvelope(
   }
   if (verified !== true) fail('signature_invalid', 'audit anchor signature verification failed');
   validatePreviousAnchor(envelope, previousEnvelope);
-  if (
-    envelope.payload.chain_head !== chainState.lastHash ||
-    envelope.payload.event_count !== chainState.count ||
-    envelope.payload.file_count !== chainState.files
-  ) {
+  const chainMatches = chainState !== null
+    ? envelope.payload.chain_head === chainState.lastHash
+      && envelope.payload.event_count === chainState.count
+      && envelope.payload.file_count === chainState.files
+    : envelope.payload.event_count === chainProof.anchoredEventCount
+      && envelope.payload.chain_head === chainProof.hashAtAnchor
+      && envelope.payload.file_count === chainProof.filesAtAnchor;
+  if (!chainMatches) {
     fail('chain_state_mismatch', 'local audit chain does not match the signed anchor');
   }
   return {

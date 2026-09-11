@@ -188,6 +188,19 @@ function normalizeExpiry(creds) {
   throw new Error('workload identity response missing expiration');
 }
 
+function validateCredentialMaterial(creds, provider) {
+  if (typeof creds.access_key_id !== 'string' || creds.access_key_id.length === 0) {
+    throw new Error(`${provider} workload identity response missing access key id`);
+  }
+  if (provider !== 'gcp' && (typeof creds.access_key_secret !== 'string' || creds.access_key_secret.length === 0)) {
+    throw new Error(`${provider} workload identity response missing access key secret`);
+  }
+  if (typeof creds.security_token !== 'string' || creds.security_token.length === 0) {
+    throw new Error(`${provider} workload identity response missing security token`);
+  }
+  return creds;
+}
+
 function cacheKey(provider, opts) {
   if (provider === 'gcp') return `gcp:${opts.audience}`;
   return `${provider}:${opts.roleArn}`;
@@ -230,7 +243,7 @@ export async function getCredentials(provider, oidcToken, opts = {}, deps = {}) 
   const handler = PROVIDER_HANDLERS[provider];
   const promise = (async () => {
     const credsRaw = await handler(oidcToken, opts, http);
-    const creds = normalizeExpiry(credsRaw);
+    const creds = validateCredentialMaterial(normalizeExpiry(credsRaw), provider);
     TOKEN_CACHE.set(key, { creds, expires_at_ms: creds.expires_at_ms });
     return creds;
   })();

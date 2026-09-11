@@ -161,6 +161,23 @@ section('aws provider');
     ok('aws: malformed expiration fails closed', threw);
     _resetForTests();
   }
+  let missingMaterial = false;
+  try {
+    await getCredentials('aws', 'tok', { roleArn: 'arn:aws:iam::1:role/x' }, {
+      httpClient: async () => ({
+        status: 200,
+        body: JSON.stringify({
+          AssumeRoleWithWebIdentityResult: {
+            Credentials: {
+              SecretAccessKey: 'SECRET', SessionToken: 'TOKEN',
+              Expiration: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          },
+        }),
+      }),
+    });
+  } catch (e) { missingMaterial = /missing access key id/.test(e.message); }
+  ok('aws: incomplete credential material fails closed', missingMaterial);
 }
 
 // ============================================================
@@ -337,8 +354,8 @@ section('listCache');
           AssumeRoleWithWebIdentityResult: {
             Credentials: {
               AccessKeyId: 'SHOULD-NOT-LEAK',
-              AccessKeySecret: 'SHOULD-NOT-LEAK',
-              SecurityToken: 'SHOULD-NOT-LEAK',
+              SecretAccessKey: 'SHOULD-NOT-LEAK',
+              SessionToken: 'SHOULD-NOT-LEAK',
               Expiration: new Date(Date.now() + 3600_000).toISOString(),
             },
           },

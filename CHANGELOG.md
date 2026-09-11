@@ -7,6 +7,51 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.7.0] - 2026-09-11
+
+### Added (Test coverage)
+
+Six new unit-test files covering previously untested modules (REVIEW.md §5 P1
++ lib/* gaps). All wired into `npm run test:v4`:
+
+| File | Module | Cases |
+|---|---|---|
+| `broker-test/test-metrics.js` | `broker/lib/metrics.js` | 40 |
+| `broker-test/test-session.js` | `broker/lib/session.js` | 28 |
+| `broker-test/test-cron-tasks.js` | `broker/cron-tasks.js` | 14 |
+| `broker-test/test-http.js` | `broker/lib/http.js` | 25 |
+| `broker-test/test-risk-score.js` | `broker/lib/risk-score.js` | 26 |
+| `broker-test/test-sops.js` | `broker/lib/sops.js` | 5 |
+| **Total new cases** | | **138** |
+
+Coverage focus:
+- **test-metrics.js**: inc / getCounter (incl. label escaping), observeMs
+  (cumulative histogram semantics), prometheusText format (gauge/counter/
+  histogram/+/Inf), _resetMetricsForTests, timedRequest (success + error).
+- **test-session.js**: makeSession / getSession (header + cookie), sliding
+  expiration, deleteSession idempotency, login lockout thresholds and
+  per-key isolation, post-lockout counter reset.
+- **test-cron-tasks.js**: registerCron / listCron, fireNow (success +
+  propagation + unknown id), startCronLoop / stopCronLoop idempotency.
+- **test-http.js**: send (JSON / text / _kind / noSecurityHeaders /
+  exposeVersion), readBody (JSON / raw / empty / >1MB rejected), jsonError.
+- **test-risk-score.js**: all 5 dimensions (unusual_ip / stale_account /
+  sensitive_action / unusual_hour / user_agent_changed), boundary at 100,
+  SENSITIVE_ACTIONS set membership.
+- **test-sops.js**: file-not-found rejection, spawn failure when binary
+  missing, age key public-key parsing.
+
+### Notes
+
+- Full SOPS round-trip (encrypt → decrypt → match) requires the `sops`
+  binary on PATH and a real age key. Not included in unit tests; covered
+  by `npm run test:modular` in CI which assumes the build environment.
+- `test-shutdown.js`, `test-config-validate.js`, `test-signing.js`
+  deferred to v4.7.x patches to keep this commit focused on the highest-
+  impact gaps.
+
+---
+
 ## [4.6.0] - 2026-09-11
 
 ### Added (Deployment)

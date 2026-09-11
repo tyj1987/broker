@@ -88,6 +88,17 @@ for (const [name, change] of denied) {
 }
 assert.equal(evaluateOperationPolicy(config, base, 2_001).allow, false, 'expired approval');
 assert.equal(evaluateOperationPolicy(config, {
+  ...base,
+  identity: {
+    ...base.identity,
+    context: {
+      ...context,
+      clientName: undefined,
+      approvalGrants: [{ ...context.approvalGrants[0], approved_by: 'automation-1' }],
+    },
+  },
+}, 1_000).reason, 'approval_required', 'approval cannot be self-approved when clientName metadata is absent');
+assert.equal(evaluateOperationPolicy(config, {
   ...base, identity: { ...base.identity, context: { ...context, approvalGrants: [] } },
 }, 1_000, { ignoreApproval: true }).allow, true, 'approval preflight skips only the approval grant');
 assert.equal(evaluateOperationPolicy(config, {

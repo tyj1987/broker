@@ -7,6 +7,20 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.4.0] - 2026-09-09
+
+### Added
+
+- `GET /api/v1/ws-stats` admin endpoint (documented in `docs/WEBSOCKET.md:150` since v4.1, but never implemented). Returns `subscriber_count`, `events` (registered event types), `event_counts` (per-event subscriber count), and `subscribers` (full per-client metadata: id, events, filter, last_seen). Admin-only; non-admin gets 403.
+- Backed by `broker/lib/ws.js#getStats()` and `listSubscribers()`, which already exposed the data — `server.js` just didn't wire them into an HTTP route before.
+
+### Notes
+
+- The admin dashboard "TODO list" panel (`broker/dashboard/home.js` `renderTodo()`) was already implemented (rotation reminders, anomaly count, stale clients). The header comment at `home.js:5` describing it is not stale, just describes what's rendered. No code change required.
+- `lib/ws.js` itself remains dormant in production (the WebSocket upgrade handler `attachWebSocket` is not called from `server.js`). The new endpoint reports an empty subscriber list until a future commit wires the WebSocket upgrade path. Documenting this gap here so it isn't mistaken for a regression.
+
+---
+
 ## [4.3.0] - 2026-09-09
 
 ### Refactor

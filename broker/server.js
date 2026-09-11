@@ -72,6 +72,7 @@ import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
 import { createAuditRoutes } from './routes/audit.js';
+import { getStats, listSubscribers } from './lib/ws.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -2692,6 +2693,26 @@ async function handle(req, res) {
     const deleted = clearAuditLogs();
     audit({ action: 'audit_cleared', cn: ctx.cn, fp: ctx.fp, status: 'ok', deleted: deleted.length });
     return send(res, 200, { ok: true, deleted });
+  }
+
+  // ----- GET /api/v1/ws-stats (v4.4.0: admin inspect of WS subscribers) -----
+  // Returns subscriber count + per-event count + (admin only) full subscriber list.
+  // docs/WEBSOCKET.md:150 — was a documented-but-unimplemented endpoint.
+  if (m === 'GET' && p === '/api/v1/ws-stats') {
+    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    const stats = getStats();
+    // 也返回每事件订阅计数,便于 dashboard 看 alert 流是否有人在听
+    const eventCounts = {};
+    for (const e of stats.events) {
+      eventCounts[e] = (SUBS_BY_EVENT.get(e) || new Set()).size;
+    }
+    return send(res, 200, {
+      subscriber_count: stats.subscriberCount,
+      events: stats.events,
+      event_counts: eventCounts,
+      subscribers: listSubscribers(),
+      version: BROKER_VERSION,
+    });
   }
 
   // ----- GET /api/v1/admin/audit/stream (SSE) -----

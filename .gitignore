@@ -165,3 +165,16 @@ broker/**/*.bak*
 broker/server.js.bak*
 broker/server.js.patch.*
 **/.pytest-tmp/
+
+# v4.9.x: 隔离子项目 / 无关产物 (用户工作文件,非 broker 产物)
+# Hydropower finance plan + promo videos + media pipeline scratch
+水电站*.md
+水电站*.xlsx
+lease_schedule_hydropower*.py
+videos/
+docs/MEDIA/
+broker/docs/openapi.yaml
+sdk/vscode/out/
+# CI / ECS 临时扫描脚本(不进库)
+tmp-ecs-pki-scan.sh
+tmp-pki-scan.ps1

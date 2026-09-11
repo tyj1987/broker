@@ -885,6 +885,17 @@ assert.throws(
 );
 assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'unsafe result restore is atomic');
 
+const valueLeakResultState = workerBroker.exportState();
+valueLeakResultState.operations.find((operation) => operation.status === 'completed').result = {
+  status: `gh${'p_'}${'C'.repeat(24)}`,
+};
+assert.throws(
+  () => workerBroker.restoreState(valueLeakResultState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'restored operation results cannot hide credential values in ordinary fields',
+);
+assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'value-leak restore is atomic');
+
 let failoverDeviceId;
 const failoverBroker = new OperationBroker({
   now: () => now,

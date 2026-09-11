@@ -319,6 +319,9 @@ export class OperationBroker {
         if (source.result !== null) {
           try {
             assertSafeResult(source.result);
+            if (canonicalJson(redactDeep(source.result)) !== canonicalJson(source.result)) {
+              throw new Error('unsafe');
+            }
           } catch {
             throw stateCorrupt();
           }

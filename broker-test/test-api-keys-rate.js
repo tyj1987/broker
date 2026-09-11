@@ -4,6 +4,8 @@ import {
   generateApiKey,
   generateMasterKey,
   createChildKey,
+  findApiKey,
+  isExpired,
   normalizeRateLimit,
   RATE_LIMIT_PRESETS,
 } from '../broker/api-keys.js';
@@ -42,6 +44,16 @@ section('presets');
 ok('preset 100/hour present', !!RATE_LIMIT_PRESETS['100/hour']);
 ok('preset 1000/hour present', !!RATE_LIMIT_PRESETS['1000/hour']);
 ok('preset unlimited present', !!RATE_LIMIT_PRESETS['unlimited']);
+
+section('expiry fail-closed');
+const expiryKey = generateApiKey('expiry-check', 'client-1', { ttl_ms: 60_000 });
+ok('valid key is accepted', findApiKey([expiryKey.key_obj], expiryKey.secret)?.id === expiryKey.id);
+ok('valid key is not expired', isExpired(expiryKey.key_obj) === false);
+ok('missing expiry is expired', isExpired({}) === true);
+ok('malformed expiry is expired', isExpired({ expires_at: 'not-a-date' }) === true);
+ok('malformed expiry cannot authenticate', findApiKey([
+  { ...expiryKey.key_obj, expires_at: 'not-a-date' },
+], expiryKey.secret) === null);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');

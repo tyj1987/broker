@@ -279,7 +279,7 @@ export function findApiKey(cfgKeys, secret) {
   const k = cfgKeys.find(x => x.fingerprint_sha256 === fp);
   if (!k) return null;
   if (k.revoked_at) return null;
-  if (k.expires_at && new Date(k.expires_at) < new Date()) return null;
+  if (isExpired(k)) return null;
   return k;
 }
 
@@ -308,9 +308,10 @@ export function canProxyService(k, serviceName) {
 /**
  * 检查 API Key 是否过期
  */
-export function isExpired(k) {
-  if (!k.expires_at) return false;
-  return new Date(k.expires_at) < new Date();
+export function isExpired(k, now = Date.now()) {
+  if (!k || typeof k.expires_at !== 'string' || k.expires_at.length === 0) return true;
+  const expiresAt = Date.parse(k.expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt <= now;
 }
 
 /**

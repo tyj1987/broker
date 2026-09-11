@@ -710,6 +710,13 @@ function normalizeClientConfig(body) {
   return out;
 }
 
+function validateClientConfigMutation(candidate) {
+  const result = validateBrokerConfig(candidate, {
+    allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production',
+  });
+  if (!result.ok) throw new Error(formatValidationReport(result));
+}
+
 // Server-side last-seen timestamps. Not part of broker.yaml because it
 // changes on every connect (would force a write per request). Map name → ms.
 const LAST_SEEN = new Map();
@@ -2716,6 +2723,15 @@ async function handle(req, res) {
     }
     let cfg;
     try { cfg = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
+    try {
+      validateClientConfigMutation({
+        ...CONFIG,
+        clients: { ...CONFIG.clients, [name]: cfg },
+      });
+    } catch (e) {
+      audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'invalid_config' });
+      return jsonError(res, 400, 'Invalid client configuration');
+    }
     const prev = CONFIG.clients[name];
     CONFIG.clients[name] = cfg;
     try {
@@ -2744,6 +2760,15 @@ async function handle(req, res) {
     const next = { ...existing, ...patch };
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'password') && !patch.password) {
       delete next.password;
+    }
+    try {
+      validateClientConfigMutation({
+        ...CONFIG,
+        clients: { ...CONFIG.clients, [name]: next },
+      });
+    } catch (e) {
+      audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'invalid_config' });
+      return jsonError(res, 400, 'Invalid client configuration');
     }
     CONFIG.clients[name] = next;
     try {

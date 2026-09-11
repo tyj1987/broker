@@ -104,6 +104,28 @@ await assert.rejects(
   (error) => error instanceof V2Error && error.code === 'forbidden',
 );
 
+await assert.rejects(
+  broker.createOperation({
+    name: 'owner-1',
+    context: {
+      via: 'api_key',
+      apiKey: {
+        scopes: ['operations:execute'],
+        allowed_services: ['aliyun'],
+        allowed_operations: ['aliyun:other.operation'],
+        allowed_accounts: ['primary'],
+        allowed_environments: ['production'],
+        allowed_resources: ['account.aliyun.com'],
+      },
+    },
+  }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { resource_ref: 'account.aliyun.com' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'forbidden',
+  'a delegated key cannot create an operation outside its allowlist',
+);
+
 const rollbackOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
   operation_id: 'console.login',

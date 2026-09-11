@@ -650,6 +650,14 @@ export class OperationBroker {
     const environment = input?.environment;
     if (!ENVIRONMENTS.has(environment)) throw new V2Error('invalid_request', 'unsupported environment');
     const typedParameters = requireObject(input?.typed_parameters || {}, 'typed_parameters');
+    // Creation must enforce the same delegated capability boundary as reads.
+    // Otherwise a bearer key could create an out-of-scope browser/OTP
+    // operation and let a separately authenticated worker execute it.
+    if (!apiKeyAllowsOperation(identity, {
+      provider, operationId, accountRef, environment, typedParameters,
+    })) {
+      throw new V2Error('forbidden', 'API key is not authorized for this operation', 403);
+    }
     const decision = await this.authorize({ identity, provider, operationId, accountRef, environment, typedParameters });
     if (!decision?.allow) throw new V2Error('forbidden', 'operation is not allowed', 403);
     this.prune();

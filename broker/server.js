@@ -1049,6 +1049,11 @@ function getClientContext(socket) {
 function canResolve(ctx, secretName) {
   if (!ctx.client) return false;
   if (ctx.client.security_profile === 'strict') return false;
+  // A Bearer/API-key request is bounded by the key capability even when its
+  // owner is an admin client.  Never let the legacy client allowlist widen it.
+  if (ctx.via === 'api_key' || ctx.apiKey) {
+    return canResolveSecret(ctx.apiKey, secretName);
+  }
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_resolve || [];
   return checkPathAllowed(allow, secretName);

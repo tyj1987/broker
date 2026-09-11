@@ -278,6 +278,30 @@ section('12. Fall-through (unhandled path returns false)');
   ok('no response sent (statusCode 0)', res.statusCode === 0);
 }
 
+section('13. Security: API-key secret capability bounds listing and resolve');
+
+{
+  const keyCtx = {
+    via: 'api_key',
+    apiKey: { scopes: ['secrets:resolve'], allowed_secrets: ['GITHUB_PAT'] },
+    client: { role: 'admin', allowed_resolve: ['*'] },
+    cn: 'apikey:test', fp: 'K',
+  };
+  const deps = makeDeps({
+    canResolve: (ctx, name) => ctx.via === 'api_key'
+      ? ctx.apiKey?.scopes?.includes('secrets:resolve') && ctx.apiKey.allowed_secrets?.includes(name)
+      : true,
+  });
+  const r = createReadApiRoutes(deps);
+  const listRes = fakeRes();
+  await r.dispatch(req(), listRes, { method: 'GET', pathname: '/api/v1/secrets' }, keyCtx);
+  ok('API-key listing only exposes allowed secret', listRes.body?.secrets?.length === 1 && listRes.body.secrets[0].name === 'GITHUB_PAT');
+  const deniedRes = fakeRes();
+  await r.dispatch(req({ method: 'POST', body: { name: 'ALIYUN_KEY' } }), deniedRes,
+    { method: 'POST', pathname: '/api/v1/secrets/resolve' }, keyCtx);
+  ok('API-key resolve outside allowlist denied', deniedRes.statusCode === 403);
+}
+
 // ---------- summary ----------
 
 console.log(`\n=== ${pass} pass / ${fail} fail ===`);

@@ -70,12 +70,20 @@ export function createReadApiRoutes(deps) {
 
   function handleSecrets(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/secrets') return false;
-    const allow = ctx.client.allowed_resolve || [];
     const all = Array.from(deps.SECRET_CACHE.keys());
     let visible;
-    if (ctx.client.role === 'admin') visible = all;
-    else if (allow.includes('.*') || allow.includes('*')) visible = all;
-    else visible = all.filter(n => deps.checkPathAllowed(allow, n));
+    // Use the same authorization predicate as resolve itself.  This prevents
+    // metadata enumeration from exposing secrets outside a child API key's
+    // explicit allowed_secrets boundary.
+    if (ctx.client.role === 'admin' && ctx.via !== 'api_key' && !ctx.apiKey) {
+      visible = all;
+    } else if (ctx.via === 'api_key' || ctx.apiKey) {
+      visible = all.filter(n => deps.canResolve(ctx, n));
+    } else {
+      const allow = ctx.client.allowed_resolve || [];
+      if (allow.includes('.*') || allow.includes('*')) visible = all;
+      else visible = all.filter(n => deps.checkPathAllowed(allow, n));
+    }
     deps.audit({ action: 'list', cn: ctx.cn, fp: ctx.fp, count: visible.length });
     if (ctx.client.role === 'admin') {
       const out = visible.map(name => {

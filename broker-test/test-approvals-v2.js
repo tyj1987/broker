@@ -477,7 +477,7 @@ assert.throws(
 );
 expiryCommitMode = 'pass';
 assert.equal(
-  expiryCommitBroker.list(requester).find((item) => item.id === expiryRollback.id).status,
+  expiryCommitBroker.records.get(expiryRollback.id).status,
   'REQUESTED',
   'a failed expiry commit restores the approval state for a safe retry',
 );
@@ -509,13 +509,34 @@ assert.throws(
 );
 expiryCommitMode = 'pass';
 assert.equal(
-  expiryCommitBroker.list(requester).find((item) => item.id === expiryAsync.id).status,
+  expiryCommitBroker.records.get(expiryAsync.id).status,
   'REQUESTED',
   'an async expiry handler is rejected and rolled back',
 );
 assert.throws(
   () => new ApprovalBroker({ onExpire: null }),
   expectCode('checkpoint_invalid'),
+);
+
+const expiryListed = expiryCommitBroker.create(requester, input);
+now += 5 * 60_000 + 1;
+assert.equal(
+  expiryCommitBroker.list(requester).find((item) => item.id === expiryListed.id).status,
+  'EXPIRED',
+  'listing materializes and commits expiry before returning stale state',
+);
+assert.equal(expiryCommits.at(-1).identity, requester.name);
+
+const expiryCancelled = expiryCommitBroker.create(requester, input);
+now += 5 * 60_000 + 1;
+assert.throws(
+  () => expiryCommitBroker.cancel(requester, expiryCancelled.id),
+  expectCode('approval_expired'),
+  'cancellation cannot overwrite an expired approval terminal state',
+);
+assert.equal(
+  expiryCommitBroker.list(requester).find((item) => item.id === expiryCancelled.id).status,
+  'EXPIRED',
 );
 
 const cancelled = broker.create(requester, input);

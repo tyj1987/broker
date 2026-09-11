@@ -406,7 +406,10 @@ export class ApprovalBroker {
           (record.requester === identity.name ||
             (canReviewOthers && record.approvalRoles.includes(role))),
       )
-      .map(publicApproval);
+      .map((record) => {
+        this.expireIfNeeded(record, identity);
+        return publicApproval(record);
+      });
   }
 
   claimFor(identity, input) {
@@ -527,6 +530,7 @@ export class ApprovalBroker {
     if (!apiKeyAllowsApproval(identity, record)) {
       throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
     }
+    this.getActive(id, identity);
     if (!['REQUESTED', 'APPROVED'].includes(record.status)) {
       throw new V2Error('invalid_state', 'approval request cannot be cancelled', 409);
     }
@@ -588,6 +592,16 @@ export class ApprovalBroker {
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status))
       throw new V2Error('not_found', 'approval request not found', 404);
+    this.expireIfNeeded(record, identity);
+    if (record.status === 'EXPIRED')
+      throw new V2Error('approval_expired', 'approval request expired', 409);
+    if (['DENIED', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(record.status)) {
+      throw new V2Error('invalid_state', 'approval request is no longer active', 409);
+    }
+    return record;
+  }
+
+  expireIfNeeded(record, identity = null) {
     if (
       new Date(record.expiresAt).getTime() <= this.now() &&
       ['REQUESTED', 'APPROVED'].includes(record.status)
@@ -610,12 +624,6 @@ export class ApprovalBroker {
         throw error;
       }
     }
-    if (record.status === 'EXPIRED')
-      throw new V2Error('approval_expired', 'approval request expired', 409);
-    if (['DENIED', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(record.status)) {
-      throw new V2Error('invalid_state', 'approval request is no longer active', 409);
-    }
-    return record;
   }
 
   prune() {

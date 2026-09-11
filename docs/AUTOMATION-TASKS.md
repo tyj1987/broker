@@ -242,7 +242,8 @@ grant follows the same rule. The Broker writes a mandatory `v2_approval_expired`
 event and a synchronous control-plane checkpoint before returning
 `approval_expired`. A definite audit or checkpoint failure restores the prior
 approval state for retry; an indeterminate atomic replacement retains
-`EXPIRED` in memory and requires reconciliation.
+`EXPIRED` in memory and requires reconciliation. Listing approvals materializes
+the same durable terminal state, and cancellation cannot overwrite it.
 
 The operation component is included in every global checkpoint and shutdown
 checkpoint. Operation creation, device replay-nonce consumption, OTP receipt,

@@ -916,6 +916,52 @@ export class AutomationTaskBroker {
     this.prune();
   }
 
+  validateRestoredState(approvalSnapshot) {
+    if (!approvalSnapshot || typeof approvalSnapshot !== 'object' || Array.isArray(approvalSnapshot)
+      || !Array.isArray(approvalSnapshot.records)) {
+      throw stateCorrupt('approval state is unavailable for task binding validation');
+    }
+    const approvals = new Map();
+    for (const record of approvalSnapshot.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record) || !record.id
+        || approvals.has(record.id)) {
+        throw stateCorrupt('approval state contains duplicate or invalid records');
+      }
+      approvals.set(record.id, record);
+    }
+    const expectedStatuses = new Map([
+      ['PENDING_APPROVAL', new Set(['REQUESTED'])],
+      ['READY', new Set(['APPROVED', 'EXECUTING'])],
+      ['EXECUTING', new Set(['EXECUTING'])],
+      ['SUCCEEDED', new Set(['SUCCEEDED'])],
+      ['FAILED', new Set(['FAILED'])],
+      ['EXPIRED', new Set(['EXPIRED', 'FAILED', 'CANCELLED'])],
+      ['CANCELLED', new Set(['CANCELLED'])],
+    ]);
+    for (const task of this.tasks.values()) {
+      if (!task.approvalId) continue;
+      const approval = approvals.get(task.approvalId);
+      const request = {
+        provider: task.tool.provider,
+        operation_id: task.tool.operation_id,
+        account_ref: task.accountRef,
+        environment: task.environment,
+        typed_parameters: structuredClone(task.parameters),
+      };
+      const requestHash = hash(request);
+      if (!approval || approval.requester !== task.owner
+        || approval.provider !== request.provider
+        || approval.operationId !== request.operation_id
+        || approval.accountRef !== request.account_ref
+        || approval.environment !== request.environment
+        || approval.resourceRef !== task.parameters.resource_ref
+        || approval.requestHash !== requestHash
+        || !expectedStatuses.get(task.state)?.has(approval.status)) {
+        throw stateCorrupt('task approval binding is invalid');
+      }
+    }
+  }
+
   prune() {
     const cutoff = this.now() - 60 * 60_000;
     for (const [id, task] of this.tasks) if (TERMINAL.has(task.state) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);

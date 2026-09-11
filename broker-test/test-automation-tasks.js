@@ -294,6 +294,14 @@ const criticalInput = {
 const critical = await broker.create(human, criticalInput);
 assert.equal(critical.state, 'PENDING_APPROVAL');
 assert.equal(critical.risk_level, 'CRITICAL');
+broker.validateRestoredState(approvals.exportState());
+const orphanedApprovalState = approvals.exportState();
+orphanedApprovalState.records = orphanedApprovalState.records.filter((record) => record.id !== critical.approval_id);
+assert.throws(
+  () => broker.validateRestoredState(orphanedApprovalState),
+  expectCode('state_corrupt'),
+  'a task cannot be restored without its bound approval record',
+);
 const approver = (name) => ({ name, context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } } });
 approvals.decide(approver('admin-b'), critical.approval_id, 'approve');
 approvals.decide(approver('admin-c'), critical.approval_id, 'approve');

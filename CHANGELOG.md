@@ -18,9 +18,21 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
   - Empty `fields` → `skipped` (pickCredential returns primary=undefined, short-circuits before checkAliyun).
   - `access_key_secret` only (no AK) → `skipped` (same short-circuit, documents the unreachable misconfigured-branch from public API).
 
+### Perf
+
+- `server.js` audit hot-read path now uses an in-memory ring buffer (last 1000 events) per REVIEW.md Next#11. The disk JSONL scan was being re-run on every dashboard refresh.
+- Ring write happens inside `audit()` after the disk write; ring eviction is FIFO at 1000 capacity.
+- `readAuditFiltered({ client, service, action, status, since, until, limit })` short-circuits to ring when:
+  - no `service` filter,
+  - no `until` bound,
+  - `since` is null OR `since` is ≥ ring's oldest event timestamp,
+  - `limit` ≤ ring size.
+- Falls back to existing disk-scan code in all other cases.
+- Disk remains the source of truth; ring is a hot cache only. On broker restart, ring starts empty and re-populates from live `audit()` calls.
+
 ### Notes
 
-- The audit hot-read ring buffer (REVIEW.md Next#11) follows in a separate `perf` commit under the same v4.2.1 release.
+- Architectural cleanup that consolidates `server.js`'s inline audit module with `broker/lib/audit.js#createAudit` (which already had the ring buffer pattern) is **deferred** to v4.3.0 server.js extraction (REVIEW.md Next#6).
 
 ---
 

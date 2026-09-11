@@ -288,10 +288,10 @@ export function findApiKey(cfgKeys, secret) {
  */
 export function canResolveSecret(k, secretName) {
   if (!k || !k.scopes || !k.scopes.includes('secrets:resolve')) return false;
-  if (Array.isArray(k.allowed_secrets) && k.allowed_secrets.length > 0) {
-    if (!k.allowed_secrets.includes(secretName)) return false;
-  }
-  return true;
+  return Array.isArray(k.allowed_secrets)
+    && k.allowed_secrets.length > 0
+    && typeof secretName === 'string'
+    && k.allowed_secrets.includes(secretName);
 }
 
 /**
@@ -299,10 +299,10 @@ export function canResolveSecret(k, secretName) {
  */
 export function canProxyService(k, serviceName) {
   if (!k || !k.scopes || !k.scopes.includes('services:proxy')) return false;
-  if (Array.isArray(k.allowed_services) && k.allowed_services.length > 0) {
-    if (!k.allowed_services.includes(serviceName)) return false;
-  }
-  return true;
+  return Array.isArray(k.allowed_services)
+    && k.allowed_services.length > 0
+    && typeof serviceName === 'string'
+    && k.allowed_services.includes(serviceName);
 }
 
 /**

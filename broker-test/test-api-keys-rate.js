@@ -6,6 +6,8 @@ import {
   createChildKey,
   findApiKey,
   isExpired,
+  canResolveSecret,
+  canProxyService,
   normalizeRateLimit,
   RATE_LIMIT_PRESETS,
 } from '../broker/api-keys.js';
@@ -54,6 +56,12 @@ ok('malformed expiry is expired', isExpired({ expires_at: 'not-a-date' }) === tr
 ok('malformed expiry cannot authenticate', findApiKey([
   { ...expiryKey.key_obj, expires_at: 'not-a-date' },
 ], expiryKey.secret) === null);
+
+section('scope and allowlist fail-closed');
+ok('secret scope needs explicit secret allowlist', canResolveSecret({ scopes: ['secrets:resolve'], allowed_secrets: [] }, 'token') === false);
+ok('secret allowlist grants exact secret', canResolveSecret({ scopes: ['secrets:resolve'], allowed_secrets: ['token'] }, 'token') === true);
+ok('service scope needs explicit service allowlist', canProxyService({ scopes: ['services:proxy'], allowed_services: [] }, 'github') === false);
+ok('service allowlist grants exact service', canProxyService({ scopes: ['services:proxy'], allowed_services: ['github'] }, 'github') === true);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');

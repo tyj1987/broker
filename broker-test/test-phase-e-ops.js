@@ -49,6 +49,33 @@ console.log('=== validateBrokerConfig ===');
   });
   assert(good.ok === true && good.errors.length === 0, 'good config');
 
+  const validApiKey = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    api_keys: [{
+      id: 'key-1', client: 'admin', scopes: ['services:proxy'],
+      allowed_services: ['github'], rate_limit: { hour: 10 },
+      expires_at: '2026-09-12T12:00:00.000Z',
+      fingerprint_sha256: 'a'.repeat(64),
+    }],
+  });
+  assert(validApiKey.ok === true, 'valid persisted API key');
+
+  const malformedApiKeys = [
+    { id: 'key-1', client: 'admin', rate_limit: {} },
+    { id: 'key-2', client: 'admin', allowed_services: [''] },
+    { id: 'key-3', client: 'admin', expires_at: 'not-a-timestamp' },
+    { id: 'key-4', client: 'admin', fingerprint_sha256: 'short' },
+  ];
+  for (const [index, key] of malformedApiKeys.entries()) {
+    const result = validateBrokerConfig({ clients: { admin: { role: 'admin' } }, api_keys: [key] });
+    assert(result.ok === false, `malformed persisted API key ${index + 1} fails closed`);
+  }
+
+  const malformedClientRate = validateBrokerConfig({
+    clients: { admin: { role: 'admin', rate_limit: {} } },
+  });
+  assert(malformedClientRate.ok === false, 'malformed client rate limit fails closed');
+
   const providerAccounts = validateBrokerConfig({
     clients: {},
     provider_accounts: { github: {} },

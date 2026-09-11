@@ -121,13 +121,20 @@ export function validateTypedParameters(value, schema) {
   return { ok: true };
 }
 
-function hasApproval(ctx, provider, operationId, accountRef, now) {
-  return (ctx?.approvalGrants || []).some((grant) => grant
+function hasApproval(ctx, provider, operationId, accountRef, requiredApprovals, now) {
+  const approvers = new Set();
+  for (const grant of ctx?.approvalGrants || []) {
+    if (grant
     && grant.provider === provider
     && grant.operation_id === operationId
     && grant.account_ref === accountRef
     && grant.approved_by !== ctx.clientName
-    && Number(grant.expires_at_ms) > now);
+    && Number(grant.expires_at_ms) > now
+    && typeof grant.approved_by === 'string') {
+      approvers.add(grant.approved_by);
+    }
+  }
+  return approvers.size >= requiredApprovals;
 }
 
 export function evaluateOperationPolicy(config, request, now = Date.now(), options = {}) {
@@ -162,8 +169,12 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   if (Array.isArray(policy.resources) && policy.resources.length > 0 && !includes(policy.resources, resource)) {
     return deny('resource_denied');
   }
+  const requiredApprovals = policy.required_approvals === undefined ? 1 : policy.required_approvals;
+  if (!Number.isSafeInteger(requiredApprovals) || requiredApprovals < 1 || requiredApprovals > 10) {
+    return deny('approval_policy_invalid');
+  }
   if (policy.approval_required === true && options.ignoreApproval !== true
-    && !hasApproval(ctx, provider, operationId, accountRef, now)) {
+    && !hasApproval(ctx, provider, operationId, accountRef, requiredApprovals, now)) {
     return deny('approval_required');
   }
 

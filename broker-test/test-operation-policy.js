@@ -45,6 +45,26 @@ const base = {
 };
 
 assert.equal(evaluateOperationPolicy(config, base, 1_000).allow, true);
+const dualPolicy = { ...policy, required_approvals: 2 };
+const dualConfig = { operation_policies: { aliyun: { 'billing.read': dualPolicy } } };
+const dualContext = {
+  ...context,
+  approvalGrants: [
+    ...context.approvalGrants,
+    { ...context.approvalGrants[0], approved_by: 'reviewer-3' },
+  ],
+};
+assert.equal(evaluateOperationPolicy(dualConfig, {
+  ...base, identity: { ...base.identity, context: dualContext },
+}, 1_000).allow, true, 'all required independent approvals are required');
+assert.equal(evaluateOperationPolicy(dualConfig, base, 1_000).reason, 'approval_required');
+assert.equal(evaluateOperationPolicy(dualConfig, {
+  ...base,
+  identity: { ...base.identity, context: { ...context, approvalGrants: [
+    ...context.approvalGrants,
+    { ...context.approvalGrants[0] },
+  ] } },
+}, 1_000).reason, 'approval_required', 'duplicate approvers do not satisfy dual control');
 assert.equal(evaluateOperationPolicy(config, base, 1_000).executionMode, 'adapter');
 assert.equal(evaluateOperationPolicy({
   operation_policies: { aliyun: { 'billing.read': { ...policy, execution_mode: 'browser' } } },

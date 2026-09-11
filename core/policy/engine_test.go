@@ -61,6 +61,14 @@ func TestEvaluateFailsClosedForEveryDimension(t *testing.T) {
 	}
 }
 
+func TestEvaluateRequiresResourceWhenRuleBindsResource(t *testing.T) {
+	subject, request, rule := baseline()
+	request.Resource = ""
+	if decision := Evaluate(subject, request, rule); decision.Code != "resource_denied" {
+		t.Fatalf("expected empty resource denial, got %#v", decision)
+	}
+}
+
 func TestEvaluateRiskFloor(t *testing.T) {
 	subject, request, rule := baseline()
 	request.RiskLevel = "HIGH"

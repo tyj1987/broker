@@ -124,7 +124,11 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 			return deny("step_up_required")
 		}
 	}
-	if request.Resource != "" && (!contains(subject.Resources, request.Resource) || !contains(rule.Resources, request.Resource)) {
+	if len(rule.Resources) > 0 {
+		if request.Resource == "" || !contains(rule.Resources, request.Resource) || !contains(subject.Resources, request.Resource) {
+			return deny("resource_denied")
+		}
+	} else if request.Resource != "" && !contains(subject.Resources, request.Resource) {
 		return deny("resource_denied")
 	}
 	if (subject.RequiresApproval || rule.RequireStepUp) && !request.StepUp {

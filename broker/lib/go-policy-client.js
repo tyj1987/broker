@@ -33,6 +33,10 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
   const riskLevel = tool?.risk_level || '';
   const key = ctx.apiKey;
   const resource = typeof typedParameters.resource_ref === 'string' ? typedParameters.resource_ref : '';
+  if (policy.ttl_seconds !== undefined
+    && (!Number.isSafeInteger(policy.ttl_seconds) || policy.ttl_seconds < 0)) {
+    throw new Error('invalid ttl_seconds policy');
+  }
   const policyTTL = Math.min(Math.max(Number(policy.ttl_seconds || 300) * 1000, 10_000), 900_000);
   const operationValues = (key?.allowed_operations || []).map((value) => {
     const prefix = `${provider}:`;

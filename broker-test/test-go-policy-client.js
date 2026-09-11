@@ -166,6 +166,17 @@ try {
     await malformedAuthorize(operation, { allow: true, ttlMs: 90_000, tool }),
     { allow: false, reason: 'core_config_invalid' },
   );
+  for (const ttl of [Infinity, NaN, '120', -1]) {
+    const malformedTtlConfig = {
+      operation_policies: { github: { 'repo.read': { ...policy, ttl_seconds: ttl } } },
+    };
+    const malformedTtlAuthorize = createOperationAuthorizer(malformedTtlConfig, { socketPath: socket, requireCore: true });
+    assert.deepEqual(
+      await malformedTtlAuthorize(operation, { allow: true, ttlMs: 90_000, tool }),
+      { allow: false, reason: 'core_config_invalid' },
+      `malformed core TTL: ${String(ttl)}`,
+    );
+  }
 
   responseFactory = (requestBinding) => ({
     allow: false, ttl_ms: 0, code: 'role_denied', request_binding: requestBinding,

@@ -34,7 +34,7 @@ const LEASE_KEYS = new Set([
   'id', 'receiptHash', 'deviceId', 'operationId', 'expiresAt', 'otpClaimed',
   'previousStatus', 'previousUpdatedAt',
 ]);
-const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|api[_-]?key|client[_-]?secret|app[_-]?secret|signing[_-]?key|otp|verification.?code)/i;
+const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|api[_-]?key|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|otp|verification.?code)/i;
 
 export class V2Error extends Error {
   constructor(code, message, status = 400) {

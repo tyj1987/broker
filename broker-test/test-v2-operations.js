@@ -3,9 +3,16 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import {
   OperationBroker,
   V2Error,
+  assertSafeParameters,
   canonicalDeviceMessage,
   canonicalJson,
 } from '../broker/lib/operations-v2.js';
+
+assert.throws(
+  () => assertSafeParameters({ nested: { master_key: 'credential-canary' } }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'operation parameters reject key-material field variants',
+);
 
 const indeterminateCheckpoint = () => {
   throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);

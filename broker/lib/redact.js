@@ -64,7 +64,7 @@ const PATTERNS = [
   // Basic auth header
   { name: 'basic_auth',         regex: /(Basic\s+)[A-Za-z0-9+/=]{8,}/g,             replace: '$1***' },
   // Free-form error text containing a labelled credential assignment
-  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, replace: '$1***' },
+  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, replace: '$1***' },
   // Generic Bearer token (long opaque string after "Bearer ")
   { name: 'bearer_token',       regex: /(Bearer\s+)[A-Za-z0-9_\-\.~+\/=]{20,}/g,    replace: '$1***' },
   // Docker registry token
@@ -74,7 +74,7 @@ const PATTERNS = [
 const SENSITIVE_KEYS = new Set([
   'authorization', 'proxyauthorization', 'cookie', 'setcookie',
   'password', 'passwd', 'passphrase', 'secret', 'clientsecret',
-  'passwordhash', 'apikey', 'accesskey', 'accesskeyid', 'accesskeysecret', 'appsecret', 'signingkey',
+  'passwordhash', 'apikey', 'accesskey', 'accesskeyid', 'accesskeysecret', 'appsecret', 'signingkey', 'encryptionkey', 'masterkey', 'kmskey',
   'secretaccesskey', 'secretid', 'secretkey', 'authorizationheader',
   'privatekey', 'token', 'accesstoken', 'refreshtoken', 'idtoken',
   'session', 'sessiontoken', 'securitytoken', 'credential', 'credentials',
@@ -136,7 +136,7 @@ export function redactDeep(value, seen = new WeakSet()) {
 export function hasLikelySecret(s) {
   if (typeof s !== 'string' || s.length < 8) return false;
   // Heuristics: presence of common token prefixes, PEM marker, JWT shape, UUID
-  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|mb_(?:live|test)_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|(?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
+  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|mb_(?:live|test)_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|(?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
 }
 
 /**

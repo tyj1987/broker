@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const DECISION_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 function listOr(value, fallback) {
   return Array.isArray(value) && value.length > 0 ? [...value] : [...fallback];
@@ -97,6 +99,7 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
 export function evaluateWithCore(socketPath, payload, timeoutMs = 2_000) {
   return new Promise((resolve) => {
     const encoded = Buffer.from(JSON.stringify(payload));
+    const requestBinding = createHash('sha256').update(encoded).digest('base64url');
     const request = http.request({
       socketPath,
       path: '/v1/evaluate',
@@ -119,8 +122,29 @@ export function evaluateWithCore(socketPath, payload, timeoutMs = 2_000) {
         try {
           if (response.statusCode !== 200) return resolve({ allow: false, reason: 'core_rejected' });
           const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          if (typeof value.allow !== 'boolean' || typeof value.code !== 'string') throw new Error('invalid policy response');
-          resolve({ allow: value.allow, reason: value.code, ttlMs: Number(value.ttl_ms) || undefined });
+          const keys = Object.keys(value || {}).sort().join(',');
+          const requestedTTL = payload?.request?.requested_ttl_ms;
+          if (
+            keys !== 'allow,code,request_binding,ttl_ms' ||
+            typeof value.allow !== 'boolean' ||
+            !DECISION_CODE_RE.test(value.code || '') ||
+            value.request_binding !== requestBinding ||
+            !Number.isSafeInteger(value.ttl_ms) ||
+            (value.allow && (
+              value.code !== 'allowed' ||
+              value.ttl_ms < 1 ||
+              !Number.isSafeInteger(requestedTTL) ||
+              value.ttl_ms > requestedTTL
+            )) ||
+            (!value.allow && (value.code === 'allowed' || value.ttl_ms !== 0))
+          ) {
+            throw new Error('invalid policy response');
+          }
+          resolve({
+            allow: value.allow,
+            reason: value.code,
+            ttlMs: value.allow ? value.ttl_ms : undefined,
+          });
         } catch {
           resolve({ allow: false, reason: 'core_invalid_response' });
         }

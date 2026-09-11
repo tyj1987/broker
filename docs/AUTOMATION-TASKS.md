@@ -26,6 +26,13 @@ is absent. Both the operation policy and Tool Registry independently re-check
 the key's scope, provider, operation, account, resource and environment bounds;
 a successful upstream identity lookup cannot bypass those child constraints.
 
+The Node-to-Go policy decision is bound to the exact serialized evaluation
+request. The Go core independently hashes the received body and echoes the
+base64url SHA-256 binding; Node accepts only the exact response schema, matching
+binding, consistent allow/deny code, and a positive allow TTL no greater than
+the requested TTL. A stale, crossed, oversized or malformed response fails
+closed instead of being merged into the preliminary decision.
+
 The current safe acceptance operation is
 `broker.tools.inspect@1.0.0`. The next rollout checkpoint is a seven-day,
 file-delivered MCP key constrained to that one operation, the `control-plane`

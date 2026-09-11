@@ -93,6 +93,11 @@ export {
   verifyAuditAnchorEnvelope,
 } from './audit-anchor.js';
 export {
+  LOCAL_AUDIT_ANCHOR_SIGNER_CONTRACT,
+  LocalAuditAnchorSignerError,
+  createLocalAuditAnchorSignerClient,
+} from './local-audit-anchor-signer-client.js';
+export {
   validateBrokerConfig,
   requireValidBrokerConfig,
   preflightPaths,

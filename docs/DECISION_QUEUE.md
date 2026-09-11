@@ -41,7 +41,9 @@ continue.
   detection, signer revocation, clock rollback, storage outage, retention-lock
   enforcement and disaster-recovery tests.
 - Current safe default: restart-safe local chain verification plus a
-  provider-neutral signed-head envelope and fail-closed verifier. Deterministic
+  provider-neutral signed-head envelope, fail-closed verifier, and fixed,
+  ownership-checked Unix-socket client that sends no audit content or private
+  key material to the signer boundary. Deterministic
   tests cover payload/signature tampering, signer trust and revocation,
   predecessor/sequence continuity, clock and count rollback, and exact local
   recovery missing a suffix or the full chain. No exporter, external signer,

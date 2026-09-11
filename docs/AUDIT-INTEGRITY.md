@@ -73,6 +73,16 @@ choose an immutable store, KMS/HSM identity, retention policy, or disaster
 recovery authority. Production export remains disabled until DQ-003 is decided
 and its storage-outage, retention-lock, signer-rotation and recovery tests pass.
 
+`broker/lib/local-audit-anchor-signer-client.js` defines the corresponding
+credential-isolated workload boundary. It accepts only the versioned anchor
+request, connects to the fixed
+`/run/secret-broker-audit-anchor/signer.sock` path, rejects symbolic links and
+unsafe ownership or modes, and requires the response to echo the exact purpose,
+algorithm, key identifier and payload digest. The wire request contains only
+public anchor metadata and the domain-separated signing input. It never carries
+audit events or private-key material. This client is source-only until a
+separately managed signer workload is selected and deployed.
+
 ## Open production gate
 
 Local hashing is tamper-evident, not independently non-repudiable. Production

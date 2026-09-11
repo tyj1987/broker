@@ -7,6 +7,29 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.3.0] - 2026-09-09
+
+### Refactor
+
+- `broker/server.js` audit module (audit / readAuditFiltered / readAudit / collectAuditFacets / clearAuditLogs / bus, ~152 LOC) extracted into `broker/routes/audit.js` as a `createAuditRoutes({ auditDir, getConfig, redact })` factory. The factory returns the same surface used by `server.js` callers, so no HTTP-route changes.
+- `server.js` shrunk from 3316 → 3176 LOC. Imports cleaned up: `EventEmitter`, `appendFileSync`, `mkdirSync`, `readdirSync` are no longer needed by `server.js` (they moved with the module).
+- `server.js` now binds the factory once at startup:
+  ```js
+  const { audit, readAudit, readAuditFiltered, collectAuditFacets, clearAuditLogs, bus: AUDIT_BUS } =
+    createAuditRoutes({ auditDir: AUDIT_DIR, getConfig: () => CONFIG, redact: redactDeep });
+  ```
+
+### Tests
+
+- `broker-test/test-audit-routes.js` (new, 20 cases) covers: audit + ring push, ring-first read, ring fallback to disk, bus event subscription, `clearAuditLogs`, `readAudit` alias, `collectAuditFacets`, ring eviction at 1000 capacity.
+- `npm run test:trace` now runs `test-audit-routes.js` after `test-phase-d-trace-audit.js`.
+
+### Notes
+
+- `server.js` still at 3176 LOC — further extractions (`auth.js`, `proxy.js`, `admin.js`) deferred to subsequent v4.3.x steps. The REVIEW.md Next#6 target of <600 LOC will require 4–5 more extraction commits; this commit lays the factory pattern that subsequent extractions will follow.
+
+---
+
 ## [4.2.1] - 2026-09-09
 
 ### Tests

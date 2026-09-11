@@ -20,7 +20,7 @@ function assert(c, m) {
 }
 
 console.log('=== version ===');
-assert(BROKER_VERSION === '4.2.0', '4.2.0');
+assert(BROKER_VERSION === '4.3.0', '4.3.0');
 
 console.log('=== redactConfigForExport ===');
 {

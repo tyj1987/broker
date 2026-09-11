@@ -8,7 +8,7 @@
 
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync, renameSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -71,6 +71,7 @@ import { handleMetrics } from './routes/metrics.js';
 import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js';
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
+import { createAuditRoutes } from './routes/audit.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -96,7 +97,6 @@ import {
   createIdentityResolver,
 } from './lib/index.js';
 // v3.0: schema migration (in start())
-import { EventEmitter } from 'node:events';
 import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
@@ -655,160 +655,20 @@ function isValidSecretName(name) {
 const ALLOWED_SECRET_TYPES = new Set(Object.keys(TYPE_SCHEMAS));
 
 // ============================================================
-// Audit log
+// Audit log (V4.3.0: extracted to routes/audit.js factory)
 // ============================================================
-if (!existsSync(AUDIT_DIR)) mkdirSync(AUDIT_DIR, { recursive: true });
-
-// Phase 1.4: an in-process pub/sub for live audit events. The SSE endpoint
-// subscribes; every `audit(...)` call also emits here. Restart the broker
-// drops all subscribers (clients will reconnect on next page load).
-const AUDIT_BUS = new EventEmitter();
-AUDIT_BUS.setMaxListeners(0);  // unbounded; one listener per SSE connection
-
-// V4.2.1: in-memory ring buffer for hot reads (REVIEW.md Next#11).
-// Keeps the last 1000 events in process so dashboard refresh / SSE poll
-// doesn't re-read 100s of MB of jsonl. Disk is the source of truth; ring is
-// a hot cache. On broker restart, ring starts empty and re-populates from
-// live audit() calls.
-const AUDIT_RING = [];        // chronological (oldest at [0])
-const AUDIT_RING_MAX = 1000;  // capacity
-
-function auditFilePath() {
-  const d = new Date().toISOString().slice(0, 10);
-  return join(AUDIT_DIR, `audit-${d}.jsonl`);
-}
-
-let auditBytes = 0;
-function audit(event) {
-  const e = redactDeep({
-    ts: new Date().toISOString(),
-    id: randomUUID(),
-    ...event,
-  });
-  const line = JSON.stringify(e) + '\n';
-  try {
-    appendFileSync(auditFilePath(), line, { encoding: 'utf8' });
-    auditBytes += Buffer.byteLength(line, 'utf8');
-    // rotate at 50MB
-    if (auditBytes > 50 * 1024 * 1024) {
-      const old = auditFilePath();
-      const rotated = old + '.1';
-      if (existsSync(rotated)) unlinkSync(rotated);
-      renameSync(old, rotated);
-      auditBytes = 0;
-    }
-  } catch (err) {
-    console.error('[audit] write failed:', err.message);
-  }
-  // V4.2.1: 写完磁盘后,推一份到 ring buffer,供 readAuditFiltered 热路径读取
-  if (AUDIT_RING.length >= AUDIT_RING_MAX) AUDIT_RING.shift();
-  AUDIT_RING.push(e);
-  // Broadcast to any live SSE subscribers. setImmediate keeps the audit
-  // call non-blocking even if a subscriber is slow.
-  setImmediate(() => AUDIT_BUS.emit('event', e));
-  return e;
-}
-
-// Phase 1.4: filtered audit read.
-// Filters: client (cn substring), service, action, status, since, until.
-// Returns up to `limit` events (default 100, max 5000).
-// V4.2.1: 热读路径先走内存 ring buffer;ring 不覆盖(`service` 过滤 / `until`
-// 范围 / `since` 早于 ring 起点)时回落到磁盘扫描。
-function readAuditFiltered({ client, service, action, status, since, until, limit = 100 } = {}) {
-  const maxLimit = Math.min(Math.max(1, limit), 5000);
-  // Pre-lowercase substring matches
-  const cnL     = client  ? String(client).toLowerCase()  : null;
-  const svcL    = service ? String(service).toLowerCase() : null;
-  const actL    = action  ? String(action).toLowerCase()  : null;
-  const stL     = status  ? String(status).toLowerCase()  : null;
-  // ----- V4.2.1 ring buffer hot read -----
-  // 命中条件:无 service / until 过滤,since 为空或在 ring 时间范围内,
-  // 且请求条数不超过 ring 当前容量。
-  const ringHasRange = AUDIT_RING.length > 0
-    && !svcL  // ring 过滤暂不支持 service
-    && !until // ring 不持有 until 上界外的事件
-    && (!since || since <= AUDIT_RING[0].ts)
-    && maxLimit <= AUDIT_RING.length;
-  if (ringHasRange) {
-    const out = [];
-    for (let i = AUDIT_RING.length - 1; i >= 0 && out.length < maxLimit; i--) {
-      const e = AUDIT_RING[i];
-      if (cnL  && !(e.cn  || '').toLowerCase().includes(cnL))  continue;
-      if (actL && !(e.action  || '').toLowerCase().includes(actL)) continue;
-      if (stL  && !(e.status  || '').toLowerCase().includes(stL))  continue;
-      out.push(e);
-    }
-    return out;
-  }
-  // ----- 冷读:扫描磁盘 -----
-  const files = readdirSync(AUDIT_DIR)
-    .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
-    .sort()
-    .reverse();
-  const out = [];
-  for (const f of files) {
-    if (out.length >= maxLimit) break;
-    const content = readFileSync(join(AUDIT_DIR, f), 'utf8');
-    for (const line of content.split('\n').reverse()) {
-      if (!line) continue;
-      let e;
-      try { e = JSON.parse(line); } catch { continue; }
-      if (since && e.ts < since) continue;
-      if (until && e.ts > until) continue;
-      if (cnL  && !(e.cn  || '').toLowerCase().includes(cnL))  continue;
-      if (svcL && !(e.service || '').toLowerCase().includes(svcL)) continue;
-      if (actL && !(e.action  || '').toLowerCase().includes(actL)) continue;
-      if (stL  && !(e.status  || '').toLowerCase().includes(stL))  continue;
-      out.push(e);
-      if (out.length >= maxLimit) break;
-    }
-  }
-  return out;
-}
-
-// Kept for backwards compat: simple {since, limit} read (used by /api/v1/audit).
-function readAudit({ since, limit = 100 } = {}) {
-  return readAuditFiltered({ since, limit });
-}
-
-function collectAuditFacets() {
-  const clients = new Set(Object.keys(CONFIG.clients || {}));
-  const services = new Set(Object.keys(CONFIG.services || {}));
-  const actions = new Set([
-    'login', 'logout', 'proxy', 'resolve', 'connect', 'healthcheck',
-    'admin_secrets_create', 'admin_services_create', 'admin_clients_create',
-    'audit_cleared',
-  ]);
-  const statuses = new Set(['ok', 'error', 'denied', 'not_found', 'mfa_required']);
-  for (const e of readAuditFiltered({ limit: 2000 })) {
-    if (e.cn) clients.add(e.cn);
-    if (e.client) clients.add(e.client);
-    if (e.service) services.add(e.service);
-    if (e.action) actions.add(e.action);
-    if (e.status) statuses.add(e.status);
-  }
-  const sort = (s) => [...s].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
-  return {
-    clients: sort(clients),
-    services: sort(services),
-    actions: sort(actions),
-    statuses: sort(statuses),
-  };
-}
-
-function clearAuditLogs() {
-  const deleted = [];
-  if (!existsSync(AUDIT_DIR)) return deleted;
-  for (const f of readdirSync(AUDIT_DIR)) {
-    if (!f.startsWith('audit-')) continue;
-    if (!(f.endsWith('.jsonl') || f.endsWith('.jsonl.1'))) continue;
-    try {
-      unlinkSync(join(AUDIT_DIR, f));
-      deleted.push(f);
-    } catch { /* keep going */ }
-  }
-  return deleted;
-}
+const {
+  audit,
+  readAudit,
+  readAuditFiltered,
+  collectAuditFacets,
+  clearAuditLogs,
+  bus: AUDIT_BUS,
+} = createAuditRoutes({
+  auditDir: AUDIT_DIR,
+  getConfig: () => CONFIG,
+  redact: redactDeep,
+});
 
 // ============================================================
 // Session tokens (for dashboard / browser usage; mTLS is still supported)

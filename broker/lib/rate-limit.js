@@ -4,6 +4,27 @@ const WINDOWS_MS = {
   day: 86_400_000,
 };
 
+// Kept for the extracted helper's public compatibility surface.  Runtime
+// request paths use consumeRateLimit below, which distinguishes malformed
+// policies from unlimited and fails closed.
+export function parseRateLimit(limit) {
+  if (!limit || limit === 'unlimited') return null;
+  const match = String(limit).match(/^(\d+)\/(hour|minute|day)$/);
+  if (!match) return null;
+  const max = Number(match[1]);
+  if (!Number.isSafeInteger(max)) return null;
+  return { max, windowMs: WINDOWS_MS[match[2]] };
+}
+
+export function createRateLimiter() {
+  const buckets = new Map();
+  return (key, limit) => {
+    const parsed = parseRateLimit(limit);
+    if (!parsed) return true;
+    return consumeRateLimit(limit, key, buckets);
+  };
+}
+
 function dimensions(limit) {
   if (limit === 'unlimited' || limit == null) return [];
   if (typeof limit === 'string') {

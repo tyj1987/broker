@@ -131,7 +131,8 @@ function hasApproval(ctx, actorName, provider, operationId, accountRef, environm
     && grant.environment === environment
     && grant.resource_ref === resource
     && grant.approved_by !== actorName
-    && Number(grant.expires_at_ms) > now
+    && Number.isSafeInteger(grant.expires_at_ms)
+    && grant.expires_at_ms > now
     && typeof grant.approved_by === 'string') {
       approvers.add(grant.approved_by);
     }

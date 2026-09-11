@@ -81,6 +81,7 @@ const denied = [
   ['resource', { apiKey: { ...apiKey, allowed_resources: ['other'] } }],
   ['secret', { apiKey: { ...apiKey, allowed_secrets: [] } }],
   ['approval', { approvalGrants: [] }],
+  ['malformed approval expiry', { approvalGrants: [{ ...context.approvalGrants[0], expires_at_ms: Infinity }] }],
 ];
 for (const [name, change] of denied) {
   const request = { ...base, identity: { ...base.identity, context: { ...context, ...change } } };

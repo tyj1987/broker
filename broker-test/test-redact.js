@@ -117,6 +117,8 @@ const keyBound = redactDeep({
   Authorization: 'short-value',
   private_key: { material: 'not-pattern-shaped' },
   access_key_id: 'ordinary-identifier',
+  app_secret: 'short-secret',
+  signing_key: 'short-signing-key',
   totp_secret: 'short-seed',
   recovery_codes: ['alpha', 'bravo'],
   secret: 'human-readable-value',
@@ -127,6 +129,8 @@ ok('password key always redacted', keyBound.password === '[REDACTED]');
 ok('authorization key always redacted', keyBound.Authorization === '[REDACTED]');
 ok('private key object always redacted', keyBound.private_key === '[REDACTED]');
 ok('access key id always redacted', keyBound.access_key_id === '[REDACTED]');
+ok('app secret always redacted', keyBound.app_secret === '[REDACTED]');
+ok('signing key always redacted', keyBound.signing_key === '[REDACTED]');
 ok('totp secret always redacted', keyBound.totp_secret === '[REDACTED]');
 ok('recovery code array always redacted', keyBound.recovery_codes === '[REDACTED]');
 ok('bare secret key always redacted', keyBound.secret === '[REDACTED]');

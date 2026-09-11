@@ -37,6 +37,18 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 - `CONFIG_PATH` env (not `SECRETS_PATH`) controls which `broker.yaml`
   is loaded. `SECRETS_PATH` is for SOPS-encrypted secrets.
 
+### Added (Test coverage — v4.9.x patch)
+
+- **`broker-test/test-shutdown.js`** (v4.9.x, 17 cases): covers
+  `installGracefulShutdown` (state, idempotency, hooks, hook error
+  tolerance, server.close) + `rejectIfShuttingDown` middleware
+  helper.
+- **`broker-test/test-config-validate.js`** (v4.9.x, 23 cases):
+  covers `validateBrokerConfig` (null config, clients, services,
+  api_keys, role validation, rate_limit format, no-admin warning,
+  strict mode) + `preflightPaths` (existing/missing paths).
+- Both wired into `npm run test:v4`.
+
 ---
 
 ## [4.8.0] - 2026-09-11

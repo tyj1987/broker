@@ -1,0 +1,73 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "broker.fullname" . }}
+  labels:
+    {{- include "broker.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "broker.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if .Values.networkPolicy.ingressNamespaceSelector }}
+  ingress:
+    # Allow ingress only from the configured namespace(s) on the mTLS port.
+    # Comma-separated namespace list expanded via Helm template range.
+    {{- range $ns := splitList "," .Values.networkPolicy.ingressNamespaceSelector }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns | trim }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.targetPort }}
+    {{- end }}
+    # Also allow ingress from the cluster-local Prometheus scraper on the metrics port.
+    # Operators typically label the prometheus namespace (e.g. "monitoring").
+    {{- if .Values.networkPolicy.prometheusNamespace }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: 9090
+    {{- end }}
+  {{- else }}
+  ingress:
+    # No ingress namespace configured → deny all ingress by leaving the list empty.
+    []
+  {{- end }}
+  egress:
+    # DNS (UDP + TCP) for service discovery and upstream hostname resolution.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to upstream API providers (GitHub, Aliyun, Cloudflare, AWS, etc.).
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+    # HTTP for OCSP / CRL fetches and ACME challenges.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 80
+    # Allow egress to OTLP collector if configured (default 4317/4318 gRPC+HTTP).
+    {{- if .Values.otelExporter.enabled }}
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.otelExporter.port | default 4318 }}
+    {{- end }}
+{{- end }}

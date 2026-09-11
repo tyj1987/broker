@@ -150,7 +150,7 @@ secrets:
   # -- Path to the CA cert (PEM)
   caCert: ""
 
-# -- Liveness/metrics probes
+# -- Liveness/metrics probes (v4.6.0: adds startupProbe for slow-start safety)
 probes:
   liveness:
     enabled: true
@@ -164,3 +164,38 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
+  startup:
+    # startupProbe gates livenessProbe until the broker is ready.
+    # failureThreshold * periodSeconds = max startup grace.
+    # 30 * 10s = 5 minutes (handles cold-start on slow disks / large configs).
+    enabled: true
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 30
+    successThreshold: 1
+
+# -- ServiceMonitor for Prometheus Operator (v4.6.0)
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+  honorLabels: false
+
+# -- NetworkPolicy (v4.6.0): restrict ingress/egress to known namespaces
+networkPolicy:
+  enabled: true
+  # Allow ingress from these namespaces (comma-separated). Empty = deny all ingress.
+  ingressNamespaceSelector: "ingress"
+  # Allow egress to DNS + upstream providers + metrics scrapers.
+  egressRules:
+    dns:
+      - port: 53
+        protocol: UDP
+      - port: 53
+        protocol: TCP
+    https:
+      - port: 443
+        protocol: TCP
+    http:
+      - port: 80
+        protocol: TCP

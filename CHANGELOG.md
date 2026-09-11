@@ -7,6 +7,103 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.6.0] - 2026-09-11
+
+### Added (Deployment)
+
+- **Helm `startupProbe`** (v4.6.0): gates livenessProbe until broker is ready.
+  30 × 10s = 5-minute startup grace handles cold-start on slow disks / large
+  configs without killing the pod prematurely.
+- **Helm `templates/networkpolicy.yaml`** (v4.6.0): restricts ingress to a
+  configurable namespace selector (default `ingress`) plus a metrics-scraper
+  namespace; egress limited to DNS (53 UDP+TCP) + HTTPS (443) + HTTP (80) +
+  optional OTLP collector. Disabled when `networkPolicy.enabled=false`.
+- **Helm `templates/servicemonitor.yaml`** (v4.6.0): Prometheus Operator CRD
+  for auto-discovery of the broker's `/metrics` endpoint over HTTPS. 15s
+  scrape interval, configurable via `serviceMonitor.interval`.
+- **`docker-compose.yml`** adds `loki:2.9.0` + `promtail:2.9.0` (v4.6.0)
+  under the `monitoring` profile. The Grafana "Recent Audit Events" panel
+  (using `DS_LOKI`) now has a data source.
+
+### Added (Observability)
+
+- **`broker/lib/trace.js#exportSpan()`** (v4.6.0): zero-dependency OTLP/HTTP
+  JSON exporter. Activated by env `BROKER_OTLP_ENDPOINT` (e.g.
+  `http://otel-collector:4318`); optional `BROKER_OTLP_HEADERS` for auth;
+  sample rate `BROKER_OTLP_SAMPLE` (default 0.1). Best-effort, swallows
+  errors, never blocks the request path. When unset, all calls are no-ops.
+
+### Added (Runbook)
+
+- **`RUNBOOK.md` §5a–5c** (v4.6.0):
+  - §5a SSE / DoS response — how to triage HTTP 429 on the audit stream
+    endpoint (caused by the 3-concurrent-connection cap per admin client).
+  - §5b mTLS failure troubleshooting — step-by-step cert validation
+    (CA chain, expiry, CRL, fingerprint registration, nginx passthrough).
+  - §5c OTLP trace export — verification recipe when collector is set.
+
+### Notes
+
+- `RUNBOOK.md` was already 516 lines covering incident response, DR, and
+  monitoring. The v4.6.0 additions close gaps surfaced by the SSE cap
+  (REVIEW.md P6) and the new OTLP exporter.
+
+---
+
+## [4.5.0] - 2026-09-11
+
+### Added
+
+- **`LICENSE`** (MIT) at repo root — was missing; blocks commercial launch.
+  Includes a **dual-license commercial notice** for revenue-generating /
+  multi-tenant / embedded / managed-service use.
+- **`docs/COMMERCIAL.md`** — full commercial policy: licensing tiers (Small /
+  Medium / Large / Enterprise with USD pricing), OEM/SaaS rules, compliance
+  notes (SOC2 / ISO27001 / HIPAA / PCI), roadmap to wider availability.
+- **`docs/SUPPORT.md`** — support tiers (Community / Standard / Pro /
+  Enterprise) with response SLAs, severity definitions, out-of-scope
+  coverage, contact channels.
+
+### Changed
+
+- **`README.md`** rebranded from "sops-age-template" to "Secret Broker";
+  adds licensing banner + 5-line TL;DR + quick-links strip.
+- **`mkdocs.yml`** nav rewritten: ~20 broken `guides/*` / `api/*` / `sdk/*` /
+  `deploy/*` references collapsed into the actual existing docs
+  (`README.md`, `RUNBOOK.md`, `QUICKSTART.md`, `WORKLOAD-IDENTITY.md`,
+  `SSH-PROXY.md`, `WEBSOCKET.md`, `EXTENDING.md`, `THREAT-MODEL.md`,
+  `SECURITY-AUDIT-2026-09-05.md`, `FAQ.md`, `SDK-REFERENCE.md`,
+  `DEPLOY-52TRZ.md`, `52TRZ-UPGRADE-1PAGE.md`, `POST-DEPLOY-CHECKLIST.md`,
+  `VERIFY.md`, `SECURITY.md`, `STATUS.md`, `COMMERCIAL.md`, `SUPPORT.md`,
+  `REVIEW.md`, `CHANGELOG.md`, `ROADMAP-post-1.0.md`, `CONTRIBUTING.md`,
+  `RELEASE-NOTES-v4.1.0.md`, `V4.1-COMPLETE.md`). Removed items that are
+  roadmap-future (multi-tenant, market images) from the nav until they ship.
+- **`docs/QUICKSTART.md`** version reference corrected from `4.0.0` → `4.4.0`;
+  reload-token step rewritten to use `RELOAD_TOKEN` env (the broker prints
+  the UUID at startup) instead of the broken audit-log extraction.
+- **`docs/SSH-PROXY.md`** key-lifecycle section now documents
+  `os.tmpdir()` per-platform paths (Linux `/tmp`, Windows `%TEMP%`) instead
+  of hardcoded `/tmp/...`. Wipe-on-boot guarantee applies only to Linux
+  tmpfs; Windows relies on the OS cleanup scheduler.
+- **`docs/WEBSOCKET.md:150`** stale TODO removed; the endpoint
+  `/api/v1/ws-stats` was implemented in v4.4.0. Now describes the response
+  shape and notes the WebSocket upgrade path is still dormant.
+
+### Moved
+
+- **`AWAITING-USER.md`** (operational hand-off note from 2026-09-01) →
+  `docs/internal/handoff-2026-09-01-v4.1.0-ga.md`. Preserved history
+  via `git mv`; no longer pollutes repo root.
+
+### Notes
+
+- `mkdocs build --strict` should now succeed (no broken nav links).
+- AWAITING-USER.md content was 6 weeks old at time of move; the upgrade
+  it described has long since completed. The internal/ copy is kept for
+  historical reference.
+
+---
+
 ## [4.4.0] - 2026-09-09
 
 ### Added

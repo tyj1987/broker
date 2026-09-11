@@ -506,6 +506,59 @@ recovers from a fresh machine.
 
 ---
 
+## 5a. SSE / DoS response (v4.6.0+)
+
+The admin audit SSE endpoint (`/api/v1/admin/audit/stream`) is capped at
+**3 concurrent connections per admin client** (returns HTTP 429 on the 4th).
+If you see a flood of 429s for a single client:
+
+1. Confirm the source IP from `/api/v1/audit` filtered by `status=denied`
+   and `action=sse_open`. / 在审计里按 `status=denied` `action=sse_open`
+   过滤,定位来源 IP。
+2. If the source is a legitimate admin with too many tabs, ask them to close
+   redundant tabs. / 如果是合法管理员 tab 太多,要求关闭冗余 tab。
+3. If the source is abusive, add the IP to `clients.<client>.ip_whitelist`
+   restrictions or rotate the client's certificate (it bypasses the cap).
+
+## 5b. mTLS failure troubleshooting (v4.6.0+)
+
+When a client cert fails to authenticate:
+
+1. **Check the cert is signed by the production CA**:
+   ```bash
+   openssl verify -CAfile pki/ca/ca.crt pki/clients/<client>.crt
+   ```
+2. **Check the cert is not expired** (`notAfter`):
+   ```bash
+   openssl x509 -in pki/clients/<client>.crt -noout -dates
+   ```
+3. **Check the cert is not revoked** (CRL):
+   ```bash
+   openssl crl -in pki/ca/crl.pem -noout -text | grep <serial>
+   ```
+4. **Confirm the fingerprint is registered** in `secrets/broker.yaml`
+   under `clients.<name>.cert_fingerprint_sha256`. The error
+   `no matching fingerprint` means the broker has no record of this cert.
+5. **Check nginx** (if applicable): the upstream `proxy_ssl_verify on`
+   must be set; otherwise nginx accepts any client cert and forwards it.
+
+## 5c. OTLP trace export (v4.6.0+)
+
+When `BROKER_OTLP_ENDPOINT` is set (e.g. `http://otel-collector:4318`),
+broker emits OTLP/HTTP spans at 10% sample rate by default. Verify export
+is working:
+
+1. Check the collector is reachable from the broker host:
+   ```bash
+   curl -X POST http://otel-collector:4318/v1/traces \
+     -H 'content-type: application/json' -d '{"resourceSpans":[]}'
+   ```
+2. Tail the collector's `traces` log line; you should see a hit.
+3. Set `BROKER_OTLP_SAMPLE=1.0` to force 100% sampling during debug,
+   then revert to the default 0.1 in production.
+
+---
+
 ## 6. Reference / 6. 参考
 
 - SOPS docs / 文档: https://github.com/getsops/sops

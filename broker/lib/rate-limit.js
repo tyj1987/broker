@@ -19,8 +19,9 @@ export function parseRateLimit(limit) {
 export function createRateLimiter() {
   const buckets = new Map();
   return (key, limit) => {
+    if (limit == null || limit === 'unlimited') return true;
     const parsed = parseRateLimit(limit);
-    if (!parsed) return true;
+    if (!parsed) return false;
     return consumeRateLimit(limit, key, buckets);
   };
 }

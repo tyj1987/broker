@@ -108,6 +108,7 @@ assert.equal(validateTypedParameters({ count: 2, ratio: 1.5, nested: { label: 'o
 
 const requestDenials = [
   [{ ...base, identity: null }, 'identity_missing'],
+  [{ ...base, identity: { ...base.identity, context: { ...context, apiKey: null } } }, 'api_key_context_missing'],
   [{ ...base, operationId: 'missing' }, 'policy_missing'],
   [{ ...base, environment: 'staging' }, 'environment_denied'],
   [{ ...base, accountRef: 'secondary' }, 'account_denied'],

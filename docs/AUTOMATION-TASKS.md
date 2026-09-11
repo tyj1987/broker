@@ -21,6 +21,11 @@ restored terminal timestamp must be canonical and chronologically consistent
 with issuance and expiry. Invalid clocks and corrupt snapshots fail before
 replacing live state.
 
+An identity marked `via=api_key` is denied if its authenticated API-key context
+is absent. Both the operation policy and Tool Registry independently re-check
+the key's scope, provider, operation, account, resource and environment bounds;
+a successful upstream identity lookup cannot bypass those child constraints.
+
 The current safe acceptance operation is
 `broker.tools.inspect@1.0.0`. The next rollout checkpoint is a seven-day,
 file-delivered MCP key constrained to that one operation, the `control-plane`

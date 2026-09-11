@@ -168,6 +168,7 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   }
 
   const apiKey = ctx.apiKey;
+  if (ctx.via === 'api_key' && !apiKey) return deny('api_key_context_missing');
   if (apiKey) {
     const operationScope = `operations:${provider}:${operationId}`;
     if (!includes(apiKey.scopes, 'operations:execute') && !includes(apiKey.scopes, operationScope)) return deny('scope_denied');

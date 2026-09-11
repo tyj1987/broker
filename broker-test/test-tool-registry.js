@@ -69,13 +69,35 @@ const allowed = { allow: true, reason: 'allowed' };
 assert.equal(registry.evaluate({
   identity: { name: 'developer-a', context: { via: 'api_key', client: { role: 'developer' } } },
   provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+}, allowed).reason, 'tool_api_key_denied');
+assert.equal(registry.evaluate({
+  identity: githubAgent,
+  provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
 }, allowed).allow, true);
+for (const [field, value] of [
+  ['scopes', []],
+  ['allowed_services', []],
+  ['allowed_operations', []],
+  ['allowed_accounts', []],
+  ['allowed_resources', []],
+  ['allowed_environments', []],
+]) {
+  const restricted = structuredClone(githubAgent);
+  restricted.context.apiKey[field] = value;
+  assert.equal(registry.evaluate({
+    identity: restricted,
+    provider: 'github', operationId: 'repo.read', environment: 'production',
+    accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+  }, allowed).reason, 'tool_api_key_denied', `${field} is enforced during execution`);
+}
 assert.equal(registry.evaluate({
   identity: admin, provider: 'unknown', operationId: 'anything', environment: 'production',
 }, allowed).reason, 'tool_unregistered');
 assert.equal(registry.evaluate({
   identity: agent, provider: 'broker', operationId: 'device.state', environment: 'production',
-}, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).reason, 'critical_agent_denied');
+}, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).reason, 'tool_api_key_denied');
 assert.equal(registry.evaluate({
   identity: { ...admin, context: { ...admin.context, authFactors: [] } },
   provider: 'broker', operationId: 'device.state', environment: 'production',

@@ -170,6 +170,20 @@ function apiKeyAllowsDiscovery(identity, tool) {
     && apiKey.allowed_environments?.some((environment) => tool.environments.includes(environment));
 }
 
+function apiKeyAllowsExecution(identity, tool, request) {
+  const context = identity?.context;
+  const apiKey = context?.apiKey;
+  if (!apiKey) return context?.via !== 'api_key';
+  const operation = `${tool.provider}:${tool.operation_id}`;
+  const operationScope = `operations:${tool.provider}:${tool.operation_id}`;
+  return (apiKey.scopes?.includes('operations:execute') || apiKey.scopes?.includes(operationScope))
+    && apiKey.allowed_services?.includes(tool.provider)
+    && apiKey.allowed_operations?.includes(operation)
+    && apiKey.allowed_accounts?.includes(request.accountRef)
+    && apiKey.allowed_resources?.includes(request.typedParameters?.resource_ref)
+    && apiKey.allowed_environments?.includes(request.environment);
+}
+
 export class ToolRegistry {
   constructor(document) {
     assertObject(document, 'tool registry must be an object');
@@ -249,6 +263,9 @@ export class ToolRegistry {
     if (!preliminary?.allow) return preliminary || { allow: false, reason: 'policy_denied' };
     const tool = this.byOperation.get(`${request.provider}:${request.operationId}`);
     if (!tool) return { allow: false, reason: 'tool_unregistered' };
+    if (!apiKeyAllowsExecution(request.identity, tool, request)) {
+      return { allow: false, reason: 'tool_api_key_denied' };
+    }
     const role = request.identity?.context?.client?.role;
     if (role !== 'admin' && role !== tool.required_role) return { allow: false, reason: 'tool_role_denied' };
     if (!tool.environments.includes(request.environment)) return { allow: false, reason: 'tool_environment_denied' };

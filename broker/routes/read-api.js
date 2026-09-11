@@ -43,7 +43,14 @@ export function createReadApiRoutes(deps) {
   function handleServices(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/services') return false;
     const services = [];
-    for (const [name, svc] of Object.entries(deps.config.services)) {
+    const entries = Object.entries(deps.config.services).filter(([name]) => {
+      // Delegated keys must not enumerate service metadata outside their
+      // explicit capability boundary (upstream and token_secret are useful
+      // reconnaissance even when `allowed` is false).
+      if (ctx.via === 'api_key' || ctx.apiKey) return deps.isServiceAllowed(ctx, name);
+      return true;
+    });
+    for (const [name, svc] of entries) {
       const secretHealth = svc.token_secret
         ? (() => {
             const s = deps.healthcheckGetSecretStatus(svc.token_secret);

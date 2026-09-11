@@ -302,6 +302,30 @@ section('13. Security: API-key secret capability bounds listing and resolve');
   ok('API-key resolve outside allowlist denied', deniedRes.statusCode === 403);
 }
 
+section('14. Security: API-key service directory is capability bounded');
+
+{
+  const keyCtx = {
+    via: 'api_key',
+    apiKey: { scopes: ['services:proxy'], allowed_services: ['github'] },
+    client: { role: 'admin', allowed_proxy: ['*'] },
+    cn: 'apikey:test', fp: 'K',
+  };
+  const deps = makeDeps({
+    config: {
+      services: {
+        github: { type: 'github_token', upstream: 'https://api.github.com', token_secret: 'GITHUB_PAT', dashboard_actions: [] },
+        aliyun: { type: 'aliyun_v2', upstream: 'https://ecs.aliyuncs.com', token_secret: 'ALIYUN_KEY', dashboard_actions: [] },
+      },
+    },
+    isServiceAllowed: (ctx, name) => ctx.apiKey?.allowed_services?.includes(name) === true,
+  });
+  const r = createReadApiRoutes(deps);
+  const res = fakeRes();
+  await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/services' }, keyCtx);
+  ok('API-key service listing only exposes allowed service', res.body?.services?.length === 1 && res.body.services[0].name === 'github');
+}
+
 // ---------- summary ----------
 
 console.log(`\n=== ${pass} pass / ${fail} fail ===`);

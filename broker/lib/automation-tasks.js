@@ -190,8 +190,10 @@ function restoreTaskRecord(value, toolRegistry) {
   }
   const approvalId = value.approval_id;
   const executionId = value.execution_id;
+  const approvalRequiredByRisk = ['HIGH', 'CRITICAL'].includes(tool.risk_level);
   if ((approvalId !== null && !UUID_RE.test(approvalId || ''))
     || (executionId !== null && !UUID_RE.test(executionId || ''))
+    || (approvalRequiredByRisk && approvalId === null)
     || (value.state === 'PENDING_APPROVAL' && approvalId === null)
     || (value.state === 'EXECUTING' && executionId === null)) {
     throw stateCorrupt('task execution binding is invalid');

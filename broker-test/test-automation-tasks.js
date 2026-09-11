@@ -294,6 +294,16 @@ const criticalInput = {
 const critical = await broker.create(human, criticalInput);
 assert.equal(critical.state, 'PENDING_APPROVAL');
 assert.equal(critical.risk_level, 'CRITICAL');
+const forgedCriticalState = broker.exportState();
+const forgedCriticalTask = forgedCriticalState.tasks.find((task) => task.id === critical.id);
+forgedCriticalTask.approval_id = null;
+assert.throws(
+  () => new AutomationTaskBroker({
+    toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+  }).restoreState(forgedCriticalState),
+  expectCode('state_corrupt'),
+  'a high-risk task cannot be restored without an approval binding',
+);
 broker.validateRestoredState(approvals.exportState());
 const orphanedApprovalState = approvals.exportState();
 orphanedApprovalState.records = orphanedApprovalState.records.filter((record) => record.id !== critical.approval_id);

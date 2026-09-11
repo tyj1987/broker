@@ -2994,7 +2994,7 @@ async function handle(req, res) {
       last_rotated_at: now,
       rotation_count: history.length,
       // 凭据零接触: 不返 value, 只返 metadata
-      note: 'Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or rotate-secret-ecs.sh).',
+      note: 'Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or scripts/rotate-secret-ecs.sh).',
     });
   }
 

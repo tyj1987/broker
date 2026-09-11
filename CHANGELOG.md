@@ -7,6 +7,28 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.2.0] - 2026-09-09
+
+### Changed
+
+- `broker/experimental/modular-routes/` (8 dead-code handlers + README) merged into `broker/routes/_legacy/`. The "experimental" directory marker is removed; the handler files are kept under `_legacy/` because three peer tests still import them (`test-routes-auth-me.js`, `test-routes-b4.js`, `test-phase-f-backup-probes.js`). The production request pipeline does not dispatch through them. Test imports were updated to point to the new paths.
+- `broker/scripts/rotate-secret-ecs.sh` moved to top-level `scripts/rotate-secret-ecs.sh` so ECS ops scripts sit alongside `scripts/broker/`, `scripts/dev/`, etc. Server.js help text and acceptance docs (`M5.3-ACCEPTANCE.md`, `M5.6-M5.9-ACCEPTANCE.md`) updated to reflect the new path.
+
+### Removed
+
+- `broker/experimental/` directory (8 handlers + README). Files renamed (preserved history via `git mv`); no handler code was modified.
+
+### Tests
+
+- `test-phase-f-backup-probes.js` version assertion updated from `'4.1.7'` to `'4.2.0'`.
+
+### Notes
+
+- `package-lock.json` at the repo root was claimed by REVIEW.md §4 (Next#10) to be empty; it does not currently exist in the working tree, so no action was required.
+- Audit event field naming standardisation (REVIEW.md §4 P6: `cn` / `fingerprint_sha256` / `client_name`) is **deferred** to a separate v4.2.x patch because it touches dozens of audit emit sites and warrants its own focused change.
+
+---
+
 ## [4.1.9] - 2026-09-09
 
 ### Added

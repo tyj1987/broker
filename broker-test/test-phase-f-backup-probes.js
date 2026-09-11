@@ -6,7 +6,7 @@ import {
 } from '../broker/lib/backup.js';
 import { runProbes, probesFromConfig, probeTcp } from '../broker/lib/probes.js';
 // chore/oss-modular-security: handleOps moved to experimental (UNSUPPORTED).
-import { handleOps } from '../broker/experimental/modular-routes/ops.js';
+import { handleOps } from '../broker/routes/_legacy/ops.js';
 import { handleHealth } from '../broker/routes/health.js';
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +20,7 @@ function assert(c, m) {
 }
 
 console.log('=== version ===');
-assert(BROKER_VERSION === '4.1.7', '4.1.7');
+assert(BROKER_VERSION === '4.2.0', '4.2.0');
 
 console.log('=== redactConfigForExport ===');
 {

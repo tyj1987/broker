@@ -1,6 +1,8 @@
-# `broker/experimental/modular-routes/` — UNSUPPORTED reference implementations
+# `broker/routes/_legacy/` — UNSUPPORTED reference implementations
 
-> **Status: experimental, not wired to production.**
+> **Status: legacy, not wired to production.** Moved from
+> `broker/experimental/modular-routes/` in v4.2.0 to consolidate dead-code
+> references and remove the "experimental" directory marker.
 > These handlers were created during Phase B (broker modularization). The
 > production request pipeline in `broker/server.js` does **not** dispatch
 > through them — every endpoint is served by inline `if (m === … && p === …)`
@@ -19,14 +21,14 @@ under `broker-test/test-routes-*.js`. Cutting them would either lose test
 coverage for the inline behaviour or force a large refactor of the production
 request pipeline. Both are out of scope for the OSS trunk chore.
 
-They are moved here so that:
+They are kept under `_legacy/` so that:
 
 1. The production-active set (`broker/routes/{health,static,metrics,ssh-proxy}.js`)
    is the only thing the inline request pipeline imports.
 2. Anyone exploring the repo can see, in one folder, the historical
    modularization work and the corresponding tests.
 3. Future cuts or migrations are obvious — pick a handler, port it to
-   `server.js`, delete both the experimental file and the test that
+   `server.js`, delete both the legacy file and the test that
    exercises it.
 
 ## How to migrate a handler back into production
@@ -43,9 +45,9 @@ If a future change wants to actually wire one of these handlers:
 3. **Add a peer test that exercises both the inline and the handler path
    under the same auth/role/secret fixtures** (see `broker-test/test-routes-auth-me.js`
    for the prior style).
-4. **Move the file from `experimental/modular-routes/` to `broker/routes/`**,
-   update the import in `server.js`, and delete the corresponding test
-   fixture from this folder.
+4. **Move the file from `_legacy/` to `broker/routes/` (drop the underscore
+   prefix)**, update the import in `server.js`, and delete the corresponding
+   test fixture from this folder.
 5. **No env flag, no opt-in switch.** A handler that is good enough to
    migrate is good enough to be the only path.
 

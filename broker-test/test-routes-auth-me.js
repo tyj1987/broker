@@ -1,10 +1,10 @@
 // broker-test/test-routes-auth-me.js
 // Run: node broker-test/test-routes-auth-me.js
 
-// chore/oss-modular-security: handler implementations moved to
-// broker/experimental/modular-routes/ (UNSUPPORTED reference). Tests follow.
-import { handleAuth } from '../broker/experimental/modular-routes/auth.js';
-import { handleMe } from '../broker/experimental/modular-routes/me.js';
+// v4.2.0: 历史参考实现从 broker/experimental/modular-routes/ 迁移到
+// broker/routes/_legacy/。生产请求管线不经过这里;测试仅做单元覆盖。
+import { handleAuth } from '../broker/routes/_legacy/auth.js';
+import { handleMe } from '../broker/routes/_legacy/me.js';
 import { createMfaPending, getMfaPending, consumeMfaPending, isMfaRequired, MFA_TOKEN_TTL_MS } from '../broker/auth-flow.js';
 
 let passed = 0, failed = 0;

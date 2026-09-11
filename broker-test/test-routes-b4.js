@@ -1,12 +1,12 @@
 // broker-test/test-routes-b4.js
 // Run: node broker-test/test-routes-b4.js
 
-// chore/oss-modular-security: handler implementations moved to
-// broker/experimental/modular-routes/ (UNSUPPORTED reference). Tests follow.
-import { handleSecrets } from '../broker/experimental/modular-routes/secrets.js';
-import { handleServices } from '../broker/experimental/modular-routes/services.js';
-import { handleClients } from '../broker/experimental/modular-routes/clients.js';
-import { handleProxy } from '../broker/experimental/modular-routes/proxy.js';
+// v4.2.0: 历史参考实现从 broker/experimental/modular-routes/ 迁移到
+// broker/routes/_legacy/。生产请求管线不经过这里;测试仅做单元覆盖。
+import { handleSecrets } from '../broker/routes/_legacy/secrets.js';
+import { handleServices } from '../broker/routes/_legacy/services.js';
+import { handleClients } from '../broker/routes/_legacy/clients.js';
+import { handleProxy } from '../broker/routes/_legacy/proxy.js';
 
 let passed = 0, failed = 0;
 function assert(c, m) {

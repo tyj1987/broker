@@ -18,7 +18,7 @@
 
 import { createIdentityResolver } from '../broker/lib/mtls.js';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,6 +28,12 @@ function ok(name, cond, detail) {
   else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
 }
 function section(t) { console.log(`\n[${t}]`); }
+
+const OPENSSL = process.env.OPENSSL_BIN || (
+  process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\usr\\bin\\openssl.exe')
+    ? 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe'
+    : 'openssl'
+);
 
 // ---------- helpers ----------
 
@@ -188,13 +194,13 @@ section('9. mTLS-header (nginx forwarded, SUCCESS)');
     // Make CA + sign a client cert
     const caKey = join(tmp, 'ca.key');
     const caCrt = join(tmp, 'ca.crt');
-    execFileSync('openssl', ['genrsa', '-out', caKey, '2048']);
-    execFileSync('openssl', ['req', '-x509', '-new', '-nodes', '-key', caKey, '-days', '1', '-subj', '/CN=ca', '-out', caCrt]);
-    execFileSync('openssl', ['genrsa', '-out', key, '2048']);
-    execFileSync('openssl', ['req', '-new', '-key', key, '-subj', '/CN=client.alice', '-out', csr]);
-    execFileSync('openssl', ['x509', '-req', '-in', csr, '-CA', caCrt, '-CAkey', caKey, '-CAcreateserial', '-days', '1', '-out', crt]);
+    execFileSync(OPENSSL, ['genrsa', '-out', caKey, '2048']);
+    execFileSync(OPENSSL, ['req', '-x509', '-new', '-nodes', '-key', caKey, '-days', '1', '-subj', '/CN=ca', '-out', caCrt]);
+    execFileSync(OPENSSL, ['genrsa', '-out', key, '2048']);
+    execFileSync(OPENSSL, ['req', '-new', '-key', key, '-subj', '/CN=client.alice', '-out', csr]);
+    execFileSync(OPENSSL, ['x509', '-req', '-in', csr, '-CA', caCrt, '-CAkey', caKey, '-CAcreateserial', '-days', '1', '-out', crt]);
     const pem = readFileSync(crt, 'utf8');
-    const fpLine = execFileSync('openssl', ['x509', '-in', crt, '-noout', '-fingerprint', '-sha256'], { encoding: 'utf8' });
+    const fpLine = execFileSync(OPENSSL, ['x509', '-in', crt, '-noout', '-fingerprint', '-sha256'], { encoding: 'utf8' });
     const realFp = fpLine.split('=')[1].trim();
     const cfg = makeConfig();
     cfg.clients['client.alice'].cert_fingerprint_sha256 = realFp;

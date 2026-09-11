@@ -7,6 +7,34 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.8] - 2026-09-09
+
+### Security
+
+- SSH proxy enforces `StrictHostKeyChecking=yes` with secret-bound `known_hosts`; `accept-new` is rejected, no automatic host key acceptance.
+- SSH proxy validates that the requested `target` exactly matches the `host`, `port`, and `username` stored in the selected `ssh_connection`. One credential cannot be redirected to an arbitrary host.
+- SSH `ssh_connection` schema now requires a `known_hosts` field — verified OpenSSH host key entry that must be provided through an independent trusted channel.
+
+### Changed
+
+- SSH proxy writes the verified `known_hosts` file to a private tmpfs (0600) alongside the private key, and passes `UserKnownHostsFile=<tmp>` plus `GlobalKnownHostsFile=/dev/null` to the OpenSSH client. No host keys are persisted between sessions.
+
+### Fixed
+
+- Test compatibility on Windows: detect Git-bundled OpenSSL at `C:\Program Files\Git\usr\bin\openssl.exe`; skip POSIX `0600` file-mode assertions on Windows where they are not representable.
+- `test:python-sdk` now installs from `requirements-dev.txt` (pinned versions) into a per-run pytest temp dir (`--basetemp .pytest-tmp`) so the test suite is reproducible across machines.
+
+### Docs
+
+- `docs/SSH-PROXY.md` documents the new known_hosts enforcement, secret-bound target validation, and the strict host-key-checking lifecycle.
+
+### Tests
+
+- `broker-test/test-ssh-proxy.js` now covers 61 cases (added: strict host-key checking, pinned known_hosts, target-must-match-secret, missing known_hosts fails-closed).
+- `broker-test/test-cert-issuer.js` and `broker-test/test-mtls.js` detect Windows OpenSSL paths.
+
+---
+
 ## [4.1.7] - 2026-09-08
 
 ### Fixed

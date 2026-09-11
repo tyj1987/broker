@@ -12,9 +12,9 @@ private key as an env var, where it can be captured by:
 - audit logs
 - accidentally-printed env in error messages
 
-The SSH proxy keeps the private key on the broker's tmpfs (0600) for the
-duration of the command, then `rm -rf` immediately. AI receives only
-stdout/stderr/exit code.
+The SSH proxy keeps the private key and a separately verified `known_hosts`
+file on the broker's tmpfs (0600) for the duration of the command, then removes
+both immediately. AI receives only stdout/stderr/exit code.
 
 ## Endpoints
 
@@ -99,10 +99,21 @@ secret-broker ssh-tunnel \
 
 ### Target validation
 
-`target` must match `user@host[:port]` with strict regex. Rejected:
+`target` must match `user@host[:port]` with strict regex and must exactly match
+the `host`, `port`, and `username` stored in the selected `ssh_connection`.
+One credential therefore cannot be redirected to an arbitrary host. Rejected:
 - shell metacharacters: `; & | \` $ ' " \`
 - ports outside 1-65535
 - invalid hostnames
+
+### Host identity validation
+
+Each `ssh_connection` must contain a complete OpenSSH `known_hosts` entry that
+was verified through an independent trusted channel. The broker writes it to a
+private temporary file and invokes SSH with `StrictHostKeyChecking=yes`.
+Missing, malformed, changed, or mismatched host keys fail closed. The broker
+never uses `accept-new`, `StrictHostKeyChecking=no`, or an empty known-hosts
+database.
 
 ### Command validation
 
@@ -128,40 +139,45 @@ Default 5 minutes. Configurable per-request via `timeout_ms`.
 ```
 1. mkdtempSync('/tmp/broker-ssh-XXXXXX')     # 0700
 2. writeFileSync('id_key', privateKey)        # 0600
-3. spawn('ssh', ['-i', 'id_key', ...])        # broker-controlled
-4. wait for command to finish
-5. rm -rf('/tmp/broker-ssh-XXXXXX')          # finally block
+3. writeFileSync('known_hosts', verifiedKey)  # 0600
+4. spawn('ssh', ['-i', 'id_key', ...])        # strict host-key checking
+5. wait for command to finish
+6. rm -rf('/tmp/broker-ssh-XXXXXX')          # finally block
 ```
 
 If broker process crashes, tmpfs is wiped on next boot (or by cron).
 
 ## Secret type
 
-Use the `ssh_jump_host` type (V4) or store a custom secret with fields:
+Use the `ssh_connection` type with fields:
 - `private_key` (required) — PEM-encoded RSA/ECDSA/Ed25519 key
-- `username` (optional, derived from target)
+- `host`, `port`, `username` (required connection target)
+- `known_hosts` (required, independently verified OpenSSH host-key entry)
 - `passphrase` (optional, used by ssh-keygen decrypt)
 
 Example `secrets/secrets-detail.json` entry:
 ```json
 {
   "name": "ssh.bastion",
-  "type": "ssh_jump_host",
-  "value": {
-    "jump_host": "bastion.example.com",
-    "jump_user": "bastion",
-    "jump_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+  "type": "ssh_connection",
+  "fields": {
+    "host": "10.0.1.5",
+    "port": 22,
+    "username": "app",
+    "known_hosts": "10.0.1.5 ssh-ed25519 AAAA...",
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
   }
 }
 ```
 
 ## Testing
 
-`broker-test/test-ssh-proxy.js` (53 tests):
+`broker-test/test-ssh-proxy.js` (61 tests):
 - target / command validation
 - sshExec happy path with injected executor
 - sshExec error paths
 - key file lifecycle (mkdtemp / write / chmod / rm)
+- strict host-key pinning and secret-bound targets
 - tunnel start/stop, in-flight cleanup
 - zero credential leakage (return values never include private_key)
 

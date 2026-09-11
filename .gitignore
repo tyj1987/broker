@@ -164,4 +164,4 @@ pki/server/
 broker/**/*.bak*
 broker/server.js.bak*
 broker/server.js.patch.*
-
+**/.pytest-tmp/

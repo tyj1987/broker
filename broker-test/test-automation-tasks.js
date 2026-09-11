@@ -957,6 +957,16 @@ const afterRestart = new AutomationTaskBroker({
 });
 afterRestart.restoreState(taskState);
 assert.equal(afterRestart.get(human, persistedSuccess.id).state, 'SUCCEEDED');
+assert.throws(
+  () => afterRestart.get(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),
+  expectCode('forbidden'),
+  'restored tasks remain bounded by the current bearer capability',
+);
+await assert.rejects(
+  afterRestart.run(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),
+  expectCode('forbidden'),
+  'restored task execution cannot bypass a revoked or narrowed bearer capability',
+);
 assert.equal(
   (await afterRestart.create(human, { ...lowInput, idempotency_key: 'persisted-success-0001' })).id,
   persistedSuccess.id,

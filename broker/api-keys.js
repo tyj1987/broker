@@ -106,6 +106,7 @@ export function generateApiKey(name, client, opts = {}) {
   const allowedAccounts = normalizeStringList(opts.allowed_accounts, 'allowed_accounts');
   const allowedResources = normalizeStringList(opts.allowed_resources, 'allowed_resources');
   const allowedEnvironments = normalizeStringList(opts.allowed_environments, 'allowed_environments');
+  const ipWhitelist = opts.ip_whitelist == null ? null : normalizeStringList(opts.ip_whitelist, 'ip_whitelist');
   const random = genRandomBase62(KEY_RANDOM_LEN);
   const secret = `${KEY_PREFIX}_${ENV}_${random}`;
   const fingerprint = createHash('sha256').update(secret).digest('hex');
@@ -128,7 +129,7 @@ export function generateApiKey(name, client, opts = {}) {
     allowed_resources: allowedResources,
     allowed_environments: allowedEnvironments,
     rate_limit: opts.rate_limit || '100/hour',
-    ip_whitelist: opts.ip_whitelist || null,
+    ip_whitelist: ipWhitelist,
     fingerprint_sha256: fingerprint,
     created_at: now.toISOString(),
     created_by: opts.created_by || client,

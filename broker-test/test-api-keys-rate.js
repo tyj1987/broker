@@ -82,6 +82,11 @@ try { generateApiKey('bad-mixed-allowlist', 'client-1', { allowed_resources: ['r
   rejectedMixedAllowlist = /allowed_resources must be an array/.test(error.message);
 }
 ok('mixed-type resource allowlist is rejected', rejectedMixedAllowlist);
+let rejectedStringIpWhitelist = false;
+try { generateApiKey('bad-ip-whitelist', 'client-1', { ip_whitelist: '203.0.113.0/24' }); } catch (error) {
+  rejectedStringIpWhitelist = /ip_whitelist must be an array/.test(error.message);
+}
+ok('string IP whitelist is rejected at creation', rejectedStringIpWhitelist);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');

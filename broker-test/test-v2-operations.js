@@ -134,6 +134,14 @@ await assert.rejects(
   (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
   'operation parameters cannot contain credential fields',
 );
+await assert.rejects(
+  broker.createOperation({ name: 'owner-1' }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { clientSecret: 'credential-canary' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'camelCase credential fields are rejected',
+);
 
 const rollbackOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',

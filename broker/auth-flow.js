@@ -66,6 +66,10 @@ function getMfaPending(token) {
 function consumeMfaPending(token) {
   const v = MFA_PENDING.get(token);
   if (!v) return false;
+  if (Date.now() - v.createdAt > MFA_TOKEN_TTL_MS) {
+    MFA_PENDING.delete(token);
+    return false;
+  }
   v.used = true;
   // 立即删除（单次使用）
   MFA_PENDING.delete(token);

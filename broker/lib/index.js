@@ -99,6 +99,10 @@ export {
   createLocalAuditAnchorSignerClient,
 } from './local-audit-anchor-signer-client.js';
 export {
+  AuditAnchorExporterError,
+  createAuditAnchorExporter,
+} from './audit-anchor-exporter.js';
+export {
   validateBrokerConfig,
   requireValidBrokerConfig,
   preflightPaths,

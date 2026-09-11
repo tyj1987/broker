@@ -79,6 +79,14 @@ choose an immutable store, KMS/HSM identity, retention policy, or disaster
 recovery authority. Production export remains disabled until DQ-003 is decided
 and its storage-outage, retention-lock, signer-rotation and recovery tests pass.
 
+`broker/lib/audit-anchor-exporter.js` adds the provider-neutral publication
+coordinator without selecting those controls. It verifies an externally signed
+envelope locally before publication, uses the previous anchor digest as the
+immutable store compare-and-set condition, and treats a concurrent publication
+of the same chain state as an idempotent success. A conflicting chain state,
+invalid retained head, signer outage or store outage fails closed. Only signed
+chain metadata crosses either boundary; audit event content is never included.
+
 `broker/lib/local-audit-anchor-signer-client.js` defines the corresponding
 credential-isolated workload boundary. It accepts only the versioned anchor
 request, connects to the fixed

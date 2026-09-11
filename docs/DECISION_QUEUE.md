@@ -41,14 +41,17 @@ continue.
   detection, signer revocation, clock rollback, storage outage, retention-lock
   enforcement and disaster-recovery tests.
 - Current safe default: restart-safe local chain verification plus a
-  provider-neutral signed-head envelope, fail-closed verifier, and fixed,
-  ownership-checked Unix-socket client that sends no audit content or private
-  key material to the signer boundary. Deterministic
-  tests cover payload/signature tampering, signer trust and revocation,
-  predecessor/sequence continuity, clock and count rollback, and exact local
-  recovery missing a suffix or the full chain. No exporter, external signer,
-  immutable retention store or recovery authority is selected, so there is no
-  claim of independent non-repudiation and RR-012 remains open.
+  provider-neutral signed-head envelope, fail-closed verifier, fixed,
+  ownership-checked Unix-socket signer client, and provider-neutral export
+  coordinator. The coordinator verifies every signature before publication,
+  uses the previous anchor digest for compare-and-set, and makes same-chain
+  retries idempotent without sending audit content or private key material.
+  Deterministic tests cover payload/signature tampering, signer trust and
+  revocation, predecessor/sequence continuity, clock and count rollback,
+  retained anchors on growing chains, publication conflicts and signer/store
+  outages. No external signer, immutable retention store or recovery authority
+  is selected, so there is no claim of independent non-repudiation and RR-012
+  remains open.
 
 ## DQ-004: provider signing and account-binding authority
 

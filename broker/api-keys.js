@@ -33,6 +33,14 @@ const DEFAULT_CHILD_TTL_SECONDS = 60 * 60;  // 1h
 const MASTER_KEY_SCOPES = ['keys:issue_child'];  // master key 只能创建子 key，不能直接调 service
 const DEFAULT_CHILD_SCOPES = ['secrets:resolve', 'services:proxy'];
 
+function normalizeStringList(value, field) {
+  const list = value === undefined ? [] : value;
+  if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item.length === 0)) {
+    throw new TypeError(`API key ${field} must be an array of non-empty strings`);
+  }
+  return [...list];
+}
+
 // V4.0 任务 6: 多维度限额
 // 历史 v3 rate_limit 字段是 "100/hour" 字符串;V4 支持每分钟/小时/天 三个维度
 // 旧的字符串格式仍可解析(向后兼容)
@@ -92,6 +100,12 @@ export function generateApiKey(name, client, opts = {}) {
   if (!Array.isArray(childScopes) || childScopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
     throw new TypeError('API key child_scopes must be an array of non-empty strings');
   }
+  const allowedSecrets = normalizeStringList(opts.allowed_secrets, 'allowed_secrets');
+  const allowedServices = normalizeStringList(opts.allowed_services, 'allowed_services');
+  const allowedOperations = normalizeStringList(opts.allowed_operations, 'allowed_operations');
+  const allowedAccounts = normalizeStringList(opts.allowed_accounts, 'allowed_accounts');
+  const allowedResources = normalizeStringList(opts.allowed_resources, 'allowed_resources');
+  const allowedEnvironments = normalizeStringList(opts.allowed_environments, 'allowed_environments');
   const random = genRandomBase62(KEY_RANDOM_LEN);
   const secret = `${KEY_PREFIX}_${ENV}_${random}`;
   const fingerprint = createHash('sha256').update(secret).digest('hex');
@@ -107,12 +121,12 @@ export function generateApiKey(name, client, opts = {}) {
     name: name || 'unnamed',
     client,  // 归属的 client name
     scopes,
-    allowed_secrets: opts.allowed_secrets || [],
-    allowed_services: opts.allowed_services || [],
-    allowed_operations: opts.allowed_operations || [],
-    allowed_accounts: opts.allowed_accounts || [],
-    allowed_resources: opts.allowed_resources || [],
-    allowed_environments: opts.allowed_environments || [],
+    allowed_secrets: allowedSecrets,
+    allowed_services: allowedServices,
+    allowed_operations: allowedOperations,
+    allowed_accounts: allowedAccounts,
+    allowed_resources: allowedResources,
+    allowed_environments: allowedEnvironments,
     rate_limit: opts.rate_limit || '100/hour',
     ip_whitelist: opts.ip_whitelist || null,
     fingerprint_sha256: fingerprint,

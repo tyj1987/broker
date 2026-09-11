@@ -72,6 +72,16 @@ try { generateApiKey('bad-child-scopes', 'client-1', { child_scopes: 'services:p
   rejectedStringChildScopes = /child_scopes must be an array/.test(error.message);
 }
 ok('string child scopes are rejected', rejectedStringChildScopes);
+let rejectedStringAllowlist = false;
+try { generateApiKey('bad-allowlist', 'client-1', { allowed_services: 'github' }); } catch (error) {
+  rejectedStringAllowlist = /allowed_services must be an array/.test(error.message);
+}
+ok('string service allowlist is rejected', rejectedStringAllowlist);
+let rejectedMixedAllowlist = false;
+try { generateApiKey('bad-mixed-allowlist', 'client-1', { allowed_resources: ['repo', 1] }); } catch (error) {
+  rejectedMixedAllowlist = /allowed_resources must be an array/.test(error.message);
+}
+ok('mixed-type resource allowlist is rejected', rejectedMixedAllowlist);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');

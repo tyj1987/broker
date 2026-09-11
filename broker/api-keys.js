@@ -73,6 +73,19 @@ export function normalizeRateLimit(rl) {
   return null;
 }
 
+function isValidRateLimitInput(rl) {
+  if (rl == null || rl === 'unlimited') return true;
+  if (typeof rl === 'string') return Object.hasOwn(RATE_LIMIT_PRESETS, rl);
+  if (!rl || typeof rl !== 'object' || Array.isArray(rl)) return false;
+  const keys = Object.keys(rl);
+  if (keys.length === 0 || keys.some((name) => !['minute', 'hour', 'day'].includes(name))) return false;
+  return keys.every((name) => rl[name] == null || (Number.isSafeInteger(rl[name]) && rl[name] >= 0));
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0);
+}
+
 // ============================================================
 // helpers
 // ============================================================
@@ -107,6 +120,9 @@ export function generateApiKey(name, client, opts = {}) {
   const allowedResources = normalizeStringList(opts.allowed_resources, 'allowed_resources');
   const allowedEnvironments = normalizeStringList(opts.allowed_environments, 'allowed_environments');
   const ipWhitelist = opts.ip_whitelist == null ? null : normalizeStringList(opts.ip_whitelist, 'ip_whitelist');
+  if (!isValidRateLimitInput(opts.rate_limit)) {
+    throw new TypeError('API key rate_limit is invalid');
+  }
   const random = genRandomBase62(KEY_RANDOM_LEN);
   const secret = `${KEY_PREFIX}_${ENV}_${random}`;
   const fingerprint = createHash('sha256').update(secret).digest('hex');
@@ -197,6 +213,18 @@ export function isClientIpAllowed(k, remoteIp) {
 export function createChildKey(cfgKeys, master, name, opts = {}) {
   const check = canCreateChild(master);
   if (!check.ok) return { ok: false, reason: check.reason };
+
+  for (const field of ['allowed_secrets', 'allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_resources', 'allowed_environments', 'ip_whitelist']) {
+    if (opts[field] !== undefined && opts[field] !== null && !isStringArray(opts[field])) {
+      return { ok: false, reason: `invalid_${field}` };
+    }
+  }
+  if (opts.scopes !== undefined && !isStringArray(opts.scopes)) {
+    return { ok: false, reason: 'invalid_scopes' };
+  }
+  if (!isValidRateLimitInput(master.rate_limit) || !isValidRateLimitInput(opts.rate_limit)) {
+    return { ok: false, reason: 'invalid_rate_limit' };
+  }
 
   let childScopes = opts.scopes || master.child_scopes || DEFAULT_CHILD_SCOPES;
   if (Array.isArray(childScopes) && Array.isArray(master.child_scopes)) {

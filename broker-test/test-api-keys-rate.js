@@ -87,6 +87,11 @@ try { generateApiKey('bad-ip-whitelist', 'client-1', { ip_whitelist: '203.0.113.
   rejectedStringIpWhitelist = /ip_whitelist must be an array/.test(error.message);
 }
 ok('string IP whitelist is rejected at creation', rejectedStringIpWhitelist);
+let rejectedMalformedRate = false;
+try { generateApiKey('bad-rate', 'client-1', { rate_limit: {} }); } catch (error) {
+  rejectedMalformedRate = /rate_limit is invalid/.test(error.message);
+}
+ok('empty rate object is rejected at creation', rejectedMalformedRate);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');
@@ -186,6 +191,13 @@ section('child constraints fail closed');
   const { key_obj } = generateMasterKey('unconstrained', 'client', { child_scopes: ['services:proxy'] });
   const denied = createChildKey([], key_obj, 'unsafe-child', { scopes: ['services:proxy'] });
   ok('unconstrained proxy child denied', denied.ok === false && denied.reason === 'service_constraints_required');
+}
+{
+  const { key_obj: master } = generateMasterKey('malformed-parent', 'client', { child_scopes: ['services:proxy'], allowed_services: ['github'] });
+  const denied = createChildKey([], { ...master, rate_limit: {} }, 'unsafe-child', { scopes: ['services:proxy'], allowed_services: ['github'] });
+  ok('malformed parent rate is rejected', denied.ok === false && denied.reason === 'invalid_rate_limit');
+  const deniedInput = createChildKey([], master, 'unsafe-child', { scopes: ['services:proxy'], allowed_services: 'github' });
+  ok('malformed child allowlist is rejected', deniedInput.ok === false && deniedInput.reason === 'invalid_allowed_services');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

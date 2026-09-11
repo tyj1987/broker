@@ -95,6 +95,7 @@ import {
   redactDeep,
   securityHeaders,
   createIdentityResolver,
+  createSessionStore,
 } from './lib/index.js';
 // v3.0: schema migration (in start())
 import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
@@ -671,75 +672,18 @@ const {
 });
 
 // ============================================================
-// Session tokens (for dashboard / browser usage; mTLS is still supported)
+// Session tokens + login lockout (V4.3.0-step2: extracted from
+// inline duplicate of lib/session.js#createSessionStore)
 // ============================================================
-const SESSIONS = new Map();  // token -> { cn, fp, role, clientName, expiresAt }
-const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 min
-const SESSION_HEADER = 'x-auth-token';
-
-function makeSession(ctx) {
-  const token = randomUUID();
-  SESSIONS.set(token, {
-    cn: ctx.cn,
-    fp: ctx.fp,
-    role: ctx.client.role,
-    clientName: ctx.clientName,
-    cert: ctx.cert,
-    client: ctx.client,
-    expiresAt: Date.now() + SESSION_TTL_MS,
-    createdAt: Date.now(),
-  });
-  return token;
-}
-
-function getSession(req) {
-  const t = req.headers[SESSION_HEADER]
-    || (req.headers.cookie || '').match(/broker_session=([^;]+)/)?.[1];
-  if (!t) return null;
-  const s = SESSIONS.get(t);
-  if (!s) return null;
-  if (Date.now() > s.expiresAt) {
-    SESSIONS.delete(t);
-    return null;
-  }
-  // sliding expiration
-  s.expiresAt = Date.now() + SESSION_TTL_MS;
-  return s;
-}
-
-function deleteSession(token) {
-  if (token) SESSIONS.delete(token);
-}
-
-// Login brute-force protection (per client + auth mode)
-const LOGIN_ATTEMPTS = new Map();  // `${clientName}|${mode}` -> { fails, lockedUntil }
-const MAX_LOGIN_FAILS = 5;
-const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
-
-function checkLoginLock(key) {
-  const a = LOGIN_ATTEMPTS.get(key);
-  if (!a) return true;
-  // lockedUntil === 0 means "no lock armed yet"; only block while armed
-  if (a.lockedUntil && Date.now() < a.lockedUntil) return false;
-  return true;
-}
-
-function recordLoginFail(key) {
-  const a = LOGIN_ATTEMPTS.get(key) || { fails: 0, lockedUntil: 0 };
-  // if a previous lockout expired, start the counter over
-  if (a.lockedUntil && Date.now() >= a.lockedUntil) {
-    a.fails = 0;
-    a.lockedUntil = 0;
-  }
-  a.fails += 1;
-  if (a.fails >= MAX_LOGIN_FAILS) a.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
-  LOGIN_ATTEMPTS.set(key, a);
-}
-
-function clearLoginLock(key) {
-  LOGIN_ATTEMPTS.delete(key);
-}
-
+const {
+  makeSession,
+  getSession,
+  deleteSession,
+  checkLoginLock,
+  recordLoginFail,
+  clearLoginLock,
+  sessions: SESSIONS,
+} = createSessionStore();
 
 function getClientContext(socket) {
   // Kept for back-compat with places that still pass req.socket.

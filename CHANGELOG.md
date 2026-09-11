@@ -28,6 +28,23 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 - `server.js` still at 3176 LOC — further extractions (`auth.js`, `proxy.js`, `admin.js`) deferred to subsequent v4.3.x steps. The REVIEW.md Next#6 target of <600 LOC will require 4–5 more extraction commits; this commit lays the factory pattern that subsequent extractions will follow.
 
+### Refactor (v4.3.0-step2)
+
+- Removed inline duplicate of `broker/lib/session.js#createSessionStore` (~56 LOC). `server.js` now binds the factory once at module scope:
+  ```js
+  const {
+    makeSession, getSession, deleteSession,
+    checkLoginLock, recordLoginFail, clearLoginLock,
+    sessions: SESSIONS,
+  } = createSessionStore();
+  ```
+- Inline `SESSIONS`, `SESSION_TTL_MS`, `SESSION_HEADER`, `LOGIN_ATTEMPTS`, `MAX_LOGIN_FAILS`, `LOGIN_LOCKOUT_MS`, `makeSession`, `getSession`, `deleteSession`, `checkLoginLock`, `recordLoginFail`, `clearLoginLock` all deleted. `server.js` shrunk from 3176 → 3120 LOC.
+- Behavior identical to v4.2.1 inline implementation; the `lib/session.js` factory has been present since Phase B.2 but `server.js` carried its own copy.
+
+### Notes (v4.3.0-step2)
+
+- Further server.js extractions (proxy forwarder, admin CRUD, config persistence) remain. The <600 LOC target is a long-term goal; this commit cuts another 56 LOC of duplicate code while reducing future extraction friction.
+
 ---
 
 ## [4.2.1] - 2026-09-09

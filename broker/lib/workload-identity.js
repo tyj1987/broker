@@ -173,12 +173,19 @@ const PROVIDER_HANDLERS = {
  * Convert a V4 response to a normalized credentials object with expires_at_ms.
  */
 function normalizeExpiry(creds) {
-  if (creds.expires_at_ms) return creds;
-  if (creds.expiration) {
-    const t = new Date(creds.expiration).getTime();
-    return { ...creds, expires_at_ms: isNaN(t) ? Date.now() + 3600_000 : t };
+  if (!creds || typeof creds !== 'object') throw new Error('workload identity response missing credentials');
+  if (Object.prototype.hasOwnProperty.call(creds, 'expires_at_ms')) {
+    if (!Number.isSafeInteger(creds.expires_at_ms) || creds.expires_at_ms <= Date.now()) {
+      throw new Error('workload identity response has invalid expiration');
+    }
+    return creds;
   }
-  return { ...creds, expires_at_ms: Date.now() + 3600_000 };
+  if (typeof creds.expiration === 'string' && creds.expiration.length > 0) {
+    const t = new Date(creds.expiration).getTime();
+    if (!Number.isSafeInteger(t) || t <= Date.now()) throw new Error('workload identity response has invalid expiration');
+    return { ...creds, expires_at_ms: t };
+  }
+  throw new Error('workload identity response missing expiration');
 }
 
 function cacheKey(provider, opts) {

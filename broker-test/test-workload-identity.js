@@ -145,6 +145,23 @@ section('aws provider');
   } catch (e) { threw = /aws sts 403/.test(e.message); }
   ok('aws: 403 surfaces as error', threw);
 }
+{
+  _resetForTests();
+  const malformedResponses = [
+    { AssumeRoleWithWebIdentityResult: { Credentials: { AccessKeyId: 'AKID', SecretAccessKey: 'SECRET', SessionToken: 'TOKEN' } } },
+    { AssumeRoleWithWebIdentityResult: { Credentials: { AccessKeyId: 'AKID', SecretAccessKey: 'SECRET', SessionToken: 'TOKEN', Expiration: 'not-a-date' } } },
+  ];
+  for (const response of malformedResponses) {
+    let threw = false;
+    try {
+      await getCredentials('aws', 'tok', { roleArn: 'arn:aws:iam::1:role/x' }, {
+        httpClient: async () => ({ status: 200, body: JSON.stringify(response) }),
+      });
+    } catch (e) { threw = /invalid expiration|missing expiration/.test(e.message); }
+    ok('aws: malformed expiration fails closed', threw);
+    _resetForTests();
+  }
+}
 
 // ============================================================
 // GCP provider

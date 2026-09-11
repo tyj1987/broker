@@ -102,6 +102,8 @@ const sparseOperation = {
         { provider: 'github', operation_id: 'other', account_ref: 'primary', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: 'alice', expires_at_ms: Date.now() + 60_000 },
         { provider: 'github', operation_id: 'repo.read', account_ref: 'other', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: 'alice', expires_at_ms: Date.now() + 60_000 },
         { provider: 'github', operation_id: 'repo.read', account_ref: 'primary', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: '', expires_at_ms: Date.now() + 60_000 },
+        { provider: 'github', operation_id: 'repo.read', account_ref: 'primary', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: 'bad-expiry', expires_at_ms: 'not-a-time' },
+        { provider: 'github', operation_id: 'repo.read', account_ref: 'primary', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: 123, expires_at_ms: Date.now() + 60_000 },
         { provider: 'github', operation_id: 'repo.read', account_ref: 'primary', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: 'human', expires_at_ms: Date.now() + 60_000 },
         { provider: 'github', operation_id: 'repo.read', account_ref: 'primary', environment: 'production', resource_ref: 'tyj1987/broker', approved_by: 'expired', expires_at_ms: 0 },
       ],

@@ -13,7 +13,10 @@ function approvalsFor(ctx, actorName, provider, operationId, accountRef, environ
   for (const grant of ctx?.approvalGrants || []) {
     if (grant?.provider !== provider || grant.operation_id !== operationId || grant.account_ref !== accountRef
       || grant.environment !== environment || grant.resource_ref !== resource) continue;
-    if (Number(grant.expires_at_ms) <= now || !grant.approved_by || grant.approved_by === actorName) continue;
+    const expiresAt = grant.expires_at_ms;
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= now
+      || typeof grant.approved_by !== 'string' || grant.approved_by.length === 0
+      || grant.approved_by === actorName) continue;
     approvers.add(grant.approved_by);
   }
   return approvers.size;

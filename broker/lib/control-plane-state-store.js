@@ -86,8 +86,8 @@ export class ControlPlaneStateCoordinator {
 
   restoreState(snapshot) {
     validateSnapshot(snapshot);
-    if (snapshot.generation < this.generation) {
-      throw failure('state_rollback_detected', 'control-plane state generation is older than the active state');
+    if (snapshot.generation <= this.generation) {
+      throw failure('state_rollback_detected', 'control-plane state generation is not newer than the active state');
     }
     const previous = {
       approvals: this.approvals.exportState(),

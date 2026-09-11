@@ -77,6 +77,7 @@ try {
   executionTokens.restoreState({ version: 1, records: [] });
   tasks.restoreState({ version: 1, tasks: [], idempotency: [], rate_limits: [] });
   operations.restoreState({ version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] });
+  coordinator.generation = 0;
   assert.equal(store.load(), true);
   assert.deepEqual(approvals.exportState().records, [{ id: 'approval-1' }]);
   assert.deepEqual(executionTokens.exportState().records, [{ id: 'execution-1' }]);
@@ -88,6 +89,11 @@ try {
   assert.throws(
     () => coordinator.restoreState({ ...coordinator.exportState(), generation: 1 }),
     code('state_rollback_detected'),
+  );
+  assert.throws(
+    () => coordinator.restoreState({ ...coordinator.exportState(), generation: coordinator.generation }),
+    code('state_rollback_detected'),
+    'a snapshot from the active generation must not be replayed',
   );
   assert.throws(
     () => coordinator.restoreState({ ...coordinator.exportState(), approvals: [] }),

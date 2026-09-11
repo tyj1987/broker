@@ -7,6 +7,27 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.1.9] - 2026-09-09
+
+### Added
+
+- SSH proxy now supports passphrase-protected private keys. If `ssh_connection.passphrase` is set, the broker runs `ssh-keygen -p -f <key> -P "<passphrase>" -N ""` inside the same tmpfs right after writing the encrypted key, leaving a passphrase-free key in place for OpenSSH to consume. Passphrase is delivered as argv (no shell, no env, no prompt capture); the decrypted key never leaves the tmpfs and is removed with the encrypted file when the connection closes.
+- sshExec and sshTunnel both accept an injectable `deps.keygen` so tests can simulate `ssh-keygen` behavior (success / wrong passphrase / timeout) without spawning the real binary.
+
+### Security
+
+- Passphrase is **never** written to audit, log, error messages, or return values. The generic `ssh-keygen` failure message contains no passphrase content (ssh-keygen itself does not echo it). The `passphrase` field is capped at 1 KB; longer values are rejected before any spawn.
+
+### Tests
+
+- `broker-test/test-ssh-proxy.js` now covers 77 cases (added 16 passphrase cases: no-op without passphrase, correct keygen argv on passphrase, wrong passphrase → reject + cleanup, oversize/non-string passphrase rejected, passphrase never leaks to audit or result, sshTunnel also handles passphrase).
+
+### Docs
+
+- `docs/SSH-PROXY.md` documents the passphrase decryption lifecycle, including argv delivery, tmpfs containment, and the no-leak guarantee.
+
+---
+
 ## [4.1.8] - 2026-09-09
 
 ### Security

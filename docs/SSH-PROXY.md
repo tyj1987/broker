@@ -115,6 +115,27 @@ Missing, malformed, changed, or mismatched host keys fail closed. The broker
 never uses `accept-new`, `StrictHostKeyChecking=no`, or an empty known-hosts
 database.
 
+### Passphrase-protected keys (v4.1.9+)
+
+If `ssh_connection.passphrase` is set, the broker invokes
+`ssh-keygen -p -f <key> -P "<passphrase>" -N ""` **inside the same tmpfs**
+right after writing the encrypted private key. The decrypted key still lives
+only in the 0600 tmpfs and is removed together with the encrypted file when
+the connection closes.
+
+Properties:
+- Passphrase is delivered to `ssh-keygen` as argv (`-P`), not via env or stdin.
+  No shell interpolation, no prompt capture.
+- The decrypted key never persists outside the broker process; the broker
+  does not cache the passphrase, and the decrypted key is overwritten in
+  place by `ssh-keygen -p` itself (the original encrypted file is replaced).
+- Passphrase is **never** written to audit, log, error messages, or return
+  values. The `ssh-keygen` failure message is truncated and contains no
+  passphrase content (ssh-keygen itself never echoes it back).
+- Passphrase is capped at 1 KB; longer values are rejected before any spawn.
+- Wrong passphrase is reported as a generic decrypt failure; the broker
+  cleans up the tmpfs immediately and does not retry.
+
 ### Command validation
 
 `command` must:
@@ -172,7 +193,7 @@ Example `secrets/secrets-detail.json` entry:
 
 ## Testing
 
-`broker-test/test-ssh-proxy.js` (61 tests):
+`broker-test/test-ssh-proxy.js` (77 tests):
 - target / command validation
 - sshExec happy path with injected executor
 - sshExec error paths
@@ -180,6 +201,7 @@ Example `secrets/secrets-detail.json` entry:
 - strict host-key pinning and secret-bound targets
 - tunnel start/stop, in-flight cleanup
 - zero credential leakage (return values never include private_key)
+- passphrase decryption via injected ssh-keygen; failure cleanup
 
 ## Comparison to alternatives
 

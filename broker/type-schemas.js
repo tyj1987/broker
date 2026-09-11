@@ -227,7 +227,7 @@ export const TYPE_SCHEMAS = {
           { value: 'private_key', label: '私钥 / Private Key' },
           { value: 'password', label: '密码 / Password（运行时未支持）' },
         ],
-        help: 'sshExec/sshTunnel 仅支持 private_key（BatchMode + -i）。password / passphrase 尚未实现。' },
+        help: 'sshExec/sshTunnel 仅支持 private_key（BatchMode + -i）。password 仍不支持(v4.1.9 起 passphrase 通过 ssh-keygen 解密支持)。' },
       { name: 'password', label: '密码（未支持）', kind: 'password', sensitive: true,
         show_when: { field: 'auth_method', equals: 'password' },
         help: '运行时未实现：请改用 private_key。保留字段仅兼容旧配置。' },
@@ -241,7 +241,7 @@ export const TYPE_SCHEMAS = {
         help: 'broker 端使用私钥时会读这个路径。优先级：private_key > private_key_path' },
       { name: 'passphrase', label: '私钥密码 (可选)', kind: 'password', sensitive: true,
         show_when: { field: 'auth_method', equals: 'private_key' },
-        help: '如果私钥文件本身有密码保护' },
+        help: '如果私钥本身有密码保护,broker 会用 ssh-keygen 在 tmpfs 中解密(解密后仍仅存活在 0600 临时文件中,执行完立即 rm)。passphrase 永远不写入审计或日志。' },
     ],
   },
   ssh_private_key: {

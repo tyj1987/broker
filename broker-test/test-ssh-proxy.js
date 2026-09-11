@@ -301,5 +301,116 @@ section('zero credential leakage');
 }
 
 // ============================================================
+// passphrase 解密（v4.1.9）
+// ============================================================
+section('sshExec passphrase decryption');
+{
+  // 没 passphrase 时,keygen 不应被调用
+  let keygenCalls = 0;
+  const r = await sshExec(
+    { target: 'app@10.0.1.5', command: 'uptime', secret: testSecret('app@10.0.1.5', 'FAKE-KEY') },
+    {
+      executor: async () => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
+      keygen: async () => { keygenCalls++; },
+    }
+  );
+  ok('no passphrase → keygen not called', keygenCalls === 0);
+  ok('ssh still completes when no passphrase', r.ok === true);
+}
+{
+  // 有 passphrase → keygen 被调用,且参数正确
+  let keygenArgs = null;
+  const r = await sshExec(
+    { target: 'app@10.0.1.5', command: 'uptime', secret: { ...testSecret('app@10.0.1.5', 'ENCRYPTED-KEY'), passphrase: 'secret-phrase' } },
+    {
+      executor: async () => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
+      keygen: async (args) => { keygenArgs = args; },
+    }
+  );
+  ok('passphrase → keygen called', keygenArgs !== null);
+  ok('keygen args include -p (change passphrase)', keygenArgs?.[0] === '-p');
+  ok('keygen args include -f <keyPath>', keygenArgs?.[1] === '-f' && /id_key$/.test(keygenArgs?.[2] || ''));
+  ok('keygen args include -P <passphrase>', keygenArgs?.[3] === '-P' && keygenArgs?.[4] === 'secret-phrase');
+  ok('keygen args include -N "" (remove)', keygenArgs?.[5] === '-N' && keygenArgs?.[6] === '');
+}
+{
+  // 错误 passphrase → keygen 抛错,sshExec 抛错,临时目录清理
+  const fsCalls = [];
+  let threw = false;
+  try {
+    await sshExec(
+      { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), passphrase: 'wrong' } },
+      {
+        executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+        keygen: async () => { throw new Error('ssh-keygen decrypt failed (exit 1)'); },
+        fsImpl: {
+          writeFileSync: (...a) => fsCalls.push(['write', a[0], a[1]]),
+          chmodSync: () => {},
+          rmSync: (...a) => fsCalls.push(['rm', a[0]]),
+          existsSync: () => true,
+          mkdtempSync: () => '/tmp/broker-ssh-test',
+        },
+      }
+    );
+  } catch (e) { threw = /ssh-keygen decrypt failed/.test(e.message); }
+  ok('wrong passphrase → sshExec rejects', threw);
+  ok('tmp dir cleaned after keygen failure', fsCalls.some(c => c[0] === 'rm'));
+}
+{
+  // passphrase 过长 → 直接拒绝
+  let threw = false;
+  try {
+    await sshExec(
+      { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), passphrase: 'x'.repeat(1025) } },
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), keygen: async () => {} }
+    );
+  } catch (e) { threw = /passphrase too long/.test(e.message); }
+  ok('passphrase > 1KB rejected', threw);
+}
+{
+  // passphrase 非字符串 → 拒绝
+  let threw = false;
+  try {
+    await sshExec(
+      { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), passphrase: 12345 } },
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), keygen: async () => {} }
+    );
+  } catch (e) { threw = /must be a string/.test(e.message); }
+  ok('non-string passphrase rejected', threw);
+}
+{
+  // passphrase 永远不出现在 audit 或返回值
+  const auditCalls = [];
+  const r = await sshExec(
+    { target: 'app@10.0.1.5', command: 'echo hi', secret: { ...testSecret('app@10.0.1.5', 'ENCRYPTED'), passphrase: 'SECRET-PHRASE-VALUE' } },
+    {
+      executor: async () => ({ exitCode: 0, stdout: 'hi', stderr: '' }),
+      keygen: async () => {},
+      audit: (e) => auditCalls.push(e),
+    }
+  );
+  const rTxt = JSON.stringify(r);
+  const aTxt = JSON.stringify(auditCalls);
+  ok('result does not contain passphrase', !rTxt.includes('SECRET-PHRASE-VALUE'));
+  ok('audit does not contain passphrase', !aTxt.includes('SECRET-PHRASE-VALUE'));
+  ok('audit does not contain private_key', !aTxt.includes('ENCRYPTED'));
+}
+{
+  // sshTunnel 同样支持 passphrase
+  let keygenArgs = null;
+  const fakeChild = { on: () => {}, kill: () => {} };
+  await sshTunnel(
+    { target: 'app@b:22', localPort: 5432, remoteHost: 'db.svc', remotePort: 5432,
+      secret: { ...testSecret('app@b:22'), passphrase: 'topsecret' } },
+    { executor: async () => ({ child: fakeChild }), keygen: async (args) => { keygenArgs = args; }, audit: () => {} }
+  );
+  ok('sshTunnel calls keygen when passphrase set', keygenArgs !== null);
+  ok('sshTunnel keygen args include passphrase', keygenArgs?.[4] === 'topsecret');
+  // 清理 tunnel
+  const items = listTunnels();
+  for (const t of items) await stopTunnel(t.id, () => {});
+}
+
+// ============================================================
 console.log(`\n=== Total: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);

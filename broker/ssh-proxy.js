@@ -6,6 +6,12 @@
 // 临时文件存放私钥(0600),spawn 完即删。
 // 跨平台: Linux/macOS 用 /usr/bin/ssh,Windows 用 PATH 里的 ssh.exe (Win10 1809+ / Win11 自带)。
 //
+// v4.1.9 起支持带 passphrase 的私钥:
+//   写完加密私钥后,若 secret.passphrase 非空,调用 ssh-keygen -p -f <key>
+//   -P <pass> -N "" 在 tmpfs 内就地解密。解密后的私钥依然只活在 0600 临时文件中。
+//   passphrase 永远不进入审计、日志或返回值;依赖 ssh-keygen 子进程的 argv 传递,
+//   不经任何 shell 解释器。
+//
 // 注入点:
 //   - executor 替换 spawn,测试用
 //   - secretStore.getSecret 读 secret (注入使测试不依赖 sops)
@@ -124,6 +130,68 @@ function writeSshMaterial(fsImpl, secret) {
   return { dir, keyPath, knownHostsPath };
 }
 
+/**
+ * 若 passphrase 非空,通过 ssh-keygen 就地把 tmpfs 里的加密私钥解密为无密码私钥。
+ * 不抛任何包含原 passphrase 内容的错误;日志/异常中的密钥相关字段都是占位符。
+ *
+ * @param {string} passphrase  用户提供的私钥密码（sensitive:true，永不记录）
+ * @param {object} deps        { keygen } —— keygen(args, opts) -> Promise;测试可注入
+ */
+async function decryptSshKeyIfNeeded({ fsImpl, keyPath, passphrase, deps }) {
+  if (!passphrase) return;
+  if (typeof passphrase !== 'string') {
+    throw new Error('passphrase must be a string');
+  }
+  if (passphrase.length > 1024) {
+    throw new Error('passphrase too long (>1KB)');
+  }
+  const keygen = deps.keygen || defaultKeygen;
+  // ssh-keygen -p  -f <key>  -P <current>  -N <new>
+  //   -p: change passphrase (here: remove it)
+  //   -f: key file
+  //   -P: current passphrase
+  //   -N: new passphrase (empty string = remove)
+  // argv 传递,不经 shell;tmpfs 内原地覆盖,文件权限保留 0600。
+  await keygen(['-p', '-f', keyPath, '-P', passphrase, '-N', ''], { timeoutMs: 30_000 });
+}
+
+/**
+ * Default ssh-keygen executor: spawn the binary, capture stderr, enforce timeout.
+ * Mirrors defaultExecutor pattern for `ssh`. Injected via deps.keygen in tests.
+ */
+function defaultKeygen(args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn('ssh-keygen', args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        windowsHide: true,
+      });
+    } catch (e) { return reject(new Error(`ssh-keygen spawn failed: ${e.message}`)); }
+    let stderr = '';
+    let timer = null;
+    if (opts.timeoutMs) {
+      timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch (_e) { /* */ }
+        reject(new Error(`ssh-keygen timeout after ${opts.timeoutMs}ms`));
+      }, opts.timeoutMs);
+    }
+    child.stderr.on('data', (d) => {
+      if (stderr.length < 4096) stderr += d.toString('utf8');
+    });
+    child.on('error', (e) => {
+      if (timer) clearTimeout(timer);
+      reject(new Error(`ssh-keygen spawn error: ${e.message}`));
+    });
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`ssh-keygen decrypt failed (exit ${code})`));
+    });
+  });
+}
+
 function cleanupKeyDir(fsImpl, dir) {
   try {
     if (fsImpl.existsSync(dir)) fsImpl.rmSync(dir, { recursive: true, force: true });
@@ -156,6 +224,13 @@ export async function sshExec(opts, deps = {}) {
   const executor = deps.executor || defaultExecutor;
   const startedAt = Date.now();
   const { dir, keyPath, knownHostsPath } = writeSshMaterial(fsImpl, opts.secret);
+  try {
+    // v4.1.9: 若 secret.passphrase 非空,在 spawn ssh 之前就地解密私钥
+    await decryptSshKeyIfNeeded({ fsImpl, keyPath, passphrase: opts.secret.passphrase, deps });
+  } catch (e) {
+    cleanupKeyDir(fsImpl, dir);
+    throw e;
+  }
   const args = [
     '-i', keyPath,
     '-o', 'StrictHostKeyChecking=yes',
@@ -276,6 +351,13 @@ export async function sshTunnel(opts, deps = {}) {
     });
   });
   const { dir, keyPath, knownHostsPath } = writeSshMaterial(fsImpl, opts.secret);
+  try {
+    // v4.1.9: 同 sshExec,先解密 passphrase-protected 的私钥
+    await decryptSshKeyIfNeeded({ fsImpl, keyPath, passphrase: opts.secret.passphrase, deps });
+  } catch (e) {
+    cleanupKeyDir(fsImpl, dir);
+    throw e;
+  }
   const args = [
     '-i', keyPath,
     '-o', 'StrictHostKeyChecking=yes',

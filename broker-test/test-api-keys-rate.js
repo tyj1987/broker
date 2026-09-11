@@ -124,6 +124,7 @@ section('IP whitelist');
   ok('cidr 10/8 hit', isClientIpAllowed(key_obj, '10.99.99.99'));
   ok('cidr 192.168.1/24 hit', isClientIpAllowed(key_obj, '192.168.1.50'));
   ok('cidr miss', !isClientIpAllowed(key_obj, '172.16.0.1'));
+  ok('malformed non-array whitelist fails closed', !isClientIpAllowed({ ip_whitelist: '10.0.0.0/8' }, '10.1.2.3'));
 }
 
 // === master key still works ===

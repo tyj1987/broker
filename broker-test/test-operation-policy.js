@@ -69,6 +69,16 @@ assert.equal(evaluateOperationPolicy(config, base, 1_000).executionMode, 'adapte
 assert.equal(evaluateOperationPolicy({
   operation_policies: { aliyun: { 'billing.read': { ...policy, execution_mode: 'browser' } } },
 }, base, 1_000).executionMode, 'browser');
+for (const ttl of [Infinity, NaN, '60', -1]) {
+  assert.equal(evaluateOperationPolicy({
+    operation_policies: { aliyun: { 'billing.read': { ...policy, ttl_seconds: ttl } } },
+  }, base, 1_000).reason, 'policy_ttl_invalid', `malformed policy ttl: ${String(ttl)}`);
+}
+for (const ttl of [Infinity, NaN, '60', -1]) {
+  assert.equal(evaluateOperationPolicy({
+    operation_policies: { aliyun: { 'billing.read': { ...policy, otp: { required: true, ttl_seconds: ttl } } } },
+  }, base, 1_000).reason, 'otp_policy_ttl_invalid', `malformed OTP ttl: ${String(ttl)}`);
+}
 const denied = [
   ['role', { client: { ...context.client, role: 'admin' } }],
   ['profile', { client: { ...context.client, security_profile: 'compatibility' } }],

@@ -157,6 +157,14 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   if (environment === 'production' && policy.contract_verified !== true) {
     return deny('contract_unverified');
   }
+  if (policy.ttl_seconds !== undefined
+    && (!Number.isSafeInteger(policy.ttl_seconds) || policy.ttl_seconds < 0)) {
+    return deny('policy_ttl_invalid');
+  }
+  if (policy.otp?.ttl_seconds !== undefined
+    && (!Number.isSafeInteger(policy.otp.ttl_seconds) || policy.otp.ttl_seconds < 0)) {
+    return deny('otp_policy_ttl_invalid');
+  }
 
   const conditions = evaluatePolicyConditions(policy, ctx.sourceIp, now);
   if (!conditions.ok) return deny(conditions.reason);

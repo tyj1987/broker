@@ -119,6 +119,8 @@ section('master key');
   });
   ok('master is_master=true', key_obj.is_master === true);
   ok('master can_create_child=true', key_obj.can_create_child === true);
+  const forgedMaster = generateMasterKey('forged-scope-master', 'client', { scopes: ['secrets:resolve'] });
+  ok('master scope cannot be overridden', JSON.stringify(forgedMaster.key_obj.scopes) === JSON.stringify(['keys:issue_child']));
   const keys = [key_obj];
   const child = createChildKey(keys, key_obj, 'child', {
     scopes: ['operations:execute'], allowed_services: ['aliyun', 'github'],

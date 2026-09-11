@@ -130,7 +130,7 @@ export function generateMasterKey(name, client, opts = {}) {
     ...opts,
     is_master: true,
     ttl_ms: opts.ttl_ms || DEFAULT_MASTER_TTL_MS,
-    scopes: opts.scopes || MASTER_KEY_SCOPES,
+    scopes: MASTER_KEY_SCOPES,
   });
 }
 

@@ -73,6 +73,7 @@ import {
 } from './lib/outbound-policy.js';
 import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
 import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
+import { consumeRateLimit } from './lib/rate-limit.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
@@ -1086,23 +1087,8 @@ function verifyClientPassword(plaintext, stored) {
 function rateLimit(ctx) {
   if (!ctx.client) return true;  // fail at canResolve/canProxy later
   const limit = ctx.client.rate_limit || '100/hour';
-  if (limit === 'unlimited') return true;
-  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return false;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
   const key = ctx.fp || ctx.clientName;
-  if (!key) return false;
-  const now = Date.now();
-  const bucket = RATE_BUCKETS.get(key) || [];
-  const fresh = bucket.filter(t => now - t < windowMs);
-  if (fresh.length >= max) {
-    RATE_BUCKETS.set(key, fresh);
-    return false;
-  }
-  fresh.push(now);
-  RATE_BUCKETS.set(key, fresh);
-  return true;
+  return consumeRateLimit(limit, key, RATE_BUCKETS);
 }
 
 // ============================================================
@@ -3311,22 +3297,8 @@ const API_KEY_BUCKETS = new Map();
 function rateLimitApiKey(k) {
   if (!k) return true;
   const limit = k.rate_limit || '100/hour';
-  if (limit === 'unlimited') return true;
-  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return false;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
   const key = 'apikey:' + k.id;
-  const now = Date.now();
-  const bucket = API_KEY_BUCKETS.get(key) || [];
-  const fresh = bucket.filter(t => now - t < windowMs);
-  if (fresh.length >= max) {
-    API_KEY_BUCKETS.set(key, fresh);
-    return false;
-  }
-  fresh.push(now);
-  API_KEY_BUCKETS.set(key, fresh);
-  return true;
+  return consumeRateLimit(limit, key, API_KEY_BUCKETS);
 }
 
 // ============================================================

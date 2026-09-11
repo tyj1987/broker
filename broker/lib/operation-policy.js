@@ -121,13 +121,15 @@ export function validateTypedParameters(value, schema) {
   return { ok: true };
 }
 
-function hasApproval(ctx, actorName, provider, operationId, accountRef, requiredApprovals, now) {
+function hasApproval(ctx, actorName, provider, operationId, accountRef, environment, resource, requiredApprovals, now) {
   const approvers = new Set();
   for (const grant of ctx?.approvalGrants || []) {
     if (grant
     && grant.provider === provider
     && grant.operation_id === operationId
     && grant.account_ref === accountRef
+    && grant.environment === environment
+    && grant.resource_ref === resource
     && grant.approved_by !== actorName
     && Number(grant.expires_at_ms) > now
     && typeof grant.approved_by === 'string') {
@@ -174,7 +176,7 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
     return deny('approval_policy_invalid');
   }
   if (policy.approval_required === true && options.ignoreApproval !== true
-    && !hasApproval(ctx, identity.name, provider, operationId, accountRef, requiredApprovals, now)) {
+    && !hasApproval(ctx, identity.name, provider, operationId, accountRef, environment, resource, requiredApprovals, now)) {
     return deny('approval_required');
   }
 

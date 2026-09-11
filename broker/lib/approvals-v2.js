@@ -436,6 +436,8 @@ export class ApprovalBroker {
       provider: record.provider,
       operation_id: record.operationId,
       account_ref: record.accountRef,
+      environment: record.environment,
+      resource_ref: record.resourceRef,
       approved_by: item.name,
       expires_at_ms: new Date(record.expiresAt).getTime(),
     }));

@@ -8,11 +8,12 @@ function listOr(value, fallback) {
   return Array.isArray(value) && value.length > 0 ? [...value] : [...fallback];
 }
 
-function approvalsFor(ctx, provider, operationId, accountRef, now) {
+function approvalsFor(ctx, actorName, provider, operationId, accountRef, environment, resource, now) {
   const approvers = new Set();
   for (const grant of ctx?.approvalGrants || []) {
-    if (grant?.provider !== provider || grant.operation_id !== operationId || grant.account_ref !== accountRef) continue;
-    if (Number(grant.expires_at_ms) <= now || !grant.approved_by || grant.approved_by === ctx.clientName) continue;
+    if (grant?.provider !== provider || grant.operation_id !== operationId || grant.account_ref !== accountRef
+      || grant.environment !== environment || grant.resource_ref !== resource) continue;
+    if (Number(grant.expires_at_ms) <= now || !grant.approved_by || grant.approved_by === actorName) continue;
     approvers.add(grant.approved_by);
   }
   return approvers.size;
@@ -68,7 +69,7 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
       environment,
       requested_ttl_ms: Math.min(Number(preliminary.ttlMs || policyTTL), policyTTL),
       step_up: (ctx.authFactors || []).includes('webauthn'),
-      approval_count: approvalsFor(ctx, provider, operationId, accountRef, now),
+      approval_count: approvalsFor(ctx, identity.name, provider, operationId, accountRef, environment, resource, now),
       approval_phase: options.ignoreApproval === true,
       source_ip: ctx.sourceIp || '',
       at: new Date(now).toISOString(),

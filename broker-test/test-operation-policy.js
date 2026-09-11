@@ -37,7 +37,7 @@ const context = {
   clientName: 'automation-1',
   client: { role: 'operator', security_profile: 'strict', allowed_services: ['aliyun'] },
   apiKey,
-  approvalGrants: [{ provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', approved_by: 'reviewer-2', expires_at_ms: 2_000 }],
+  approvalGrants: [{ provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', resource_ref: 'billing-summary', approved_by: 'reviewer-2', expires_at_ms: 2_000 }],
 };
 const base = {
   identity: { name: 'automation-1', context }, provider: 'aliyun', operationId: 'billing.read',
@@ -160,6 +160,7 @@ const stagingBase = {
     ...base.identity,
     context: {
       ...context,
+      approvalGrants: context.approvalGrants.map((grant) => ({ ...grant, environment: 'staging' })),
       apiKey: { ...apiKey, allowed_environments: ['staging'] },
     },
   },

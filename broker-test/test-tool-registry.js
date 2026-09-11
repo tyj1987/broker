@@ -108,6 +108,9 @@ assert.equal(registry.evaluate({
 assert.equal(registry.evaluate({
   identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
 }, allowed, { operationPolicy: { approval_required: true, required_approvals: 1 } }).reason, 'tool_approval_policy_mismatch');
+assert.equal(registry.evaluate({
+  identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
+}, allowed, { operationPolicy: { approval_required: true, required_approvals: 'not-a-number' } }).reason, 'tool_approval_policy_mismatch');
 
 assert.equal(registry.validateConfiguration({ operation_policies: {
   github: { 'repo.read': {
@@ -124,6 +127,12 @@ assert.throws(() => registry.validateConfiguration({ operation_policies: {
 assert.throws(() => registry.validateConfiguration({ operation_policies: {
   broker: { 'device.state': {
     enabled: true, environments: ['production'], approval_required: false,
+    parameter_schema: { properties: { resource_ref: {}, device_id: {}, state: {} } },
+  } },
+} }), /weakens tool approval/);
+assert.throws(() => registry.validateConfiguration({ operation_policies: {
+  broker: { 'device.state': {
+    enabled: true, environments: ['production'], approval_required: true, required_approvals: 'not-a-number',
     parameter_schema: { properties: { resource_ref: {}, device_id: {}, state: {} } },
   } },
 } }), /weakens tool approval/);

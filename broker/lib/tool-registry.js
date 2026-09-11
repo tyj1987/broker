@@ -251,7 +251,9 @@ export class ToolRegistry {
         }
         if (['HIGH', 'CRITICAL'].includes(tool.risk_level)
           && (policy.approval_required !== true
-            || Number(policy.required_approvals || 1) < tool.approval_policy.approvals_required)) {
+            || !Number.isSafeInteger(policy.required_approvals === undefined ? 1 : policy.required_approvals)
+            || (policy.required_approvals === undefined ? 1 : policy.required_approvals)
+              < tool.approval_policy.approvals_required)) {
           throw new Error(`${provider}:${operationId}: policy weakens tool approval requirements`);
         }
       }
@@ -278,7 +280,9 @@ export class ToolRegistry {
     const policy = options.operationPolicy;
     if (['HIGH', 'CRITICAL'].includes(tool.risk_level)) {
       if (policy?.approval_required !== true) return { allow: false, reason: 'tool_approval_policy_mismatch' };
-      if (Number(policy.required_approvals || 1) < tool.approval_policy.approvals_required) {
+      const requiredApprovals = policy.required_approvals === undefined ? 1 : policy.required_approvals;
+      if (!Number.isSafeInteger(requiredApprovals)
+        || requiredApprovals < tool.approval_policy.approvals_required) {
         return { allow: false, reason: 'tool_approval_policy_mismatch' };
       }
     }

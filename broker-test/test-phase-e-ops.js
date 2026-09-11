@@ -2,6 +2,7 @@
 import {
   validateBrokerConfig,
   normalizeBrokerConfig,
+  validateClientMutationCandidate,
   requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
@@ -211,6 +212,14 @@ console.log('=== validateBrokerConfig ===');
   const exampleBootstrap = validateBrokerConfig(example, { allowWebAuthnBootstrap: true });
   assert(exampleBootstrap.ok === true, 'strict example is valid only with non-production bootstrap');
   assert(validateBrokerConfig(example).ok === false, 'strict example fails closed in production before two hardware keys');
+
+  const mutationBase = { clients: { admin: { role: 'admin' } }, services: {} };
+  assert(validateClientMutationCandidate(mutationBase, 'developer', { role: 'developer' }).ok === true,
+    'valid client mutation is accepted');
+  assert(validateClientMutationCandidate(mutationBase, 'broken', {}).ok === false,
+    'client mutation without role fails closed');
+  assert(validateClientMutationCandidate(mutationBase, 'broken', null).ok === false,
+    'null client mutation fails closed');
 }
 
 console.log('=== preflightPaths ===');

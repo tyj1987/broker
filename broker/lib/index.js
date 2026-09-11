@@ -110,6 +110,7 @@ export {
 export {
   validateBrokerConfig,
   normalizeBrokerConfig,
+  validateClientMutationCandidate,
   requireValidBrokerConfig,
   preflightPaths,
   formatValidationReport,

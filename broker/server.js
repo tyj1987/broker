@@ -128,6 +128,7 @@ import {
   rejectIfShuttingDown,
   validateBrokerConfig,
   normalizeBrokerConfig,
+  validateClientMutationCandidate,
   requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
@@ -708,13 +709,6 @@ function normalizeClientConfig(body) {
   if (body.rate_limit !== undefined) out.rate_limit = String(body.rate_limit);
   if (body.description !== undefined) out.description = String(body.description);
   return out;
-}
-
-function validateClientConfigMutation(candidate) {
-  const result = validateBrokerConfig(candidate, {
-    allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production',
-  });
-  if (!result.ok) throw new Error(formatValidationReport(result));
 }
 
 // Server-side last-seen timestamps. Not part of broker.yaml because it
@@ -2724,10 +2718,10 @@ async function handle(req, res) {
     let cfg;
     try { cfg = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
     try {
-      validateClientConfigMutation({
-        ...CONFIG,
-        clients: { ...CONFIG.clients, [name]: cfg },
+      const result = validateClientMutationCandidate(CONFIG, name, cfg, {
+        allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production',
       });
+      if (!result.ok) throw new Error(formatValidationReport(result));
     } catch (e) {
       audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'invalid_config' });
       return jsonError(res, 400, 'Invalid client configuration');
@@ -2762,10 +2756,10 @@ async function handle(req, res) {
       delete next.password;
     }
     try {
-      validateClientConfigMutation({
-        ...CONFIG,
-        clients: { ...CONFIG.clients, [name]: next },
+      const result = validateClientMutationCandidate(CONFIG, name, next, {
+        allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production',
       });
+      if (!result.ok) throw new Error(formatValidationReport(result));
     } catch (e) {
       audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'invalid_config' });
       return jsonError(res, 400, 'Invalid client configuration');

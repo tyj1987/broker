@@ -258,6 +258,27 @@ export function normalizeBrokerConfig(config) {
   return config;
 }
 
+/**
+ * Validate one admin client mutation against the complete candidate config.
+ * Runtime mutations must share the same fail-closed rules as startup and
+ * reload; validating only the submitted fragment misses global invariants.
+ */
+export function validateClientMutationCandidate(config, name, client, opts = {}) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)
+    || typeof name !== 'string' || !name
+    || !client || typeof client !== 'object' || Array.isArray(client)) {
+    return {
+      ok: false,
+      errors: [{ level: 'error', path: 'clients', message: 'client mutation candidate is invalid' }],
+      warnings: [],
+    };
+  }
+  return validateBrokerConfig({
+    ...config,
+    clients: { ...(config.clients || {}), [name]: client },
+  }, opts);
+}
+
 export function requireValidBrokerConfig(config, opts = {}) {
   const result = validateBrokerConfig(config, opts);
   if (!result.ok) throw new Error(`broker configuration rejected:\n${formatValidationReport(result)}`);

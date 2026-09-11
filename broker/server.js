@@ -127,6 +127,7 @@ import {
   installGracefulShutdown,
   rejectIfShuttingDown,
   validateBrokerConfig,
+  normalizeBrokerConfig,
   requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
@@ -427,6 +428,7 @@ async function prepareConfig() {
     : await sopsDecrypt(CONFIG_PATH);
   const cfg = parseYaml(yamlText);
   if (!cfg || typeof cfg !== 'object') throw new Error('Invalid broker.yaml');
+  normalizeBrokerConfig(cfg);
   cfg.services = cfg.services || {};
   cfg.clients = cfg.clients || {};
   requireValidBrokerConfig(cfg, { allowWebAuthnBootstrap: process.env.NODE_ENV !== 'production' });

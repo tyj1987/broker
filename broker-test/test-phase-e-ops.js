@@ -1,6 +1,7 @@
 // broker-test/test-phase-e-ops.js
 import {
   validateBrokerConfig,
+  normalizeBrokerConfig,
   requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
@@ -48,6 +49,12 @@ console.log('=== validateBrokerConfig ===');
     },
   });
   assert(good.ok === true && good.errors.length === 0, 'good config');
+
+  const mappedKeys = {
+    api_keys: { first: { id: 'first', client: 'admin' }, second: { id: 'second', client: 'admin' } },
+  };
+  assert(normalizeBrokerConfig(mappedKeys) === mappedKeys, 'config normalization preserves object identity');
+  assert(Array.isArray(mappedKeys.api_keys) && mappedKeys.api_keys.length === 2, 'legacy API key map normalizes to array');
 
   const validApiKey = validateBrokerConfig({
     clients: { admin: { role: 'admin' } },

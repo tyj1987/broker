@@ -244,6 +244,20 @@ export function validateBrokerConfig(config, opts = {}) {
   return { ok, errors, warnings };
 }
 
+/**
+ * Normalize legacy object-map API keys at the configuration boundary. The
+ * runtime key store and management routes operate on arrays; keeping this
+ * conversion next to validation prevents a config that passes preflight from
+ * silently disabling every bearer key at runtime.
+ */
+export function normalizeBrokerConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
+  if (config.api_keys && typeof config.api_keys === 'object' && !Array.isArray(config.api_keys)) {
+    config.api_keys = Object.values(config.api_keys);
+  }
+  return config;
+}
+
 export function requireValidBrokerConfig(config, opts = {}) {
   const result = validateBrokerConfig(config, opts);
   if (!result.ok) throw new Error(`broker configuration rejected:\n${formatValidationReport(result)}`);

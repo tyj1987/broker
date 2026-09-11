@@ -109,6 +109,7 @@ export {
 } from './audit-anchor-recovery.js';
 export {
   validateBrokerConfig,
+  normalizeBrokerConfig,
   requireValidBrokerConfig,
   preflightPaths,
   formatValidationReport,

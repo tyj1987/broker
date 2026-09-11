@@ -63,6 +63,22 @@ function requireObject(value, field) {
   return structuredClone(value);
 }
 
+function assertSafeParameters(value, depth = 0) {
+  if (depth > 8) throw new V2Error('unsafe_parameters', 'operation parameters are too deeply nested');
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertSafeParameters(item, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') throw new V2Error('unsafe_parameters', 'operation parameters contain an unsupported value');
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_RESULT_KEY.test(key)) {
+      throw new V2Error('unsafe_parameters', 'operation parameters contain credential material');
+    }
+    assertSafeParameters(item, depth + 1);
+  }
+}
+
 function requireText(value, field, maxLength = 128) {
   if (typeof value !== 'string' || value.length === 0 || value.length > maxLength || /[\u0000-\u001f\u007f]/.test(value)) {
     throw new V2Error('invalid_request', `${field} has an invalid format`);
@@ -299,6 +315,7 @@ export class OperationBroker {
           || (source.otpTaskId !== null && !ID_RE.test(source.otpTaskId))
           || (source.error !== null && !ID_RE.test(source.error))) throw stateCorrupt();
         requireObject(source.typedParameters, 'typed_parameters');
+        assertSafeParameters(source.typedParameters);
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.updatedAt, 'updated_at');
         requireTimestamp(source.expiresAt, 'expires_at');
@@ -650,6 +667,7 @@ export class OperationBroker {
     const environment = input?.environment;
     if (!ENVIRONMENTS.has(environment)) throw new V2Error('invalid_request', 'unsupported environment');
     const typedParameters = requireObject(input?.typed_parameters || {}, 'typed_parameters');
+    assertSafeParameters(typedParameters);
     // Creation must enforce the same delegated capability boundary as reads.
     // Otherwise a bearer key could create an out-of-scope browser/OTP
     // operation and let a separately authenticated worker execute it.

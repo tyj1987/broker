@@ -126,6 +126,15 @@ await assert.rejects(
   'a delegated key cannot create an operation outside its allowlist',
 );
 
+await assert.rejects(
+  broker.createOperation({ name: 'owner-1' }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { password: 'credential-canary' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'operation parameters cannot contain credential fields',
+);
+
 const rollbackOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
   operation_id: 'console.login',

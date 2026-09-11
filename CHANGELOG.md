@@ -7,6 +7,23 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.2.1] - 2026-09-09
+
+### Tests
+
+- `test-healthcheck.js` header comment updated: `checkAliyun` no longer marked as "skipped TODO" (the actual HTTP-mock test has been present since v3.0 M5.1; the comment was stale).
+- `test-healthcheck.js` adds four Aliyun paths:
+  - 401 Unauthorized response → `expired` (mirrors the existing 403 path).
+  - 5xx server error → `fail` (non-2xx, non-4xx-classified branch).
+  - Empty `fields` → `skipped` (pickCredential returns primary=undefined, short-circuits before checkAliyun).
+  - `access_key_secret` only (no AK) → `skipped` (same short-circuit, documents the unreachable misconfigured-branch from public API).
+
+### Notes
+
+- The audit hot-read ring buffer (REVIEW.md Next#11) follows in a separate `perf` commit under the same v4.2.1 release.
+
+---
+
 ## [4.2.0] - 2026-09-09
 
 ### Changed

@@ -3,7 +3,9 @@
 // 1. healthcheck.checkGithub (mock https)
 // 2. healthcheck.checkOpenAI (mock https)
 // 3. healthcheck.checkSsh (mock TCP)
-// 4. healthcheck.checkAliyun (skipped TODO)
+// 4. healthcheck.checkAliyun (mock HTTP, 含 200/401/403/500/misconfigured 五路径)
+// 4b. healthcheck.checkCloudflare (mock HTTP, 含 200/401/403)
+// 4c. healthcheck.checkAiProvider deepseek (mock HTTP)
 // 5. healthcheck.runAll (合并 + 状态持久化)
 // 6. healthcheck.getStatus / getSecretStatus
 // 7. cron-tasks.shouldRun (daily / weekly / 防重复)
@@ -251,6 +253,11 @@ let lastHttpReq = null;
         res.writeHead(403, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ Code: 'InvalidAccessKeyId', Message: 'Specified access key is not valid.' }));
       }
+      // 401 Unauthorized (v4.2.1 覆盖认证失败但非 invalid signature 的路径)
+      if (req.url.includes('AccessKeyId=LTAI_unauth_test_24')) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ Code: 'Unauthorized', Message: 'Request authentication failed.' }));
+      }
       // 其它: 500
       res.writeHead(500);
       res.end('mock error');
@@ -274,6 +281,22 @@ let lastHttpReq = null;
     // 缺 secret 字段 (M5.3: 缺字段是配置错, 不是 skipped)
     const missing = await hc.checkSecret('PROD', { access_key_id: 'LTAI_x' /* no secret */ }, 'aliyun_ak');
     ok('aliyun_ak 缺 secret → misconfigured (M5.3)', missing.status === 'misconfigured' && missing.detail.includes('access_key_secret'));
+
+    // 完全空 (无 AK 无 secret): pickCredential 返 primary=undefined → skipped
+    const noFields = await hc.checkSecret('PROD', {}, 'aliyun_ak');
+    ok('aliyun_ak 完全空 fields → skipped', noFields.status === 'skipped' && noFields.detail.includes('no extractable credential'));
+
+    // 只有 secret 没 AK (primary=undefined) → 同样 skipped, 不进 checkAliyun
+    const noAk = await hc.checkSecret('PROD', { access_key_secret: 'foo' }, 'aliyun_ak');
+    ok('aliyun_ak 缺 access_key_id → skipped (short-circuit at pickCredential)', noAk.status === 'skipped');
+
+    // 401 Unauthorized → expired (v4.2.1: 覆盖除 403 之外的认证失败)
+    const unauth = await hc.checkSecret('PROD', { access_key_id: 'LTAI_unauth_test_24', access_key_secret: 'whatever' }, 'aliyun_ak');
+    ok('aliyun_ak 401 → expired', unauth.status === 'expired' && unauth.detail.includes('401'));
+
+    // 5xx 服务端错误 → fail (v4.2.1: 覆盖非认证/非 2xx 的路径)
+    const srvErr = await hc.checkSecret('PROD', { access_key_id: 'LTAI_srvfail_test_24', access_key_secret: 'whatever' }, 'aliyun_ak');
+    ok('aliyun_ak 5xx → fail', srvErr.status === 'fail' && srvErr.detail.includes('HTTP 500'));
 
     // 清理 env
     delete process.env.ALIYUN_HEALTHCHECK_HOST;

@@ -7,6 +7,38 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.9.0] - 2026-09-12
+
+### Added (Live E2E)
+
+- **`broker-test/test-e2e-live.js`** (v4.9.0, 18 cases): full live broker
+  end-to-end test. Spins up a real `server.js` subprocess with temp PKI
+  (CA + server cert + client cert, generated via `openssl` CLI), waits
+  for `/health`, exercises the full mTLS flow:
+  - `GET /api/v1/me` (any client cert)
+  - `GET /api/v1/ws-stats` (admin only)
+  - `POST /api/v1/secrets/resolve` (returns the secret value)
+  - `GET /api/v1/secrets` (list)
+  - `POST /api/v1/proxy/:service` (forwarded to a mock upstream HTTP server)
+  - Negative test: no client cert → 401
+  - Verifies audit JSONL has entries mentioning `proxy` and `client_e2e`
+  - Cleans up temp dir + kills broker on exit
+
+### Notes
+
+- `SOPS_SKIP=1` is set in the broker env so `broker.yaml` is read as
+  plaintext (the test skips the SOPS decrypt step). Real deployments
+  always encrypt with SOPS.
+- The test depends on `openssl` being on PATH (or `OPENSSL_BIN` env).
+  Git for Windows provides one at `C:\Program Files\Git\usr\bin\openssl.exe`
+  which the test auto-detects.
+- Service names must match the proxy regex `[a-z0-9_-]+` — dots are not
+  allowed in service names. Test uses `github_e2e` instead of `github.e2e`.
+- `CONFIG_PATH` env (not `SECRETS_PATH`) controls which `broker.yaml`
+  is loaded. `SECRETS_PATH` is for SOPS-encrypted secrets.
+
+---
+
 ## [4.8.0] - 2026-09-11
 
 ### Added (Release pipeline — SEC-006 closed)

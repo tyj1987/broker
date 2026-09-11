@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { V2Error, canonicalJson } from './operations-v2.js';
+import { V2Error, assertSafeParameters, canonicalJson } from './operations-v2.js';
 import { ExecutionTokenBroker } from './execution-tokens.js';
 import { redactDeep } from './redact.js';
 
@@ -150,6 +150,7 @@ function restoreTaskRecord(value, toolRegistry) {
   try {
     parameters = structuredClone(value.parameters);
     assertSchema(parameters, tool.input_schema, 'parameters');
+    assertSafeParameters(parameters);
   } catch {
     throw stateCorrupt('task parameters are invalid');
   }
@@ -437,6 +438,7 @@ export class AutomationTaskBroker {
     if (!tool) throw new V2Error('tool_unregistered', 'tool and version are not registered', 404);
     const parameters = structuredClone(input.parameters);
     assertSchema(parameters, tool.input_schema, 'parameters');
+    assertSafeParameters(parameters);
     if (!this.apiKeyAllowsTask(identity, {
       tool, accountRef: input.account_ref, environment: input.environment, parameters,
     })) {

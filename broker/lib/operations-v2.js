@@ -63,7 +63,7 @@ function requireObject(value, field) {
   return structuredClone(value);
 }
 
-function assertSafeParameters(value, depth = 0) {
+export function assertSafeParameters(value, depth = 0) {
   if (depth > 8) throw new V2Error('unsafe_parameters', 'operation parameters are too deeply nested');
   if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
   if (Array.isArray(value)) {

@@ -3,9 +3,15 @@ import { resolve } from 'node:path';
 import { ApprovalBroker } from '../broker/lib/approvals-v2.js';
 import { AutomationTaskBroker } from '../broker/lib/automation-tasks.js';
 import { loadToolRegistry } from '../broker/lib/tool-registry.js';
-import { V2Error } from '../broker/lib/operations-v2.js';
+import { V2Error, assertSafeParameters } from '../broker/lib/operations-v2.js';
 
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
+
+assert.throws(
+  () => assertSafeParameters({ nested: { clientSecret: 'credential-canary' } }),
+  expectCode('unsafe_parameters'),
+  'automation parameter helper rejects nested credential fields',
+);
 const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'));
 let now = 1_900_000_000_000;
 const observed = [];

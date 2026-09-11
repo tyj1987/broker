@@ -59,6 +59,35 @@ const lowInput = {
   parameters: { resource_ref: 'tool-registry', tool_name: 'github.repository.read', tool_version: '1.0.0' },
 };
 
+const inspectTool = registry.findByName(lowInput.tool, lowInput.tool_version);
+const permissiveInspectTool = {
+  ...inspectTool,
+  input_schema: {
+    ...inspectTool.input_schema,
+    properties: {
+      ...inspectTool.input_schema.properties,
+      clientSecret: { type: 'string' },
+    },
+  },
+};
+const permissiveRegistry = {
+  findByName(name, version) {
+    return name === permissiveInspectTool.name && version === permissiveInspectTool.version
+      ? structuredClone(permissiveInspectTool) : registry.findByName(name, version);
+  },
+  listFor(identity) { return registry.listFor(identity); },
+};
+await assert.rejects(
+  new AutomationTaskBroker({ toolRegistry: permissiveRegistry, authorize, approvalBroker: approvals, executors })
+    .create(human, {
+      ...lowInput,
+      idempotency_key: 'unsafe-task-client-secret-0001',
+      parameters: { ...lowInput.parameters, clientSecret: 'credential-canary' },
+    }),
+  expectCode('unsafe_parameters'),
+  'task creation rejects credential-shaped fields even when the tool schema permits them',
+);
+
 await assert.rejects(
   new AutomationTaskBroker({ toolRegistry: registry, authorize, approvalBroker: approvals, executors })
     .create({ ...human, name: 'invalid\0principal' }, lowInput),

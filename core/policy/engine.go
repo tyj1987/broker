@@ -83,6 +83,12 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 		request.Provider == "" || request.Operation == "" || request.Account == "" || request.Environment == "" {
 		return deny("invalid_request")
 	}
+	if request.ApprovalCount < 0 || request.ApprovalCount > 10 {
+		return deny("invalid_request")
+	}
+	if rule.RequiredApprovals < 0 || rule.RequiredApprovals > 10 {
+		return deny("invalid_rule")
+	}
 	if !rule.Enabled {
 		return deny("rule_disabled")
 	}

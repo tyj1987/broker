@@ -89,6 +89,27 @@ func TestEvaluateRiskFloor(t *testing.T) {
 	}
 }
 
+func TestEvaluateRejectsMalformedApprovalBounds(t *testing.T) {
+	subject, request, rule := baseline()
+	rule.RequiredApprovals = -1
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_rule" {
+		t.Fatalf("expected malformed negative approval rule denial, got %#v", decision)
+	}
+	rule.RequiredApprovals = 11
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_rule" {
+		t.Fatalf("expected oversized approval rule denial, got %#v", decision)
+	}
+	rule.RequiredApprovals = 0
+	request.ApprovalCount = -1
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_request" {
+		t.Fatalf("expected malformed negative approval count denial, got %#v", decision)
+	}
+	request.ApprovalCount = 11
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_request" {
+		t.Fatalf("expected oversized approval count denial, got %#v", decision)
+	}
+}
+
 func TestApprovalPreflightDoesNotExecute(t *testing.T) {
 	subject, request, rule := baseline()
 	request.RiskLevel = "HIGH"

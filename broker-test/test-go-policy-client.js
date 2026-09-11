@@ -156,6 +156,14 @@ try {
   assert.equal(decision.marker, true);
   const preflight = await authorize(operation, { allow: true, ttlMs: 90_000, tool }, { ignoreApproval: true });
   assert.equal(preflight.allow, true);
+  const malformedConfig = {
+    operation_policies: { github: { 'repo.read': { ...policy, required_approvals: 'not-a-number' } } },
+  };
+  const malformedAuthorize = createOperationAuthorizer(malformedConfig, { socketPath: socket, requireCore: true });
+  assert.deepEqual(
+    await malformedAuthorize(operation, { allow: true, ttlMs: 90_000, tool }),
+    { allow: false, reason: 'core_config_invalid' },
+  );
 
   responseFactory = (requestBinding) => ({
     allow: false, ttl_ms: 0, code: 'role_denied', request_binding: requestBinding,

@@ -39,7 +39,11 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
   const accountValues = listOr(key?.allowed_accounts, listOr(client.allowed_accounts, policy.accounts));
   const resourceValues = listOr(key?.allowed_resources, listOr(client.allowed_resources, policy.resources || []));
   const environmentValues = listOr(key?.allowed_environments, listOr(client.allowed_environments, policy.environments));
-  const configuredApprovals = Math.max(Number(policy.required_approvals || 0), policy.approval_required ? 1 : 0);
+  const configuredApprovalsInput = policy.required_approvals === undefined ? 0 : policy.required_approvals;
+  if (!Number.isSafeInteger(configuredApprovalsInput) || configuredApprovalsInput < 0 || configuredApprovalsInput > 10) {
+    throw new Error('invalid required_approvals policy');
+  }
+  const configuredApprovals = Math.max(configuredApprovalsInput, policy.approval_required ? 1 : 0);
   return {
     subject: {
       id: identity.name,
@@ -165,10 +169,13 @@ export function createOperationAuthorizer(configSource, options = {}) {
     if (!socketPath) return requireCore ? { allow: false, reason: 'core_required' } : preliminary;
     const config = typeof configSource === 'function' ? configSource() : configSource;
     if (!config) return { allow: false, reason: 'core_config_missing' };
-    const decision = await evaluateWithCore(
-      socketPath,
-      corePolicyPayload(config, operation, preliminary, Date.now(), evaluationOptions),
-    );
+    let payload;
+    try {
+      payload = corePolicyPayload(config, operation, preliminary, Date.now(), evaluationOptions);
+    } catch {
+      return { allow: false, reason: 'core_config_invalid' };
+    }
+    const decision = await evaluateWithCore(socketPath, payload);
     if (!decision.allow) return decision;
     return { ...preliminary, ttlMs: Math.min(Number(preliminary.ttlMs || 900_000), decision.ttlMs) };
   };

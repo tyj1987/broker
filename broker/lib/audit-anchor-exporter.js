@@ -68,18 +68,20 @@ export function createAuditAnchorExporter({
     throw new TypeError('Audit anchor exporter configuration is invalid');
   }
 
-  async function chainState() {
+  async function chainState(signal) {
     try {
-      return await loadChainState();
+      return await loadChainState({ signal });
     } catch {
+      if (signal?.aborted) fail('anchor_export_aborted', 'Audit anchor export was aborted');
       fail('anchor_chain_unavailable', 'Audit chain state is unavailable');
     }
   }
 
-  async function chainProof(eventCount) {
+  async function chainProof(eventCount, signal) {
     try {
-      return await loadChainProof(eventCount);
+      return await loadChainProof(eventCount, { signal });
     } catch {
+      if (signal?.aborted) fail('anchor_export_aborted', 'Audit anchor export was aborted');
       fail('anchor_chain_unavailable', 'Audit chain proof is unavailable');
     }
   }
@@ -89,6 +91,7 @@ export function createAuditAnchorExporter({
     try {
       head = await store.readHead({ streamId, signal });
     } catch {
+      if (signal?.aborted) fail('anchor_export_aborted', 'Audit anchor export was aborted');
       fail('anchor_store_unavailable', 'Audit anchor store is unavailable');
     }
     if (
@@ -100,12 +103,12 @@ export function createAuditAnchorExporter({
     return head;
   }
 
-  async function verifyStored(envelope, previousEnvelope) {
+  async function verifyStored(envelope, previousEnvelope, signal) {
     if (!envelope || envelope?.payload?.stream_id !== streamId) {
       fail('anchor_store_invalid', 'Audit anchor store returned an invalid head');
     }
     try {
-      const proof = await chainProof(envelope.payload.event_count);
+      const proof = await chainProof(envelope.payload.event_count, signal);
       verifyAuditAnchorEnvelope(envelope, {
         chainProof: proof,
         previousEnvelope,
@@ -129,6 +132,7 @@ export function createAuditAnchorExporter({
         signal,
       });
     } catch {
+      if (signal?.aborted) fail('anchor_export_aborted', 'Audit anchor export was aborted');
       fail('anchor_store_unavailable', 'Audit anchor store is unavailable');
     }
     const published = exactKeys(result, new Set(['status'])) && result.status === 'published';
@@ -142,13 +146,13 @@ export function createAuditAnchorExporter({
 
   async function exportAnchor({ signal } = {}) {
     validateSignal(signal);
-    const state = await chainState();
+    const state = await chainState(signal);
     validateSignal(signal);
     const head = await readHead(signal);
     validateSignal(signal);
 
     if (head.current !== null) {
-      await verifyStored(head.current, head.previous);
+      await verifyStored(head.current, head.previous, signal);
       if (sameChainState(head.current, state)) {
         return Object.freeze({
           status: 'already_published',

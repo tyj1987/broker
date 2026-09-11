@@ -87,6 +87,14 @@ of the same chain state as an idempotent success. A conflicting chain state,
 invalid retained head, signer outage or store outage fails closed. Only signed
 chain metadata crosses either boundary; audit event content is never included.
 
+`broker/lib/audit-anchor-recovery.js` verifies recovery against a fixed retained
+head. It reads bounded pages only through that sequence and checks every anchor
+from sequence one: signature trust and revocation, predecessor continuity, and
+the corresponding historical local-chain proof. Missing, duplicated, reordered
+or tampered anchors, a changed head, unavailable proof, or configured limit
+overflow fails closed. This verifies the portable contract; it is not evidence
+that any production immutable store or retention lock has been deployed.
+
 `broker/lib/local-audit-anchor-signer-client.js` defines the corresponding
 credential-isolated workload boundary. It accepts only the versioned anchor
 request, connects to the fixed

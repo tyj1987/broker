@@ -46,10 +46,13 @@ continue.
   coordinator. The coordinator verifies every signature before publication,
   uses the previous anchor digest for compare-and-set, and makes same-chain
   retries idempotent without sending audit content or private key material.
+  A fixed-head, bounded-page recovery verifier checks every retained anchor
+  from sequence one against its local historical chain proof.
   Deterministic tests cover payload/signature tampering, signer trust and
   revocation, predecessor/sequence continuity, clock and count rollback,
-  retained anchors on growing chains, publication conflicts and signer/store
-  outages. No external signer, immutable retention store or recovery authority
+  retained anchors on growing chains, publication conflicts, signer/store
+  outages, incomplete recovery and recovery bounds. No external signer,
+  immutable retention store or recovery authority
   is selected, so there is no claim of independent non-repudiation and RR-012
   remains open.
 

@@ -103,6 +103,11 @@ export {
   createAuditAnchorExporter,
 } from './audit-anchor-exporter.js';
 export {
+  AUDIT_ANCHOR_RECOVERY_LIMITS,
+  AuditAnchorRecoveryError,
+  createAuditAnchorRecoveryVerifier,
+} from './audit-anchor-recovery.js';
+export {
   validateBrokerConfig,
   requireValidBrokerConfig,
   preflightPaths,

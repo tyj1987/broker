@@ -242,5 +242,20 @@ await assert.rejects(
   abortingSigner.value.exportAnchor({ signal: abortDuringSigning.signal }),
   expectCode('anchor_export_aborted'),
 );
+const abortDuringStore = new AbortController();
+const abortingStore = exporter({
+  state: firstState,
+  store: {
+    readHead: async () => {
+      abortDuringStore.abort();
+      throw new Error('detail');
+    },
+    publish() {},
+  },
+});
+await assert.rejects(
+  abortingStore.value.exportAnchor({ signal: abortDuringStore.signal }),
+  expectCode('anchor_export_aborted'),
+);
 
 console.log('audit anchor exporter: verified CAS publication, idempotency and safe failures passed');

@@ -842,6 +842,13 @@ export class OperationBroker {
     }
     try {
       const result = await consumer(code);
+      // OTP consumers are an internal boundary, but their result is persisted
+      // and later exposed through getOperation. Fail closed before committing
+      // any result that contains a credential or other sensitive material.
+      assertSafeResult(result);
+      if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
+        throw new V2Error('unsafe_result', 'operation result contains credential material');
+      }
       if (task.status !== 'consuming' || operation?.status === 'revoked') {
         throw new V2Error('operation_revoked', 'OTP operation was revoked while consuming', 409);
       }

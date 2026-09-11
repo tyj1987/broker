@@ -214,6 +214,26 @@ await assert.rejects(
   (error) => error instanceof V2Error && error.code === 'invalid_state',
 );
 
+const unsafeResultOperation = await broker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun',
+  operation_id: 'console.login',
+  account_ref: 'secondary',
+  environment: 'production',
+  typed_parameters: { requested_action: 'unsafe-result-test' },
+});
+const unsafeResultTask = broker.listDeviceOtpTasks(device.id)
+  .find((task) => task.id === unsafeResultOperation.otp_task_id);
+broker.submitOtp(device.id, unsafeResultTask.id, {
+  code: '731904', sim_binding: 'sim-primary', challenge: unsafeResultTask.challenge,
+});
+await assert.rejects(
+  broker.consumeOtp(unsafeResultTask.id, async () => ({ access_token: 'credential-canary' })),
+  (error) => error instanceof V2Error && error.code === 'upstream_failed',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, unsafeResultOperation.id).status, 'failed');
+assert.equal(JSON.stringify(broker.exportState()).includes('credential-canary'), false,
+  'unsafe OTP result is never persisted');
+
 const revokedInFlightOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
   operation_id: 'console.login',

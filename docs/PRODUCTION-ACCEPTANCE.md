@@ -27,10 +27,10 @@ suite at commit `df1d0f05b28257ee07d6d80dd5bb78128c598a1d`, which was squash
 merged into the baseline above.
 
 The next source candidate is
-`codex/goal-current-state@d57946ea600305819bcb8822dca14e8fb81ed16f`,
+`codex/goal-current-state@f4c0a68aee825bf1010cbcd2a3294baafb4c1820`,
 tracked in draft PR
-[#29](https://github.com/tyj1987/broker/pull/29). Its single PR CI run
-[`34540657300`](https://github.com/tyj1987/broker/actions/runs/34540657300)
+[#29](https://github.com/tyj1987/broker/pull/29). Its final PR CI run
+[`34544480711`](https://github.com/tyj1987/broker/actions/runs/34544480711)
 completed successfully. That run covered the Node and Go security boundaries,
 SDKs, desktop and mobile clients, CodeQL, secret-history and dependency scans,
 Terraform, the production container runtime policy, Trivy and SBOM generation.

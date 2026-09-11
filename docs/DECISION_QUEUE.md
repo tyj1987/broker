@@ -40,8 +40,13 @@ continue.
 - Required evidence: signed-head verification, suffix and full-chain deletion
   detection, signer revocation, clock rollback, storage outage, retention-lock
   enforcement and disaster-recovery tests.
-- Current safe default: restart-safe local chain verification; no claim of
-  independent non-repudiation.
+- Current safe default: restart-safe local chain verification plus a
+  provider-neutral signed-head envelope and fail-closed verifier. Deterministic
+  tests cover payload/signature tampering, signer trust and revocation,
+  predecessor/sequence continuity, clock and count rollback, and exact local
+  recovery missing a suffix or the full chain. No exporter, external signer,
+  immutable retention store or recovery authority is selected, so there is no
+  claim of independent non-repudiation and RR-012 remains open.
 
 ## DQ-004: provider signing and account-binding authority
 

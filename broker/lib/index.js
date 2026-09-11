@@ -83,6 +83,16 @@ export {
   GENESIS_HASH,
 } from './audit-hash-chain.js';
 export {
+  ANCHOR_PURPOSE,
+  ANCHOR_VERSION,
+  SIGNATURE_ALGORITHMS,
+  AuditAnchorError,
+  attachAuditAnchorSignature,
+  createAuditAnchorRequest,
+  createAuditAnchorSigningInput,
+  verifyAuditAnchorEnvelope,
+} from './audit-anchor.js';
+export {
   validateBrokerConfig,
   requireValidBrokerConfig,
   preflightPaths,

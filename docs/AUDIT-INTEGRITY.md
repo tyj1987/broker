@@ -44,6 +44,35 @@ chain verifier. A successful local verification proves consistency only for
 the files that are present; it cannot prove that an attacker did not remove a
 valid suffix or the entire chain.
 
+## External anchor protocol core
+
+The source tree includes a provider-neutral signed-head envelope in
+`broker/lib/audit-anchor.js`. An anchor payload binds a stream identifier,
+strictly increasing sequence, UTC capture time, retained file and event counts,
+current chain head, and the previous anchor digest. The signature input uses a
+fixed domain separator and also binds the signature algorithm and key
+identifier. Only the payload digest and public metadata need to cross the
+external signer boundary; no audit content or signing private key is released
+to Broker.
+
+The verifier fails closed when the payload is modified, the signer is not in
+the explicit trust set, the signer is revoked, the signature is invalid, the
+previous anchor or sequence is discontinuous, time or event count moves
+backwards, or the restored local chain state differs from the signed head. An
+externally retained envelope can therefore detect an exact recovery that is
+missing a valid suffix or the complete local chain.
+
+Run the protocol and chain tests together:
+
+```bash
+npm --prefix broker run test:audit-hash-chain
+```
+
+This module is a contract and verifier, not an active exporter. It does not
+choose an immutable store, KMS/HSM identity, retention policy, or disaster
+recovery authority. Production export remains disabled until DQ-003 is decided
+and its storage-outage, retention-lock, signer-rotation and recovery tests pass.
+
 ## Open production gate
 
 Local hashing is tamper-evident, not independently non-repudiable. Production

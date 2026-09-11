@@ -82,5 +82,6 @@ sink. Local development defaults to `audit/YYYY-MM-DD.jsonl`. Each event include
 - `request_id` (for cross-referencing with traces)
 - `redacted_payload` (auto-redacted by the redact engine)
 
-Audit chains are signed daily with a SHA-256 hash chain. Tampering with
-historical entries is detectable on verification.
+Audit events are sealed into daily files with a SHA-256 hash chain. Tampering
+with retained historical entries is detectable on verification. Independent
+signing and immutable external retention remain a production acceptance gate.

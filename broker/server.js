@@ -74,6 +74,7 @@ import {
 import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
 import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
 import { consumeRateLimit } from './lib/rate-limit.js';
+import { isApiKeyLegacyRouteAllowed } from './lib/api-key-route-boundary.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
@@ -1725,6 +1726,10 @@ async function handle(req, res) {
   if (!ctx.client) {
     audit({ action: 'connect', status: 'denied', reason: 'cert_not_registered', cn: ctx.cn, fp: ctx.fp, remote: req.socket.remoteAddress });
     return jsonError(res, 403, `Client certificate not registered. CN=${ctx.cn} fp=${ctx.fp}`);
+  }
+  if ((ctx.via === 'api_key' || ctx.apiKey) && !isApiKeyLegacyRouteAllowed(m, p)) {
+    audit({ action: 'legacy_api', status: 'denied', reason: 'api_key_route_not_allowed', cn: ctx.cn, path: p });
+    return jsonError(res, 403, 'API key is not valid for this compatibility route');
   }
   if (!rateLimit(ctx)) {
     audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });

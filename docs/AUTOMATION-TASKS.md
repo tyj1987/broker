@@ -15,6 +15,12 @@ catalog is intentionally smaller than the source registry: a registered
 manifest is not visible until a runtime executor and reviewed policy are both
 available.
 
+Execution-token expiry is materialized before consume, revoke, snapshot export
+and restored-state publication. Revocation cannot overwrite `EXPIRED`, and a
+restored terminal timestamp must be canonical and chronologically consistent
+with issuance and expiry. Invalid clocks and corrupt snapshots fail before
+replacing live state.
+
 The current safe acceptance operation is
 `broker.tools.inspect@1.0.0`. The next rollout checkpoint is a seven-day,
 file-delivered MCP key constrained to that one operation, the `control-plane`

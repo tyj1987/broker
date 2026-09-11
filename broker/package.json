@@ -1,6 +1,6 @@
 {
   "name": "secret-broker",
-  "version": "4.7.0",
+  "version": "4.8.0",
   "description": "mTLS Secret Broker with SOPS-backed credentials, proxy-mode for AI clients",
   "main": "server.js",
   "type": "module",
@@ -43,7 +43,8 @@
     "test:http": "node ../broker-test/test-http.js",
     "test:risk-score": "node ../broker-test/test-risk-score.js",
     "test:sops": "node ../broker-test/test-sops.js",
-    "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4 && npm run test:cert-issuer && npm run test:security-headers && npm run test:static && npm run test:mtls && npm run test:can-proxy-policy && npm run test:read-api && npm run test:audit-async && npm run test:audit-hash-chain && npm run test:fuzz-parsers && npm run test:log && npm run test:webauthn && npm run test:metrics && npm run test:session && npm run test:cron-tasks && npm run test:http && npm run test:risk-score && npm run test:sops",
+    "test:sse-cap": "node ../broker-test/test-sse-cap.js",
+    "test:v4": "npm run test:redact && npm run test:mfa && npm run test:sms && npm run test:apikeys-v4 && npm run test:cert-issuer && npm run test:security-headers && npm run test:static && npm run test:mtls && npm run test:can-proxy-policy && npm run test:read-api && npm run test:audit-async && npm run test:audit-hash-chain && npm run test:fuzz-parsers && npm run test:log && npm run test:webauthn && npm run test:metrics && npm run test:session && npm run test:cron-tasks && npm run test:http && npm run test:risk-score && npm run test:sops && npm run test:sse-cap",
     "test:workload": "node ../broker-test/test-workload-identity.js",
     "test:v4-modules": "node ../broker-test/test-v4-modules.js",
     "test:ssh": "node ../broker-test/test-ssh-proxy.js",

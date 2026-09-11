@@ -7,6 +7,48 @@ Secret Broker (mTLS credential proxy for AI) 的所有重要变更.
 
 ---
 
+## [4.8.0] - 2026-09-11
+
+### Added (Release pipeline — SEC-006 closed)
+
+- **`.github/workflows/release.yml`** (v4.8.0): full SBOM + cosign keyless
+  signing pipeline. Triggered by `v*.*.*` tag push or `workflow_dispatch`.
+  Builds `linux/amd64` image from root `Dockerfile` (target: production),
+  pushes to `ghcr.io/tyj1987/broker:<tag>`, generates SPDX + CycloneDX
+  SBOMs via `anchore/sbom-action`, signs image digest with `cosign`
+  (keyless OIDC tied to GitHub Actions identity), attaches SBOM as
+  cosign attestation, self-verifies the signature, and creates a GitHub
+  Release with SBOMs as downloadable artifacts.
+- **`docs/RELEASING.md`** (v4.8.0): release manager runbook — tag
+  procedure, verification recipe for operators (`cosign verify` with
+  `--certificate-identity-regexp 'https://github.com/tyj1987/broker'`),
+  pre-release checklist, rationale for keyless OIDC.
+
+### Added (SSE rate limit — REVIEW.md P6 closed)
+
+- **`broker/lib/sse-cap.js`** (v4.8.0): per-admin concurrent SSE connection
+  cap (max 3). Exports `createSseCap` factory + `adminSseKey`,
+  `tryAcquireSseSlot`, `releaseSseSlot`, test helpers.
+- **`broker/server.js`** audit SSE endpoint (`/api/v1/admin/audit/stream`)
+  now applies the cap. Rejected connections return HTTP 429 with an audit
+  event (`action: 'sse_open', status: 'denied', reason: 'too_many_concurrent'`).
+  On connection close, the slot is released.
+- **`broker-test/test-sse-cap.js`** (v4.8.0, 29 cases): covers the cap
+  factory, per-admin isolation, release past zero (no underflow), module-
+  level + factory-shared state, all wired into `npm run test:v4`.
+
+### Notes
+
+- Live E2E (`broker-test/test-e2e-live.js`) — spinning up a real broker
+  process with temp PKI + running the full mTLS login → secrets →
+  proxy → logout flow — is scoped for v4.9.x; v4.8.0 ships the SSE cap
+  test which exercises the same per-request HTTP path.
+- The release workflow assumes the runner has `docker/build-push-action@v6`
+  + `sigstore/cosign-installer@v3` + `anchore/sbom-action@v0` available.
+  Self-hosted runners may need to allow these actions in `settings.json`.
+
+---
+
 ## [4.7.0] - 2026-09-11
 
 ### Added (Test coverage)

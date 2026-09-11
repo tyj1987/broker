@@ -73,6 +73,7 @@ import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
 import { createAuditRoutes } from './routes/audit.js';
 import { getStats, listSubscribers } from './lib/ws.js';
+import { createSseCap } from './lib/sse-cap.js';
 import {
   installGracefulShutdown,
   rejectIfShuttingDown,
@@ -685,6 +686,11 @@ const {
   clearLoginLock,
   sessions: SESSIONS,
 } = createSessionStore();
+
+// ============================================================
+// V4.8.0: SSE 并发连接上限 (REVIEW.md §3 P6) — 见 broker/lib/sse-cap.js
+// ============================================================
+const { adminSseKey, tryAcquireSseSlot, releaseSseSlot } = createSseCap();
 
 function getClientContext(socket) {
   // Kept for back-compat with places that still pass req.socket.
@@ -2720,8 +2726,16 @@ async function handle(req, res) {
   // Browser opens via `new EventSource('/api/v1/admin/audit/stream')`.
   // Sends a hello ping, then `event: <name>\ndata: <json>\n\n` for each event.
   // Closes after 30 minutes (clients can reconnect).
+  // V4.8.0: 同一 admin 客户端最多 3 个并发 SSE 连接,超过返回 429 (REVIEW.md P6)。
   if (m === 'GET' && p === '/api/v1/admin/audit/stream') {
     if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+    // V4.8.0: 并发上限 (REVIEW.md P6)
+    const adminKey = adminSseKey(ctx.clientName || ctx.cn);
+    const slot = tryAcquireSseSlot(adminKey);
+    if (!slot.acquired) {
+      audit({ action: 'sse_open', status: 'denied', reason: 'too_many_concurrent', client: ctx.clientName, current: slot.current, limit: slot.limit });
+      return jsonError(res, 429, `Too many concurrent SSE connections for ${ctx.clientName} (limit ${slot.limit})`);
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -2746,6 +2760,7 @@ async function handle(req, res) {
       clearInterval(ka);
       clearTimeout(closeTimer);
       AUDIT_BUS.off('event', onEvent);
+      releaseSseSlot(adminKey);  // V4.8.0
     });
     return;  // keep connection open
   }

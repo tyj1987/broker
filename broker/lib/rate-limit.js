@@ -12,6 +12,11 @@ function dimensions(limit) {
     return [{ max: Number(match[1]), windowMs: WINDOWS_MS[match[2]] }];
   }
   if (limit === null || typeof limit !== 'object' || Array.isArray(limit)) return null;
+  const keys = Object.keys(limit);
+  // An explicit object must name at least one supported dimension.  Treating
+  // {} or an object containing only unknown fields as unlimited would turn a
+  // malformed persisted policy into a fail-open configuration.
+  if (keys.length === 0 || keys.some((name) => !Object.hasOwn(WINDOWS_MS, name))) return null;
   const result = [];
   for (const name of Object.keys(WINDOWS_MS)) {
     const value = limit[name];

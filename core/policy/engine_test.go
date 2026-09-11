@@ -154,6 +154,18 @@ func TestDelegationCannotExpandParent(t *testing.T) {
 	if err := ValidateDelegation(parent, child); err == nil {
 		t.Fatal("expanded child delegation was allowed")
 	}
+	child = parent
+	child.ID = "api-key-child"
+	child.Role = "admin"
+	if err := ValidateDelegation(parent, child); err == nil {
+		t.Fatal("child role escalation was allowed")
+	}
+	child = parent
+	child.ID = "api-key-child"
+	child.SecurityProfile = "compatible"
+	if err := ValidateDelegation(parent, child); err == nil {
+		t.Fatal("child security profile downgrade was allowed")
+	}
 }
 
 func TestEvaluateDenyConditions(t *testing.T) {

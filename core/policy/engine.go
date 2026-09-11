@@ -247,6 +247,12 @@ func ValidateDelegation(parent, child Subject) error {
 	if parent.PrincipalType != "human" && child.PrincipalType != parent.PrincipalType {
 		return errors.New("child changed principal type")
 	}
+	if child.Role != parent.Role {
+		return errors.New("child changed role")
+	}
+	if child.SecurityProfile != parent.SecurityProfile {
+		return errors.New("child changed security profile")
+	}
 	if child.MaximumTTL <= 0 || parent.MaximumTTL <= 0 || child.MaximumTTL > parent.MaximumTTL {
 		return errors.New("child ttl exceeds parent")
 	}

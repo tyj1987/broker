@@ -204,9 +204,18 @@ function apiKeyAllowsApproval(identity, record) {
 }
 
 export class ApprovalBroker {
-  constructor({ now = () => Date.now(), getPolicy = () => null, maxRecords = 10_000 } = {}) {
+  constructor({
+    now = () => Date.now(),
+    getPolicy = () => null,
+    onExpire = () => {},
+    maxRecords = 10_000,
+  } = {}) {
+    if (typeof onExpire !== 'function') {
+      throw new V2Error('checkpoint_invalid', 'approval expiry handler must be synchronous', 500);
+    }
     this.now = now;
     this.getPolicy = getPolicy;
+    this.onExpire = onExpire;
     this.maxRecords = maxRecords;
     this.records = new Map();
   }
@@ -339,7 +348,7 @@ export class ApprovalBroker {
     if (record.requester === identity.name) {
       throw new V2Error('separation_of_duties', 'requester cannot approve the request', 403);
     }
-    this.getActive(id);
+    this.getActive(id, identity);
     if (record.status !== 'REQUESTED') {
       throw new V2Error('invalid_state', 'approval request is already decided', 409);
     }
@@ -411,7 +420,7 @@ export class ApprovalBroker {
     if (!apiKeyAllowsApproval(identity, candidate)) {
       throw new V2Error('forbidden', 'API key is not authorized for this approval', 403);
     }
-    const record = this.getActive(id);
+    const record = this.getActive(id, identity);
     if (
       record.status !== 'APPROVED' ||
       record.requester !== identity?.name ||
@@ -575,7 +584,7 @@ export class ApprovalBroker {
     this.prune();
   }
 
-  getActive(id) {
+  getActive(id, identity = null) {
     const record = this.records.get(id);
     if (!record || !STATES.has(record.status))
       throw new V2Error('not_found', 'approval request not found', 404);
@@ -583,7 +592,23 @@ export class ApprovalBroker {
       new Date(record.expiresAt).getTime() <= this.now() &&
       ['REQUESTED', 'APPROVED'].includes(record.status)
     ) {
+      const previousStatus = record.status;
       record.status = 'EXPIRED';
+      try {
+        const result = this.onExpire(publicApproval(record), identity);
+        if (result && typeof result.then === 'function') {
+          Promise.resolve(result).catch(() => {});
+          throw new V2Error(
+            'checkpoint_invalid',
+            'approval expiry handler must be synchronous',
+            500,
+          );
+        }
+      } catch (error) {
+        if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+        record.status = previousStatus;
+        throw error;
+      }
     }
     if (record.status === 'EXPIRED')
       throw new V2Error('approval_expired', 'approval request expired', 409);

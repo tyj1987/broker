@@ -201,6 +201,24 @@ async function approvalRequestAuthorization(request) {
 
 const approvalBroker = new ApprovalBroker({
   getPolicy: (provider, operationId) => CONFIG?.operation_policies?.[provider]?.[operationId],
+  onExpire: (approval, identity) => {
+    try {
+      audit(
+        {
+          action: 'v2_approval_expired',
+          status: approval.status,
+          cn: identity?.name || approval.requester,
+          approval_id: approval.id,
+          requester: approval.requester,
+          provider: approval.provider,
+        },
+        { mandatory: true },
+      );
+    } catch {
+      throw new V2Error('audit_unavailable', 'mandatory audit storage is unavailable', 503);
+    }
+    checkpointControlPlaneState('approval_expired');
+  },
 });
 let controlPlaneStateRuntime = null;
 

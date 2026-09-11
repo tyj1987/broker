@@ -437,6 +437,87 @@ assert.throws(
   expectCode('approval_expired'),
 );
 
+let expiryCommitMode = 'pass';
+const expiryCommits = [];
+const expiryCommitBroker = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) =>
+    provider === 'aliyun' && operationId === 'billing.read' ? policy : null,
+  onExpire: (approval, identity) => {
+    expiryCommits.push({ approval: structuredClone(approval), identity: identity?.name || null });
+    if (expiryCommitMode === 'fail') throw new Error('expiry persistence unavailable');
+    if (expiryCommitMode === 'async') return Promise.resolve();
+    if (expiryCommitMode === 'indeterminate') {
+      throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+    }
+    return undefined;
+  },
+});
+const expiryCommitted = expiryCommitBroker.create(requester, input);
+now += 5 * 60_000 + 1;
+assert.throws(
+  () => expiryCommitBroker.claimFor(requester, { ...input, approval_request_id: expiryCommitted.id }),
+  expectCode('approval_expired'),
+);
+assert.equal(expiryCommits.length, 1);
+assert.equal(expiryCommits[0].approval.status, 'EXPIRED');
+assert.equal(expiryCommits[0].identity, requester.name);
+assert.equal(
+  expiryCommitBroker.list(requester).find((item) => item.id === expiryCommitted.id).status,
+  'EXPIRED',
+  'a committed expiry remains terminal',
+);
+
+const expiryRollback = expiryCommitBroker.create(requester, input);
+now += 5 * 60_000 + 1;
+expiryCommitMode = 'fail';
+assert.throws(
+  () => expiryCommitBroker.decide(approver('admin-expiry-rollback'), expiryRollback.id, 'approve'),
+  /expiry persistence unavailable/,
+);
+expiryCommitMode = 'pass';
+assert.equal(
+  expiryCommitBroker.list(requester).find((item) => item.id === expiryRollback.id).status,
+  'REQUESTED',
+  'a failed expiry commit restores the approval state for a safe retry',
+);
+assert.throws(
+  () => expiryCommitBroker.decide(approver('admin-expiry-rollback'), expiryRollback.id, 'approve'),
+  expectCode('approval_expired'),
+);
+
+const expiryIndeterminate = expiryCommitBroker.create(requester, input);
+now += 5 * 60_000 + 1;
+expiryCommitMode = 'indeterminate';
+assert.throws(
+  () => expiryCommitBroker.claimFor(requester, { ...input, approval_request_id: expiryIndeterminate.id }),
+  expectCode('state_commit_indeterminate'),
+);
+expiryCommitMode = 'pass';
+assert.equal(
+  expiryCommitBroker.list(requester).find((item) => item.id === expiryIndeterminate.id).status,
+  'EXPIRED',
+  'an indeterminate expiry commit retains fail-closed in-memory state',
+);
+
+const expiryAsync = expiryCommitBroker.create(requester, input);
+now += 5 * 60_000 + 1;
+expiryCommitMode = 'async';
+assert.throws(
+  () => expiryCommitBroker.claimFor(requester, { ...input, approval_request_id: expiryAsync.id }),
+  expectCode('checkpoint_invalid'),
+);
+expiryCommitMode = 'pass';
+assert.equal(
+  expiryCommitBroker.list(requester).find((item) => item.id === expiryAsync.id).status,
+  'REQUESTED',
+  'an async expiry handler is rejected and rolled back',
+);
+assert.throws(
+  () => new ApprovalBroker({ onExpire: null }),
+  expectCode('checkpoint_invalid'),
+);
+
 const cancelled = broker.create(requester, input);
 assert.throws(
   () =>

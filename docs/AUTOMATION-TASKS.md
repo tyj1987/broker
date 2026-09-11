@@ -237,6 +237,13 @@ the response is returned. A pre-replacement checkpoint failure restores both the
 task and its approval state; an indeterminate replacement keeps the expired
 state so a restart cannot reopen an execution window.
 
+Approval expiry discovered while an approver decides or an executor claims a
+grant follows the same rule. The Broker writes a mandatory `v2_approval_expired`
+event and a synchronous control-plane checkpoint before returning
+`approval_expired`. A definite audit or checkpoint failure restores the prior
+approval state for retry; an indeterminate atomic replacement retains
+`EXPIRED` in memory and requires reconciliation.
+
 The operation component is included in every global checkpoint and shutdown
 checkpoint. Operation creation, device replay-nonce consumption, OTP receipt,
 browser-extension claims and completions, and isolated-browser lease claims,

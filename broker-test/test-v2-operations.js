@@ -873,6 +873,18 @@ assert.throws(
 );
 assert.deepEqual(replayRestored.exportState(), beforeCorruptRestore, 'invalid state cannot partially replace live state');
 
+const completedResultState = workerBroker.exportState();
+completedResultState.operations.find((operation) => operation.status === 'completed').result = {
+  nested: { access_token: 'credential-canary' },
+};
+const beforeUnsafeResultRestore = workerBroker.exportState();
+assert.throws(
+  () => workerBroker.restoreState(completedResultState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'restored operation results cannot reintroduce credential-shaped fields',
+);
+assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'unsafe result restore is atomic');
+
 let failoverDeviceId;
 const failoverBroker = new OperationBroker({
   now: () => now,

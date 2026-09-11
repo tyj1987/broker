@@ -316,6 +316,13 @@ export class OperationBroker {
           || (source.error !== null && !ID_RE.test(source.error))) throw stateCorrupt();
         requireObject(source.typedParameters, 'typed_parameters');
         assertSafeParameters(source.typedParameters);
+        if (source.result !== null) {
+          try {
+            assertSafeResult(source.result);
+          } catch {
+            throw stateCorrupt();
+          }
+        }
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.updatedAt, 'updated_at');
         requireTimestamp(source.expiresAt, 'expires_at');

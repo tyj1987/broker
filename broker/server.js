@@ -1092,7 +1092,7 @@ function verifyClientPassword(plaintext, stored) {
 
 function rateLimit(ctx) {
   if (!ctx.client) return true;  // fail at canResolve/canProxy later
-  const limit = ctx.client.rate_limit || '100/hour';
+  const limit = ctx.client.rate_limit ?? '100/hour';
   const key = ctx.fp || ctx.clientName;
   return consumeRateLimit(limit, key, RATE_BUCKETS);
 }
@@ -3306,7 +3306,7 @@ function getApiKeyIdentity(req) {
 const API_KEY_BUCKETS = new Map();
 function rateLimitApiKey(k) {
   if (!k) return true;
-  const limit = k.rate_limit || '100/hour';
+  const limit = k.rate_limit ?? '100/hour';
   const key = 'apikey:' + k.id;
   return consumeRateLimit(limit, key, API_KEY_BUCKETS);
 }

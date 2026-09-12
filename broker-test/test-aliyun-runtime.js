@@ -16,6 +16,8 @@ const NOW = Date.parse('2026-09-11T01:02:03Z');
 const REGION = 'cn-hangzhou';
 const RESOURCE = 'primary-ecs-inventory';
 const CREDENTIAL_BINDING = 'b'.repeat(43);
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const basePolicy = {
   enabled: true,
   contract_verified: true,
@@ -53,6 +55,8 @@ const createSignerClient = () => {
         environment: input.environment,
         resource_ref: input.resource_ref,
         region_id: input.region_id,
+        execution_id: input.execution_id,
+        request_binding: input.request_binding,
         credential_binding: CREDENTIAL_BINDING,
         headers: {
           Authorization:
@@ -148,6 +152,8 @@ const result = await executors.get('aliyun.ecs.instances.list@1.0.0')(
       tool: 'aliyun.ecs.instances.list@1.0.0',
       target: RESOURCE,
       environment: 'production',
+      execution_id: EXECUTION_ID,
+      request_binding: REQUEST_BINDING,
     },
   },
 );
@@ -159,6 +165,8 @@ assert.equal(signInputs[0].region_id, REGION);
 assert.equal(signInputs[0].resource_ref, RESOURCE);
 assert.equal(signInputs[0].signal, signal);
 assert.equal(signInputs[0].operation_id, 'sts.caller-identity.read');
+assert.equal(signInputs[0].execution_id, EXECUTION_ID);
+assert.equal(signInputs[0].request_binding, REQUEST_BINDING);
 assert.equal(signInputs[1].operation_id, 'ecs.instances.list');
 assert.equal(requests[0].hostname, 'sts.aliyuncs.com');
 assert.equal(requests[1].hostname, `ecs.${REGION}.aliyuncs.com`);
@@ -171,6 +179,8 @@ const signedFor = (input, credentialBinding) => {
     environment: input.environment,
     resource_ref: input.resource_ref,
     region_id: input.region_id,
+    execution_id: input.execution_id,
+    request_binding: input.request_binding,
     credential_binding: credentialBinding,
     headers: {
       Authorization:
@@ -206,6 +216,8 @@ const executionContext = {
     tool: 'aliyun.ecs.instances.list@1.0.0',
     target: RESOURCE,
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
 };
 await assert.rejects(
@@ -246,6 +258,8 @@ for (const [parameters, changedContext] of [
         tool: 'aliyun.ecs.instances.list@1.0.0',
         target: 'other-inventory',
         environment: 'production',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ],
@@ -257,6 +271,8 @@ for (const [parameters, changedContext] of [
         tool: 'aliyun.ecs.instances.list@1.0.0',
         target: RESOURCE,
         environment: 'staging',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
     },
   ],
@@ -269,6 +285,8 @@ for (const [parameters, changedContext] of [
         tool: 'aliyun.ecs.instances.list@1.0.0',
         target: parameters.resource_ref,
         environment: 'production',
+        execution_id: EXECUTION_ID,
+        request_binding: REQUEST_BINDING,
       },
       ...changedContext,
     }),

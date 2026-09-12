@@ -176,6 +176,10 @@ jobs:
       - name: Enforce signer protocol statement coverage
         run: |
           test "$(go tool cover -func=signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=aliyun-signer-coverage.out ./aliyunsigner
+      - name: Enforce Alibaba signer protocol statement coverage
+        run: |
+          test "$(go tool cover -func=aliyun-signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=provider-credential-coverage.out ./providercredential
       - name: Enforce provider credential protocol statement coverage
         run: |

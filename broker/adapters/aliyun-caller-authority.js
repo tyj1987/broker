@@ -10,6 +10,8 @@ const VERSION = '2015-04-01';
 const EMPTY_PAYLOAD_HASH = createHash('sha256').update('').digest('hex');
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,511}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const ARN_RE =
   /^acs:ram::[0-9]{6,32}:(?:root|user\/[A-Za-z0-9+=,.@_/-]+|role\/[A-Za-z0-9+=,.@_/-]+)$/;
 const SIGNED_HEADERS_RE =
@@ -51,6 +53,8 @@ function validateHeaders(result, expected, now) {
     result?.environment !== expected.environment ||
     result?.resource_ref !== expected.resource_ref ||
     result?.region_id !== expected.region_id ||
+    result?.execution_id !== expected.execution_id ||
+    result?.request_binding !== expected.request_binding ||
     !headers ||
     typeof headers !== 'object' ||
     Array.isArray(headers) ||
@@ -124,7 +128,9 @@ export function createAliyunCallerAuthorityProvider({ request, signRequest, now 
     if (
       input?.tool !== 'aliyun.ecs.instances.list@1.0.0' ||
       input?.target !== input?.resource_ref ||
-      input?.execution_environment !== input?.environment
+      input?.execution_environment !== input?.environment ||
+      !EXECUTION_ID_RE.test(input?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(input?.request_binding || '')
     )
       fail(
         'aliyun_authority_execution_binding_mismatch',
@@ -137,6 +143,8 @@ export function createAliyunCallerAuthorityProvider({ request, signRequest, now 
       environment: input.environment,
       resource_ref: input.resource_ref,
       region_id: input.region_id,
+      execution_id: input.execution_id,
+      request_binding: input.request_binding,
       method: 'POST',
       path: '/',
       query: {},

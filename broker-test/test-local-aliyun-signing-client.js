@@ -9,12 +9,16 @@ import {
 
 const DIRECTORY = '/run/secret-broker-signer';
 const SOCKET = `${DIRECTORY}/aliyun.sock`;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const input = {
   operation_id: 'ecs.instances.list',
   account_ref: 'aliyun-primary',
   environment: 'production',
   resource_ref: 'primary-ecs-inventory',
   region_id: 'cn-hangzhou',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   method: 'POST',
   path: '/',
   query: { MaxResults: 20, RegionId: 'cn-hangzhou' },
@@ -32,13 +36,15 @@ const headers = {
   'x-acs-version': '2014-05-26',
 };
 const response = JSON.stringify({
-  version: 2,
+  version: 3,
   provider: 'aliyun',
   operation_id: input.operation_id,
   account_ref: input.account_ref,
   environment: input.environment,
   resource_ref: input.resource_ref,
   region_id: input.region_id,
+  execution_id: input.execution_id,
+  request_binding: input.request_binding,
   credential_binding: CREDENTIAL_BINDING,
   headers,
 });
@@ -98,6 +104,8 @@ assert.deepEqual(await client.sign(input), {
   environment: input.environment,
   resource_ref: input.resource_ref,
   region_id: input.region_id,
+  execution_id: input.execution_id,
+  request_binding: input.request_binding,
   credential_binding: CREDENTIAL_BINDING,
   headers,
 });
@@ -106,13 +114,15 @@ assert.equal(harness.state.timeoutMs, 500);
 assert.equal(harness.state.destroyed, true);
 const encoded = JSON.parse(harness.state.payload.trim());
 assert.deepEqual(encoded, {
-  version: 2,
+  version: 3,
   provider: 'aliyun',
   operation_id: input.operation_id,
   account_ref: input.account_ref,
   environment: input.environment,
   resource_ref: input.resource_ref,
   region_id: input.region_id,
+  execution_id: input.execution_id,
+  request_binding: input.request_binding,
   method: 'POST',
   path: '/',
   query: input.query,
@@ -132,13 +142,15 @@ const authorityHeaders = {
 };
 const authorityHarness = socketHarness({
   output: JSON.stringify({
-    version: 2,
+    version: 3,
     provider: 'aliyun',
     operation_id: authorityInput.operation_id,
     account_ref: authorityInput.account_ref,
     environment: authorityInput.environment,
     resource_ref: authorityInput.resource_ref,
     region_id: authorityInput.region_id,
+    execution_id: authorityInput.execution_id,
+    request_binding: authorityInput.request_binding,
     credential_binding: CREDENTIAL_BINDING,
     headers: authorityHeaders,
   }),
@@ -168,6 +180,8 @@ for (const changed of [
   { ...input, environment: 'Production' },
   { ...input, resource_ref: '../inventory' },
   { ...input, region_id: 'https://attacker.example' },
+  { ...input, execution_id: 'wrong' },
+  { ...input, request_binding: 'wrong' },
   { ...input, method: 'GET' },
   { ...input, path: 'https://attacker.example' },
   { ...input, query: null },
@@ -240,6 +254,8 @@ for (const output of [
   'null',
   JSON.stringify({ ...JSON.parse(response), version: 1 }),
   JSON.stringify({ ...JSON.parse(response), account_ref: 'other' }),
+  JSON.stringify({ ...JSON.parse(response), execution_id: '87654321-1234-4123-8123-123456789abc' }),
+  JSON.stringify({ ...JSON.parse(response), request_binding: 'c'.repeat(43) }),
   JSON.stringify({ ...JSON.parse(response), headers: null }),
   JSON.stringify({ ...JSON.parse(response), credential_binding: 'short' }),
   JSON.stringify({ ...JSON.parse(response), extra: 'canary-secret' }),
@@ -293,7 +309,7 @@ await assert.rejects(pending, expectCode('aliyun_signing_aborted'));
 assert.deepEqual(LOCAL_ALIYUN_SIGNING_CONTRACT, {
   socket_directory: DIRECTORY,
   socket_path: SOCKET,
-  protocol_version: 2,
+  protocol_version: 3,
   supported_operations: ['ecs.instances.list', 'sts.caller-identity.read'],
   maximum_request_bytes: 8192,
   maximum_response_bytes: 16384,

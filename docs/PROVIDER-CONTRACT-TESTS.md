@@ -16,10 +16,12 @@ wrong-resource denial. GitHub uses the authenticated App installation endpoint;
 Alibaba Cloud uses STS `GetCallerIdentity`. The adapter hashes every returned
 principal identifier before it can enter a task result. The runner accepts and
 compares only lowercase SHA-256 digests plus the bounded principal type.
-For Alibaba Cloud, signer protocol version 2 also returns an opaque,
+For Alibaba Cloud, signer protocol version 3 also returns an opaque,
 non-credential lease binding. The ECS request must use the same binding as the
-identity probe; drift fails before the ECS request is sent. All typed business
-parameters are validated before either signer or provider traffic occurs.
+identity probe and the consumed task execution. The Node client, adapters and
+Go protocol core reject execution, request or credential binding drift before
+the ECS request is sent. All typed business parameters are validated before
+either signer or provider traffic occurs.
 
 It issues only typed `/api/v2/tasks` requests.
 It cannot submit a URL, authentication header, provider credential or arbitrary

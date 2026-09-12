@@ -217,10 +217,13 @@ continue.
   identity endpoint or Alibaba Cloud STS `GetCallerIdentity`; adapters release
   only SHA-256 principal digests and a bounded principal type. The protected
   plan supplies expected digests, and a mismatch fails before a receipt can be
-  issued. Alibaba signer protocol version 2 additionally binds the identity and
+  issued. Alibaba signer protocol version 3 additionally binds the identity and
   ECS signatures to one opaque credential lease; drift is rejected before the
   business request leaves the Broker, and invalid business parameters cannot
-  trigger the identity probe. The remaining checks cover bounded secret-free
+  trigger the identity probe. Its Go protocol core independently enforces the
+  fixed operation, account, environment, resource, region, execution and
+  request bindings before an injected backend can sign. The remaining checks
+  cover bounded secret-free
   output plus wrong-account and wrong-resource denials. Credentials are accepted only from
   operator-supplied files and the receipt contains no account, resource,
   principal or digest. The 2026-09-12 production probe was denied before

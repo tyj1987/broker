@@ -8,6 +8,8 @@ const MAX_RESPONSE_BYTES = 16 * 1024;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const REGION_RE = /^[a-z0-9]+(?:-[a-z0-9]+){1,4}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export class LocalAliyunSigningError extends Error {
   constructor(code, message) {
@@ -37,6 +39,8 @@ function validateInput(input) {
           'environment',
           'resource_ref',
           'region_id',
+          'execution_id',
+          'request_binding',
           'method',
           'path',
           'query',
@@ -48,6 +52,8 @@ function validateInput(input) {
     !ENVIRONMENT_RE.test(input.environment || '') ||
     !ID_RE.test(input.resource_ref || '') ||
     !REGION_RE.test(input.region_id || '') ||
+    !EXECUTION_ID_RE.test(input.execution_id || '') ||
+    !REQUEST_BINDING_RE.test(input.request_binding || '') ||
     input.method !== 'POST' ||
     input.path !== '/' ||
     !query ||
@@ -73,13 +79,15 @@ function validateInput(input) {
 
 function encodeRequest(input) {
   const payload = `${JSON.stringify({
-    version: 2,
+    version: 3,
     provider: 'aliyun',
     operation_id: input.operation_id,
     account_ref: input.account_ref,
     environment: input.environment,
     resource_ref: input.resource_ref,
     region_id: input.region_id,
+    execution_id: input.execution_id,
+    request_binding: input.request_binding,
     method: input.method,
     path: input.path,
     query: input.query,
@@ -108,6 +116,8 @@ function decodeResponse(input, value) {
     'environment',
     'resource_ref',
     'region_id',
+    'execution_id',
+    'request_binding',
     'credential_binding',
     'headers',
   ];
@@ -116,13 +126,15 @@ function decodeResponse(input, value) {
     typeof document !== 'object' ||
     Array.isArray(document) ||
     Object.keys(document).some((key) => !allowed.includes(key)) ||
-    document.version !== 2 ||
+    document.version !== 3 ||
     document.provider !== 'aliyun' ||
     document.operation_id !== input.operation_id ||
     document.account_ref !== input.account_ref ||
     document.environment !== input.environment ||
     document.resource_ref !== input.resource_ref ||
     document.region_id !== input.region_id ||
+    document.execution_id !== input.execution_id ||
+    document.request_binding !== input.request_binding ||
     !/^[A-Za-z0-9_-]{43}$/.test(document.credential_binding || '') ||
     !document.headers ||
     typeof document.headers !== 'object' ||
@@ -138,6 +150,8 @@ function decodeResponse(input, value) {
     environment: document.environment,
     resource_ref: document.resource_ref,
     region_id: document.region_id,
+    execution_id: document.execution_id,
+    request_binding: document.request_binding,
     credential_binding: document.credential_binding,
     headers: Object.freeze({ ...document.headers }),
   });
@@ -271,7 +285,7 @@ export function createLocalAliyunSigningClient({
 export const LOCAL_ALIYUN_SIGNING_CONTRACT = Object.freeze({
   socket_directory: SOCKET_DIRECTORY,
   socket_path: SOCKET_PATH,
-  protocol_version: 2,
+  protocol_version: 3,
   supported_operations: Object.freeze(['ecs.instances.list', 'sts.caller-identity.read']),
   maximum_request_bytes: MAX_REQUEST_BYTES,
   maximum_response_bytes: MAX_RESPONSE_BYTES,

@@ -29,6 +29,8 @@ export function createAliyunEcsInstancesListExecutor({
       execution_environment: context.execution?.environment,
       resource_ref: parameters?.resource_ref,
       region_id: parameters?.region_id,
+      execution_id: context.execution?.execution_id,
+      request_binding: context.execution?.request_binding,
       signal: context.signal,
     });
     const result = await instancesList(parameters, {

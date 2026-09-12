@@ -9,6 +9,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = Date.parse('2026-09-13T00:00:00Z');
 const CREDENTIAL_BINDING = 'b'.repeat(43);
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const input = {
   account_ref: 'aliyun-isolated',
   environment: 'staging',
@@ -17,6 +19,8 @@ const input = {
   execution_environment: 'staging',
   resource_ref: 'ecs-inventory-isolated',
   region_id: 'cn-hangzhou',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: new AbortController().signal,
 };
 const body = {
@@ -31,6 +35,8 @@ const signed = (request) => ({
   environment: request.environment,
   resource_ref: request.resource_ref,
   region_id: request.region_id,
+  execution_id: request.execution_id,
+  request_binding: request.request_binding,
   credential_binding: CREDENTIAL_BINDING,
   headers: {
     Authorization: `ACS3-HMAC-SHA256 Credential=STS.TEST,SignedHeaders=host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-security-token;x-acs-signature-nonce;x-acs-version,Signature=${'a'.repeat(64)}`,
@@ -67,6 +73,8 @@ assert.equal(evidence.credential_binding, CREDENTIAL_BINDING);
 assert.equal(JSON.stringify(evidence.authority).includes(body.AccountId), false);
 assert.equal(JSON.stringify(evidence.authority).includes(body.Arn), false);
 assert.equal(calls[0].sign.operation_id, 'sts.caller-identity.read');
+assert.equal(calls[0].sign.execution_id, EXECUTION_ID);
+assert.equal(calls[0].sign.request_binding, REQUEST_BINDING);
 assert.deepEqual(calls[0].sign.query, {});
 assert.equal(calls[1].request.origin, 'https://sts.aliyuncs.com');
 assert.equal(calls[1].request.path, '/');
@@ -99,6 +107,14 @@ await assert.rejects(
 );
 await assert.rejects(
   provider({ ...input, target: 'other' }),
+  expectCode('aliyun_authority_execution_binding_mismatch'),
+);
+await assert.rejects(
+  provider({ ...input, execution_id: 'wrong' }),
+  expectCode('aliyun_authority_execution_binding_mismatch'),
+);
+await assert.rejects(
+  provider({ ...input, request_binding: 'wrong' }),
   expectCode('aliyun_authority_execution_binding_mismatch'),
 );
 await assert.rejects(

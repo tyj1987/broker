@@ -59,6 +59,10 @@ ok('Basic auth redacted', !redact('Authorization: Basic dXNlcjpwYXNz').includes(
 const labelled = redact('upstream failed: password=ordinary-value api_key:another-value');
 ok('labelled password redacted', !labelled.includes('ordinary-value'));
 ok('labelled api key redacted', !labelled.includes('another-value'));
+ok('connection URL password redacted', !redact('postgres://broker:db-password@example.invalid:5432/app').includes('db-password'));
+ok('signed URL token redacted', !redact('https://example.invalid/callback?token=one-time-secret&next=ok').includes('one-time-secret'));
+ok('signed URL signature redacted', !redact('https://example.invalid/callback?X-Amz-Signature=signature-canary').includes('signature-canary'));
+ok('labelled token redacted', !redact('worker failure token=short-token').includes('short-token'));
 
 // === PEM keys ===
 section('PEM private keys');

@@ -63,8 +63,12 @@ const PATTERNS = [
     replace: '-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----' },
   // Basic auth header
   { name: 'basic_auth',         regex: /(Basic\s+)[A-Za-z0-9+/=]{8,}/g,             replace: '$1***' },
+  // Connection URL userinfo (for example postgres://user:password@host)
+  { name: 'url_userinfo',        regex: /([a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)[^@/\s]+@/gi, replace: '$1***@' },
+  // Signed URLs and query-string credentials
+  { name: 'url_secret_query',   regex: /([?&](?:token|access_token|refresh_token|api[_-]?key|password|secret|signature|sig|x-amz-signature|x-amz-security-token)=)[^&#\s]+/gi, replace: '$1***' },
   // Free-form error text containing a labelled credential assignment
-  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, replace: '$1***' },
+  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token|token|session|cookie|signature|sig)\s*[:=]\s*)(?!(?:mb_|ghp_|github_pat_|ghu_|ghs_|ghr_|sk[-_]|AIza|LTAI|STS\.|AKID|AKIA|ASIA|xox|docker_))[^\s,;]+/gi, replace: '$1***' },
   // Generic Bearer token (long opaque string after "Bearer ")
   { name: 'bearer_token',       regex: /(Bearer\s+)[A-Za-z0-9_\-\.~+\/=]{20,}/g,    replace: '$1***' },
   // Docker registry token
@@ -136,7 +140,7 @@ export function redactDeep(value, seen = new WeakSet()) {
 export function hasLikelySecret(s) {
   if (typeof s !== 'string' || s.length < 8) return false;
   // Heuristics: presence of common token prefixes, PEM marker, JWT shape, UUID
-  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|mb_(?:live|test)_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|(?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
+  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|mb_(?:live|test)_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|[?&](?:token|access_token|refresh_token|api[_-]?key|password|secret|signature|sig|x-amz-signature|x-amz-security-token)=|[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@/\s]+@|(?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token|token|session|cookie|signature|sig)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
 }
 
 /**

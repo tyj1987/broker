@@ -194,7 +194,8 @@ export class ToolRegistry {
     }
     this.byOperation = new Map();
     this.byName = new Map();
-    this.providerGates = options.providerGates instanceof Map ? new Map(options.providerGates) : new Map();
+    this.enforceProviderGates = options.providerGates instanceof Map;
+    this.providerGates = this.enforceProviderGates ? new Map(options.providerGates) : new Map();
     for (const item of document.tools) {
       validateTool(item);
       const operationKey = `${item.provider}:${item.operation_id}`;
@@ -295,8 +296,9 @@ export class ToolRegistry {
   }
 
   isProviderAvailable(provider) {
+    if (!this.enforceProviderGates || provider === 'broker') return true;
     const gate = this.providerGates.get(provider);
-    if (!gate) return true;
+    if (!gate) return false;
     const verifiedAt = Date.parse(gate.contract_test?.verified_at || '');
     const evidence = gate.implementation_evidence;
     return gate.status === 'production' && gate.contract_test?.required === true

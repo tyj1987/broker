@@ -98,6 +98,10 @@ assert.equal(incompleteRegistry.evaluate({
   identity: githubAgent, provider: 'github', operationId: 'repo.read', environment: 'production',
   accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
 }, allowed).reason, 'provider_contract_required', 'production gate requires verified_at');
+assert.equal(gatedRegistry.evaluate({
+  identity: githubAgent, provider: 'cloudflare', operationId: 'zones.list', environment: 'production',
+  accountRef: 'cloudflare-main', typedParameters: { resource_ref: 'cloudflare-main' },
+}, allowed).reason, 'provider_contract_required', 'unregistered providers fail closed');
 assert.equal(registry.evaluate({
   identity: { name: 'developer-a', context: { via: 'api_key', client: { role: 'developer' } } },
   provider: 'github', operationId: 'repo.read', environment: 'production',

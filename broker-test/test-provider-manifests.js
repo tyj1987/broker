@@ -14,6 +14,7 @@ const authenticationSchemaKeys = new Set(
 const expected = new Set([
   'aliyun',
   'cloudflare',
+  'deepseek',
   'docker',
   'github',
   'google_drive',
@@ -24,6 +25,7 @@ const expected = new Set([
 ]);
 const manifests = readdirSync(providerDir).filter((name) => name.endsWith('.yaml'));
 const ids = new Set();
+const manifestOperations = new Map();
 
 for (const filename of manifests) {
   const document = parse(readFileSync(resolve(providerDir, filename), 'utf8'));
@@ -74,9 +76,31 @@ for (const filename of manifests) {
       throw new Error(`${filename}: mutating operation requires approval`);
     }
   }
+  manifestOperations.set(document.id, operationIds);
 }
 
 for (const id of expected) {
   if (!ids.has(id)) throw new Error(`missing initial provider manifest: ${id}`);
+}
+const registry = JSON.parse(readFileSync(resolve(import.meta.dirname, '../tools/registry.json'), 'utf8'));
+const registryOperations = new Map();
+for (const tool of registry.tools || []) {
+  if (tool.provider === 'broker') continue;
+  if (!manifestOperations.has(tool.provider)) {
+    throw new Error(`tool registry provider ${tool.provider} has no provider manifest`);
+  }
+  const operations = registryOperations.get(tool.provider) || new Set();
+  operations.add(tool.operation_id);
+  registryOperations.set(tool.provider, operations);
+  if (!manifestOperations.get(tool.provider).has(tool.operation_id)) {
+    throw new Error(`tool registry operation ${tool.provider}:${tool.operation_id} is absent from its manifest`);
+  }
+}
+for (const [provider, operations] of manifestOperations) {
+  for (const operation of operations) {
+    if (!registryOperations.get(provider)?.has(operation)) {
+      throw new Error(`manifest operation ${provider}:${operation} is absent from the tool registry`);
+    }
+  }
 }
 console.log(`provider manifests: ${manifests.length} validated; all remain contract-gated`);

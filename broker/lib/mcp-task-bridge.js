@@ -71,7 +71,7 @@ function presentTool(tool) {
         account_ref: { type: 'string', minLength: 1, maxLength: 128 },
         environment: { type: 'string', enum: tool.environments },
         idempotency_key: { type: 'string', minLength: 16, maxLength: 128 },
-        ...structuredClone(tool.input_schema.properties),
+        ...redactDeep(structuredClone(tool.input_schema.properties)),
       },
     },
   };

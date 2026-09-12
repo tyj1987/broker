@@ -26,7 +26,14 @@ const executable = {
     type: 'object',
     additionalProperties: false,
     required: ['resource_ref'],
-    properties: { resource_ref: { type: 'string' } },
+    properties: {
+      resource_ref: {
+        type: 'string',
+        description: 'Use sk-proj-schema-canary-secret-token-1234567890 only for tests.',
+        default: 'Bearer sk-proj-schema-canary-secret-token-1234567890',
+        examples: ['https://private.example/sk-proj-schema-canary-secret-token-1234567890'],
+      },
+    },
   },
 };
 
@@ -78,6 +85,9 @@ const driveTool = tools.find((tool) => tool.name.startsWith('broker_execute__'))
 assert.equal(driveTool.name, 'broker_execute__google_drive_document_read__v1_0_0');
 assert.equal(driveTool.inputSchema.additionalProperties, false);
 assert.equal(driveTool.description.includes('sk-proj-canary-secret-token'), false);
+const projectedSchema = JSON.stringify(driveTool.inputSchema.properties.resource_ref);
+assert.equal(projectedSchema.includes('schema-canary-secret-token'), false);
+assert.equal(projectedSchema.includes('sk-proj-***'), true);
 assert.deepEqual(driveTool.inputSchema.required, [
   'account_ref',
   'environment',

@@ -119,9 +119,20 @@ validated public input and its SHA-256 digest, but no event body or credential.
 The included monotonic authorizer requires a linearizable compare-and-swap
 store outside the Broker host. It accepts only a contiguous predecessor,
 allows an exact retry, and rejects gaps, rewinds, conflicting payloads, corrupt
-state and exhausted concurrency retries. The cloud-backed state store and KMS
-adapter remain production work; an in-memory or Broker-owned implementation
-cannot satisfy DQ-003.
+state and exhausted concurrency retries. The Alibaba KMS adapter maps only the
+validated 32-byte digest to `ECDSA_SHA_256` with `MessageType=DIGEST`, requires
+the immutable key ID and exact response metadata, validates canonical P-256
+DER signature bounds, and hides provider errors behind stable failures. This
+is an SDK-independent transport contract, not a deployed KMS integration. The
+cloud-backed state store, SDK transport and runnable signer remain production
+work; an in-memory or Broker-owned implementation cannot satisfy DQ-003.
+
+Four hardened systemd unit contracts pin mutually distinct signer, exporter,
+store and recovery identities. The 22-item production preflight now requires
+both the exporter and signer to be active and rejects shared or generic audit
+users and groups. The units intentionally cannot start until their reviewed
+binaries and provider configuration validators are packaged; their presence
+does not constitute live KMS, WORM, mirror or recovery evidence.
 
 The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
 `ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the

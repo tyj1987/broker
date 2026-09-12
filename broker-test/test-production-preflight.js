@@ -25,12 +25,18 @@ const readySnapshot = {
   policySocketProtected: true,
   githubSignerSocketProtected: true,
   githubSignerRequired: false,
+  auditSignerActive: true,
   auditExporterActive: true,
   auditStoreLockActive: true,
   auditRecoveryAuthorityActive: true,
+  auditSignerUser: 'broker-audit-signer',
   auditExporterUser: 'broker-audit-exporter',
   auditStoreUser: 'broker-audit-store',
   auditRecoveryUser: 'broker-audit-recovery',
+  auditSignerGroup: 'broker-audit-signer',
+  auditExporterGroup: 'broker-audit-exporter',
+  auditStoreGroup: 'broker-audit-store',
+  auditRecoveryGroup: 'broker-audit-recovery',
   loopbackHealth: true,
 };
 
@@ -68,12 +74,18 @@ for (const [field, unsafeValue] of [
   ['controlPlaneStateKeyProtected', false],
   ['policySocketProtected', false],
   ['githubSignerSocketProtected', false],
+  ['auditSignerActive', false],
   ['auditExporterActive', false],
   ['auditExporterUser', 'broker'],
+  ['auditExporterGroup', 'broker'],
+  ['auditSignerUser', 'broker-audit-exporter'],
+  ['auditSignerGroup', 'broker'],
   ['auditStoreLockActive', false],
   ['auditStoreUser', 'broker'],
+  ['auditStoreGroup', 'broker'],
   ['auditRecoveryAuthorityActive', false],
   ['auditRecoveryUser', 'broker'],
+  ['auditRecoveryGroup', 'broker'],
   ['loopbackHealth', false],
 ]) {
   const result = evaluateProductionReadiness({
@@ -111,35 +123,42 @@ const fakeStats = new Map([
   ['/state', { isFile: () => true, isSymbolicLink: () => false }],
   ['/state-key', { isFile: () => true, isSymbolicLink: () => false, uid: 0, mode: 0o100600 }],
   ['/policy.sock', { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660 }],
-  ['/signer', { isDirectory: () => true, isSymbolicLink: () => false, uid: 2001, gid: 1002, mode: 0o040750 }],
-  ['/signer/github.sock', { isSocket: () => true, isSymbolicLink: () => false, uid: 2001, gid: 1002, mode: 0o140660 }],
+  [
+    '/signer',
+    { isDirectory: () => true, isSymbolicLink: () => false, uid: 2001, gid: 1002, mode: 0o040750 },
+  ],
+  [
+    '/signer/github.sock',
+    { isSocket: () => true, isSymbolicLink: () => false, uid: 2001, gid: 1002, mode: 0o140660 },
+  ],
 ]);
 const command = (name, args) => {
   const invocation = `${name} ${args.join(' ')}`;
-  if (invocation.includes('secret-broker-audit-exporter.service') && invocation.includes('-p User')) {
-    return { ok: true, stdout: 'broker-audit-exporter' };
-  }
-  if (invocation.includes('secret-broker-audit-store.service') && invocation.includes('-p User')) {
-    return { ok: true, stdout: 'broker-audit-store' };
-  }
-  if (invocation.includes('secret-broker-audit-recovery.service') && invocation.includes('-p User')) {
-    return { ok: true, stdout: 'broker-audit-recovery' };
+  for (const service of ['signer', 'exporter', 'store', 'recovery']) {
+    if (invocation.includes(`secret-broker-audit-${service}.service`)) {
+      if (invocation.includes('-p User')) return { ok: true, stdout: `broker-audit-${service}` };
+      if (invocation.includes('-p Group')) return { ok: true, stdout: `broker-audit-${service}` };
+    }
   }
   if (invocation.includes('-p User')) return { ok: true, stdout: 'broker' };
   if (invocation.includes('-p Group')) return { ok: true, stdout: 'broker' };
   if (name === 'nginx') return { ok: true, stdout: '  proxy_ssl_verify on;\n' };
   if (name === 'id' && args[0] === '-u') return { ok: true, stdout: '1001' };
   if (name === 'id' && args[0] === '-G') return { ok: true, stdout: '1001 1002' };
-  return { ok: true, stdout: name === 'getent' ? 'broker-deploy:x:1002:1002::/nonexistent:/bin/bash' : '' };
+  return {
+    ok: true,
+    stdout: name === 'getent' ? 'broker-deploy:x:1002:1002::/nonexistent:/bin/bash' : '',
+  };
 };
-const collectWithStats = (stats) => collectProductionSnapshot({
-  command,
-  paths: fakePaths,
-  pathInfoImpl: async (path) => stats.get(path) ?? null,
-  isExecutableImpl: async () => true,
-  countPrivateKeysImpl: async () => 0,
-  loopbackHealthImpl: async () => true,
-});
+const collectWithStats = (stats) =>
+  collectProductionSnapshot({
+    command,
+    paths: fakePaths,
+    pathInfoImpl: async (path) => stats.get(path) ?? null,
+    isExecutableImpl: async () => true,
+    countPrivateKeysImpl: async () => 0,
+    loopbackHealthImpl: async () => true,
+  });
 const collected = await collectWithStats(fakeStats);
 assert.equal(evaluateProductionReadiness(collected).ready, true);
 assert.equal(collected.nginxVerifyOnCount, 1);
@@ -158,8 +177,16 @@ for (const [path, replacement] of [
   assert.equal(unsafe.githubSignerSocketProtected, false, `${path} boundary must fail closed`);
 }
 assert.equal(isDirectExecution('-', 'file:///irrelevant'), true);
-const scriptPath = fileURLToPath(new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url));
-assert.equal(isDirectExecution(scriptPath, new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url).href), true);
+const scriptPath = fileURLToPath(
+  new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url),
+);
+assert.equal(
+  isDirectExecution(
+    scriptPath,
+    new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url).href,
+  ),
+  true,
+);
 assert.equal(isDirectExecution('/tmp/other.mjs', 'file:///tmp/preflight.mjs'), false);
 
 console.log('production preflight: 22 fail-closed deployment gates passed');

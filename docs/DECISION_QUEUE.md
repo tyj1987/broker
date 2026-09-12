@@ -66,9 +66,12 @@ continue.
   KMS backend can be called. Its monotonic authorizer uses a linearizable
   compare-and-swap state contract to reject forks, gaps, rewinds and corrupt
   state while allowing an exact retry. It authenticates the local peer on Linux
-  and returns only stable error codes. No KMS backend,
-  immutable bucket, mirror worker, retention lock or recovery authority is
-  deployed yet, so there is no claim of independent non-repudiation and RR-012
+  and returns only stable error codes. Its Alibaba KMS adapter now binds the
+  approved `ECDSA_SHA_256` and `DIGEST` request to the exact configured key and
+  rejects malformed P-256 DER signatures and mismatched response metadata.
+  The SDK transport, runnable signer, immutable bucket, mirror worker,
+  retention lock and recovery authority are not deployed yet, so there is no
+  claim of independent non-repudiation and RR-012
   remains open.
 
 ## DQ-004: provider signing and account-binding authority

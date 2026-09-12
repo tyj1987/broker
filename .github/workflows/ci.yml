@@ -427,14 +427,16 @@ jobs:
           > /tmp/broker-rendered.yaml
       - run: bash -n deploy/bin/secret-broker-deploy
       - run: node --check deploy/bin/secret-broker-production-preflight.mjs
+      - run: node broker-test/test-audit-systemd-units.js
       - run: node broker-test/test-production-preflight.js
       - name: Verify deployment helper fail-closed invariants
         run: |
           grep -Fq 'policy core is not active' deploy/bin/secret-broker-deploy
+          grep -Fq 'secret-broker-audit-signer.service' deploy/bin/secret-broker-deploy
           grep -Fq 'secret-broker-audit-exporter.service' deploy/bin/secret-broker-deploy
           grep -Fq 'secret-broker-audit-store.service' deploy/bin/secret-broker-deploy
           grep -Fq 'secret-broker-audit-recovery.service' deploy/bin/secret-broker-deploy
-          grep -Fq 'audit service must use an independent user' deploy/bin/secret-broker-deploy
+          grep -Fq 'audit service identity does not match the pinned contract' deploy/bin/secret-broker-deploy
           grep -Fq 'proxy_ssl_verify[[:space:]]+off' deploy/bin/secret-broker-deploy
           grep -Fq '/etc/secret-broker/pki/ca' deploy/bin/secret-broker-deploy
           grep -Fq '/etc/secret-broker/pki/clients' deploy/bin/secret-broker-deploy

@@ -39,6 +39,10 @@ for (const filename of manifests) {
   }
   if (document.manifest_version !== 1) throw new Error(`${filename}: unsupported manifest version`);
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(document.id || '')) throw new Error(`${filename}: invalid id`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(document.checked_at || '')
+    || !Number.isFinite(Date.parse(`${document.checked_at}T00:00:00Z`))) {
+    throw new Error(`${filename}: checked_at must be an ISO date`);
+  }
   if (ids.has(document.id)) throw new Error(`${filename}: duplicate id`);
   ids.add(document.id);
   if (document.status === 'production') throw new Error(`${filename}: cannot be production before a real contract test`);
@@ -52,7 +56,8 @@ for (const filename of manifests) {
     || typeof document.authentication.revocation !== 'string' || !document.authentication.revocation) {
     throw new Error(`${filename}: authentication priority, injection, rotation and revocation are required`);
   }
-  if (document.contract_test?.required !== true || document.contract_test?.last_result !== 'not_run') {
+  if (document.contract_test?.required !== true || document.contract_test?.last_result !== 'not_run'
+    || typeof document.contract_test?.account !== 'string' || !document.contract_test.account) {
     throw new Error(`${filename}: must retain an explicit unverified contract gate`);
   }
   for (const source of document.official_docs || []) {

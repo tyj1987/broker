@@ -139,7 +139,14 @@ continue.
   binary below the active release; an old, deleted or alternate-path process
   cannot satisfy the existing active-service gates. Linux peer/socket E2E and
   the existing provider-backed repository tests remain the current CI evidence
-  point.
+  point. A bounded Go read-only audit-chain verifier and historical proof
+  reader now provide the local-chain dependency needed by a future Go exporter
+  and recovery authority. CI constructs the chain with Node and requires Go
+  compatibility across Unicode, number and historical-anchor cases. The Go
+  reader fails closed on non-I-JSON input and is not yet packaged or used by
+  the production deployment helper. A runtime switch remains blocked on real
+  retained-chain parity, a quiet filesystem snapshot, exact release packaging
+  and rollback evidence.
 
 ## DQ-004: provider signing and account-binding authority
 

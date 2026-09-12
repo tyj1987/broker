@@ -162,6 +162,9 @@ jobs:
         with:
           go-version: '1.27.1'
           cache-dependency-path: core/go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
@@ -185,6 +188,13 @@ jobs:
       - name: Enforce audit store protocol statement coverage
         run: |
           test "$(go tool cover -func=audit-store-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-chain-coverage.out ./auditchain
+      - name: Enforce audit chain verifier statement coverage
+        run: |
+          test "$(go tool cover -func=audit-chain-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race ./cmd/audit-chain-check
+      - name: Verify Node and Go audit-chain compatibility
+        run: node ../broker-test/test-audit-chain-go-parity.js
       - run: go test -race ./server
       - run: go build ./...
 

@@ -39,10 +39,33 @@ Run the repository audit-chain regression test:
 node broker-test/test-audit-hash-chain.js
 ```
 
+The Go security core also contains a bounded, read-only verifier and historical
+proof reader in `core/auditchain`. The one-shot
+`core/cmd/audit-chain-check` command accepts only an absolute `AUDIT_DIR` and
+emits counts on success or one stable failure marker. It never emits an event,
+path, hash or parser error. This command is source-only: the production image,
+release payload and existing deployment helper still use the Node verifier.
+Replacing that runtime boundary requires a separately approved packaging and
+rollback checkpoint.
+
+CI creates a synthetic chain with Node and verifies it with both Node and Go.
+The fixture covers nested data, control characters, non-ASCII key ordering and
+ECMAScript number serialization. Go verification intentionally applies the
+I-JSON/JCS input boundary: duplicate object names, invalid UTF-8 and lone UTF-16
+surrogates fail closed. Before any production runtime replacement, both
+implementations must verify the complete retained production chain with the
+same file count, event count and final hash. A compatibility failure blocks the
+switch; operators must not rewrite audit history to force acceptance.
+
 The administrative verification endpoint uses the same strict parser and
 chain verifier. A successful local verification proves consistency only for
 the files that are present; it cannot prove that an attacker did not remove a
-valid suffix or the entire chain.
+valid suffix or the entire chain. The Go directory check likewise assumes a
+quiet, root-managed snapshot; it detects ordinary file or directory changes
+during its scan but is not a filesystem snapshot primitive. An empty directory
+can therefore verify as an empty local chain and does not prove that retained
+history was never deleted. Independent signed anchors and immutable copies are
+still required for that claim.
 
 ## External anchor protocol core
 

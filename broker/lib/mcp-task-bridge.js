@@ -1,3 +1,5 @@
+import { redactDeep } from './redact.js';
+
 const CONTROL_FIELDS = new Set(['account_ref', 'environment', 'idempotency_key']);
 const TASK_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SAFE_NAME_RE = /^[a-z][a-z0-9._-]{1,127}$/;
@@ -5,6 +7,10 @@ const SAFE_VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
 
 function fail(message) {
   throw new Error(message);
+}
+
+function safeMcpResult(value) {
+  return redactDeep(value);
 }
 
 function taskId(args) {
@@ -159,7 +165,7 @@ export function createMcpTaskBridge({ callBroker } = {}) {
     return callBroker(`/api/v2/tasks/${task.id}/run`, { method: 'POST', body: {} });
   }
 
-  async function callTool(name, args) {
+  async function callToolRaw(name, args) {
     if (name === 'broker_task_get')
       return callBroker(`/api/v2/tasks/${taskId(args)}`, { method: 'GET' });
     if (name === 'broker_task_run')
@@ -171,6 +177,10 @@ export function createMcpTaskBridge({ callBroker } = {}) {
     const tool = (await executableTools()).find((candidate) => mcpName(candidate) === name);
     if (!tool) fail('Unknown or unavailable Broker tool');
     return executeTool(tool, args);
+  }
+
+  async function callTool(name, args) {
+    return safeMcpResult(await callToolRaw(name, args));
   }
 
   return { listTools, callTool };

@@ -57,9 +57,19 @@ const bridge = createMcpTaskBridge({
   callBroker: async (path, options) => {
     calls.push([path, options]);
     if (path === '/api/v2/tools') return { registry_version: 1, tools: [executable] };
-    if (path === '/api/v2/tasks') return { id: TASK_ID, state: createState };
+    if (path === '/api/v2/tasks') return {
+      id: TASK_ID,
+      state: createState,
+      token: 'canary-secret-token',
+      result: { authorization: 'Bearer canary-secret-token' },
+    };
     if (path.endsWith('/events')) return { events: [] };
-    return { id: TASK_ID, state: path.endsWith('/cancel') ? 'CANCELLED' : 'SUCCEEDED' };
+    return {
+      id: TASK_ID,
+      state: path.endsWith('/cancel') ? 'CANCELLED' : 'SUCCEEDED',
+      token: 'canary-secret-token',
+      result: { authorization: 'Bearer canary-secret-token' },
+    };
   },
 });
 const tools = await bridge.listTools();
@@ -82,6 +92,8 @@ const completed = await bridge.callTool(driveTool.name, {
   resource_ref: '1AbCdEfGhIjKlMnOpQrStUvWxYz',
 });
 assert.equal(completed.state, 'SUCCEEDED');
+assert.equal(completed.token, '[REDACTED]');
+assert.equal(completed.result.authorization, '[REDACTED]');
 assert.deepEqual(calls[1], [
   '/api/v2/tasks',
   {

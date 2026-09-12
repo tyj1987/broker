@@ -37,6 +37,9 @@ const CHECKS = Object.freeze([
   ['policy_socket_protected', (snapshot) => snapshot.policySocketProtected === true],
   ['github_signer_socket_protected', (snapshot) =>
     snapshot.githubSignerRequired !== true || snapshot.githubSignerSocketProtected === true],
+  ['audit_exporter_active', (snapshot) => snapshot.auditExporterActive === true],
+  ['audit_store_lock_active', (snapshot) => snapshot.auditStoreLockActive === true],
+  ['audit_recovery_authority_active', (snapshot) => snapshot.auditRecoveryAuthorityActive === true],
   ['loopback_health', (snapshot) => snapshot.loopbackHealth === true],
 ]);
 
@@ -135,6 +138,9 @@ export async function collectProductionSnapshot({
   const brokerGroup = command('systemctl', ['show', 'secret-broker.service', '-p', 'Group', '--value']);
   const brokerActive = command('systemctl', ['is-active', '--quiet', 'secret-broker.service']);
   const policyActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-policy.service']);
+  const auditExporterActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-audit-exporter.service']);
+  const auditStoreLockActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-audit-store.service']);
+  const auditRecoveryAuthorityActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-audit-recovery.service']);
   const deployAccount = command('getent', ['passwd', 'broker-deploy']);
   const nginx = command('nginx', ['-T']);
   const release = await pathInfoImpl(paths.currentRelease);
@@ -158,6 +164,9 @@ export async function collectProductionSnapshot({
     brokerGroup: brokerGroup.ok ? brokerGroup.stdout : '',
     brokerActive: brokerActive.ok,
     policyActive: policyActive.ok,
+    auditExporterActive: auditExporterActive.ok,
+    auditStoreLockActive: auditStoreLockActive.ok,
+    auditRecoveryAuthorityActive: auditRecoveryAuthorityActive.ok,
     managedReleaseSymlink: release?.isSymbolicLink() === true,
     deployHelperExecutable: await isExecutableImpl(paths.deployHelper),
     deployAccountPresent: deployAccount.ok && deployAccount.stdout.length > 0,

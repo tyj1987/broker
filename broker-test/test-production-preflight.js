@@ -25,12 +25,15 @@ const readySnapshot = {
   policySocketProtected: true,
   githubSignerSocketProtected: true,
   githubSignerRequired: false,
+  auditExporterActive: true,
+  auditStoreLockActive: true,
+  auditRecoveryAuthorityActive: true,
   loopbackHealth: true,
 };
 
 const ready = evaluateProductionReadiness(readySnapshot);
 assert.equal(ready.ready, true);
-assert.equal(ready.checks.length, 16);
+assert.equal(ready.checks.length, 19);
 assert.ok(ready.checks.every((check) => check.passed));
 assert.match(renderProductionReadiness(ready), /production_cd_ready=yes\n$/);
 
@@ -62,6 +65,9 @@ for (const [field, unsafeValue] of [
   ['controlPlaneStateKeyProtected', false],
   ['policySocketProtected', false],
   ['githubSignerSocketProtected', false],
+  ['auditExporterActive', false],
+  ['auditStoreLockActive', false],
+  ['auditRecoveryAuthorityActive', false],
   ['loopbackHealth', false],
 ]) {
   const result = evaluateProductionReadiness({
@@ -141,4 +147,4 @@ const scriptPath = fileURLToPath(new URL('../deploy/bin/secret-broker-production
 assert.equal(isDirectExecution(scriptPath, new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url).href), true);
 assert.equal(isDirectExecution('/tmp/other.mjs', 'file:///tmp/preflight.mjs'), false);
 
-console.log('production preflight: 16 fail-closed deployment gates passed');
+console.log('production preflight: 19 fail-closed deployment gates passed');

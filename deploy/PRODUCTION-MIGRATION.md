@@ -38,6 +38,9 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/usr/local/sbin/secret-broker-production-preflight.mjs` | `root:root`, `0755` | Read-only production CD readiness check |
 | `/run/secret-broker/core.sock` | `broker-core:broker`, `0660` | Local-only Go policy decision channel |
 | `/run/secret-broker-signer/github.sock` | `broker-signer:broker`, `0660` | Signature-only GitHub App capability; private key remains in KMS/HSM |
+| `secret-broker-audit-exporter.service` | independent service account | Signs and exports audit-chain heads without exposing event bodies |
+| `secret-broker-audit-store.service` | independent service account | Publishes heads to an independently administered immutable store with retention lock |
+| `secret-broker-audit-recovery.service` | independent recovery authority | Verifies restore authority and retained-chain recovery evidence |
 
 Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it. The service uses systemd credentials, so verify that the host supports `LoadCredential=` and the `%d` credential-directory specifier before the maintenance window.
 
@@ -63,10 +66,11 @@ The initializer refuses to overwrite an existing state file. Back up the encrypt
 4. Copy encrypted data and only the runtime PKI files listed above to the target paths without printing them. The CA private key and all client private keys must remain offline and must not exist on the Broker host. Verify ownership and permissions with metadata-only commands.
 5. Install the checksum-pinned Node 24 runtime below `/opt/secret-broker/runtime`, then replace `/opt/secret-broker/broker` with a relative symlink to the verified candidate release.
 6. Install and start both hardened systemd units. This one-time bootstrap is manual because the normal deploy helper intentionally requires an already-active policy core and managed symlink. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. If a GitHub operation is enabled, provision the independently reviewed signer workload under `/run/secret-broker-signer`; the Broker user must not own or be able to replace that directory or socket. A missing policy core, signer, or unavailable control-plane state must make the affected production operations fail closed.
-7. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
-8. Install the deploy helper, production preflight, and sudoers fragment. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command. Run the preflight locally as root and retain its pass/fail-only output with the release evidence.
-9. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.
-10. Disable root SSH login only after a second verified management path is working.
+7. Install and start the independently owned audit exporter, immutable-store/retention-lock, and recovery-authority units listed above. They must not run as `broker`, must not receive audit event bodies when only a signed head is required, and must expose only pass/fail health to the preflight. The preflight intentionally remains not ready until all three units are active; a local JSONL chain alone is not production audit evidence.
+8. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
+9. Install the deploy helper, production preflight, and sudoers fragment. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command. Run the preflight locally as root and retain its pass/fail-only output with the release evidence.
+10. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.
+11. Disable root SSH login only after a second verified management path is working.
 
 ## Rollback
 

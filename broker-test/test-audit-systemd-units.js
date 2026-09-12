@@ -59,10 +59,13 @@ for (const [name, contract] of Object.entries(services)) {
 
 const exporter = read('../deploy/systemd/secret-broker-audit-exporter.service');
 assert.match(exporter, /^PrivateNetwork=true$/m);
+assert.match(exporter, /^SupplementaryGroups=broker-audit-signer broker-audit-store$/m);
 assert.match(
   exporter,
   /^Requires=secret-broker-audit-signer\.service secret-broker-audit-store\.service$/m,
 );
+const recovery = read('../deploy/systemd/secret-broker-audit-recovery.service');
+assert.match(recovery, /^SupplementaryGroups=broker-audit-store$/m);
 for (const name of ['signer', 'store', 'recovery']) {
   assert.doesNotMatch(
     read(`../deploy/systemd/secret-broker-audit-${name}.service`),

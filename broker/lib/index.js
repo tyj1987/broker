@@ -99,6 +99,11 @@ export {
   createLocalAuditAnchorSignerClient,
 } from './local-audit-anchor-signer-client.js';
 export {
+  LOCAL_AUDIT_ANCHOR_STORE_CONTRACT,
+  LocalAuditAnchorStoreError,
+  createLocalAuditAnchorStoreClient,
+} from './local-audit-anchor-store-client.js';
+export {
   AuditAnchorExporterError,
   createAuditAnchorExporter,
 } from './audit-anchor-exporter.js';

@@ -189,6 +189,27 @@ await assert.rejects(
   expectCode('anchor_signer_aborted'),
 );
 
+const probeAbortHarness = socketHarness();
+const probeAbortController = new AbortController();
+let probeStatCalls = 0;
+const probeAbortClient = createLocalAuditAnchorSignerClient({
+  algorithm,
+  keyId,
+  connect: probeAbortHarness.connect,
+  stat: async (path) => {
+    probeStatCalls += 1;
+    if (probeStatCalls === 1) probeAbortController.abort();
+    return safeStat(path);
+  },
+  processUid: 1000,
+  processGroups: [3000],
+});
+await assert.rejects(
+  probeAbortClient.signAnchor(anchor, { signal: probeAbortController.signal }),
+  expectCode('anchor_signer_aborted'),
+);
+assert.equal(probeAbortHarness.state.payload, undefined);
+
 for (const body of [
   '{invalid-json',
   JSON.stringify(null),

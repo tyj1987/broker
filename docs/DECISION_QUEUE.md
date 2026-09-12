@@ -93,9 +93,16 @@ continue.
   Transport tests
   cover exact requests, immutable duplicate handling, object-lock headers,
   response bounds, invalid provider responses and internal cancellation
-  boundaries. Runnable signer/store services, immutable buckets, mirror worker,
-  credentials, retention locks and recovery authority are not deployed yet, so
-  there is no claim of independent non-repudiation and RR-012 remains open.
+  boundaries. A separate, hermetically tested store protocol now binds a fixed
+  stream and purpose to `publish`, `read_head`, `read_page` and `health`, uses
+  exact non-root exporter/recovery UID roles, bounds pages and wire sizes, and
+  independently verifies returned envelopes. Its fixed-path Node client maps
+  only those operations to the existing exporter and recovery contracts. It
+  does not resolve restart-safe dual-cloud head discovery or independently
+  prove recovery freshness. Runnable signer/store services, immutable buckets,
+  mirror worker, credentials, retention locks and recovery authority are not
+  deployed yet, so there is no claim of independent non-repudiation and RR-012
+  remains open.
 
 ## DQ-004: provider signing and account-binding authority
 

@@ -162,6 +162,7 @@ export function createLocalAuditAnchorSignerClient({
     const payload = encodeRequest(request, algorithm, keyId);
     if (signal?.aborted) fail('anchor_signer_aborted', 'Audit anchor signing was aborted');
     await probe();
+    if (signal?.aborted) fail('anchor_signer_aborted', 'Audit anchor signing was aborted');
     return new Promise((resolve, reject) => {
       let socket;
       let settled = false;
@@ -179,7 +180,13 @@ export function createLocalAuditAnchorSignerClient({
       const abort = () =>
         rejectSafe('anchor_signer_aborted', 'Audit anchor signing was aborted');
       try {
-        socket = connect({ path: SOCKET_PATH }, () => socket.end(payload));
+        socket = connect({ path: SOCKET_PATH }, () => {
+          if (settled || signal?.aborted) {
+            socket.destroy();
+            return;
+          }
+          socket.end(payload);
+        });
         socket.setTimeout(timeoutMs, () =>
           rejectSafe('anchor_signer_timeout', 'Audit anchor signer request timed out'),
         );

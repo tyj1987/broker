@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -333,13 +332,7 @@ func cloneWriterConfig(config ImmutableObjectWriterConfig) (ImmutableObjectWrite
 		return ImmutableObjectWriterConfig{}, false
 	}
 	cloned := config
-	cloned.TrustedKeys = make(map[string]TrustedSigningKey, len(config.TrustedKeys))
-	for keyID, trustedKey := range config.TrustedKeys {
-		trustedKey.PublicKey = &ecdsa.PublicKey{
-			Curve: elliptic.P256(), X: new(big.Int).Set(trustedKey.PublicKey.X), Y: new(big.Int).Set(trustedKey.PublicKey.Y),
-		}
-		cloned.TrustedKeys[keyID] = trustedKey
-	}
+	cloned.TrustedKeys, _ = cloneTrustedSigningKeys(config.TrustedKeys)
 	return cloned, true
 }
 
@@ -349,11 +342,15 @@ func validP256PublicKey(publicKey *ecdsa.PublicKey) bool {
 }
 
 func verifyStoredEnvelopeSignature(config ImmutableObjectWriterConfig, envelope storedEnvelope) bool {
+	return verifyStoredEnvelopeSignatureWithTrust(config.StreamID, config.TrustedKeys, envelope)
+}
+
+func verifyStoredEnvelopeSignatureWithTrust(streamID string, trustedKeys map[string]TrustedSigningKey, envelope storedEnvelope) bool {
 	if envelope.Signature.Algorithm != "ecdsa-p256-sha256" ||
-		envelope.Payload.StreamID != config.StreamID {
+		envelope.Payload.StreamID != streamID {
 		return false
 	}
-	trustedKey, trusted := config.TrustedKeys[envelope.Signature.KeyID]
+	trustedKey, trusted := trustedKeys[envelope.Signature.KeyID]
 	if !trusted || !validP256PublicKey(trustedKey.PublicKey) ||
 		envelope.Payload.Sequence < trustedKey.ValidFromSequence ||
 		(trustedKey.ValidThroughSequence != 0 && envelope.Payload.Sequence > trustedKey.ValidThroughSequence) {

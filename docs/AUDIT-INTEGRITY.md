@@ -168,6 +168,31 @@ exact retain-until timestamp in the original PutObject request. These are still
 source-only transports: credentials, cloud resources and a runnable store
 service do not yet exist.
 
+`core/auditstore` and
+`broker/lib/local-audit-anchor-store-client.js` now define the bounded local
+boundary between the exporter or recovery verifier and that future store
+workload. The versioned protocol fixes the stream, purpose and request ID;
+accepts only `publish`, `read_head`, `read_page` and `health`; limits requests,
+responses and recovery pages; and validates every returned envelope again.
+Linux peer credentials assign one of two non-root roles: the exporter may
+publish but may not enumerate recovery pages, while recovery may read but may
+not publish. Provider errors are reduced to stable codes and an unauthorized
+peer receives no response. The Node client additionally pins the Unix socket,
+requires safe ownership and mode, and exposes exactly the store methods used by
+the existing exporter and recovery verifier. The recovery unit has group-level
+socket access, but the store still authorizes its exact UID for read-only
+operations.
+
+This protocol is hermetic source evidence, not a claim that the cloud store is
+restart-safe or independently recoverable. A production repository must derive
+the longest identical, contiguous and retained prefix from both clouds after a
+restart. The current SDK boundary has no bounded object-list operation yet, so
+an in-memory or Broker-host checkpoint must not be used as the authoritative
+head. Likewise, recovery through the store socket is useful for contract tests
+but cannot by itself prove freshness against a compromised store process; the
+independent recovery authority must read both clouds or verify an independently
+held freshness checkpoint.
+
 The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
 `ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the
 exact signing key. The OSS writer can only create objects in the audit prefix;

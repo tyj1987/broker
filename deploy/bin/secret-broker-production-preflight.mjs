@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { constants as fsConstants } from 'node:fs';
-import { access, lstat, readdir } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { posix as path } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_PATHS = Object.freeze({
@@ -15,6 +16,12 @@ const DEFAULT_PATHS = Object.freeze({
   githubSignerSocket: '/run/secret-broker-signer/github.sock',
   auditStoreHealthHelper: '/opt/secret-broker/broker/bin/secret-broker-audit-store-health',
   auditStoreSocket: '/run/secret-broker-audit-store/store.sock',
+  auditExecutables: Object.freeze({
+    signer: '/opt/secret-broker/broker/bin/secret-broker-audit-signer',
+    exporter: '/opt/secret-broker/broker/bin/secret-broker-audit-exporter',
+    store: '/opt/secret-broker/broker/bin/secret-broker-audit-store',
+    recovery: '/opt/secret-broker/broker/bin/secret-broker-audit-recovery',
+  }),
   forbiddenKeyRoots: [
     '/etc/secret-broker/pki/ca',
     '/etc/secret-broker/pki/clients',
@@ -28,6 +35,7 @@ const AUDIT_IDENTITIES = Object.freeze({
   store: Object.freeze({ user: 'broker-audit-store', group: 'broker-audit-store' }),
   recovery: Object.freeze({ user: 'broker-audit-recovery', group: 'broker-audit-recovery' }),
 });
+const AUDIT_SERVICES = Object.freeze(['signer', 'exporter', 'store', 'recovery']);
 
 function exactAuditIdentity(snapshot, service) {
   const expected = AUDIT_IDENTITIES[service];
@@ -70,7 +78,11 @@ const CHECKS = Object.freeze([
   ],
   [
     'audit_exporter_signer_active',
-    (snapshot) => snapshot.auditExporterActive === true && snapshot.auditSignerActive === true,
+    (snapshot) =>
+      snapshot.auditExporterActive === true &&
+      snapshot.auditSignerActive === true &&
+      snapshot.auditExporterReleaseBound === true &&
+      snapshot.auditSignerReleaseBound === true,
   ],
   [
     'audit_exporter_signer_independent_identities',
@@ -79,10 +91,17 @@ const CHECKS = Object.freeze([
   ],
   [
     'audit_store_lock_ready',
-    (snapshot) => snapshot.auditStoreActive === true && snapshot.auditStoreHealthReady === true,
+    (snapshot) =>
+      snapshot.auditStoreActive === true &&
+      snapshot.auditStoreReleaseBound === true &&
+      snapshot.auditStoreHealthReady === true,
   ],
   ['audit_store_independent_identity', (snapshot) => exactAuditIdentity(snapshot, 'store')],
-  ['audit_recovery_authority_active', (snapshot) => snapshot.auditRecoveryAuthorityActive === true],
+  [
+    'audit_recovery_authority_active',
+    (snapshot) =>
+      snapshot.auditRecoveryAuthorityActive === true && snapshot.auditRecoveryReleaseBound === true,
+  ],
   ['audit_recovery_independent_identity', (snapshot) => exactAuditIdentity(snapshot, 'recovery')],
   ['loopback_health', (snapshot) => snapshot.loopbackHealth === true],
 ]);
@@ -198,6 +217,147 @@ function auditStoreHealth(command, paths) {
   return result.ok && parseAuditStoreHealth(result.stdout);
 }
 
+function emptyAuditRuntimeSnapshot() {
+  return {
+    auditSignerReleaseBound: false,
+    auditExporterReleaseBound: false,
+    auditStoreReleaseBound: false,
+    auditRecoveryReleaseBound: false,
+    auditStoreHealthReady: false,
+  };
+}
+
+function processStartTime(stat, pid) {
+  if (typeof stat !== 'string' || !stat.startsWith(`${pid} (`)) return null;
+  const commandEnd = stat.lastIndexOf(')');
+  if (commandEnd < 3) return null;
+  const fields = stat
+    .slice(commandEnd + 1)
+    .trim()
+    .split(/\s+/u);
+  const startTime = fields[19];
+  return /^[1-9][0-9]*$/u.test(startTime ?? '') ? startTime : null;
+}
+
+async function auditProcessSample(command, realpathImpl, readFileImpl, paths, release, service) {
+  const executables = paths?.auditExecutables;
+  if (
+    typeof command !== 'function' ||
+    typeof realpathImpl !== 'function' ||
+    typeof readFileImpl !== 'function' ||
+    !Object.hasOwn(AUDIT_IDENTITIES, service) ||
+    executables === null ||
+    typeof executables !== 'object' ||
+    !Object.hasOwn(executables, service) ||
+    typeof executables[service] !== 'string' ||
+    executables[service].length === 0
+  ) {
+    return null;
+  }
+  let result;
+  try {
+    result = command('systemctl', [
+      'show',
+      `secret-broker-audit-${service}.service`,
+      '-p',
+      'MainPID',
+      '--value',
+    ]);
+  } catch {
+    return null;
+  }
+  if (
+    !result?.ok ||
+    typeof result.stdout !== 'string' ||
+    !/^[1-9][0-9]{0,9}$/u.test(result.stdout)
+  ) {
+    return null;
+  }
+  const pid = Number(result.stdout);
+  if (!Number.isSafeInteger(pid) || pid > 4_194_304) return null;
+  try {
+    const [expectedExecutable, runningExecutable, stat] = await Promise.all([
+      realpathImpl(executables[service]),
+      realpathImpl(`/proc/${pid}/exe`),
+      readFileImpl(`/proc/${pid}/stat`, 'utf8'),
+    ]);
+    const startTime = processStartTime(stat, pid);
+    const releaseExecutable = path.join(release, 'bin', path.basename(executables[service]));
+    if (
+      startTime === null ||
+      expectedExecutable !== releaseExecutable ||
+      runningExecutable !== expectedExecutable
+    ) {
+      return null;
+    }
+    return { pid, startTime, executable: runningExecutable };
+  } catch {
+    return null;
+  }
+}
+
+function sameAuditProcess(left, right) {
+  return (
+    left !== null &&
+    right !== null &&
+    left.pid === right.pid &&
+    left.startTime === right.startTime &&
+    left.executable === right.executable
+  );
+}
+
+export async function collectStableAuditRuntimeSnapshot({
+  command,
+  realpathImpl,
+  readFileImpl,
+  paths,
+  healthProbe,
+}) {
+  const rejected = emptyAuditRuntimeSnapshot();
+  if (typeof healthProbe !== 'function' || typeof paths?.currentRelease !== 'string') {
+    return rejected;
+  }
+  try {
+    const release = await realpathImpl(paths.currentRelease);
+    if (typeof release !== 'string' || !release.startsWith('/')) return rejected;
+    const healthHelper = path.join(
+      release,
+      'bin',
+      path.basename(paths.auditStoreHealthHelper ?? ''),
+    );
+    if ((await realpathImpl(paths.auditStoreHealthHelper)) !== healthHelper) return rejected;
+    const before = await Promise.all(
+      AUDIT_SERVICES.map((service) =>
+        auditProcessSample(command, realpathImpl, readFileImpl, paths, release, service),
+      ),
+    );
+    if (before.some((sample) => sample === null)) return rejected;
+    const auditStoreHealthReady = (await healthProbe(release)) === true;
+    const after = await Promise.all(
+      AUDIT_SERVICES.map((service) =>
+        auditProcessSample(command, realpathImpl, readFileImpl, paths, release, service),
+      ),
+    );
+    if (after.some((sample) => sample === null)) return rejected;
+    const finalRelease = await realpathImpl(paths.currentRelease);
+    if (
+      release !== finalRelease ||
+      before.some((sample, index) => !sameAuditProcess(sample, after[index]))
+    ) {
+      return rejected;
+    }
+    return {
+      auditSignerReleaseBound: true,
+      auditExporterReleaseBound: true,
+      auditStoreReleaseBound: true,
+      auditRecoveryReleaseBound: true,
+      auditStoreHealthReady,
+    };
+  } catch {
+    return rejected;
+  }
+}
+
 export function evaluateProductionReadiness(snapshot) {
   const checks = CHECKS.map(([name, predicate]) => ({
     name,
@@ -224,14 +384,10 @@ export async function collectProductionSnapshot({
   countPrivateKeysImpl = countPrivateKeys,
   loopbackHealthImpl = loopbackHealth,
   auditStoreHealthImpl = auditStoreHealth,
+  realpathImpl = realpath,
+  readFileImpl = readFile,
   githubSignerRequired = process.env.BROKER_REQUIRE_GITHUB_SIGNER === '1',
 } = {}) {
-  let auditStoreHealthReady = false;
-  try {
-    auditStoreHealthReady = (await auditStoreHealthImpl(command, paths)) === true;
-  } catch {
-    auditStoreHealthReady = false;
-  }
   const brokerUser = command('systemctl', [
     'show',
     'secret-broker.service',
@@ -345,6 +501,25 @@ export async function collectProductionSnapshot({
   const forbiddenPrivateKeyCount = (
     await Promise.all(paths.forbiddenKeyRoots.map((path) => countPrivateKeysImpl(path)))
   ).reduce((sum, value) => sum + value, 0);
+  const deployHelperExecutable = await isExecutableImpl(paths.deployHelper);
+  const loopbackHealth = await loopbackHealthImpl(fetchImpl);
+  // Keep the release/process double-sample last. No asynchronous probe may
+  // extend the acceptance window after this point.
+  const auditRuntime = await collectStableAuditRuntimeSnapshot({
+    command,
+    realpathImpl,
+    readFileImpl,
+    paths,
+    healthProbe: (release) =>
+      auditStoreHealthImpl(command, {
+        ...paths,
+        auditStoreHealthHelper: path.join(
+          release,
+          'bin',
+          path.basename(paths.auditStoreHealthHelper),
+        ),
+      }),
+  });
 
   return {
     brokerUser: brokerUser.ok ? brokerUser.stdout : '',
@@ -354,7 +529,7 @@ export async function collectProductionSnapshot({
     auditSignerActive: auditSignerActive.ok,
     auditExporterActive: auditExporterActive.ok,
     auditStoreActive: auditStoreActive.ok,
-    auditStoreHealthReady,
+    ...auditRuntime,
     auditRecoveryAuthorityActive: auditRecoveryAuthorityActive.ok,
     auditSignerUser: auditSignerUser.ok ? auditSignerUser.stdout : '',
     auditExporterUser: auditExporterUser.ok ? auditExporterUser.stdout : '',
@@ -365,7 +540,7 @@ export async function collectProductionSnapshot({
     auditStoreGroup: auditStoreGroup.ok ? auditStoreGroup.stdout : '',
     auditRecoveryGroup: auditRecoveryGroup.ok ? auditRecoveryGroup.stdout : '',
     managedReleaseSymlink: release?.isSymbolicLink() === true,
-    deployHelperExecutable: await isExecutableImpl(paths.deployHelper),
+    deployHelperExecutable,
     deployAccountPresent: deployAccount.ok && deployAccount.stdout.length > 0,
     nginxConfigValid: nginx.ok,
     nginxVerifyOnCount: nginx.ok
@@ -402,7 +577,7 @@ export async function collectProductionSnapshot({
       brokerGroups.includes(githubSignerSocket.gid) &&
       (githubSignerSocket.mode & 0o060) === 0o060,
     githubSignerRequired,
-    loopbackHealth: await loopbackHealthImpl(fetchImpl),
+    loopbackHealth,
   };
 }
 

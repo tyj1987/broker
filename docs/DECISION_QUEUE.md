@@ -134,9 +134,12 @@ continue.
   identity, bucket or retention lock has been created. Packaging remains blocked
   until the independent service identities can execute only their own binaries,
   deployment atomically restarts and verifies the exact audit processes, and
-  rollback proves the prior audit runtime is executable. Linux peer/socket E2E
-  and the existing provider-backed repository tests remain the current CI
-  evidence point.
+  rollback proves the prior audit runtime is executable. The 22-item production
+  preflight now binds each audit service's `MainPID` executable to the exact
+  binary below the active release; an old, deleted or alternate-path process
+  cannot satisfy the existing active-service gates. Linux peer/socket E2E and
+  the existing provider-backed repository tests remain the current CI evidence
+  point.
 
 ## DQ-004: provider signing and account-binding authority
 

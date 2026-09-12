@@ -49,11 +49,26 @@ function validateTool(tool) {
     tool.input_schema.type !== 'object' ||
     tool.input_schema.additionalProperties !== false ||
     !tool.input_schema.properties ||
-    typeof tool.input_schema.properties !== 'object'
+    typeof tool.input_schema.properties !== 'object' ||
+    Array.isArray(tool.input_schema.properties)
   ) {
     fail('Broker returned an invalid executable tool');
   }
-  if (Object.keys(tool.input_schema.properties).some((key) => CONTROL_FIELDS.has(key))) {
+  const schema = tool.input_schema;
+  if (
+    schema.required !== undefined &&
+    (!Array.isArray(schema.required) ||
+      new Set(schema.required).size !== schema.required.length ||
+      schema.required.some(
+        (key) =>
+          typeof key !== 'string' ||
+          CONTROL_FIELDS.has(key) ||
+          !Object.prototype.hasOwnProperty.call(schema.properties, key),
+      ))
+  ) {
+    fail('Broker returned an invalid executable schema');
+  }
+  if (Object.keys(schema.properties).some((key) => CONTROL_FIELDS.has(key))) {
     fail('Broker tool conflicts with MCP control fields');
   }
   return tool;

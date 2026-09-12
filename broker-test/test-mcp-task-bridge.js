@@ -167,6 +167,18 @@ for (const invalidRegistry of [
   { registry_version: 1, tools: [{ ...executable, environments: ['production', 'production'] }] },
   {
     registry_version: 1,
+    tools: [{ ...executable, input_schema: { ...executable.input_schema, required: 'resource_ref' } }],
+  },
+  {
+    registry_version: 1,
+    tools: [{ ...executable, input_schema: { ...executable.input_schema, required: ['missing'] } }],
+  },
+  {
+    registry_version: 1,
+    tools: [{ ...executable, input_schema: { ...executable.input_schema, required: ['resource_ref', 'resource_ref'] } }],
+  },
+  {
+    registry_version: 1,
     tools: [
       {
         ...executable,

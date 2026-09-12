@@ -6,7 +6,11 @@ const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registr
 const gatedRegistry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'), {
   providerGates: new Map([
     ['github', { status: 'contract_required', contract_test: { required: true, last_result: 'not_run' } }],
-    ['broker', { status: 'production', contract_test: { required: true, last_result: 'passed' } }],
+    ['broker', {
+      status: 'production',
+      contract_test: { account: 'isolated-broker', required: true, last_result: 'passed', verified_at: '2026-09-12T00:00:00Z' },
+      implementation_evidence: { tests: 'unit' },
+    }],
   ]),
 });
 const github = registry.find('github', 'repo.read');
@@ -80,6 +84,20 @@ assert.equal(gatedRegistry.evaluate({
 assert.equal(gatedRegistry.evaluate({
   identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
 }, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).allow, true);
+const incompleteProductionGate = new Map([
+  ['github', {
+    status: 'production',
+    contract_test: { account: 'isolated-github', required: true, last_result: 'passed' },
+    implementation_evidence: { tests: 'unit' },
+  }],
+]);
+const incompleteRegistry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'), {
+  providerGates: incompleteProductionGate,
+});
+assert.equal(incompleteRegistry.evaluate({
+  identity: githubAgent, provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+}, allowed).reason, 'provider_contract_required', 'production gate requires verified_at');
 assert.equal(registry.evaluate({
   identity: { name: 'developer-a', context: { via: 'api_key', client: { role: 'developer' } } },
   provider: 'github', operationId: 'repo.read', environment: 'production',

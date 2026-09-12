@@ -297,8 +297,14 @@ export class ToolRegistry {
   isProviderAvailable(provider) {
     const gate = this.providerGates.get(provider);
     if (!gate) return true;
+    const verifiedAt = Date.parse(gate.contract_test?.verified_at || '');
+    const evidence = gate.implementation_evidence;
     return gate.status === 'production' && gate.contract_test?.required === true
-      && gate.contract_test?.last_result === 'passed';
+      && gate.contract_test?.last_result === 'passed'
+      && typeof gate.contract_test.account === 'string' && gate.contract_test.account.length > 0
+      && Number.isFinite(verifiedAt)
+      && evidence && typeof evidence === 'object' && !Array.isArray(evidence)
+      && Object.keys(evidence).length > 0;
   }
 }
 

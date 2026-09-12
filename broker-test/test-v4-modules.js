@@ -8,6 +8,8 @@ import { TYPE_SCHEMAS, getTypeSchema, validateFields } from '../broker/type-sche
 import { SERVICE_TEMPLATES, publicTemplateList } from '../broker/service-templates.js';
 import { configureWebAuthn, beginRegistration, beginAuthentication, finishRegistration, finishAuthentication, ensureWebAuthnFactors, listCredentials, parseAuthenticatorData, noopVerifier } from '../broker/webauthn.js';
 import { parseOpenAPI, extractAuthFromDocs, extractUpstreamFromDocs } from '../broker/lib/template-parser.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -20,6 +22,12 @@ function section(t) { console.log(`\n[${t}]`); }
 // auto-rotate
 // ============================================================
 section('auto-rotate');
+{
+  const source = readFileSync(join(process.cwd(), 'lib', 'auto-rotate.js'), 'utf8');
+  ok('rotation errors are stable', source.includes("error: 'rotation_command_failed'")
+    && source.includes('rotation_persist_skipped') && !source.includes('error: e.message'));
+  ok('rollback never returns secret material', !source.includes('resolve({ ok: true, secret: target })'));
+}
 {
   const fresh = checkRotationState({ name: 's1', type: 'github_pat', created_at: new Date().toISOString() }, {});
   ok('fresh secret has state=fresh', fresh.state === 'fresh' && fresh.days_until_rotation > 0);

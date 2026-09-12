@@ -17,7 +17,7 @@ const clientKeyPath = resolve('protected-test-inputs', 'client.key');
 const caPath = resolve('protected-test-inputs', 'ca.crt');
 const missingPlanPath = resolve('protected-test-inputs', 'missing.json');
 const plan = {
-  version: 1,
+  version: 2,
   provider: 'github',
   tool_name: 'github.repository.read',
   tool_version: '1.0.0',
@@ -31,6 +31,12 @@ const plan = {
   },
   wrong_resource_ref: 'contract-owner/other-private-repo',
   idempotency_prefix: 'dq004-github-cli-20260912',
+  expected_authority: {
+    installation_id_sha256: '1'.repeat(64),
+    account_id_sha256: '2'.repeat(64),
+    account_login_sha256: '3'.repeat(64),
+    target_type: 'Organization',
+  },
 };
 
 function requestImpl(options, callback) {
@@ -69,6 +75,7 @@ function requestImpl(options, callback) {
           full_name: plan.parameters.resource_ref,
           visibility: 'private',
           archived: false,
+          authority: structuredClone(plan.expected_authority),
         },
       };
     } else if (

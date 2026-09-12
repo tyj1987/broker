@@ -7,10 +7,22 @@ import {
 } from '../broker/lib/provider-contract-runner.js';
 
 const taskId = '00000000-0000-4000-8000-000000000101';
+const githubAuthority = Object.freeze({
+  installation_id_sha256: '1'.repeat(64),
+  account_id_sha256: '2'.repeat(64),
+  account_login_sha256: '3'.repeat(64),
+  target_type: 'Organization',
+});
+const aliyunAuthority = Object.freeze({
+  identity_type: 'AssumedRoleUser',
+  account_id_sha256: '4'.repeat(64),
+  principal_id_sha256: '5'.repeat(64),
+  arn_sha256: '6'.repeat(64),
+});
 
 function githubPlan() {
   return {
-    version: 1,
+    version: 2,
     provider: 'github',
     tool_name: 'github.repository.read',
     tool_version: '1.0.0',
@@ -24,12 +36,13 @@ function githubPlan() {
     },
     wrong_resource_ref: 'contract-owner/other-private-repo',
     idempotency_prefix: 'dq004-github-contract-20260912',
+    expected_authority: { ...githubAuthority },
   };
 }
 
 function aliyunPlan() {
   return {
-    version: 1,
+    version: 2,
     provider: 'aliyun',
     tool_name: 'aliyun.ecs.instances.list',
     tool_version: '1.0.0',
@@ -43,6 +56,7 @@ function aliyunPlan() {
     },
     wrong_resource_ref: 'ecs-inventory-other',
     idempotency_prefix: 'dq004-aliyun-contract-20260912',
+    expected_authority: { ...aliyunAuthority },
   };
 }
 
@@ -64,6 +78,7 @@ function resultFor(plan) {
       full_name: `${plan.parameters.owner}/${plan.parameters.repo}`,
       visibility: 'private',
       archived: false,
+      authority: { ...githubAuthority },
     };
   }
   return {
@@ -78,6 +93,7 @@ function resultFor(plan) {
       },
     ],
     total_count: 1,
+    authority: { ...aliyunAuthority },
   };
 }
 
@@ -128,13 +144,15 @@ for (const plan of [githubPlan(), aliyunPlan()]) {
   const broker = successfulBroker(plan);
   const receipt = await createProviderContractRunner({ callBroker: broker.callBroker })(plan);
   assert.deepEqual(receipt, {
-    version: 1,
+    version: 2,
     provider: plan.provider,
     operation_id: plan.provider === 'github' ? 'repo.read' : 'ecs.instances.list',
     environment: 'staging',
     status: 'passed',
     checks: [
       'tool_discovery',
+      'authority_identity',
+      'authority_match',
       'bounded_read',
       'safe_output',
       'wrong_account_denied',
@@ -155,6 +173,16 @@ for (const plan of [githubPlan(), aliyunPlan()]) {
   }
   assert.equal(JSON.stringify(receipt).includes(plan.account_ref), false);
   assert.equal(JSON.stringify(receipt).includes(plan.parameters.resource_ref), false);
+}
+
+{
+  const plan = githubPlan();
+  plan.expected_authority = Object.fromEntries(Object.entries(plan.expected_authority).reverse());
+  const broker = successfulBroker(plan);
+  assert.equal(
+    (await createProviderContractRunner({ callBroker: broker.callBroker })(plan)).status,
+    'passed',
+  );
 }
 
 const expectPlanInvalid = (mutate) => {
@@ -199,6 +227,9 @@ for (const mutate of [
   },
   (value) => {
     value.idempotency_prefix = 'short';
+  },
+  (value) => {
+    value.expected_authority.account_id_sha256 = 'not-a-digest';
   },
 ])
   expectPlanInvalid(mutate);
@@ -297,7 +328,13 @@ for (const [response, code] of [
 
 for (const [result, code] of [
   [
-    { id: 1, full_name: 'wrong/repo', visibility: 'private', archived: false },
+    {
+      id: 1,
+      full_name: 'wrong/repo',
+      visibility: 'private',
+      archived: false,
+      authority: { ...githubAuthority },
+    },
     'contract_result_invalid',
   ],
   [
@@ -307,6 +344,7 @@ for (const [result, code] of [
       visibility: 'private',
       archived: false,
       access_token: 'credential-canary',
+      authority: { ...githubAuthority },
     },
     'contract_result_sensitive',
   ],
@@ -314,6 +352,14 @@ for (const [result, code] of [
   const plan = githubPlan();
   const broker = successfulBroker(plan, { result });
   await expectRunCode(plan, broker.callBroker, code);
+}
+
+{
+  const plan = githubPlan();
+  const result = resultFor(plan);
+  result.authority.account_id_sha256 = '7'.repeat(64);
+  const broker = successfulBroker(plan, { result });
+  await expectRunCode(plan, broker.callBroker, 'contract_authority_mismatch');
 }
 
 {

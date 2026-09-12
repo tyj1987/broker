@@ -5,6 +5,7 @@ const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{16,96}$/;
 const GITHUB_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?$/;
 const ALIYUN_REGION_RE = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
 const TASK_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const SHA256_RE = /^[a-f0-9]{64}$/;
 const ALIYUN_INSTANCE_KEYS = new Set([
   'instance_id',
   'instance_name',
@@ -24,6 +25,7 @@ const ROOT_KEYS = new Set([
   'parameters',
   'wrong_resource_ref',
   'idempotency_prefix',
+  'expected_authority',
 ]);
 const PROVIDERS = Object.freeze({
   github: Object.freeze({
@@ -92,7 +94,7 @@ function validateParameters(provider, parameters) {
 export function validateProviderContractPlan(input) {
   if (
     !exactObject(input, ROOT_KEYS) ||
-    input.version !== 1 ||
+    input.version !== 2 ||
     !Object.hasOwn(PROVIDERS, input.provider) ||
     input.tool_name !== PROVIDERS[input.provider]?.toolName ||
     input.tool_version !== '1.0.0' ||
@@ -107,7 +109,31 @@ export function validateProviderContractPlan(input) {
     fail('contract_plan_invalid');
   }
   validateParameters(input.provider, input.parameters);
+  validateExpectedAuthority(input.provider, input.expected_authority);
   return structuredClone(input);
+}
+
+function validateExpectedAuthority(provider, authority) {
+  const keys =
+    provider === 'github'
+      ? new Set([
+          'installation_id_sha256',
+          'account_id_sha256',
+          'account_login_sha256',
+          'target_type',
+        ])
+      : new Set(['identity_type', 'account_id_sha256', 'principal_id_sha256', 'arn_sha256']);
+  if (!exactObject(authority, keys)) fail('contract_plan_invalid');
+  if (
+    Object.entries(authority).some(([key, value]) =>
+      key.endsWith('_sha256') ? !SHA256_RE.test(value || '') : typeof value !== 'string',
+    ) ||
+    (provider === 'github' &&
+      !['User', 'Organization', 'Enterprise'].includes(authority.target_type)) ||
+    (provider === 'aliyun' &&
+      !['Account', 'RAMUser', 'AssumedRoleUser'].includes(authority.identity_type))
+  )
+    fail('contract_plan_invalid');
 }
 
 function validTaskBinding(task, plan, state) {
@@ -125,7 +151,7 @@ function validTaskBinding(task, plan, state) {
 
 function validateGitHubResult(result, plan) {
   if (
-    !exactObject(result, new Set(['id', 'full_name', 'visibility', 'archived'])) ||
+    !exactObject(result, new Set(['id', 'full_name', 'visibility', 'archived', 'authority'])) ||
     !Number.isSafeInteger(result.id) ||
     result.id < 1 ||
     typeof result.full_name !== 'string' ||
@@ -147,7 +173,9 @@ function validateAliyunResult(result, plan) {
     !Number.isSafeInteger(result.total_count) ||
     result.total_count < result.instances.length ||
     result.instances.length > plan.parameters.max_results ||
-    Object.keys(result).some((key) => !['instances', 'total_count', 'next_token'].includes(key)) ||
+    Object.keys(result).some(
+      (key) => !['instances', 'total_count', 'next_token', 'authority'].includes(key),
+    ) ||
     result.instances.some(
       (instance) =>
         !exactObject(instance, ALIYUN_INSTANCE_KEYS) ||
@@ -173,6 +201,14 @@ function validateSafeResult(result, plan) {
   if (redactedJSON !== originalJSON) fail('contract_result_sensitive');
   if (plan.provider === 'github') validateGitHubResult(result, plan);
   else validateAliyunResult(result, plan);
+  validateExpectedAuthority(plan.provider, result.authority);
+  if (
+    Object.entries(plan.expected_authority).some(
+      ([key, expected]) => result.authority[key] !== expected,
+    )
+  ) {
+    fail('contract_authority_mismatch');
+  }
 }
 
 async function createTask(callBroker, plan, accountRef, parameters, suffix) {
@@ -292,13 +328,15 @@ export function createProviderContractRunner({ callBroker } = {}) {
     );
 
     return Object.freeze({
-      version: 1,
+      version: 2,
       provider: plan.provider,
       operation_id: PROVIDERS[plan.provider].operationId,
       environment: plan.environment,
       status: 'passed',
       checks: Object.freeze([
         'tool_discovery',
+        'authority_identity',
+        'authority_match',
         'bounded_read',
         'safe_output',
         'wrong_account_denied',

@@ -1,7 +1,7 @@
 manifest_version: 1
 id: github
 display_name: GitHub
-checked_at: 2026-09-11
+checked_at: 2026-09-13
 status: contract_required
 official_docs:
   - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
@@ -9,6 +9,7 @@ official_docs:
   - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
   - https://docs.github.com/en/rest/authentication
   - https://docs.github.com/en/rest/repos/repos#get-a-repository
+  - https://docs.github.com/en/rest/apps/apps#get-an-installation-for-the-authenticated-app
   - https://docs.github.com/en/rest/branches/branches#list-branches
   - https://docs.github.com/en/rest/commits/commits#list-commits
   - https://docs.github.com/en/rest/issues/issues#list-repository-issues
@@ -72,4 +73,11 @@ operations:
     parameters: { owner: { type: string }, repo: { type: string }, title: { type: string, maximum: 256 }, body: { type: string, maximum: 10000 }, head: { type: string }, base: { type: string }, draft: { type: boolean, default: true } }
     maximum_response_bytes: 1048576
 redaction: [Authorization, installation_token, app_private_key, jwt]
-contract_test: { account: isolated_github_app, required: true, last_result: not_run }
+authority_probe:
+  id: installation.authority.read
+  method: GET
+  path_template: /app/installations/{installation_id}
+  mechanism: app_jwt
+  output: sha256_digests_only
+  maximum_response_bytes: 262144
+contract_test: { version: 2, account: isolated_github_app, authority_attestation: required, required: true, last_result: not_run }

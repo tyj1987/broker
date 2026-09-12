@@ -32,7 +32,7 @@ function pageValue(value, fallback, maximum) {
   return normalized;
 }
 
-function validateParameters(parameters) {
+export function validateAliyunEcsInstancesListParameters(parameters) {
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
     fail('aliyun_invalid_request', 'Alibaba Cloud ECS request is invalid');
   }
@@ -115,7 +115,10 @@ function validateSignedHeaders(result, expected, now) {
   ) {
     fail('aliyun_signer_response_invalid', 'Alibaba Cloud signer returned invalid headers', 503);
   }
-  return headers;
+  if (!/^[A-Za-z0-9_-]{43}$/.test(result.credential_binding || '')) {
+    fail('aliyun_signer_response_invalid', 'Alibaba Cloud signer returned invalid headers', 503);
+  }
+  return { headers, credentialBinding: result.credential_binding };
 }
 
 function projectResponse(body, expected) {
@@ -167,7 +170,7 @@ export function createAliyunEcsInstancesListAdapter({ request, signRequest, now 
   if (typeof now !== 'function') throw new TypeError('Alibaba Cloud adapter requires a clock');
 
   return async function aliyunEcsInstancesList(parameters, context = {}) {
-    const validated = validateParameters(parameters);
+    const validated = validateAliyunEcsInstancesListParameters(parameters);
     if (
       context.execution?.tool !== TOOL ||
       context.execution?.target !== validated.resourceRef ||
@@ -206,9 +209,19 @@ export function createAliyunEcsInstancesListAdapter({ request, signRequest, now 
       fail('aliyun_signer_unavailable', 'Alibaba Cloud signer is unavailable', 503);
     }
 
+    if (
+      context.providerCredentialBinding !== undefined &&
+      context.providerCredentialBinding !== signed.credentialBinding
+    ) {
+      fail(
+        'aliyun_credential_binding_mismatch',
+        'Alibaba Cloud credential changed during the bound operation',
+        503,
+      );
+    }
     let response;
     try {
-      const outboundHeaders = { ...signed };
+      const outboundHeaders = { ...signed.headers };
       delete outboundHeaders.host;
       response = await request({
         origin: `https://ecs.${validated.regionId}.aliyuncs.com`,

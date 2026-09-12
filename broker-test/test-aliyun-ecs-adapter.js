@@ -25,6 +25,7 @@ const context = {
   signal: new AbortController().signal,
 };
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
+const CREDENTIAL_BINDING = 'b'.repeat(43);
 
 function signedResult(change = {}) {
   return {
@@ -32,6 +33,7 @@ function signedResult(change = {}) {
     environment: context.environment,
     resource_ref: RESOURCE,
     region_id: REGION,
+    credential_binding: CREDENTIAL_BINDING,
     headers: {
       Authorization:
         'ACS3-HMAC-SHA256 Credential=STS.TEST,' +
@@ -261,13 +263,21 @@ const taskBroker = new AutomationTaskBroker({
   executors: new Map([
     [
       'aliyun.ecs.instances.list@1.0.0',
-      createAliyunEcsInstancesListAdapter({
-        signRequest: async () => signedResult(),
-        request: async () => {
-          calls += 1;
-          return { status: 200, body: responseBody({ NextToken: undefined }) };
+      async (...arguments_) => ({
+        ...(await createAliyunEcsInstancesListAdapter({
+          signRequest: async () => signedResult(),
+          request: async () => {
+            calls += 1;
+            return { status: 200, body: responseBody({ NextToken: undefined }) };
+          },
+          now: () => NOW,
+        })(...arguments_)),
+        authority: {
+          identity_type: 'AssumedRoleUser',
+          account_id_sha256: '1'.repeat(64),
+          principal_id_sha256: '2'.repeat(64),
+          arn_sha256: '3'.repeat(64),
         },
-        now: () => NOW,
       }),
     ],
   ]),

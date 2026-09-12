@@ -211,12 +211,20 @@ continue.
   explicitly verified policy and an ownership-checked local signer socket, and
   fails startup when either is missing. The isolated TC3 signer service, CAM
   role authority and account contract test remain required before activation.
-  A source-only contract runner now validates one exact GitHub or Alibaba Cloud
-  read-only binding through the real `/api/v2/tasks` path, including bounded
-  secret-free output and wrong-account and wrong-resource denials. It accepts
-  credentials only from operator-supplied files and emits a reference-free safe
-  receipt. The 2026-09-12 production probe was denied before provider execution
-  because neither tool is deployed, so no real account contract has passed;
+  A source-only version 2 contract runner now validates one exact GitHub or
+  Alibaba Cloud read-only binding through the real `/api/v2/tasks` path. The
+  same execution-bound signer path first calls a fixed GitHub App installation
+  identity endpoint or Alibaba Cloud STS `GetCallerIdentity`; adapters release
+  only SHA-256 principal digests and a bounded principal type. The protected
+  plan supplies expected digests, and a mismatch fails before a receipt can be
+  issued. Alibaba signer protocol version 2 additionally binds the identity and
+  ECS signatures to one opaque credential lease; drift is rejected before the
+  business request leaves the Broker, and invalid business parameters cannot
+  trigger the identity probe. The remaining checks cover bounded secret-free
+  output plus wrong-account and wrong-resource denials. Credentials are accepted only from
+  operator-supplied files and the receipt contains no account, resource,
+  principal or digest. The 2026-09-12 production probe was denied before
+  provider execution because neither tool is deployed, so no real account contract has passed;
   revocation and rotation remain separate required phases.
 
 ## DQ-005: SSH target, host-key and certificate authority

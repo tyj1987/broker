@@ -1,6 +1,8 @@
 import { redact, redactDeep } from './redact.js';
 
 const CONTROL_FIELDS = new Set(['account_ref', 'environment', 'idempotency_key']);
+const RISK_LEVELS = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
 const TASK_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SAFE_NAME_RE = /^[a-z][a-z0-9._-]{1,127}$/;
 const SAFE_VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
@@ -37,6 +39,12 @@ function validateTool(tool) {
     typeof tool !== 'object' ||
     !SAFE_NAME_RE.test(tool.name || '') ||
     !SAFE_VERSION_RE.test(tool.version || '') ||
+    typeof tool.description !== 'string' ||
+    !RISK_LEVELS.has(tool.risk_level) ||
+    !Array.isArray(tool.environments) ||
+    tool.environments.length === 0 ||
+    new Set(tool.environments).size !== tool.environments.length ||
+    tool.environments.some((environment) => !ENVIRONMENTS.has(environment)) ||
     !tool.input_schema ||
     tool.input_schema.type !== 'object' ||
     tool.input_schema.additionalProperties !== false ||

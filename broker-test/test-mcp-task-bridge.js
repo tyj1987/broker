@@ -162,6 +162,9 @@ for (const invalidRegistry of [
   { registry_version: 1, tools: {} },
   { registry_version: 1, tools: [null] },
   { registry_version: 1, tools: [{ ...executable, version: 'latest' }] },
+  { registry_version: 1, tools: [{ ...executable, risk_level: 'ROOT' }] },
+  { registry_version: 1, tools: [{ ...executable, environments: ['production', 'unknown'] }] },
+  { registry_version: 1, tools: [{ ...executable, environments: ['production', 'production'] }] },
   {
     registry_version: 1,
     tools: [

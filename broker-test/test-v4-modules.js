@@ -161,6 +161,13 @@ section('alerting');
   }, sink);
   ok('detail got redacted', r7.ok === true);
 }
+{
+  const canary = 'synthetic-alert-sink-secret';
+  const r8 = await dispatchAlert({ type: 'slack_webhook', target: 'https://x', payload: {} }, {
+    fetchImpl: async () => { throw new Error(canary); },
+  });
+  ok('sink exception is generic', r8.ok === false && r8.error === 'alert_dispatch_failed' && !r8.error.includes(canary));
+}
 
 // ============================================================
 // OpenAPI

@@ -208,6 +208,17 @@ read-only runtime evidence; it is not a migration or release approval.
   production KMS/HSM backend, signer workload, account binding or
   isolated-account live contract has run, so the manifest remains
   `contract_required` and this is not production-available evidence.
+- DQ-004 live read-only probe on 2026-09-12 used the existing Windows
+  certificate-store identity without exporting its private key. The public
+  Broker authenticated the certificate and returned HTTP 200 for
+  `/api/v2/tools`, but exposed only `broker.tools.inspect`; neither
+  `github.repository.read` nor `aliyun.ecs.instances.list` was executable.
+  Policy-bound attempts to create registry-inspection tasks for those two
+  operations returned the stable `forbidden` result. No provider request was
+  sent, no API key or certificate material was read, and no account contract
+  was marked passed. The production signer/account bindings and an executable
+  read-only provider route remain prerequisites for the approved GitHub and
+  Alibaba isolated-account checks.
 - The Cloudflare zones-list adapter binds the execution, credential and API
   query to one exact account ID, accepts only bounded filters and pagination,
   and returns a minimal zone projection. The composed executor uses the pinned

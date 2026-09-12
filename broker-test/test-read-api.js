@@ -4,6 +4,9 @@
 // using fake req/res and an in-memory config + secret cache.
 
 import { createReadApiRoutes } from '../broker/routes/read-api.js';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -81,6 +84,7 @@ function makeDeps(overrides = {}) {
         github: { type: 'github_token', upstream: 'https://api.github.com', token_secret: 'GITHUB_PAT', dashboard_actions: [] },
       },
     },
+    auditDir: overrides.auditDir,
     SECRET_CACHE: overrides.SECRET_CACHE || SECRET_CACHE,
     audit: overrides.audit || audit,
     canResolve: overrides.canResolve || (() => true),
@@ -324,6 +328,24 @@ section('14. Security: API-key service directory is capability bounded');
   const res = fakeRes();
   await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/services' }, keyCtx);
   ok('API-key service listing only exposes allowed service', res.body?.services?.length === 1 && res.body.services[0].name === 'github');
+}
+
+section('15. Audit verification errors are not exposed');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'broker-read-api-'));
+  const notADirectory = join(dir, 'audit-file');
+  writeFileSync(notADirectory, 'synthetic-audit-path-canary');
+  const deps = makeDeps({ auditDir: notADirectory });
+  const r = createReadApiRoutes(deps);
+  ok('audit dir configured', deps.auditDir === notADirectory, `auditDir=${deps.auditDir}`);
+  const res = fakeRes();
+  const direct = await r.handlers[4](req(), res, { method: 'GET', pathname: '/api/v1/admin/audit/verify' },
+    { client: { role: 'admin' }, cn: 'admin', fp: 'X' });
+  ok('direct verification handler handled', direct === true, `status=${res.statusCode}`);
+  ok('verification failure is 500', res.statusCode === 500, `status=${res.statusCode} body=${JSON.stringify(res.body)}`);
+  ok('verification failure uses generic error', res.body?.error === 'audit_verification_failed', `body=${JSON.stringify(res.body)}`);
+  ok('verification path is not exposed', !JSON.stringify(res.body).includes('synthetic-audit-path-canary'));
+  rmSync(dir, { recursive: true, force: true });
 }
 
 // ---------- summary ----------

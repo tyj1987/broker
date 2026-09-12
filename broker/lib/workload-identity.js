@@ -70,11 +70,11 @@ async function assumeAliyun(oidcToken, opts, http) {
     body: params.toString(),
   });
   if (res.status !== 200) {
-    throw new Error(`aliyun sts ${res.status}: ${res.body.slice(0, 300)}`);
+    throw new Error(`aliyun sts ${res.status} request failed`);
   }
   const parsed = JSON.parse(res.body);
   if (!parsed.Credentials) {
-    throw new Error(`aliyun sts: no Credentials in response: ${res.body.slice(0, 200)}`);
+    throw new Error('aliyun sts: response missing Credentials');
   }
   const c = parsed.Credentials;
   return {
@@ -106,13 +106,13 @@ async function assumeAws(oidcToken, opts, http) {
     body: params.toString(),
   });
   if (res.status !== 200) {
-    throw new Error(`aws sts ${res.status}: ${res.body.slice(0, 300)}`);
+    throw new Error(`aws sts ${res.status} request failed`);
   }
   // AWS STS 200 也可能返回 XML 错误嵌套,需要先看 root
   const parsed = JSON.parse(res.body);
   const inner = parsed.AssumeRoleWithWebIdentityResult;
   if (!inner || !inner.Credentials) {
-    throw new Error(`aws sts: no Credentials: ${res.body.slice(0, 200)}`);
+    throw new Error('aws sts: response missing Credentials');
   }
   const c = inner.Credentials;
   return {
@@ -144,11 +144,11 @@ async function assumeGcp(oidcToken, opts, http) {
     body,
   });
   if (res.status !== 200) {
-    throw new Error(`gcp sts ${res.status}: ${res.body.slice(0, 300)}`);
+    throw new Error(`gcp sts ${res.status} request failed`);
   }
   const parsed = JSON.parse(res.body);
   if (!parsed.access_token) {
-    throw new Error(`gcp sts: no access_token: ${res.body.slice(0, 200)}`);
+    throw new Error('gcp sts: response missing access_token');
   }
   // Google token 响应给 expires_in (秒),换算为 ISO
   const expiresAtMs = Date.now() + (parsed.expires_in * 1000);

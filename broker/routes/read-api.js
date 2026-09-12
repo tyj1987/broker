@@ -174,7 +174,9 @@ export function createReadApiRoutes(deps) {
       const r = await verifyAuditDir(deps.auditDir);
       send(res, r.ok ? 200 : 422, r);
     } catch (err) {
-      jsonError(res, 500, `verify failed: ${err.message}`);
+      // Verification failures can contain filesystem paths or parser details.
+      // Keep the authenticated API response stable and non-sensitive.
+      jsonError(res, 500, 'audit_verification_failed');
     }
     return true;
   }

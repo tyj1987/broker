@@ -38,8 +38,11 @@ const CHECKS = Object.freeze([
   ['github_signer_socket_protected', (snapshot) =>
     snapshot.githubSignerRequired !== true || snapshot.githubSignerSocketProtected === true],
   ['audit_exporter_active', (snapshot) => snapshot.auditExporterActive === true],
+  ['audit_exporter_independent_user', (snapshot) => snapshot.auditExporterUser !== '' && snapshot.auditExporterUser !== 'broker'],
   ['audit_store_lock_active', (snapshot) => snapshot.auditStoreLockActive === true],
+  ['audit_store_independent_user', (snapshot) => snapshot.auditStoreUser !== '' && snapshot.auditStoreUser !== 'broker'],
   ['audit_recovery_authority_active', (snapshot) => snapshot.auditRecoveryAuthorityActive === true],
+  ['audit_recovery_independent_user', (snapshot) => snapshot.auditRecoveryUser !== '' && snapshot.auditRecoveryUser !== 'broker'],
   ['loopback_health', (snapshot) => snapshot.loopbackHealth === true],
 ]);
 
@@ -141,6 +144,9 @@ export async function collectProductionSnapshot({
   const auditExporterActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-audit-exporter.service']);
   const auditStoreLockActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-audit-store.service']);
   const auditRecoveryAuthorityActive = command('systemctl', ['is-active', '--quiet', 'secret-broker-audit-recovery.service']);
+  const auditExporterUser = command('systemctl', ['show', 'secret-broker-audit-exporter.service', '-p', 'User', '--value']);
+  const auditStoreUser = command('systemctl', ['show', 'secret-broker-audit-store.service', '-p', 'User', '--value']);
+  const auditRecoveryUser = command('systemctl', ['show', 'secret-broker-audit-recovery.service', '-p', 'User', '--value']);
   const deployAccount = command('getent', ['passwd', 'broker-deploy']);
   const nginx = command('nginx', ['-T']);
   const release = await pathInfoImpl(paths.currentRelease);
@@ -167,6 +173,9 @@ export async function collectProductionSnapshot({
     auditExporterActive: auditExporterActive.ok,
     auditStoreLockActive: auditStoreLockActive.ok,
     auditRecoveryAuthorityActive: auditRecoveryAuthorityActive.ok,
+    auditExporterUser: auditExporterUser.ok ? auditExporterUser.stdout : '',
+    auditStoreUser: auditStoreUser.ok ? auditStoreUser.stdout : '',
+    auditRecoveryUser: auditRecoveryUser.ok ? auditRecoveryUser.stdout : '',
     managedReleaseSymlink: release?.isSymbolicLink() === true,
     deployHelperExecutable: await isExecutableImpl(paths.deployHelper),
     deployAccountPresent: deployAccount.ok && deployAccount.stdout.length > 0,

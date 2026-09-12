@@ -28,12 +28,15 @@ const readySnapshot = {
   auditExporterActive: true,
   auditStoreLockActive: true,
   auditRecoveryAuthorityActive: true,
+  auditExporterUser: 'broker-audit-exporter',
+  auditStoreUser: 'broker-audit-store',
+  auditRecoveryUser: 'broker-audit-recovery',
   loopbackHealth: true,
 };
 
 const ready = evaluateProductionReadiness(readySnapshot);
 assert.equal(ready.ready, true);
-assert.equal(ready.checks.length, 19);
+assert.equal(ready.checks.length, 22);
 assert.ok(ready.checks.every((check) => check.passed));
 assert.match(renderProductionReadiness(ready), /production_cd_ready=yes\n$/);
 
@@ -66,8 +69,11 @@ for (const [field, unsafeValue] of [
   ['policySocketProtected', false],
   ['githubSignerSocketProtected', false],
   ['auditExporterActive', false],
+  ['auditExporterUser', 'broker'],
   ['auditStoreLockActive', false],
+  ['auditStoreUser', 'broker'],
   ['auditRecoveryAuthorityActive', false],
+  ['auditRecoveryUser', 'broker'],
   ['loopbackHealth', false],
 ]) {
   const result = evaluateProductionReadiness({
@@ -110,6 +116,15 @@ const fakeStats = new Map([
 ]);
 const command = (name, args) => {
   const invocation = `${name} ${args.join(' ')}`;
+  if (invocation.includes('secret-broker-audit-exporter.service') && invocation.includes('-p User')) {
+    return { ok: true, stdout: 'broker-audit-exporter' };
+  }
+  if (invocation.includes('secret-broker-audit-store.service') && invocation.includes('-p User')) {
+    return { ok: true, stdout: 'broker-audit-store' };
+  }
+  if (invocation.includes('secret-broker-audit-recovery.service') && invocation.includes('-p User')) {
+    return { ok: true, stdout: 'broker-audit-recovery' };
+  }
   if (invocation.includes('-p User')) return { ok: true, stdout: 'broker' };
   if (invocation.includes('-p Group')) return { ok: true, stdout: 'broker' };
   if (name === 'nginx') return { ok: true, stdout: '  proxy_ssl_verify on;\n' };
@@ -147,4 +162,4 @@ const scriptPath = fileURLToPath(new URL('../deploy/bin/secret-broker-production
 assert.equal(isDirectExecution(scriptPath, new URL('../deploy/bin/secret-broker-production-preflight.mjs', import.meta.url).href), true);
 assert.equal(isDirectExecution('/tmp/other.mjs', 'file:///tmp/preflight.mjs'), false);
 
-console.log('production preflight: 19 fail-closed deployment gates passed');
+console.log('production preflight: 22 fail-closed deployment gates passed');

@@ -144,8 +144,15 @@ Object Lock inspection, create with STANDARD storage and per-object
 COMPLIANCE retention, read-back and retention read-back. Both copies must
 contain the exact canonical bytes; an existing different object is a conflict.
 Provider failures are reduced to stable errors and never cross the workload
-boundary. This remains a source contract: concrete SDK transports, credentials,
-cloud resources and a runnable store service do not yet exist.
+boundary. Concrete transports now pin Alibaba OSS Go SDK v2 `v1.6.0` and
+Tencent COS Go SDK v5 `v0.7.75`. They bind every call to one configured bucket,
+accept no arbitrary headers, expose no delete or retention-policy mutation,
+bound read-back data, and stop between SDK calls when the context is cancelled.
+The OSS transport maps only a `409 FileAlreadyExists` response to an
+idempotent existing object. The COS transport applies COMPLIANCE mode and the
+exact retain-until timestamp in the original PutObject request. These are still
+source-only transports: credentials, cloud resources and a runnable store
+service do not yet exist.
 
 The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
 `ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the

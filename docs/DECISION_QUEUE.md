@@ -76,8 +76,14 @@ continue.
   days, and reads back identical canonical bytes and retention metadata from
   both clouds. Tests cover exact creation, idempotent retries, content
   conflicts, malformed envelopes and every storage-control failure boundary.
-  The SDK transports, runnable signer/store services, immutable bucket, mirror
-  worker, retention locks and recovery authority are not deployed yet, so
+  Official SDK transports now pin Alibaba OSS Go SDK v2 `v1.6.0` and Tencent
+  COS Go SDK v5 `v0.7.75`, bind each client to one exact bucket, reduce provider
+  errors to stable failures, enforce bounded read-back and cancellation, and
+  expose no delete or retention-policy mutation capability. Transport tests
+  cover exact requests, immutable duplicate handling, object-lock headers,
+  response bounds, invalid provider responses and internal cancellation
+  boundaries. Runnable signer/store services, immutable buckets, mirror worker,
+  credentials, retention locks and recovery authority are not deployed yet, so
   there is no claim of independent non-repudiation and RR-012 remains open.
 
 ## DQ-004: provider signing and account-binding authority

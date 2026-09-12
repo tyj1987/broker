@@ -60,6 +60,8 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   assert(!server.includes('Persist failed: ${e.message}'), 'persistence failures do not expose raw exception text');
   assert(!server.includes('Issue failed: ${e.message}'), 'certificate failures do not expose raw exception text');
   assert(!server.includes('Rotate failed: ${e.message}'), 'rotation failures do not expose raw exception text');
+  assert(server.includes('safeUpstreamPreview(r.body)'), 'service previews use the redaction boundary');
+  assert(server.includes('redactDeep(parsed)'), 'JSON service previews redact sensitive fields');
   assert(!html.includes('btn-audit-clear'), 'dashboard has no audit deletion control');
   assert(!auditUi.includes('clearAuditLogs'), 'dashboard cannot request audit deletion');
   assert(server.includes("jsonError(res, 405, 'Audit records are immutable')"), 'server denies audit deletion');

@@ -1816,8 +1816,8 @@ async function handle(req, res) {
     try {
       await persistConfig();
     } catch (e) {
-      audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
     return send(res, 200, { ok: true, password_set_at: c.password_set_at });
@@ -1849,8 +1849,8 @@ async function handle(req, res) {
     let cert;
     try { cert = await issueAndPersist(ctx.clientName); }
     catch (e) {
-      audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Issue failed: ${e.message}`);
+      audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     c.cert_expires_at = new Date(Date.now() + 90 * 86400 * 1000).toISOString();  // 90 天
     c.last_cert_rotation = c.cert_expires_at;
@@ -1933,8 +1933,8 @@ async function handle(req, res) {
     delete c._pending_totp;
     try { await persistConfig(); }
     catch (e) {
-      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
     return send(res, 200, {
@@ -1963,8 +1963,8 @@ async function handle(req, res) {
     c.preferred_2fa = 'none';
     try { await persistConfig(); }
     catch (e) {
-      audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'ok', mfa_method: mfaResult.method });
     return send(res, 200, { ok: true, totp_disabled: true });
@@ -2044,8 +2044,8 @@ async function handle(req, res) {
       // 回滚
       const idx = CONFIG.api_keys.findIndex(k => k.id === r.key_obj.id);
       if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
-      audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, name, client: targetClient, status: 'ok' });
     return send(res, 200, {
@@ -2097,8 +2097,8 @@ async function handle(req, res) {
       return jsonError(res, 400, r.reason);
     }
     try { await persistConfig(); } catch (e) {
-      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'ok' });
     return send(res, 200, { ok: true, id, revoked_at: k.revoked_at });
@@ -2161,8 +2161,8 @@ async function handle(req, res) {
     try { await persistConfig(); } catch (e) {
       const idx = CONFIG.api_keys.findIndex(x => x.id === id);
       if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
-      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'ok', id });
     return send(res, 200, {
@@ -2213,8 +2213,8 @@ async function handle(req, res) {
     try { await persistConfig(); } catch (e) {
       const idx = CONFIG.api_keys.findIndex(x => x.id === r.key_obj.id);
       if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
-      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, child_id: r.key_obj.id, status: 'ok' });
     return send(res, 200, {
@@ -2294,7 +2294,7 @@ async function handle(req, res) {
       }
       return send(res, 200, r);
     } catch (e) {
-      return jsonError(res, 500, `healthcheck failed: ${e.message}`);
+      return jsonError(res, 500, 'healthcheck_failed');
     }
   }
 
@@ -2365,8 +2365,8 @@ async function handle(req, res) {
       await persistSecretsDetail();
     } catch (e) {
       SECRET_CACHE.delete(name);
-      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, type, status: 'ok' });
     return send(res, 200, { ok: true, name, type });
@@ -2409,8 +2409,8 @@ async function handle(req, res) {
       await persistSecretsDetail();
     } catch (e) {
       SECRET_CACHE.set(name, prevSnapshot);
-      audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2428,8 +2428,8 @@ async function handle(req, res) {
     } catch (e) {
       // best-effort rollback
       SECRET_CACHE.set(name, existing);
-      audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2529,8 +2529,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       CONFIG.services = previousServices;
-      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, type: cfg.type, status: 'ok' });
     return send(res, 200, { ok: true, name, type: cfg.type });
@@ -2574,8 +2574,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       CONFIG.services = previousServices;
-      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2595,8 +2595,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       CONFIG.services = previousServices;
-      audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2734,8 +2734,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       delete CONFIG.clients[name];
-      audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, role: cfg.role, status: 'ok' });
     return send(res, 200, { ok: true, name, role: cfg.role });
@@ -2771,8 +2771,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       CONFIG.clients[name] = prev;
-      audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2791,8 +2791,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       CONFIG.clients[name] = existing;
-      audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2841,8 +2841,8 @@ async function handle(req, res) {
     }
     let cert;
     try { cert = await issueAndPersist(name); } catch (e) {
-      audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Issue failed: ${e.message}`);
+      audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, {
@@ -2866,8 +2866,8 @@ async function handle(req, res) {
     }
     let cert;
     try { cert = await issueAndPersist(name); } catch (e) {
-      audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Rotate failed: ${e.message}`);
+      audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, {
@@ -2898,8 +2898,8 @@ async function handle(req, res) {
       await persistConfig();
     } catch (e) {
       CONFIG.clients[name] = prev;
-      audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Revoke failed: ${e.message}`);
+      audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
     return send(res, 200, { ok: true, name });
@@ -2920,7 +2920,7 @@ async function handle(req, res) {
       keyPem  = readClientKeyPem(name);
       caPem   = readCaCertPem();
     } catch (e) {
-      return jsonError(res, 409, `Cert files missing for ${name}: ${e.message}. Run /enrollment first.`);
+      return jsonError(res, 409, `Cert files missing for ${name}. Run /enrollment first.`);
     }
     const installSh = [
       '#!/bin/sh',
@@ -3238,8 +3238,8 @@ async function handle(req, res) {
       await persistSecretsDetail();
     } catch (e) {
       SECRET_CACHE.set(name, prevSnapshot);
-      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret_name: name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret_name: name, status: 'error', error_code: 'operation_failed' });
+      return jsonError(res, 500, 'operation_failed');
     }
     audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret_name: name, status: 'ok', source, note });
     return send(res, 200, {

@@ -74,7 +74,7 @@ import {
 import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
 import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
 import { consumeRateLimit } from './lib/rate-limit.js';
-import { redact, redactDeep } from './lib/redact.js';
+import { safeUpstreamPreview } from './lib/safe-preview.js';
 import { isApiKeyLegacyRouteAllowed } from './lib/api-key-route-boundary.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
@@ -90,16 +90,6 @@ import { createControlPlaneStateRuntime } from './lib/control-plane-state-runtim
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 
-function safeUpstreamPreview(body, maxLength = 500) {
-  if (body === null || body === undefined) return '';
-  const text = Buffer.isBuffer(body) ? body.toString('utf8') : String(body);
-  try {
-    const parsed = JSON.parse(text);
-    return JSON.stringify(redactDeep(parsed)).slice(0, maxLength);
-  } catch {
-    return redact(text).slice(0, maxLength);
-  }
-}
 import { loadToolRegistry } from './lib/tool-registry.js';
 import { loadSecretCacheCandidate, replaceSecretCache } from './lib/secret-cache.js';
 import { reloadRuntimeAtomically } from './lib/runtime-reload.js';

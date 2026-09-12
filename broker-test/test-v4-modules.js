@@ -8,6 +8,7 @@ import { TYPE_SCHEMAS, getTypeSchema, validateFields } from '../broker/type-sche
 import { SERVICE_TEMPLATES, publicTemplateList } from '../broker/service-templates.js';
 import { configureWebAuthn, beginRegistration, beginAuthentication, finishRegistration, finishAuthentication, ensureWebAuthnFactors, listCredentials, parseAuthenticatorData, noopVerifier } from '../broker/webauthn.js';
 import { parseOpenAPI, extractAuthFromDocs, extractUpstreamFromDocs } from '../broker/lib/template-parser.js';
+import { safeUpstreamPreview } from '../broker/lib/safe-preview.js';
 import { sopsDecrypt } from '../broker/lib/sops.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -416,6 +417,23 @@ section('webauthn');
   let threw = false;
   try { parseAuthenticatorData(Buffer.alloc(10)); } catch (_e) { threw = true; }
   ok('too short throws', threw);
+}
+
+// ============================================================
+// safe upstream preview
+// ============================================================
+section('safe-upstream-preview');
+{
+  const json = safeUpstreamPreview(JSON.stringify({
+    ok: true,
+    token: 'canary-secret-token-1234567890',
+    nested: { authorization: 'Bearer canary-secret-token-1234567890' },
+  }));
+  ok('JSON preview redacts sensitive fields', !json.includes('canary-secret-token'));
+  ok('JSON preview preserves safe fields', json.includes('"ok":true'));
+  const text = safeUpstreamPreview('Authorization: Bearer canary-secret-token-1234567890');
+  ok('text preview redacts credential patterns', !text.includes('canary-secret-token'));
+  ok('preview is bounded', safeUpstreamPreview('x'.repeat(1000), 40).length === 40);
 }
 
 // ============================================================

@@ -41,7 +41,7 @@ const safeStat = async (path) =>
 
 function response(overrides = {}) {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     purpose: ANCHOR_PURPOSE,
     algorithm,
     key_id: keyId,
@@ -96,12 +96,13 @@ assert.equal(harness.state.timeoutMs, 500);
 assert.equal(harness.state.destroyed, true);
 const wireRequest = JSON.parse(harness.state.payload.trim());
 assert.deepEqual(wireRequest, {
-  version: 1,
+  version: 2,
   purpose: ANCHOR_PURPOSE,
   algorithm,
   key_id: keyId,
   stream_id: anchor.payload.stream_id,
   sequence: anchor.payload.sequence,
+  previous_anchor_digest: anchor.payload.previous_anchor_digest,
   payload_digest: anchor.payload_digest,
   signing_input: createAuditAnchorSigningInput(anchor, { algorithm, keyId }).toString('base64url'),
 });
@@ -191,7 +192,7 @@ await assert.rejects(
 for (const body of [
   '{invalid-json',
   JSON.stringify(null),
-  response({ version: 2 }),
+  response({ version: 1 }),
   response({ purpose: 'another-purpose' }),
   response({ algorithm: 'ecdsa-p256-sha256' }),
   response({ key_id: 'another-key' }),
@@ -258,7 +259,7 @@ await assert.rejects(pending, expectCode('anchor_signer_aborted'));
 assert.deepEqual(LOCAL_AUDIT_ANCHOR_SIGNER_CONTRACT, {
   socket_directory: SOCKET_DIRECTORY,
   socket_path: SOCKET_PATH,
-  protocol_version: 1,
+  protocol_version: 2,
   maximum_request_bytes: 8192,
   maximum_response_bytes: 8192,
   maximum_timeout_ms: 10_000,

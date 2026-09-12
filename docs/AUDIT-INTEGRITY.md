@@ -49,9 +49,10 @@ valid suffix or the entire chain.
 The source tree includes a provider-neutral signed-head envelope in
 `broker/lib/audit-anchor.js`. An anchor payload binds a stream identifier,
 strictly increasing sequence, UTC capture time, retained file and event counts,
-current chain head, and the previous anchor digest. The signature input uses a
-fixed domain separator and also binds the signature algorithm and key
-identifier. Only the payload digest and public metadata need to cross the
+current chain head, and the previous anchor digest. The version 2 signature
+input uses a fixed domain separator and also binds the signature algorithm,
+key identifier, stream, sequence, previous anchor digest, and payload digest.
+Only the payload digest and public metadata need to cross the
 external signer boundary; no audit content or signing private key is released
 to Broker.
 
@@ -110,13 +111,17 @@ separately managed signer workload is selected and deployed.
 
 `core/auditanchor` is the server-side protocol core for that signer workload.
 It independently validates the exact purpose, configured algorithm, key,
-stream, positive sequence, lowercase SHA-256 payload digest and canonical
-domain-separated signing input before consulting the sequence authority or
-signing backend. Linux peer credentials bind the request to the configured
-non-root Broker UID. The KMS adapter receives both the validated public input
-and its SHA-256 digest, but no event body or credential. An injected independent
-anchor authority must reject conflicting signatures for the same stream and
-sequence.
+stream, positive sequence, previous anchor digest, lowercase SHA-256 payload
+digest and canonical domain-separated signing input before consulting the
+sequence authority or signing backend. Linux peer credentials bind the request
+to the configured non-root Broker UID. The KMS adapter receives both the
+validated public input and its SHA-256 digest, but no event body or credential.
+The included monotonic authorizer requires a linearizable compare-and-swap
+store outside the Broker host. It accepts only a contiguous predecessor,
+allows an exact retry, and rejects gaps, rewinds, conflicting payloads, corrupt
+state and exhausted concurrency retries. The cloud-backed state store and KMS
+adapter remain production work; an in-memory or Broker-owned implementation
+cannot satisfy DQ-003.
 
 The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
 `ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the

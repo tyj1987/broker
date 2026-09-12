@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,12 +58,16 @@ func (address testAddr) String() string  { return string(address) }
 func requestLine(t *testing.T, mutate func(map[string]any)) string {
 	t.Helper()
 	payloadDigest := strings.Repeat("a", 64)
-	signingInput := SignatureContext + "\x00" + testConfig.Algorithm + "\x00" + testConfig.KeyID + "\x00" + payloadDigest
+	sequence := int64(7)
+	previousDigest := strings.Repeat("b", 64)
+	signingInput := SignatureContext + "\x00" + testConfig.Algorithm + "\x00" + testConfig.KeyID + "\x00" +
+		testConfig.StreamID + "\x00" + strconv.FormatInt(sequence, 10) + "\x00" + previousDigest + "\x00" + payloadDigest
 	request := map[string]any{
 		"version": ProtocolVersion, "purpose": Purpose, "algorithm": testConfig.Algorithm,
-		"key_id": testConfig.KeyID, "stream_id": testConfig.StreamID, "sequence": 7,
-		"payload_digest": payloadDigest,
-		"signing_input":  base64.RawURLEncoding.EncodeToString([]byte(signingInput)),
+		"key_id": testConfig.KeyID, "stream_id": testConfig.StreamID, "sequence": sequence,
+		"previous_anchor_digest": previousDigest,
+		"payload_digest":         payloadDigest,
+		"signing_input":          base64.RawURLEncoding.EncodeToString([]byte(signingInput)),
 	}
 	if mutate != nil {
 		mutate(request)
@@ -118,6 +123,9 @@ func TestServeConnSignsOnlyBoundAuditAnchorInput(t *testing.T) {
 		authorized.Algorithm != testConfig.Algorithm || authorized.KeyID != testConfig.KeyID {
 		t.Fatal("anchor binding was not preserved")
 	}
+	if authorized.PreviousDigest != [32]byte{0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb} {
+		t.Fatal("previous anchor digest was not preserved")
+	}
 	if !bytes.Equal(authorized.SigningInput, signed.SigningInput) || authorized.Digest != signed.Digest {
 		t.Fatal("authorized signing input changed before signing")
 	}
@@ -151,21 +159,26 @@ func TestRequestValidationFailsClosedBeforeAuthorization(t *testing.T) {
 		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
 	)
 	tests := map[string]string{
-		"no newline":        strings.TrimSuffix(requestLine(t, nil), "\n"),
-		"crlf":              strings.TrimSuffix(requestLine(t, nil), "\n") + "\r\n",
-		"trailing":          requestLine(t, nil) + "{}\n",
-		"oversized":         strings.Repeat("x", MaxRequestBytes+1) + "\n",
-		"unknown field":     requestLine(t, func(value map[string]any) { value["private_key"] = "canary" }),
-		"wrong version":     requestLine(t, func(value map[string]any) { value["version"] = 2 }),
-		"wrong purpose":     requestLine(t, func(value map[string]any) { value["purpose"] = "generic-signing" }),
-		"wrong algorithm":   requestLine(t, func(value map[string]any) { value["algorithm"] = "rsa-pss-sha256" }),
-		"wrong key":         requestLine(t, func(value map[string]any) { value["key_id"] = "other-key" }),
-		"wrong stream":      requestLine(t, func(value map[string]any) { value["stream_id"] = "other-stream" }),
-		"zero sequence":     requestLine(t, func(value map[string]any) { value["sequence"] = 0 }),
-		"fraction sequence": requestLine(t, func(value map[string]any) { value["sequence"] = 1.5 }),
-		"uppercase digest":  requestLine(t, func(value map[string]any) { value["payload_digest"] = strings.Repeat("A", 64) }),
-		"short digest":      requestLine(t, func(value map[string]any) { value["payload_digest"] = "aa" }),
-		"padded input":      requestLine(t, func(value map[string]any) { value["signing_input"] = value["signing_input"].(string) + "=" }),
+		"no newline":            strings.TrimSuffix(requestLine(t, nil), "\n"),
+		"crlf":                  strings.TrimSuffix(requestLine(t, nil), "\n") + "\r\n",
+		"trailing":              requestLine(t, nil) + "{}\n",
+		"oversized":             strings.Repeat("x", MaxRequestBytes+1) + "\n",
+		"unknown field":         requestLine(t, func(value map[string]any) { value["private_key"] = "canary" }),
+		"wrong version":         requestLine(t, func(value map[string]any) { value["version"] = 1 }),
+		"wrong purpose":         requestLine(t, func(value map[string]any) { value["purpose"] = "generic-signing" }),
+		"wrong algorithm":       requestLine(t, func(value map[string]any) { value["algorithm"] = "rsa-pss-sha256" }),
+		"wrong key":             requestLine(t, func(value map[string]any) { value["key_id"] = "other-key" }),
+		"wrong stream":          requestLine(t, func(value map[string]any) { value["stream_id"] = "other-stream" }),
+		"zero sequence":         requestLine(t, func(value map[string]any) { value["sequence"] = 0 }),
+		"fraction sequence":     requestLine(t, func(value map[string]any) { value["sequence"] = 1.5 }),
+		"missing predecessor":   requestLine(t, func(value map[string]any) { delete(value, "previous_anchor_digest") }),
+		"short predecessor":     requestLine(t, func(value map[string]any) { value["previous_anchor_digest"] = "bb" }),
+		"uppercase predecessor": requestLine(t, func(value map[string]any) { value["previous_anchor_digest"] = strings.Repeat("B", 64) }),
+		"genesis after first":   requestLine(t, func(value map[string]any) { value["previous_anchor_digest"] = strings.Repeat("0", 64) }),
+		"non-genesis first":     requestLine(t, func(value map[string]any) { value["sequence"] = 1 }),
+		"uppercase digest":      requestLine(t, func(value map[string]any) { value["payload_digest"] = strings.Repeat("A", 64) }),
+		"short digest":          requestLine(t, func(value map[string]any) { value["payload_digest"] = "aa" }),
+		"padded input":          requestLine(t, func(value map[string]any) { value["signing_input"] = value["signing_input"].(string) + "=" }),
 		"arbitrary input": requestLine(t, func(value map[string]any) {
 			value["signing_input"] = base64.RawURLEncoding.EncodeToString([]byte("arbitrary"))
 		}),

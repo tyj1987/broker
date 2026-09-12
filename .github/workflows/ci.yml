@@ -177,6 +177,10 @@ jobs:
       - name: Enforce provider credential protocol line coverage
         run: |
           test "$(go tool cover -func=provider-credential-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-anchor-coverage.out ./auditanchor
+      - name: Enforce audit anchor protocol line coverage
+        run: |
+          test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race ./server
       - run: go build ./...
 

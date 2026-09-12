@@ -61,9 +61,12 @@ continue.
   retained anchors on growing chains, publication conflicts, signer/store
   outages, incomplete recovery and recovery bounds. The Go `auditanchor`
   protocol core now validates the fixed purpose, algorithm, key, stream,
-  sequence, payload digest and domain-separated signing input before an
-  injected independent authority or KMS backend can be called. It authenticates
-  the local peer on Linux and returns only stable error codes. No KMS backend,
+  sequence, previous anchor digest, payload digest and version 2
+  domain-separated signing input before an injected independent authority or
+  KMS backend can be called. Its monotonic authorizer uses a linearizable
+  compare-and-swap state contract to reject forks, gaps, rewinds and corrupt
+  state while allowing an exact retry. It authenticates the local peer on Linux
+  and returns only stable error codes. No KMS backend,
   immutable bucket, mirror worker, retention lock or recovery authority is
   deployed yet, so there is no claim of independent non-repudiation and RR-012
   remains open.

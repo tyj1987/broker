@@ -40,12 +40,13 @@ function signingInput(request, algorithm, keyId) {
 function encodeRequest(request, algorithm, keyId) {
   const input = signingInput(request, algorithm, keyId);
   const encoded = `${JSON.stringify({
-    version: 1,
+    version: 2,
     purpose: ANCHOR_PURPOSE,
     algorithm,
     key_id: keyId,
     stream_id: request.payload.stream_id,
     sequence: request.payload.sequence,
+    previous_anchor_digest: request.payload.previous_anchor_digest,
     payload_digest: request.payload_digest,
     signing_input: input.toString('base64url'),
   })}\n`;
@@ -76,7 +77,7 @@ function decodeResponse(request, algorithm, keyId, value) {
     Array.isArray(document) ||
     Object.keys(document).length !== allowed.size ||
     Object.keys(document).some((key) => !allowed.has(key)) ||
-    document.version !== 1 ||
+    document.version !== 2 ||
     document.purpose !== ANCHOR_PURPOSE ||
     document.algorithm !== algorithm ||
     document.key_id !== keyId ||
@@ -236,7 +237,7 @@ export function createLocalAuditAnchorSignerClient({
 export const LOCAL_AUDIT_ANCHOR_SIGNER_CONTRACT = Object.freeze({
   socket_directory: SOCKET_DIRECTORY,
   socket_path: SOCKET_PATH,
-  protocol_version: 1,
+  protocol_version: 2,
   maximum_request_bytes: MAX_REQUEST_BYTES,
   maximum_response_bytes: MAX_RESPONSE_BYTES,
   maximum_timeout_ms: 10_000,

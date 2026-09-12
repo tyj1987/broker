@@ -2,7 +2,7 @@ import { computeHash, GENESIS_HASH } from './audit-hash-chain.js';
 
 const ANCHOR_VERSION = 1;
 const ANCHOR_PURPOSE = 'secret-broker.audit-chain-head';
-const SIGNATURE_CONTEXT = 'secret-broker.audit-anchor-signature.v1';
+const SIGNATURE_CONTEXT = 'secret-broker.audit-anchor-signature.v2';
 const HASH_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SIGNATURE_RE = /^[A-Za-z0-9_-]{43,4096}$/;
@@ -205,7 +205,9 @@ export function createAuditAnchorSigningInput(request, { algorithm, keyId } = {}
     fail('invalid_signature', 'audit anchor signature metadata is invalid');
   }
   return Buffer.from(
-    `${SIGNATURE_CONTEXT}\0${algorithm}\0${keyId}\0${request.payload_digest}`,
+    `${SIGNATURE_CONTEXT}\0${algorithm}\0${keyId}\0${request.payload.stream_id}`
+      + `\0${request.payload.sequence}\0${request.payload.previous_anchor_digest}`
+      + `\0${request.payload_digest}`,
     'utf8',
   );
 }

@@ -15,15 +15,16 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	ProtocolVersion    = 1
+	ProtocolVersion    = 2
 	Purpose            = "secret-broker.audit-chain-head"
-	SignatureContext   = "secret-broker.audit-anchor-signature.v1"
+	SignatureContext   = "secret-broker.audit-anchor-signature.v2"
 	MaxRequestBytes    = 8 * 1024
 	MaxResponseBytes   = 8 * 1024
 	MinSignatureBytes  = 32
@@ -41,14 +42,15 @@ var supportedAlgorithms = map[string]struct{}{
 }
 
 type wireRequest struct {
-	Version       int    `json:"version"`
-	Purpose       string `json:"purpose"`
-	Algorithm     string `json:"algorithm"`
-	KeyID         string `json:"key_id"`
-	StreamID      string `json:"stream_id"`
-	Sequence      int64  `json:"sequence"`
-	PayloadDigest string `json:"payload_digest"`
-	SigningInput  string `json:"signing_input"`
+	Version        int    `json:"version"`
+	Purpose        string `json:"purpose"`
+	Algorithm      string `json:"algorithm"`
+	KeyID          string `json:"key_id"`
+	StreamID       string `json:"stream_id"`
+	Sequence       int64  `json:"sequence"`
+	PreviousDigest string `json:"previous_anchor_digest"`
+	PayloadDigest  string `json:"payload_digest"`
+	SigningInput   string `json:"signing_input"`
 }
 
 type wireResponse struct {
@@ -64,13 +66,14 @@ type wireResponse struct {
 // signing input. Digest is provided for KMS APIs that sign a SHA-256 digest.
 // Implementations must use a key dedicated to audit anchors.
 type SignRequest struct {
-	Algorithm     string
-	KeyID         string
-	StreamID      string
-	Sequence      int64
-	PayloadDigest [sha256.Size]byte
-	SigningInput  []byte
-	Digest        [sha256.Size]byte
+	Algorithm      string
+	KeyID          string
+	StreamID       string
+	Sequence       int64
+	PreviousDigest [sha256.Size]byte
+	PayloadDigest  [sha256.Size]byte
+	SigningInput   []byte
+	Digest         [sha256.Size]byte
 }
 
 type Signer interface {
@@ -247,17 +250,23 @@ func readRequest(reader io.Reader, config Config) (wireRequest, SignRequest, err
 	if err != nil {
 		return wireRequest{}, SignRequest{}, fail("request_invalid")
 	}
+	previousDigestBytes, err := decodeHexDigest(request.PreviousDigest)
+	if err != nil || (request.Sequence == 1 && previousDigestBytes != [sha256.Size]byte{}) ||
+		(request.Sequence > 1 && previousDigestBytes == [sha256.Size]byte{}) {
+		return wireRequest{}, SignRequest{}, fail("request_invalid")
+	}
 	signingInput, err := decodeCanonicalBase64URL(request.SigningInput)
 	if err != nil {
 		return wireRequest{}, SignRequest{}, fail("request_invalid")
 	}
-	expected := []byte(SignatureContext + "\x00" + config.Algorithm + "\x00" + config.KeyID + "\x00" + request.PayloadDigest)
+	expected := []byte(SignatureContext + "\x00" + config.Algorithm + "\x00" + config.KeyID + "\x00" +
+		config.StreamID + "\x00" + strconv.FormatInt(request.Sequence, 10) + "\x00" + request.PreviousDigest + "\x00" + request.PayloadDigest)
 	if !equalBytes(signingInput, expected) {
 		return wireRequest{}, SignRequest{}, fail("request_invalid")
 	}
 	return request, SignRequest{
 		Algorithm: config.Algorithm, KeyID: config.KeyID, StreamID: config.StreamID,
-		Sequence: request.Sequence, PayloadDigest: payloadDigestBytes,
+		Sequence: request.Sequence, PreviousDigest: previousDigestBytes, PayloadDigest: payloadDigestBytes,
 		SigningInput: append([]byte(nil), signingInput...), Digest: sha256.Sum256(signingInput),
 	}, nil
 }

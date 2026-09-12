@@ -201,6 +201,15 @@ function rpcError(id, code, message) {
   return { jsonrpc: '2.0', id, error: { code, message } };
 }
 
+function safeMcpErrorCode(error, fallback = 'tool_execution_failed') {
+  const code = error?.code;
+  return typeof code === 'string'
+    && /^[a-z][a-z0-9_]{1,63}$/.test(code)
+    && !/(secret|password|private|canary|material)/i.test(code)
+    ? code
+    : fallback;
+}
+
 async function handleRpc(bridge, request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
     return rpcError(request?.id ?? null, -32600, 'Invalid JSON-RPC request');
@@ -219,7 +228,7 @@ async function handleRpc(bridge, request) {
     try {
       return rpcResult(request.id, { tools: await bridge.listTools() });
     } catch (error) {
-      return rpcError(request.id, -32603, redact(error.message));
+      return rpcError(request.id, -32603, safeMcpErrorCode(error, 'tool_list_failed'));
     }
   }
   if (request.method === 'tools/call') {
@@ -231,7 +240,7 @@ async function handleRpc(bridge, request) {
       });
     } catch (error) {
       return rpcResult(request.id, {
-        content: [{ type: 'text', text: `Error: ${redact(error.message)}` }],
+        content: [{ type: 'text', text: `Error: ${safeMcpErrorCode(error)}` }],
         isError: true,
       });
     }

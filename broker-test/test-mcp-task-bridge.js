@@ -426,6 +426,24 @@ stdioInput.write('[]\n');
 await stdioServer.pending;
 const stdioErrors = stdioText.trim().split('\n').map((line) => JSON.parse(line));
 assert.deepEqual(stdioErrors.map((message) => message.error.code), [-32700, -32600]);
+
+const failingMcpInput = new PassThrough();
+const failingMcpOutput = new PassThrough();
+let failingMcpText = '';
+failingMcpOutput.on('data', (chunk) => { failingMcpText += chunk.toString('utf8'); });
+const failingMcp = createMcpStdioServer({
+  bridge: {
+    async listTools() { throw new Error('canary-secret /srv/private/key.pem'); },
+    async callTool() { throw new Error('canary-secret /srv/private/key.pem'); },
+  },
+  input: failingMcpInput,
+  output: failingMcpOutput,
+});
+failingMcpInput.write('{"jsonrpc":"2.0","id":21,"method":"tools/list"}\n');
+failingMcpInput.write('{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"x"}}\n');
+await failingMcp.pending;
+assert.doesNotMatch(failingMcpText, /canary-secret|\/srv\/private/);
+assert.match(failingMcpText, /tool_list_failed|tool_execution_failed/);
 assert.throws(() => createMcpStdioServer({ input: stdioInput, output: stdioOutput }), /bridge/);
 assert.throws(() => createMcpStdioServer({ bridge, input: {}, output: stdioOutput }), /streams/);
 

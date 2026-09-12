@@ -223,15 +223,15 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
   const secretsPath = opts.secretsPath || process.env.SECRETS_DETAIL_PATH
     || join(process.cwd(), 'secrets', 'secrets-detail.json');
   if (!existsSync(secretsPath)) {
-    throw new Error(`secrets file not found: ${secretsPath}`);
+    throw new Error('secrets_file_unavailable');
   }
   let data;
   try { data = JSON.parse(readFileSync(secretsPath, 'utf8')); }
-  catch (e) { throw new Error(`parse secrets file: ${e.message}`); }
+  catch (e) { throw Object.assign(new Error('secrets_file_invalid'), { cause: e }); }
   // 找到对应 secret, 替换 value
   const all = Array.isArray(data) ? data : (data.secrets || []);
   const target = all.find(s => s.name === name);
-  if (!target) throw new Error(`secret ${name} not found in ${secretsPath}`);
+  if (!target) throw new Error('secret_not_found');
   target.value = typeof newValue === 'string' ? newValue : JSON.stringify(newValue);
   target.last_rotated_at = new Date().toISOString();
   // Re-encrypt with SOPS in place (atomic). Never persist plaintext.
@@ -241,7 +241,7 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
       ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
     });
   } catch (e) {
-    throw new Error(`refusing to persist rotated secret without SOPS encryption: ${e.message}`);
+    throw Object.assign(new Error('rotation_persist_failed'), { cause: e });
   }
 }
 

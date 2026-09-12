@@ -39,7 +39,9 @@ section('auto-rotate');
 {
   const source = readFileSync(join(process.cwd(), 'lib', 'auto-rotate.js'), 'utf8');
   ok('rotation errors are stable', source.includes("error: 'rotation_command_failed'")
-    && source.includes('rotation_persist_skipped') && !source.includes('error: e.message'));
+    && source.includes('rotation_persist_skipped') && !source.includes('error: e.message')
+    && !source.includes('parse secrets file: ${e.message}')
+    && !source.includes('without SOPS encryption: ${e.message}'));
   ok('rollback never returns secret material', !source.includes('resolve({ ok: true, secret: target })'));
 }
 {

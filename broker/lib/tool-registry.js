@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 const TOOL_NAME = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
 const VERSION = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
@@ -185,13 +187,14 @@ function apiKeyAllowsExecution(identity, tool, request) {
 }
 
 export class ToolRegistry {
-  constructor(document) {
+  constructor(document, options = {}) {
     assertObject(document, 'tool registry must be an object');
     if (document.registry_version !== 1 || !Array.isArray(document.tools) || document.tools.length === 0) {
       throw new Error('tool registry version 1 with at least one tool is required');
     }
     this.byOperation = new Map();
     this.byName = new Map();
+    this.providerGates = options.providerGates instanceof Map ? new Map(options.providerGates) : new Map();
     for (const item of document.tools) {
       validateTool(item);
       const operationKey = `${item.provider}:${item.operation_id}`;
@@ -217,6 +220,7 @@ export class ToolRegistry {
     const role = identity?.context?.client?.role;
     if (!role) return [];
     return [...this.byOperation.values()]
+      .filter((tool) => this.isProviderAvailable(tool.provider))
       .filter((tool) => (role === 'admin' || role === tool.required_role)
         && (!isAgentIdentity(identity) || tool.agent_execution === true)
         && apiKeyAllowsDiscovery(identity, tool))
@@ -265,6 +269,7 @@ export class ToolRegistry {
     if (!preliminary?.allow) return preliminary || { allow: false, reason: 'policy_denied' };
     const tool = this.byOperation.get(`${request.provider}:${request.operationId}`);
     if (!tool) return { allow: false, reason: 'tool_unregistered' };
+    if (!this.isProviderAvailable(tool.provider)) return { allow: false, reason: 'provider_contract_required' };
     if (!apiKeyAllowsExecution(request.identity, tool, request)) {
       return { allow: false, reason: 'tool_api_key_denied' };
     }
@@ -288,9 +293,32 @@ export class ToolRegistry {
     }
     return { ...preliminary, tool: publicTool(tool) };
   }
+
+  isProviderAvailable(provider) {
+    const gate = this.providerGates.get(provider);
+    if (!gate) return true;
+    return gate.status === 'production' && gate.contract_test?.required === true
+      && gate.contract_test?.last_result === 'passed';
+  }
 }
 
-export function loadToolRegistry(path) {
+export function loadProviderGates(directory) {
+  const gates = new Map();
+  for (const filename of readdirSync(directory, { withFileTypes: true })) {
+    if (!filename.isFile() || extname(filename.name) !== '.yaml') continue;
+    const provider = parseYaml(readFileSync(join(directory, filename.name), 'utf8'));
+    if (!provider || typeof provider !== 'object' || Array.isArray(provider)
+      || typeof provider.id !== 'string' || typeof provider.status !== 'string'
+      || !provider.contract_test || typeof provider.contract_test !== 'object') {
+      throw new Error(`provider_manifest_invalid:${basename(filename.name, '.yaml')}`);
+    }
+    if (gates.has(provider.id)) throw new Error(`provider_manifest_duplicate:${provider.id}`);
+    gates.set(provider.id, provider);
+  }
+  return gates;
+}
+
+export function loadToolRegistry(path, options = {}) {
   let document;
   try {
     document = JSON.parse(readFileSync(path, 'utf8'));
@@ -299,5 +327,5 @@ export function loadToolRegistry(path) {
     failure.cause = error;
     throw failure;
   }
-  return new ToolRegistry(document);
+  return new ToolRegistry(document, options);
 }

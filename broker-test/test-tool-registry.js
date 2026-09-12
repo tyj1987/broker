@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
-import { ToolRegistry, loadToolRegistry } from '../broker/lib/tool-registry.js';
+import { ToolRegistry, loadProviderGates, loadToolRegistry } from '../broker/lib/tool-registry.js';
 
 const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'));
+const gatedRegistry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'), {
+  providerGates: new Map([
+    ['github', { status: 'contract_required', contract_test: { required: true, last_result: 'not_run' } }],
+    ['broker', { status: 'production', contract_test: { required: true, last_result: 'passed' } }],
+  ]),
+});
 const github = registry.find('github', 'repo.read');
 assert.equal(github.name, 'github.repository.read');
 assert.equal(github.risk_level, 'LOW');
@@ -66,6 +72,14 @@ const workloadAgent = {
 assert.ok(registry.listFor(workloadAgent).every((tool) => tool.agent_execution === true));
 
 const allowed = { allow: true, reason: 'allowed' };
+assert.deepEqual(gatedRegistry.listFor(githubAgent), [], 'contract-gated providers are hidden');
+assert.equal(gatedRegistry.evaluate({
+  identity: githubAgent, provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+}, allowed).reason, 'provider_contract_required');
+assert.equal(gatedRegistry.evaluate({
+  identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
+}, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).allow, true);
 assert.equal(registry.evaluate({
   identity: { name: 'developer-a', context: { via: 'api_key', client: { role: 'developer' } } },
   provider: 'github', operationId: 'repo.read', environment: 'production',
@@ -251,5 +265,8 @@ assert.throws(() => registry.validateConfiguration({ operation_policies: {
 } }), /environment exceeds/);
 
 assert.throws(() => loadToolRegistry(resolve(import.meta.dirname, 'missing-registry.json')), /tool_registry_load_failed/);
+const providerGates = loadProviderGates(resolve(import.meta.dirname, '../providers'));
+assert.equal(providerGates.get('github').contract_test.last_result, 'not_run');
+assert.equal(providerGates.get('github').status, 'contract_required');
 
 console.log('tool registry: schema, risk, role and agent-execution gates passed');

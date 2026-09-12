@@ -90,7 +90,7 @@ import { createControlPlaneStateRuntime } from './lib/control-plane-state-runtim
 import { evaluateOperationPolicy } from './lib/operation-policy.js';
 import { createOperationAuthorizer } from './lib/go-policy-client.js';
 
-import { loadToolRegistry } from './lib/tool-registry.js';
+import { loadProviderGates, loadToolRegistry } from './lib/tool-registry.js';
 import { loadSecretCacheCandidate, replaceSecretCache } from './lib/secret-cache.js';
 import { reloadRuntimeAtomically } from './lib/runtime-reload.js';
 import { isReloadTokenValid } from './lib/reload-auth.js';
@@ -188,7 +188,9 @@ const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
 const packagedToolRegistry = resolvePath(__dirname, 'tools/registry.json');
 const TOOL_REGISTRY_PATH = process.env.TOOL_REGISTRY_PATH
   || (existsSync(packagedToolRegistry) ? packagedToolRegistry : resolvePath(__dirname, '../tools/registry.json'));
-const toolRegistry = loadToolRegistry(TOOL_REGISTRY_PATH);
+const PROVIDER_MANIFEST_DIR = process.env.PROVIDER_MANIFEST_DIR || resolvePath(__dirname, '../providers');
+const providerGates = loadProviderGates(PROVIDER_MANIFEST_DIR);
+const toolRegistry = loadToolRegistry(TOOL_REGISTRY_PATH, { providerGates });
 
 const coreOperationAuthorization = createOperationAuthorizer(() => CONFIG);
 async function operationAuthorization(request, options = {}) {

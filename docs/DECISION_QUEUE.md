@@ -229,8 +229,15 @@ continue.
   rejection of every old identity, successful read-only typed operation,
   secret-free audit output, and a timed rollback rehearsal.
 - Current safe default: keep the legacy service available for existing users,
-  deny protected CD, and continue source/staging work. Do not copy the old key
-  hierarchy into the hardened layout or use it to satisfy the preflight.
+  deny protected CD, and continue source/staging work. A strict source-only
+  plan validator now requires the maintenance window, distinct CA
+  fingerprints, offline/HSM authority, two independently verified management
+  paths, exact nginx trusted-proxy binding, enrolled client owners, immutable
+  rollback boundary, external evidence and separate authorization. Its safe
+  report omits fingerprints and evidence references. This is preparation only:
+  no production plan has been populated or approved and no identity has been
+  switched. Do not copy the old key hierarchy into the hardened layout or use
+  it to satisfy the preflight.
 
 ## DQ-010: DeepSeek credential authority and usage controls
 

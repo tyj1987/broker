@@ -43,7 +43,7 @@ async function handleExec(req, res, { send, jsonError, readBody, audit, ctx, con
   if (!command) return jsonError(res, 400, 'command required');
   let parsed;
   try { parsed = parseSshTarget(target); validateCommand(command); }
-  catch (e) { return jsonError(res, 400, e.message); }
+  catch (_e) { return jsonError(res, 400, 'ssh_request_invalid'); }
   const sName = secretName || secret_name || 'ssh.connection';
   let secret;
   try {

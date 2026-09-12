@@ -250,6 +250,6 @@ assert.throws(() => registry.validateConfiguration({ operation_policies: {
   } },
 } }), /environment exceeds/);
 
-assert.throws(() => loadToolRegistry(resolve(import.meta.dirname, 'missing-registry.json')), /could not be loaded/);
+assert.throws(() => loadToolRegistry(resolve(import.meta.dirname, 'missing-registry.json')), /tool_registry_load_failed/);
 
 console.log('tool registry: schema, risk, role and agent-execution gates passed');

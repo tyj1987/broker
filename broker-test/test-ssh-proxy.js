@@ -161,7 +161,8 @@ section('sshExec error paths');
   const routeSource = readFileSync(join(process.cwd(), 'routes', 'ssh-proxy.js'), 'utf8');
   ok('SSH route does not expose executor exception text',
     !routeSource.includes('ssh exec failed: ${e.message}')
-      && !routeSource.includes('tunnel open failed: ${e.message}'));
+      && !routeSource.includes('tunnel open failed: ${e.message}')
+      && routeSource.includes("'ssh_request_invalid'"));
   ok('SSH tunnel stop/list require admin role',
     (routeSource.match(/ctx\.client\.role !== 'admin'/g) || []).length >= 2);
 }

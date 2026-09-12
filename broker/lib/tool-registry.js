@@ -295,7 +295,9 @@ export function loadToolRegistry(path) {
   try {
     document = JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
-    throw new Error(`tool registry could not be loaded: ${error.message}`);
+    const failure = new Error('tool_registry_load_failed');
+    failure.cause = error;
+    throw failure;
   }
   return new ToolRegistry(document);
 }

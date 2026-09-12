@@ -6,6 +6,11 @@ const require = createRequire(new URL('../broker/package.json', import.meta.url)
 const { parse } = require('yaml');
 
 const providerDir = resolve(import.meta.dirname, '../providers');
+const manifestSchema = JSON.parse(readFileSync(resolve(providerDir, 'schema.json'), 'utf8'));
+const schemaKeys = new Set(Object.keys(manifestSchema.properties || {}));
+const authenticationSchemaKeys = new Set(
+  Object.keys(manifestSchema.properties?.authentication?.properties || {}),
+);
 const expected = new Set([
   'aliyun',
   'cloudflare',
@@ -22,6 +27,14 @@ const ids = new Set();
 
 for (const filename of manifests) {
   const document = parse(readFileSync(resolve(providerDir, filename), 'utf8'));
+  for (const key of Object.keys(document)) {
+    if (!schemaKeys.has(key)) throw new Error(`${filename}: field ${key} is missing from schema.json`);
+  }
+  for (const key of Object.keys(document.authentication || {})) {
+    if (!authenticationSchemaKeys.has(key)) {
+      throw new Error(`${filename}: authentication field ${key} is missing from schema.json`);
+    }
+  }
   if (document.manifest_version !== 1) throw new Error(`${filename}: unsupported manifest version`);
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(document.id || '')) throw new Error(`${filename}: invalid id`);
   if (ids.has(document.id)) throw new Error(`${filename}: duplicate id`);

@@ -119,6 +119,7 @@ environment files and credential values were not opened or printed.
 | P1 | `secret-broker.service` runs as `root`. | Run under a dedicated locked system account with only the required writable paths. |
 | P1 | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present. | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment. |
 | P1 | nginx 1.20.1 is the active production version. | Move to a vendor-supported security-maintained release and record the package provenance. |
+| P0 | The production preflight now requires independent audit exporter, immutable-store/retention-lock, and recovery-authority services, each active under a non-Broker user; no production evidence for these services exists yet. | Deploy and independently attest all three services, verify signed-head export, retention lock and recovery authority, then repeat the 22-gate preflight and retain pass/fail-only evidence. |
 | P2 | Broker listens only on `127.0.0.1:8443`, which prevents direct public access, but it has no separate observed `9080` health listener in the live configuration. | Deploy and verify the loopback-only health listener used by the hardened workflow. |
 
 Production remains **not approved**. No deployment was attempted because P0/P1 gates, repository CI, credential rotation evidence, signed artifacts, provider contract tests, Android physical-device tests, and disaster-recovery rehearsal are incomplete.
@@ -141,10 +142,10 @@ No credential value, certificate body, private key, environment file or nginx
 configuration body was emitted by the preflight.
 
 Local regression at this checkpoint passed the complete Node verification and
-coverage gate: 97.58% lines, 91.62% branches and 98.41% functions. The preflight
-also has deterministic success, per-gate failure and output non-disclosure
-tests. This is source and read-only runtime evidence; it is not a migration or
-release approval.
+coverage gate. The current preflight has 22 deterministic gates, including the
+three independent audit services and their non-Broker users; its success,
+per-gate failure and output non-disclosure tests pass. This is source and
+read-only runtime evidence; it is not a migration or release approval.
 
 ### 2026-09-10 生产 CD 触发条件（当前执行规则）
 

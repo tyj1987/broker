@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { resolve } from 'node:path';
 
 import {
   runProviderContractCheck,
@@ -9,6 +10,12 @@ import { ProviderContractError } from '../broker/lib/provider-contract-runner.js
 
 const apiKey = `${['mb', 'test'].join('_')}_0123456789abcdefghijklmnopqrstuv`;
 const taskId = '00000000-0000-4000-8000-000000000201';
+const contractPath = resolve('protected-test-inputs', 'contract.json');
+const apiKeyPath = resolve('protected-test-inputs', 'broker.key');
+const clientCertPath = resolve('protected-test-inputs', 'client.crt');
+const clientKeyPath = resolve('protected-test-inputs', 'client.key');
+const caPath = resolve('protected-test-inputs', 'ca.crt');
+const missingPlanPath = resolve('protected-test-inputs', 'missing.json');
 const plan = {
   version: 1,
   provider: 'github',
@@ -95,11 +102,11 @@ function requestImpl(options, callback) {
 }
 
 const files = new Map([
-  ['C:\\protected\\contract.json', Buffer.from(JSON.stringify(plan))],
-  ['C:\\protected\\broker.key', Buffer.from(`${apiKey}\n`)],
-  ['C:\\protected\\client.crt', Buffer.from('certificate')],
-  ['C:\\protected\\client.key', Buffer.from('private key')],
-  ['C:\\protected\\ca.crt', Buffer.from('ca certificate')],
+  [contractPath, Buffer.from(JSON.stringify(plan))],
+  [apiKeyPath, Buffer.from(`${apiKey}\n`)],
+  [clientCertPath, Buffer.from('certificate')],
+  [clientKeyPath, Buffer.from('private key')],
+  [caPath, Buffer.from('ca certificate')],
 ]);
 const readFileImpl = (path) => {
   if (!files.has(path)) throw new Error('missing');
@@ -111,15 +118,15 @@ const argv = [
   '--broker',
   'https://broker.52trz.com',
   '--plan-file',
-  'C:\\protected\\contract.json',
+  contractPath,
   '--api-key-file',
-  'C:\\protected\\broker.key',
+  apiKeyPath,
   '--client-cert-file',
-  'C:\\protected\\client.crt',
+  clientCertPath,
   '--client-key-file',
-  'C:\\protected\\client.key',
+  clientKeyPath,
   '--ca-file',
-  'C:\\protected\\ca.crt',
+  caPath,
 ];
 const output = [];
 const receipt = await runProviderContractCheck(argv, {
@@ -136,9 +143,9 @@ const withoutTls = [
   'node',
   'provider-contract-check',
   '--plan-file',
-  'C:\\protected\\contract.json',
+  contractPath,
   '--api-key-file',
-  'C:\\protected\\broker.key',
+  apiKeyPath,
 ];
 const originalStdoutWrite = process.stdout.write;
 let defaultOutput = '';
@@ -164,23 +171,9 @@ const withoutClientKey = [
 for (const invalidArgv of [
   [...argv, '--api-key', apiKey],
   withoutClientKey,
-  ['node', 'check', '--plan-file', 'relative.json', '--api-key-file', 'C:\\protected\\broker.key'],
-  [
-    'node',
-    'check',
-    '--plan-file',
-    'C:\\protected\\missing.json',
-    '--api-key-file',
-    'C:\\protected\\broker.key',
-  ],
-  [
-    'node',
-    'check',
-    '--plan-file',
-    'C:\\protected\\contract.json',
-    '--api-key-file',
-    'relative.key',
-  ],
+  ['node', 'check', '--plan-file', 'relative.json', '--api-key-file', apiKeyPath],
+  ['node', 'check', '--plan-file', missingPlanPath, '--api-key-file', apiKeyPath],
+  ['node', 'check', '--plan-file', contractPath, '--api-key-file', 'relative.key'],
 ]) {
   await assert.rejects(
     runProviderContractCheck(invalidArgv, { readFileImpl, requestImpl, writeOutput: () => {} }),
@@ -188,9 +181,9 @@ for (const invalidArgv of [
 }
 
 for (const [path, contents, pattern] of [
-  ['C:\\protected\\contract.json', Buffer.from('{'), /invalid JSON/],
-  ['C:\\protected\\contract.json', Buffer.alloc(0), /file size is invalid/],
-  ['C:\\protected\\broker.key', Buffer.from('invalid'), /valid scoped Broker API key/],
+  [contractPath, Buffer.from('{'), /invalid JSON/],
+  [contractPath, Buffer.alloc(0), /file size is invalid/],
+  [apiKeyPath, Buffer.from('invalid'), /valid scoped Broker API key/],
 ]) {
   const invalidFiles = new Map(files);
   invalidFiles.set(path, contents);
@@ -205,7 +198,7 @@ for (const [path, contents, pattern] of [
 }
 
 const oversizedFiles = new Map(files);
-oversizedFiles.set('C:\\protected\\contract.json', Buffer.alloc(32 * 1024 + 1));
+oversizedFiles.set(contractPath, Buffer.alloc(32 * 1024 + 1));
 await assert.rejects(
   runProviderContractCheck(argv, {
     readFileImpl: (path) => oversizedFiles.get(path),

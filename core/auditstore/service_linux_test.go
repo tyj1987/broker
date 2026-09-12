@@ -14,6 +14,15 @@ import (
 	"github.com/tyj1987/broker/core/auditanchor"
 )
 
+type noSystemFileInfo struct{}
+
+func (noSystemFileInfo) Name() string       { return "none" }
+func (noSystemFileInfo) Size() int64        { return 0 }
+func (noSystemFileInfo) Mode() os.FileMode  { return 0 }
+func (noSystemFileInfo) ModTime() time.Time { return time.Time{} }
+func (noSystemFileInfo) IsDir() bool        { return false }
+func (noSystemFileInfo) Sys() any           { return nil }
+
 func TestServeRuntimeUsesProtectedUnixSocketAndKernelPeerIdentity(t *testing.T) {
 	uid := uint32(os.Geteuid())
 	if uid == 0 || uid == ^uint32(0) {
@@ -183,4 +192,160 @@ func TestListenServiceSocketRejectsUnsafeParentAndExistingPath(t *testing.T) {
 	if _, err := listenServiceSocket(filepath.Join(directory, "other.sock")); err != ErrServiceSocketInvalid {
 		t.Fatalf("wrong basename error = %v", err)
 	}
+}
+
+func TestServeRuntimeRejectsInvalidLinuxInputs(t *testing.T) {
+	config, err := ParseServiceConfig(strings.NewReader(validServiceConfigJSON()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auditanchor.NewEnvelopeVerifier(config.StreamID, trustedSigningKeys(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{StreamID: config.StreamID, Repository: &fakeRepository{}, Verifier: verifier}
+	if err = ServeRuntime(nil, runtime, 1001, 1002, DefaultSocketPath); err != ErrServiceRuntimeInvalid {
+		t.Fatalf("nil context error = %v", err)
+	}
+	if err = ServeRuntime(context.Background(), runtime, 0, 1002, DefaultSocketPath); err != ErrServiceRuntimeInvalid {
+		t.Fatalf("root peer error = %v", err)
+	}
+	if err = ServeRuntime(context.Background(), runtime, 1001, 1002, "relative/store.sock"); err != ErrServiceSocketInvalid {
+		t.Fatalf("invalid socket error = %v", err)
+	}
+}
+
+func TestListenServiceSocketRejectsUnsafeLockAndPermissionFailures(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(directory, "store.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockPath, 0o622); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := listenServiceSocket(filepath.Join(directory, "store.sock")); err != ErrServiceSocketInvalid {
+		t.Fatalf("unsafe lock error = %v", err)
+	}
+
+	missingLock := filepath.Join(directory, "missing", "store.lock")
+	if _, err := acquireServiceLock(missingLock); err != ErrServiceSocketInvalid {
+		t.Fatalf("missing lock parent error = %v", err)
+	}
+	if os.Geteuid() == 0 {
+		return
+	}
+	if err := os.Chmod(lockPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(directory, 0o700)
+	if _, err := listenServiceSocket(filepath.Join(directory, "store.sock")); err != ErrServiceSocketInvalid {
+		t.Fatalf("listen permission error = %v", err)
+	}
+}
+
+func TestListenServiceSocketRejectsUnprobeableStaleSocket(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses socket mode permission checks")
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "store.sock")
+	raw, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetUnlinkOnClose(false)
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = listenServiceSocket(path); err != ErrServiceSocketInvalid {
+		t.Fatalf("unprobeable socket error = %v", err)
+	}
+	if _, err = os.Lstat(path); err != nil {
+		t.Fatalf("unprobeable socket was removed: %v", err)
+	}
+}
+
+func TestListenServiceSocketPreservesStaleSocketWhenRemovalIsDenied(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permission checks")
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(directory, "store.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "store.sock")
+	raw, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetUnlinkOnClose(false)
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(directory, 0o700)
+	if _, err = listenServiceSocket(path); err != ErrServiceSocketInvalid {
+		t.Fatalf("removal denial error = %v", err)
+	}
+	if _, err = os.Lstat(path); err != nil {
+		t.Fatalf("stale socket was removed: %v", err)
+	}
+	closeServiceLock(nil)
+	if fileUID(noSystemFileInfo{}) != ^uint32(0) {
+		t.Fatal("invalid platform file metadata was accepted")
+	}
+}
+
+func TestRejectCreatedServiceSocketRemovesOnlyCreatedEndpointAndReleasesLock(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireServiceLock(filepath.Join(directory, "store.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "store.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		closeServiceLock(lock)
+		t.Fatal(err)
+	}
+	listener.SetUnlinkOnClose(false)
+	created, err := os.Lstat(path)
+	if err != nil {
+		_ = listener.Close()
+		closeServiceLock(lock)
+		t.Fatal(err)
+	}
+	if returned, rejectErr := rejectCreatedServiceSocket(listener, path, created, lock); returned != nil || rejectErr != ErrServiceSocketInvalid {
+		t.Fatalf("reject result = %#v, %v", returned, rejectErr)
+	}
+	if _, err = os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("created endpoint remains: %v", err)
+	}
+	reacquired, err := acquireServiceLock(filepath.Join(directory, "store.lock"))
+	if err != nil {
+		t.Fatalf("lock was not released: %v", err)
+	}
+	closeServiceLock(reacquired)
 }

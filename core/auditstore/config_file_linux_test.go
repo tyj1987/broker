@@ -75,3 +75,47 @@ func TestOpenTrustedServiceConfigAtRejectsSymlink(t *testing.T) {
 		t.Fatalf("symlink error = %v", err)
 	}
 }
+
+func TestOpenTrustedServiceConfigAtRejectsMissingEmptyAndUnreadableFiles(t *testing.T) {
+	trustedParent := t.TempDir()
+	trustedDirectory := filepath.Join(trustedParent, "audit")
+	if err := os.Mkdir(trustedDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	trustedUID := uint32(os.Geteuid())
+	missing := filepath.Join(trustedDirectory, "missing.json")
+	if _, err := openTrustedServiceConfigAt(missing, trustedDirectory, trustedUID); !errors.Is(err, ErrServiceConfigInvalid) {
+		t.Fatalf("missing error = %v", err)
+	}
+	empty := filepath.Join(trustedDirectory, "empty.json")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openTrustedServiceConfigAt(empty, trustedDirectory, trustedUID); !errors.Is(err, ErrServiceConfigInvalid) {
+		t.Fatalf("empty error = %v", err)
+	}
+	if os.Geteuid() != 0 {
+		if err := os.WriteFile(empty, []byte(validServiceConfigJSON()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(empty, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openTrustedServiceConfigAt(empty, trustedDirectory, trustedUID); !errors.Is(err, ErrServiceConfigInvalid) {
+			t.Fatalf("unreadable error = %v", err)
+		}
+	}
+}
+
+func TestOpenTrustedServiceConfigRejectsPathOutsideProductionBoundary(t *testing.T) {
+	file, err := openTrustedServiceConfig("/not-the-production-boundary/store.json")
+	if file != nil {
+		_ = file.Close()
+	}
+	if !errors.Is(err, ErrServiceConfigInvalid) {
+		t.Fatalf("outside production boundary error = %v", err)
+	}
+	if trustedConfigFileInfo(nil, uint32(os.Geteuid())) {
+		t.Fatal("nil file metadata accepted")
+	}
+}

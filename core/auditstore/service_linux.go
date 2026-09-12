@@ -35,67 +35,45 @@ func listenServiceSocket(socketPath string) (net.Listener, error) {
 	if err != nil {
 		return nil, ErrServiceSocketInvalid
 	}
-	releaseLock := func() {
-		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		_ = lock.Close()
-	}
 	if existing, statErr := os.Lstat(socketPath); statErr == nil {
 		if existing.Mode()&os.ModeSocket == 0 || existing.Mode()&os.ModeSymlink != 0 ||
 			fileUID(existing) != uint32(os.Geteuid()) {
-			releaseLock()
-			return nil, ErrServiceSocketInvalid
+			return rejectLockedServiceSocket(lock)
 		}
 		probe, probeErr := net.DialTimeout("unix", socketPath, 250*time.Millisecond)
 		if probeErr == nil {
 			_ = probe.Close()
-			releaseLock()
-			return nil, ErrServiceSocketInvalid
+			return rejectLockedServiceSocket(lock)
 		}
 		if !errors.Is(probeErr, syscall.ECONNREFUSED) {
-			releaseLock()
-			return nil, ErrServiceSocketInvalid
+			return rejectLockedServiceSocket(lock)
 		}
 		current, currentErr := os.Lstat(socketPath)
 		if currentErr != nil || !os.SameFile(existing, current) || os.Remove(socketPath) != nil {
-			releaseLock()
-			return nil, ErrServiceSocketInvalid
+			return rejectLockedServiceSocket(lock)
 		}
 	} else if !os.IsNotExist(statErr) {
-		releaseLock()
-		return nil, ErrServiceSocketInvalid
+		return rejectLockedServiceSocket(lock)
 	}
 
 	address := &net.UnixAddr{Name: socketPath, Net: "unix"}
 	listener, err := net.ListenUnix("unix", address)
 	if err != nil {
-		releaseLock()
-		return nil, ErrServiceSocketInvalid
+		return rejectLockedServiceSocket(lock)
 	}
 	listener.SetUnlinkOnClose(false)
 	created, err := os.Lstat(socketPath)
 	if err != nil || created.Mode()&os.ModeSocket == 0 || created.Mode()&os.ModeSymlink != 0 ||
 		fileUID(created) != uint32(os.Geteuid()) {
-		_ = listener.Close()
-		releaseLock()
-		return nil, ErrServiceSocketInvalid
-	}
-	cleanup := func() {
-		_ = listener.Close()
-		current, statErr := os.Lstat(socketPath)
-		if statErr == nil && os.SameFile(created, current) {
-			_ = os.Remove(socketPath)
-		}
-		releaseLock()
+		return rejectCreatedServiceSocket(listener, socketPath, nil, lock)
 	}
 	if err = os.Chmod(socketPath, 0o660); err != nil {
-		cleanup()
-		return nil, ErrServiceSocketInvalid
+		return rejectCreatedServiceSocket(listener, socketPath, created, lock)
 	}
 	info, err := os.Lstat(socketPath)
 	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 ||
 		info.Mode().Perm() != 0o660 || fileUID(info) != uint32(os.Geteuid()) || !os.SameFile(created, info) {
-		cleanup()
-		return nil, ErrServiceSocketInvalid
+		return rejectCreatedServiceSocket(listener, socketPath, created, lock)
 	}
 	return &managedUnixListener{UnixListener: listener, path: socketPath, info: info, lock: lock}, nil
 }
@@ -108,10 +86,32 @@ func (listener *managedUnixListener) Close() error {
 		if err == nil && os.SameFile(listener.info, current) {
 			_ = os.Remove(listener.path)
 		}
-		_ = syscall.Flock(int(listener.lock.Fd()), syscall.LOCK_UN)
-		_ = listener.lock.Close()
+		closeServiceLock(listener.lock)
 	})
 	return closeErr
+}
+
+func rejectLockedServiceSocket(lock *os.File) (net.Listener, error) {
+	closeServiceLock(lock)
+	return nil, ErrServiceSocketInvalid
+}
+
+func rejectCreatedServiceSocket(listener *net.UnixListener, path string, created os.FileInfo, lock *os.File) (net.Listener, error) {
+	_ = listener.Close()
+	current, err := os.Lstat(path)
+	if created != nil && err == nil && os.SameFile(created, current) {
+		_ = os.Remove(path)
+	}
+	closeServiceLock(lock)
+	return nil, ErrServiceSocketInvalid
+}
+
+func closeServiceLock(lock *os.File) {
+	if lock == nil {
+		return
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_ = lock.Close()
 }
 
 func acquireServiceLock(path string) (*os.File, error) {

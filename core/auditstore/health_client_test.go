@@ -5,12 +5,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+type deadlineFailConn struct{ net.Conn }
+
+func (connection deadlineFailConn) SetDeadline(time.Time) error {
+	return errors.New("deadline unavailable")
+}
+
+type shortWriteConn struct{ net.Conn }
+
+func (connection shortWriteConn) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
+}
 
 func validHealthResponse() string {
 	return fmt.Sprintf(`{"version":1,"purpose":%q,"request_id":%q,"operation":"health","status":"ok","stream_id":"broker-production","result":{"status":"ready","lock_contract":"verified","mirror_state":"in_sync","common_sequence":7,"reason_code":"ok"}}`, Purpose, healthRequestID)
@@ -126,6 +139,25 @@ func TestQueryHealthRejectsTransportAndFramingFailures(t *testing.T) {
 			}()
 			_, err := queryHealth(context.Background(), "/fixed/store.sock", "broker-production", func(context.Context, string, string) (net.Conn, error) {
 				return client, nil
+			})
+			if !errors.Is(err, ErrRepositoryUnavailable) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestQueryHealthRejectsDeadlineAndShortWriteFailures(t *testing.T) {
+	for name, wrap := range map[string]func(net.Conn) net.Conn{
+		"deadline":    func(connection net.Conn) net.Conn { return deadlineFailConn{connection} },
+		"short write": func(connection net.Conn) net.Conn { return shortWriteConn{connection} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer server.Close()
+			go func() { _, _ = io.Copy(io.Discard, server) }()
+			_, err := queryHealth(context.Background(), "/fixed/store.sock", "broker-production", func(context.Context, string, string) (net.Conn, error) {
+				return wrap(client), nil
 			})
 			if !errors.Is(err, ErrRepositoryUnavailable) {
 				t.Fatalf("error = %v", err)

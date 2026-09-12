@@ -49,7 +49,20 @@ ok('preset unlimited present', !!RATE_LIMIT_PRESETS['unlimited']);
 
 section('expiry fail-closed');
 const expiryKey = generateApiKey('expiry-check', 'client-1', { ttl_ms: 60_000 });
+ok('generated key has the documented 32-character base62 random component',
+  /^mb_(?:live|test)_[0-9A-Za-z]{32}$/.test(expiryKey.secret));
+ok('generated key random component provides more than 190 bits of entropy',
+  32 * Math.log2(62) > 190);
+const generatedSecrets = new Set(Array.from({ length: 256 }, () => (
+  generateApiKey('collision-check', 'client-1', { ttl_ms: 60_000 }).secret
+)));
+ok('independently generated key sample has no collisions', generatedSecrets.size === 256);
 ok('valid key is accepted', findApiKey([expiryKey.key_obj], expiryKey.secret)?.id === expiryKey.id);
+const replacement = expiryKey.secret.endsWith('0') ? '1' : '0';
+ok('wrong key is rejected', findApiKey([expiryKey.key_obj], `${expiryKey.secret.slice(0, -1)}${replacement}`) === null);
+ok('wrong prefix is rejected before authentication', findApiKey([expiryKey.key_obj], `xx${expiryKey.secret.slice(2)}`) === null);
+ok('truncated key is rejected before authentication', findApiKey([expiryKey.key_obj], expiryKey.secret.slice(0, -1)) === null);
+ok('non-string key is rejected before authentication', findApiKey([expiryKey.key_obj], Buffer.from(expiryKey.secret)) === null);
 ok('valid key is not expired', isExpired(expiryKey.key_obj) === false);
 ok('missing expiry is expired', isExpired({}) === true);
 ok('malformed expiry is expired', isExpired({ expires_at: 'not-a-date' }) === true);

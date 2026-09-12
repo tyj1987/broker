@@ -4,11 +4,11 @@
 // 设计：
 //   - 格式: mb_<env>_<random> (32 字符 base62)
 //     env: live / test
-//   - secret 只显示一次，存 SHA-256 hash
+//   - secret 只显示一次，存 SHA-256 fingerprint
 //   - 字段:
 //     id, name, client (归属), scopes, allowed_secrets, allowed_services,
 //     rate_limit, expires_at, created_at, created_by,
-//     fingerprint (SHA-256 of secret), revoked_at (可选)
+//     fingerprint (SHA-256 of a CSPRNG-generated secret), revoked_at (可选)
 //     ip_whitelist (可选 string[]): 精确 IP 或 CIDR；空 = 不限制
 //
 // API:
@@ -26,6 +26,7 @@ import { isIpAllowed, normalizeIp } from './lib/ip-allowlist.js';
 const ENV = process.env.NODE_ENV === 'production' ? 'live' : 'test';
 const KEY_PREFIX = 'mb';
 const KEY_RANDOM_LEN = 32;  // base62
+const KEY_SECRET_PATTERN = /^mb_(?:live|test)_[0-9A-Za-z]{32}$/;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;  // 24h
 // v3.0 M3.3: Master Key 用于 MCP Server auto-refresh child keys
 const DEFAULT_MASTER_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // 30d
@@ -327,7 +328,13 @@ export function parseBearer(authHeader) {
  * @returns {object|null} key obj or null
  */
 export function findApiKey(cfgKeys, secret) {
-  if (!cfgKeys || !Array.isArray(cfgKeys) || !secret) return null;
+  if (!cfgKeys || !Array.isArray(cfgKeys) || typeof secret !== 'string'
+      || !KEY_SECRET_PATTERN.test(secret)) return null;
+
+  // This is a lookup fingerprint of a uniformly generated ~190-bit bearer token,
+  // not a user-selected password. A password KDF would add unauthenticated CPU cost
+  // without materially improving resistance to exhaustive search of this keyspace.
+  // codeql[js/insufficient-password-hash]
   const fp = createHash('sha256').update(secret).digest('hex');
   const k = cfgKeys.find(x => x.fingerprint_sha256 === fp);
   if (!k) return null;

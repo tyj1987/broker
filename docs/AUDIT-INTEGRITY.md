@@ -195,7 +195,34 @@ socket access, but the store still authorizes its exact UID for read-only
 operations.
 
 This protocol is hermetic source evidence, not a claim that the cloud store is
-deployed or independently recoverable. The OSS and COS SDK boundaries now
+deployed or independently recoverable. A strict version-1 service
+configuration now binds the stream, prefix, OSS/COS bucket and region,
+independent provider profile identifiers, enumeration limits and one or more
+non-overlapping P-256 public-key epochs. The exact JSON grammar has no endpoint,
+AccessKey, token, credential-file or credential-command field; unknown,
+duplicate, null, oversized, symlinked and non-canonical key inputs fail closed.
+On Linux, the production loader accepts only the fixed root-managed audit
+configuration directory, rejects writable or incorrectly owned path elements,
+opens without following links, and verifies that the opened file is the one
+that was inspected. The runtime passes only those non-secret bindings to an
+injected workload-identity factory. Its checked-in default deliberately returns
+`identity_unavailable`, so source presence cannot be mistaken for a configured
+cloud identity.
+
+The Linux service creates only the fixed `store.sock` name below a private,
+service-owned, non-writable runtime directory. A non-blocking process lock
+prevents a second instance from replacing the active path; an existing socket
+is reclaimed only when it belongs to the service UID and an active-connection
+probe proves it stale. Listener shutdown removes only its own inode. The socket
+uses mode `0660`, and exporter/recovery authorization uses the kernel peer UID.
+A separate bounded health helper reads the same fixed
+non-secret configuration and returns only the typed health object consumed by
+the 22-item preflight. Linux socket lifecycle and real request/response behavior
+are exercised as an end-to-end test; non-Linux service startup fails closed.
+The commands are not yet packaged and no production identity factory is
+selected.
+
+The OSS and COS SDK boundaries now
 expose one fixed-bucket, fixed-prefix, lexicographically ordered object-key page
 with a maximum of 1,000 entries. They reject arbitrary delimiter, endpoint,
 header and continuation inputs, malformed ordering, unexpected prefixes,
@@ -211,7 +238,7 @@ compare both clouds, verify canonical signatures and validate COS COMPLIANCE
 retention. Enumeration is bounded to 128 pages by default and 512 pages at the
 hard maximum, so exhausting the configured bound fails closed instead of
 trusting a partial view. This removes the Broker-host checkpoint as an
-authority, but the repository and service are still source-only. At the
+authority, but the repository and service remain source-only. At the
 maximum 1,000-object page size this admits 128,000 sequences by default and
 512,000 at the hard limit. Operators must size the configured bound for the
 retention-period publication rate and alert before 80 percent; no automatic

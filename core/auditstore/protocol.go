@@ -453,22 +453,7 @@ func (server *Server) health(ctx context.Context) (any, error) {
 	if err != nil {
 		return nil, repositoryError(ctx, err)
 	}
-	if health.CommonSequence < 0 || health.CommonSequence > MaxSafeInteger ||
-		!reasonCodePattern.MatchString(health.ReasonCode) {
-		return nil, fail("store_invalid")
-	}
-	valid := false
-	switch health.Status {
-	case "ready":
-		valid = health.LockContract == "verified" && health.MirrorState == "in_sync" && health.ReasonCode == "ok"
-	case "repair_required":
-		valid = health.LockContract == "verified" && health.MirrorState == "lagging" && health.ReasonCode != "ok"
-	case "blocked":
-		valid = (health.LockContract == "verified" || health.LockContract == "unverified") &&
-			(health.MirrorState == "in_sync" || health.MirrorState == "lagging" || health.MirrorState == "invalid") &&
-			health.ReasonCode != "ok"
-	}
-	if !valid {
+	if !validHealthResult(health) {
 		return nil, fail("store_invalid")
 	}
 	return struct {

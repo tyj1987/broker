@@ -120,6 +120,17 @@ continue.
   preflight now combines store process liveness with an exact fresh health probe
   executed as the recovery UID, so an active placeholder cannot assert verified
   lock or mirror state.
+  A strict non-secret service configuration, injected cloud-client factory,
+  fixed Linux Unix-socket lifecycle and bounded health helper are now source
+  implemented. The configuration accepts no provider endpoint or credential
+  source and requires distinct OSS/COS provider profile identifiers plus
+  non-overlapping P-256 verification-key epochs. Its Linux loader pins a
+  root-managed path and verifies ownership, write protection, no-follow open and
+  file identity. The store socket rejects concurrent active instances and only
+  reclaims a same-owner stale endpoint. The checked-in default factory returns
+  `identity_unavailable`; neither command is packaged and no live cloud identity,
+  bucket or retention lock has been created. Linux peer/socket E2E and the
+  existing provider-backed repository tests are the next CI evidence point.
 
 ## DQ-004: provider signing and account-binding authority
 

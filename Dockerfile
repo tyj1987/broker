@@ -27,6 +27,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 # Copy source
 COPY broker/ ./
 COPY tools/ ./tools/
+COPY providers/ ./providers/
 
 # Generate ephemeral self-signed certs for dev convenience
 # (override by mounting PKI_DIR=/pki at runtime for real certs)
@@ -109,6 +110,7 @@ COPY --from=core-build /out/secret-broker-policy /app/bin/secret-broker-policy
 # Copy broker source
 COPY broker/ ./
 COPY tools/ ./tools/
+COPY providers/ ./providers/
 RUN rm -f package-lock.json
 
 ENV NODE_ENV=production \

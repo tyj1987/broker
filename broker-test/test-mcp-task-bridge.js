@@ -64,12 +64,13 @@ const bridge = createMcpTaskBridge({
   callBroker: async (path, options) => {
     calls.push([path, options]);
     if (path === '/api/v2/tools') return { registry_version: 1, tools: [executable] };
-    if (path === '/api/v2/tasks') return {
-      id: TASK_ID,
-      state: createState,
-      token: 'canary-secret-token',
-      result: { authorization: 'Bearer canary-secret-token' },
-    };
+    if (path === '/api/v2/tasks')
+      return {
+        id: TASK_ID,
+        state: createState,
+        token: 'canary-secret-token',
+        result: { authorization: 'Bearer canary-secret-token' },
+      };
     if (path.endsWith('/events')) return { events: [] };
     return {
       id: TASK_ID,
@@ -167,7 +168,9 @@ for (const invalidRegistry of [
   { registry_version: 1, tools: [{ ...executable, environments: ['production', 'production'] }] },
   {
     registry_version: 1,
-    tools: [{ ...executable, input_schema: { ...executable.input_schema, required: 'resource_ref' } }],
+    tools: [
+      { ...executable, input_schema: { ...executable.input_schema, required: 'resource_ref' } },
+    ],
   },
   {
     registry_version: 1,
@@ -175,7 +178,12 @@ for (const invalidRegistry of [
   },
   {
     registry_version: 1,
-    tools: [{ ...executable, input_schema: { ...executable.input_schema, required: ['resource_ref', 'resource_ref'] } }],
+    tools: [
+      {
+        ...executable,
+        input_schema: { ...executable.input_schema, required: ['resource_ref', 'resource_ref'] },
+      },
+    ],
   },
   {
     registry_version: 1,
@@ -280,12 +288,16 @@ await assert.rejects(
   brokerClientForResponse({ statusCode: 403, chunks: ['{"error":{"code":"policy_denied"}}'] })(
     '/api/v2/tools',
   ),
-  /403, policy_denied/,
+  (error) =>
+    error.code === 'policy_denied' &&
+    error.status === 403 &&
+    /403, policy_denied/.test(error.message),
 );
 await assert.rejects(
-  brokerClientForResponse({ statusCode: 409, chunks: ['{"error":"invalid_state","message":"not executable"}'] })(
-    '/api/v2/tasks/00000000-0000-4000-8000-000000000010/run', { method: 'POST', body: {} },
-  ),
+  brokerClientForResponse({
+    statusCode: 409,
+    chunks: ['{"error":"invalid_state","message":"not executable"}'],
+  })('/api/v2/tasks/00000000-0000-4000-8000-000000000010/run', { method: 'POST', body: {} }),
   /409, invalid_state/,
 );
 await assert.rejects(
@@ -333,15 +345,18 @@ createMcpHttpServer({
     return { listen() {} };
   },
 });
-async function invokeHttpRequest(handler, {
-  host = '127.0.0.1:3001',
-  origin,
-  authorization = `Bearer ${LISTENER_TOKEN}`,
-  body = '{}',
-  url = '/mcp',
-  method = 'POST',
-  contentType = 'application/json',
-} = {}) {
+async function invokeHttpRequest(
+  handler,
+  {
+    host = '127.0.0.1:3001',
+    origin,
+    authorization = `Bearer ${LISTENER_TOKEN}`,
+    body = '{}',
+    url = '/mcp',
+    method = 'POST',
+    contentType = 'application/json',
+  } = {},
+) {
   const request = new EventEmitter();
   request.method = method;
   request.url = url;
@@ -481,31 +496,57 @@ for (const port of [0, 65_536, 1.5]) {
 const stdioInput = new PassThrough();
 const stdioOutput = new PassThrough();
 let stdioText = '';
-stdioOutput.on('data', (chunk) => { stdioText += chunk.toString('utf8'); });
+stdioOutput.on('data', (chunk) => {
+  stdioText += chunk.toString('utf8');
+});
 const stdioServer = createMcpStdioServer({ bridge, input: stdioInput, output: stdioOutput });
 stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'initialize' })}\n`);
 stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
 stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/list' })}\n`);
 await stdioServer.pending;
-const stdioMessages = stdioText.trim().split('\n').map((line) => JSON.parse(line));
-assert.deepEqual(stdioMessages.map((message) => message.id), [11, 12]);
-assert.match(stdioMessages[0].result.instructions, /Never request, print, store or infer credentials/);
-assert.equal(stdioMessages[1].result.tools.some((tool) => tool.name === driveTool.name), true);
+const stdioMessages = stdioText
+  .trim()
+  .split('\n')
+  .map((line) => JSON.parse(line));
+assert.deepEqual(
+  stdioMessages.map((message) => message.id),
+  [11, 12],
+);
+assert.match(
+  stdioMessages[0].result.instructions,
+  /Never request, print, store or infer credentials/,
+);
+assert.equal(
+  stdioMessages[1].result.tools.some((tool) => tool.name === driveTool.name),
+  true,
+);
 stdioText = '';
 stdioInput.write('not-json\n');
 stdioInput.write('[]\n');
 await stdioServer.pending;
-const stdioErrors = stdioText.trim().split('\n').map((line) => JSON.parse(line));
-assert.deepEqual(stdioErrors.map((message) => message.error.code), [-32700, -32600]);
+const stdioErrors = stdioText
+  .trim()
+  .split('\n')
+  .map((line) => JSON.parse(line));
+assert.deepEqual(
+  stdioErrors.map((message) => message.error.code),
+  [-32700, -32600],
+);
 
 const failingMcpInput = new PassThrough();
 const failingMcpOutput = new PassThrough();
 let failingMcpText = '';
-failingMcpOutput.on('data', (chunk) => { failingMcpText += chunk.toString('utf8'); });
+failingMcpOutput.on('data', (chunk) => {
+  failingMcpText += chunk.toString('utf8');
+});
 const failingMcp = createMcpStdioServer({
   bridge: {
-    async listTools() { throw new Error('canary-secret /srv/private/key.pem'); },
-    async callTool() { throw new Error('canary-secret /srv/private/key.pem'); },
+    async listTools() {
+      throw new Error('canary-secret /srv/private/key.pem');
+    },
+    async callTool() {
+      throw new Error('canary-secret /srv/private/key.pem');
+    },
   },
   input: failingMcpInput,
   output: failingMcpOutput,

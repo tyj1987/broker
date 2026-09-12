@@ -143,6 +143,13 @@ continue.
   explicitly verified policy and an ownership-checked local signer socket, and
   fails startup when either is missing. The isolated TC3 signer service, CAM
   role authority and account contract test remain required before activation.
+  A source-only contract runner now validates one exact GitHub or Alibaba Cloud
+  read-only binding through the real `/api/v2/tasks` path, including bounded
+  secret-free output and wrong-account and wrong-resource denials. It accepts
+  credentials only from operator-supplied files and emits a reference-free safe
+  receipt. The 2026-09-12 production probe was denied before provider execution
+  because neither tool is deployed, so no real account contract has passed;
+  revocation and rotation remain separate required phases.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

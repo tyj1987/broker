@@ -69,10 +69,16 @@ continue.
   and returns only stable error codes. Its Alibaba KMS adapter now binds the
   approved `ECDSA_SHA_256` and `DIGEST` request to the exact configured key and
   rejects malformed P-256 DER signatures and mismatched response metadata.
-  The SDK transport, runnable signer, immutable bucket, mirror worker,
-  retention lock and recovery authority are not deployed yet, so there is no
-  claim of independent non-repudiation and RR-012
-  remains open.
+  The Go immutable-writer contract now rejects arbitrary object keys and
+  headers, verifies Locked 365-day BucketWorm with versioning disabled before
+  an OSS create-without-overwrite request, requires COS Object Lock with
+  versioning enabled, applies per-object COMPLIANCE retention for at least 365
+  days, and reads back identical canonical bytes and retention metadata from
+  both clouds. Tests cover exact creation, idempotent retries, content
+  conflicts, malformed envelopes and every storage-control failure boundary.
+  The SDK transports, runnable signer/store services, immutable bucket, mirror
+  worker, retention locks and recovery authority are not deployed yet, so
+  there is no claim of independent non-repudiation and RR-012 remains open.
 
 ## DQ-004: provider signing and account-binding authority
 

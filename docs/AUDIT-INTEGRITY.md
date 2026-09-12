@@ -134,6 +134,19 @@ users and groups. The units intentionally cannot start until their reviewed
 binaries and provider configuration validators are packaged; their presence
 does not constitute live KMS, WORM, mirror or recovery evidence.
 
+`core/auditanchor.ImmutableObjectWriter` now defines the typed dual-cloud
+write boundary. It accepts only a structurally valid signed-anchor envelope,
+recomputes its payload digest, canonicalizes the JSON, and derives the object
+key from the configured prefix, stream, zero-padded sequence and payload
+digest. The primary transport exposes only BucketWorm inspection,
+create-without-overwrite and read-back. The mirror transport exposes only COS
+Object Lock inspection, create with STANDARD storage and per-object
+COMPLIANCE retention, read-back and retention read-back. Both copies must
+contain the exact canonical bytes; an existing different object is a conflict.
+Provider failures are reduced to stable errors and never cross the workload
+boundary. This remains a source contract: concrete SDK transports, credentials,
+cloud resources and a runnable store service do not yet exist.
+
 The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
 `ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the
 exact signing key. The OSS writer can only create objects in the audit prefix;
@@ -149,7 +162,9 @@ Official contracts checked on 2026-09-12:
 - [Alibaba Cloud KMS Sign](https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/sign-1)
 - [Alibaba Cloud KMS key specifications](https://www.alibabacloud.com/help/en/kms/key-management-service/user-guide/key-types-and-specifications)
 - [Alibaba Cloud OSS retention policies](https://www.alibabacloud.com/help/en/oss/user-guide/oss-retention-policies)
+- [Alibaba Cloud OSS PutObject](https://www.alibabacloud.com/help/en/oss/developer-reference/putobject)
 - [Tencent Cloud COS Object Lock](https://cloud.tencent.com/document/product/436/55294)
+- [Tencent Cloud COS PUT Object Retention](https://cloud.tencent.com/document/product/436/95768)
 - [Tencent Cloud Object Lock condition keys](https://cloud.tencent.com/document/product/436/71307)
 
 ## Open production gate

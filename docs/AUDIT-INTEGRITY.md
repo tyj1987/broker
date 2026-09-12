@@ -135,19 +135,33 @@ binaries and provider configuration validators are packaged; their presence
 does not constitute live KMS, WORM, mirror or recovery evidence.
 
 `core/auditanchor.ImmutableObjectWriter` now defines the typed dual-cloud
-write boundary. It accepts only a structurally valid signed-anchor envelope,
-recomputes its payload digest, canonicalizes the JSON, and derives the object
-key from the configured prefix, stream, zero-padded sequence and payload
-digest. The primary transport exposes only BucketWorm inspection,
-create-without-overwrite and read-back. The mirror transport exposes only COS
-Object Lock inspection, create with STANDARD storage and per-object
-COMPLIANCE retention, read-back and retention read-back. Both copies must
-contain the exact canonical bytes; an existing different object is a conflict.
+write boundary. It accepts only a canonicalizable signed-anchor envelope,
+recomputes its payload digest, then independently verifies the exact v2
+domain-separated ECDSA P-256 signature against a configured stream and a
+trusted key sequence epoch before any provider call. Sequence epochs let a
+rotated key verify its historical anchors without authorizing new anchors.
+Each stream sequence
+has one fixed object key; the digest remains inside the signed envelope rather
+than the key. This lets OSS create-without-overwrite enforce a real immutable
+compare-and-set boundary: two different payloads for the same sequence collide
+instead of creating parallel objects. Before sequence N is written, the writer
+requires both clouds to contain the same canonical, retained sequence N-1 with
+the exact predecessor digest. The primary transport exposes only BucketWorm
+inspection, create-without-overwrite and read-back. The mirror transport
+exposes only COS Object Lock inspection, create with STANDARD storage and
+per-object COMPLIANCE retention, read-back and retention read-back. Both
+copies must contain the exact canonical bytes; an existing different object
+is a conflict.
 Provider failures are reduced to stable errors and never cross the workload
 boundary. Concrete transports now pin Alibaba OSS Go SDK v2 `v1.6.0` and
-Tencent COS Go SDK v5 `v0.7.75`. They bind every call to one configured bucket,
-accept no arbitrary headers, expose no delete or retention-policy mutation,
-bound read-back data, and stop between SDK calls when the context is cancelled.
+Tencent COS Go SDK v5 `v0.7.75`. They bind every call to one configured bucket.
+The OSS public constructor derives the SDK endpoint from an exact region and
+rejects custom endpoints, plaintext TLS, redirect, CNAME, proxy and alternate
+addressing modes. The COS public constructor requires the exact regional
+`https://<bucket>.cos.<region>.myqcloud.com` BucketURL with no userinfo, port,
+path, query or fragment. The transports accept no arbitrary headers, expose no
+delete or retention-policy mutation, bound read-back data, and stop between
+SDK calls when the context is cancelled.
 The OSS transport maps only a `409 FileAlreadyExists` response to an
 idempotent existing object. The COS transport applies COMPLIANCE mode and the
 exact retain-until timestamp in the original PutObject request. These are still

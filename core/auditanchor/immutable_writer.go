@@ -3,6 +3,8 @@ package auditanchor
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -10,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -96,11 +100,23 @@ type COSImmutableClient interface {
 	ReadObjectRetention(context.Context, string, string) (COSObjectRetention, error)
 }
 
+// TrustedSigningKey binds one P-256 verification key to an inclusive sequence
+// epoch. ValidThroughSequence zero means the key has no scheduled end yet.
+// Ending an epoch blocks new anchors without invalidating anchors that were
+// legitimately signed before rotation or revocation took effect.
+type TrustedSigningKey struct {
+	PublicKey            *ecdsa.PublicKey
+	ValidFromSequence    int64
+	ValidThroughSequence int64
+}
+
 type ImmutableObjectWriterConfig struct {
-	OSSBucket string
-	COSBucket string
-	Prefix    string
-	Now       func() time.Time
+	OSSBucket   string
+	COSBucket   string
+	Prefix      string
+	StreamID    string
+	TrustedKeys map[string]TrustedSigningKey
+	Now         func() time.Time
 }
 
 type ImmutableObjectReceipt struct {
@@ -118,16 +134,28 @@ type ImmutableObjectWriter struct {
 }
 
 func NewImmutableObjectWriter(config ImmutableObjectWriterConfig, oss OSSImmutableClient, cos COSImmutableClient) (*ImmutableObjectWriter, error) {
-	if !validWriterConfig(config) || oss == nil || cos == nil {
+	safeConfig, valid := cloneWriterConfig(config)
+	if !valid || oss == nil || cos == nil {
 		return nil, ErrObjectWriteRejected
 	}
-	return &ImmutableObjectWriter{config: config, oss: oss, cos: cos}, nil
+	return &ImmutableObjectWriter{config: safeConfig, oss: oss, cos: cos}, nil
 }
 
 func validWriterConfig(config ImmutableObjectWriterConfig) bool {
-	return bucketPattern.MatchString(config.OSSBucket) && bucketPattern.MatchString(config.COSBucket) &&
-		objectPrefixPattern.MatchString(config.Prefix) && !strings.Contains(config.Prefix, "//") &&
-		!strings.Contains(config.Prefix, "..") && config.Now != nil
+	if !bucketPattern.MatchString(config.OSSBucket) || !bucketPattern.MatchString(config.COSBucket) ||
+		!idPattern.MatchString(config.StreamID) || len(config.TrustedKeys) < 1 || len(config.TrustedKeys) > 16 ||
+		config.Now == nil || !objectPrefixPattern.MatchString(config.Prefix) || strings.Contains(config.Prefix, "//") ||
+		strings.Contains(config.Prefix, "..") {
+		return false
+	}
+	for keyID, trustedKey := range config.TrustedKeys {
+		if !idPattern.MatchString(keyID) || !validP256PublicKey(trustedKey.PublicKey) ||
+			trustedKey.ValidFromSequence < 1 ||
+			(trustedKey.ValidThroughSequence != 0 && trustedKey.ValidThroughSequence < trustedKey.ValidFromSequence) {
+			return false
+		}
+	}
+	return true
 }
 
 func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []byte) (ImmutableObjectReceipt, error) {
@@ -136,7 +164,8 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
 	}
 	envelope, canonical, err := parseStoredEnvelope(envelopeJSON)
-	if err != nil {
+	if err != nil || envelope.Payload.StreamID != writer.config.StreamID ||
+		!verifyStoredEnvelopeSignature(writer.config, envelope) {
 		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
 	}
 	now := writer.config.Now().UTC()
@@ -144,8 +173,7 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
 	}
 	retainUntil := now.Add(AuditObjectRetentionDays*24*time.Hour + objectRetentionGrace)
-	key := fmt.Sprintf("%s/%s/%020d-%s.json", writer.config.Prefix, envelope.Payload.StreamID,
-		envelope.Payload.Sequence, envelope.PayloadDigest)
+	key := auditObjectKey(writer.config.Prefix, envelope.Payload.StreamID, envelope.Payload.Sequence)
 	bodyDigest := sha256.Sum256(canonical)
 
 	primaryState, err := writer.oss.InspectBucketWORM(ctx, writer.config.OSSBucket)
@@ -158,6 +186,19 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 	if primaryState.Status != "Locked" || primaryState.RetentionDays != AuditObjectRetentionDays ||
 		primaryState.VersioningState != "Disabled" {
 		return ImmutableObjectReceipt{}, ErrPrimaryInvalid
+	}
+	mirrorState, err := writer.cos.InspectObjectLock(ctx, writer.config.COSBucket)
+	if err != nil {
+		return ImmutableObjectReceipt{}, ErrMirrorUnavailable
+	}
+	if ctx.Err() != nil {
+		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
+	}
+	if !mirrorState.Enabled || mirrorState.VersioningState != "Enabled" {
+		return ImmutableObjectReceipt{}, ErrMirrorInvalid
+	}
+	if err := writer.verifyPredecessor(ctx, envelope); err != nil {
+		return ImmutableObjectReceipt{}, err
 	}
 	primaryResult, err := writer.oss.CreateObject(ctx, OSSCreateObjectRequest{
 		Bucket: writer.config.OSSBucket, Key: key, Body: bytes.Clone(canonical),
@@ -183,16 +224,6 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 		return ImmutableObjectReceipt{}, ErrObjectConflict
 	}
 
-	mirrorState, err := writer.cos.InspectObjectLock(ctx, writer.config.COSBucket)
-	if err != nil {
-		return ImmutableObjectReceipt{}, ErrMirrorUnavailable
-	}
-	if ctx.Err() != nil {
-		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
-	}
-	if !mirrorState.Enabled || mirrorState.VersioningState != "Enabled" {
-		return ImmutableObjectReceipt{}, ErrMirrorInvalid
-	}
 	mirrorResult, err := writer.cos.CreateObject(ctx, COSCreateObjectRequest{
 		Bucket: writer.config.COSBucket, Key: key, Body: bytes.Clone(canonical),
 		ContentType: "application/json", StorageClass: "STANDARD",
@@ -235,6 +266,109 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 		Key: key, BodySHA256: bodyDigest, RetainUntil: retention.RetainUntil,
 		PrimaryState: primaryResult.Status, MirrorState: mirrorResult.Status,
 	}, nil
+}
+
+func auditObjectKey(prefix, streamID string, sequence int64) string {
+	return fmt.Sprintf("%s/%s/%020d.json", prefix, streamID, sequence)
+}
+
+// verifyPredecessor makes the immutable sequence key a real compare-and-set
+// boundary. Sequence N cannot be written unless both clouds already contain
+// the same canonical, retained sequence N-1 whose payload digest is the
+// predecessor committed by N.
+func (writer *ImmutableObjectWriter) verifyPredecessor(ctx context.Context, envelope storedEnvelope) error {
+	if envelope.Payload.Sequence == 1 {
+		return nil
+	}
+	previousKey := auditObjectKey(writer.config.Prefix, envelope.Payload.StreamID, envelope.Payload.Sequence-1)
+	primaryBody, err := writer.oss.ReadObject(ctx, writer.config.OSSBucket, previousKey)
+	if err != nil {
+		if errors.Is(err, ErrImmutableObjectNotFound) {
+			return ErrPrimaryInvalid
+		}
+		return ErrPrimaryUnavailable
+	}
+	if ctx.Err() != nil {
+		return ErrObjectWriteRejected
+	}
+	previous, canonical, err := parseStoredEnvelope(primaryBody)
+	if err != nil || !bytes.Equal(primaryBody, canonical) ||
+		!verifyStoredEnvelopeSignature(writer.config, previous) ||
+		previous.Payload.StreamID != envelope.Payload.StreamID ||
+		previous.Payload.Sequence != envelope.Payload.Sequence-1 ||
+		previous.PayloadDigest != envelope.Payload.PreviousAnchorDigest {
+		return ErrPrimaryInvalid
+	}
+
+	mirrorBody, err := writer.cos.ReadObject(ctx, writer.config.COSBucket, previousKey)
+	if err != nil {
+		if errors.Is(err, ErrImmutableObjectNotFound) {
+			return ErrMirrorInvalid
+		}
+		return ErrMirrorUnavailable
+	}
+	if ctx.Err() != nil {
+		return ErrObjectWriteRejected
+	}
+	if !bytes.Equal(mirrorBody, canonical) {
+		return ErrObjectConflict
+	}
+	retention, err := writer.cos.ReadObjectRetention(ctx, writer.config.COSBucket, previousKey)
+	if err != nil {
+		return ErrMirrorUnavailable
+	}
+	if ctx.Err() != nil {
+		return ErrObjectWriteRejected
+	}
+	minimumRetention := previous.Payload.CapturedAt.Add(AuditObjectRetentionDays * 24 * time.Hour)
+	if retention.Mode != COSComplianceMode || retention.RetainUntil.Location() != time.UTC ||
+		retention.RetainUntil.Before(minimumRetention) {
+		return ErrMirrorInvalid
+	}
+	return nil
+}
+
+func cloneWriterConfig(config ImmutableObjectWriterConfig) (ImmutableObjectWriterConfig, bool) {
+	if !validWriterConfig(config) {
+		return ImmutableObjectWriterConfig{}, false
+	}
+	cloned := config
+	cloned.TrustedKeys = make(map[string]TrustedSigningKey, len(config.TrustedKeys))
+	for keyID, trustedKey := range config.TrustedKeys {
+		trustedKey.PublicKey = &ecdsa.PublicKey{
+			Curve: elliptic.P256(), X: new(big.Int).Set(trustedKey.PublicKey.X), Y: new(big.Int).Set(trustedKey.PublicKey.Y),
+		}
+		cloned.TrustedKeys[keyID] = trustedKey
+	}
+	return cloned, true
+}
+
+func validP256PublicKey(publicKey *ecdsa.PublicKey) bool {
+	return publicKey != nil && publicKey.Curve == elliptic.P256() && publicKey.X != nil && publicKey.Y != nil &&
+		publicKey.Curve.IsOnCurve(publicKey.X, publicKey.Y)
+}
+
+func verifyStoredEnvelopeSignature(config ImmutableObjectWriterConfig, envelope storedEnvelope) bool {
+	if envelope.Signature.Algorithm != "ecdsa-p256-sha256" ||
+		envelope.Payload.StreamID != config.StreamID {
+		return false
+	}
+	trustedKey, trusted := config.TrustedKeys[envelope.Signature.KeyID]
+	if !trusted || !validP256PublicKey(trustedKey.PublicKey) ||
+		envelope.Payload.Sequence < trustedKey.ValidFromSequence ||
+		(trustedKey.ValidThroughSequence != 0 && envelope.Payload.Sequence > trustedKey.ValidThroughSequence) {
+		return false
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(envelope.Signature.Value)
+	if err != nil || base64.RawURLEncoding.EncodeToString(signature) != envelope.Signature.Value {
+		return false
+	}
+	signingInput := []byte(SignatureContext + "\x00" + envelope.Signature.Algorithm + "\x00" +
+		envelope.Signature.KeyID + "\x00" + envelope.Payload.StreamID + "\x00" +
+		strconv.FormatInt(envelope.Payload.Sequence, 10) + "\x00" + envelope.Payload.PreviousAnchorDigest +
+		"\x00" + envelope.PayloadDigest)
+	digest := sha256.Sum256(signingInput)
+	return ecdsa.VerifyASN1(trustedKey.PublicKey, digest[:], signature)
 }
 
 func validCreateStatus(status string) bool { return status == "created" || status == "exists" }

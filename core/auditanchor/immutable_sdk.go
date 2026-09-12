@@ -17,6 +17,7 @@ var (
 	ErrImmutableSDKRequestRejected = errors.New("immutable store SDK request rejected")
 	ErrImmutableSDKUnavailable     = errors.New("immutable store SDK unavailable")
 	ErrImmutableSDKResponseInvalid = errors.New("immutable store SDK response invalid")
+	ErrImmutableObjectNotFound     = errors.New("immutable store object not found")
 )
 
 type ossSDKAPI interface {
@@ -34,11 +35,37 @@ type OSSSDKImmutableClient struct {
 	api    ossSDKAPI
 }
 
-func NewOSSSDKImmutableClient(bucket string, client *alioss.Client) (*OSSSDKImmutableClient, error) {
-	if client == nil {
+func NewOSSSDKImmutableClient(bucket, region string, config *alioss.Config) (*OSSSDKImmutableClient, error) {
+	if !validOSSClientConfig(region, config) {
 		return nil, ErrImmutableSDKRequestRejected
 	}
-	return newOSSSDKImmutableClient(bucket, client)
+	safeConfig := config.Copy()
+	safeConfig.Region = ptr(region)
+	safeConfig.Endpoint = nil
+	safeConfig.DisableSSL = ptr(false)
+	safeConfig.InsecureSkipVerify = ptr(false)
+	safeConfig.EnabledRedirect = ptr(false)
+	safeConfig.UsePathStyle = ptr(false)
+	safeConfig.UseCName = ptr(false)
+	safeConfig.UseVirtualHostedAlias = ptr(false)
+	safeConfig.UseDualStackEndpoint = ptr(false)
+	safeConfig.UseAccelerateEndpoint = ptr(false)
+	safeConfig.UseInternalEndpoint = ptr(enabled(config.UseInternalEndpoint))
+	safeConfig.ProxyHost = nil
+	safeConfig.ProxyFromEnvironment = ptr(false)
+	return newOSSSDKImmutableClient(bucket, alioss.NewClient(&safeConfig))
+}
+
+func validOSSClientConfig(region string, config *alioss.Config) bool {
+	if !bucketPattern.MatchString(region) || config == nil || config.Region == nil || *config.Region != region ||
+		config.Endpoint != nil || enabled(config.DisableSSL) || enabled(config.InsecureSkipVerify) ||
+		enabled(config.EnabledRedirect) || enabled(config.UsePathStyle) || enabled(config.UseCName) ||
+		enabled(config.UseVirtualHostedAlias) || enabled(config.UseDualStackEndpoint) ||
+		enabled(config.UseAccelerateEndpoint) || enabled(config.ProxyFromEnvironment) ||
+		(config.ProxyHost != nil && *config.ProxyHost != "") {
+		return false
+	}
+	return true
 }
 
 func newOSSSDKImmutableClient(bucket string, api ossSDKAPI) (*OSSSDKImmutableClient, error) {
@@ -117,6 +144,10 @@ func (client *OSSSDKImmutableClient) ReadObject(ctx context.Context, bucket, key
 		Bucket: ptr(bucket), Key: ptr(key), Range: ptr("bytes=0-16384"),
 	})
 	if err != nil {
+		var serviceError *alioss.ServiceError
+		if errors.As(err, &serviceError) && serviceError.StatusCode == http.StatusNotFound {
+			return nil, ErrImmutableObjectNotFound
+		}
 		return nil, ErrImmutableSDKUnavailable
 	}
 	if result == nil {
@@ -146,11 +177,24 @@ type COSSDKImmutableClient struct {
 	objectAPI cosObjectSDKAPI
 }
 
-func NewCOSSDKImmutableClient(bucket string, client *tencentcos.Client) (*COSSDKImmutableClient, error) {
-	if client == nil || client.Bucket == nil || client.Object == nil {
+func NewCOSSDKImmutableClient(bucket, region string, client *tencentcos.Client) (*COSSDKImmutableClient, error) {
+	if client == nil || client.Bucket == nil || client.Object == nil ||
+		!validCOSBucketEndpoint(bucket, region, client.BaseURL) {
 		return nil, ErrImmutableSDKRequestRejected
 	}
 	return newCOSSDKImmutableClient(bucket, client.Bucket, client.Object)
+}
+
+func validCOSBucketEndpoint(bucket, region string, baseURL *tencentcos.BaseURL) bool {
+	if !bucketPattern.MatchString(bucket) || !bucketPattern.MatchString(region) || baseURL == nil || baseURL.BucketURL == nil {
+		return false
+	}
+	endpoint := baseURL.BucketURL
+	expectedHost := bucket + ".cos." + region + ".myqcloud.com"
+	return endpoint.Scheme == "https" && endpoint.Host == expectedHost && endpoint.Hostname() == expectedHost &&
+		endpoint.Port() == "" && endpoint.User == nil && (endpoint.Path == "" || endpoint.Path == "/") &&
+		endpoint.RawPath == "" && endpoint.RawQuery == "" && endpoint.Fragment == "" && endpoint.Opaque == "" &&
+		!endpoint.ForceQuery && endpoint.IsAbs()
 }
 
 func newCOSSDKImmutableClient(bucket string, bucketAPI cosBucketSDKAPI, objectAPI cosObjectSDKAPI) (*COSSDKImmutableClient, error) {
@@ -231,6 +275,9 @@ func (client *COSSDKImmutableClient) ReadObject(ctx context.Context, bucket, key
 	}
 	response, err := client.objectAPI.Get(ctx, key, nil)
 	if err != nil {
+		if tencentcos.IsNotFoundError(err) {
+			return nil, ErrImmutableObjectNotFound
+		}
 		return nil, ErrImmutableSDKUnavailable
 	}
 	if response == nil {
@@ -300,3 +347,5 @@ func cosClientBucket(client *COSSDKImmutableClient) string {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func enabled(value *bool) bool { return value != nil && *value }

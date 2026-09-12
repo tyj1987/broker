@@ -16,7 +16,9 @@ import (
 
 const (
 	ossSDKTestBucket = "broker-audit-primary"
+	ossSDKTestRegion = "cn-hangzhou"
 	cosSDKTestBucket = "broker-audit-mirror-1250000000"
+	cosSDKTestRegion = "ap-guangzhou"
 	sdkTestKey       = "audit-anchors/v1/stream/00000000000000000001-anchor.json"
 )
 
@@ -230,6 +232,9 @@ func TestOSSSDKCreateAndReadRejectInvalidResponses(t *testing.T) {
 		want   error
 	}{
 		{"provider error", func(value *fakeOSSSDK) { value.getErr = errors.New("provider detail") }, ErrImmutableSDKUnavailable},
+		{"not found", func(value *fakeOSSSDK) {
+			value.getErr = &alioss.ServiceError{StatusCode: http.StatusNotFound, Code: "NoSuchKey"}
+		}, ErrImmutableObjectNotFound},
 		{"nil response", func(value *fakeOSSSDK) { value.getResult = nil }, ErrImmutableSDKResponseInvalid},
 		{"nil body", func(value *fakeOSSSDK) { value.getResult.Body = nil }, ErrImmutableSDKResponseInvalid},
 		{"wrong status", func(value *fakeOSSSDK) { value.getResult.StatusCode = http.StatusPartialContent }, ErrImmutableSDKResponseInvalid},
@@ -304,11 +309,37 @@ func TestOSSSDKRejectsUnboundRequests(t *testing.T) {
 			t.Fatalf("unbound request error = %v", err)
 		}
 	}
-	if _, err := NewOSSSDKImmutableClient(ossSDKTestBucket, nil); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+	if _, err := NewOSSSDKImmutableClient(ossSDKTestBucket, ossSDKTestRegion, nil); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("public nil constructor error = %v", err)
 	}
-	if _, err := NewOSSSDKImmutableClient(ossSDKTestBucket, alioss.NewClient(alioss.LoadDefaultConfig())); err != nil {
+	validConfig := alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion)
+	if _, err := NewOSSSDKImmutableClient(ossSDKTestBucket, ossSDKTestRegion, validConfig); err != nil {
 		t.Fatalf("public constructor error = %v", err)
+	}
+	unsafeConfigs := map[string]*alioss.Config{
+		"missing_region":         alioss.LoadDefaultConfig(),
+		"wrong_region":           alioss.LoadDefaultConfig().WithRegion("cn-shanghai"),
+		"custom_endpoint":        alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithEndpoint("https://example.invalid"),
+		"disable_tls":            alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithDisableSSL(true),
+		"skip_tls_verify":        alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithInsecureSkipVerify(true),
+		"redirects":              alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithEnabledRedirect(true),
+		"path_style":             alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithUsePathStyle(true),
+		"cname":                  alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithUseCName(true),
+		"virtual_hosted_alias":   alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithUseVirtualHostedAlias(true),
+		"dual_stack":             alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithUseDualStackEndpoint(true),
+		"accelerate":             alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithUseAccelerateEndpoint(true),
+		"proxy_from_environment": alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithProxyFromEnvironment(true),
+		"proxy_host":             alioss.LoadDefaultConfig().WithRegion(ossSDKTestRegion).WithProxyHost("https://example.invalid"),
+	}
+	for name, unsafeConfig := range unsafeConfigs {
+		t.Run("reject_config_"+name, func(t *testing.T) {
+			if _, err := NewOSSSDKImmutableClient(ossSDKTestBucket, ossSDKTestRegion, unsafeConfig); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+				t.Fatalf("constructor error = %v", err)
+			}
+		})
+	}
+	if _, err := NewOSSSDKImmutableClient(ossSDKTestBucket, "BAD_REGION", validConfig); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+		t.Fatalf("invalid region constructor error = %v", err)
 	}
 	if _, err := newOSSSDKImmutableClient("BAD_BUCKET", validOSSSDKFake()); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("invalid bucket constructor error = %v", err)
@@ -542,6 +573,7 @@ func TestCOSSDKReadAndRetention(t *testing.T) {
 		want   error
 	}{
 		{"provider error", func(value *fakeCOSObjectSDK) { value.getErr = errors.New("provider detail") }, ErrImmutableSDKUnavailable},
+		{"not found", func(value *fakeCOSObjectSDK) { value.getResponse = nil; value.getErr = cosNotFound() }, ErrImmutableObjectNotFound},
 		{"nil response", func(value *fakeCOSObjectSDK) { value.getResponse = nil }, ErrImmutableSDKResponseInvalid},
 		{"wrong status", func(value *fakeCOSObjectSDK) {
 			value.getResponse = cosResponse(http.StatusPartialContent, io.NopCloser(bytes.NewReader(nil)))
@@ -668,16 +700,40 @@ func TestCOSSDKRejectsUnboundRequestsAndInvalidConstruction(t *testing.T) {
 			t.Fatalf("unbound request error = %v", err)
 		}
 	}
-	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, nil); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, cosSDKTestRegion, nil); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("nil constructor error = %v", err)
 	}
-	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, &tencentcos.Client{}); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, cosSDKTestRegion, &tencentcos.Client{}); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("incomplete constructor error = %v", err)
 	}
-	endpoint, _ := url.Parse("https://example.invalid")
+	endpoint, _ := url.Parse("https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com")
 	realClient := tencentcos.NewClient(&tencentcos.BaseURL{BucketURL: endpoint}, &http.Client{})
-	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, realClient); err != nil {
+	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, cosSDKTestRegion, realClient); err != nil {
 		t.Fatalf("public constructor error = %v", err)
+	}
+	for name, endpointValue := range map[string]string{
+		"http":         "http://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com",
+		"wrong_bucket": "https://other-1250000000.cos." + cosSDKTestRegion + ".myqcloud.com",
+		"wrong_region": "https://" + cosSDKTestBucket + ".cos.ap-shanghai.myqcloud.com",
+		"userinfo":     "https://user@" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com",
+		"port":         "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com:443",
+		"path":         "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com/prefix",
+		"query":        "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com?x=1",
+		"fragment":     "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com#x",
+	} {
+		t.Run("reject_endpoint_"+name, func(t *testing.T) {
+			badEndpoint, parseErr := url.Parse(endpointValue)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			badClient := tencentcos.NewClient(&tencentcos.BaseURL{BucketURL: badEndpoint}, &http.Client{})
+			if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, cosSDKTestRegion, badClient); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+				t.Fatalf("constructor error = %v", err)
+			}
+		})
+	}
+	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, "BAD_REGION", realClient); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+		t.Fatalf("invalid region constructor error = %v", err)
 	}
 	if _, err := newCOSSDKImmutableClient("BAD_BUCKET", bucket, object); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("invalid bucket constructor error = %v", err)

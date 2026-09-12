@@ -70,16 +70,27 @@ continue.
   approved `ECDSA_SHA_256` and `DIGEST` request to the exact configured key and
   rejects malformed P-256 DER signatures and mismatched response metadata.
   The Go immutable-writer contract now rejects arbitrary object keys and
-  headers, verifies Locked 365-day BucketWorm with versioning disabled before
-  an OSS create-without-overwrite request, requires COS Object Lock with
-  versioning enabled, applies per-object COMPLIANCE retention for at least 365
-  days, and reads back identical canonical bytes and retention metadata from
-  both clouds. Tests cover exact creation, idempotent retries, content
-  conflicts, malformed envelopes and every storage-control failure boundary.
+  headers, independently verifies the v2 ECDSA P-256 signature against the
+  configured stream and a bounded trusted-key sequence epoch, verifies Locked
+  365-day BucketWorm with versioning disabled before an OSS
+  create-without-overwrite request, requires COS Object Lock with versioning
+  enabled, applies per-object COMPLIANCE retention for at least 365 days, and
+  reads back identical canonical bytes and retention metadata from both clouds.
+  Sequence epochs preserve historical verification across safe key rotation
+  while refusing anchors outside a key's authorization window. Each sequence
+  uses one digest-independent immutable key, so a
+  conflicting same-sequence payload cannot evade create-without-overwrite by
+  choosing another digest. Sequence N additionally requires identical,
+  canonical and retained sequence N-1 copies in both clouds with the committed
+  predecessor digest. Tests cover exact creation, idempotent retries, content
+  conflicts, malformed envelopes, missing or divergent predecessors and every
+  storage-control failure boundary.
   Official SDK transports now pin Alibaba OSS Go SDK v2 `v1.6.0` and Tencent
-  COS Go SDK v5 `v0.7.75`, bind each client to one exact bucket, reduce provider
-  errors to stable failures, enforce bounded read-back and cancellation, and
-  expose no delete or retention-policy mutation capability. Transport tests
+  COS Go SDK v5 `v0.7.75`, bind each client to one exact bucket and region,
+  reject custom/insecure OSS routing and mismatched/non-HTTPS COS BucketURLs,
+  reduce provider errors to stable failures, enforce bounded read-back and
+  cancellation, and expose no delete or retention-policy mutation capability.
+  Transport tests
   cover exact requests, immutable duplicate handling, object-lock headers,
   response bounds, invalid provider responses and internal cancellation
   boundaries. Runnable signer/store services, immutable buckets, mirror worker,

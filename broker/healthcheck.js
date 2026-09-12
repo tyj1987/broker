@@ -64,6 +64,12 @@ HEALTHCHECK_BUS.setMaxListeners(0);
 // ============================================================
 let state = { last_run_at: null, last_status: 'unknown', checks: {} };
 
+function internalErrorCode(error) {
+  return typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code)
+    ? error.code
+    : 'UNKNOWN';
+}
+
 function loadState() {
   const p = resolveStatePath();
   if (existsSync(p)) {
@@ -76,7 +82,7 @@ function saveState() {
   try {
     writeFileSync(resolveStatePath(), JSON.stringify(state, null, 2));
   } catch (e) {
-    console.error('[healthcheck] state save failed:', e.message);
+    console.error('[healthcheck] state save failed:', internalErrorCode(e));
   }
 }
 
@@ -107,7 +113,7 @@ function loadAlertHistory() {
         }
       }
     } catch (e) {
-      console.error('[healthcheck] alert_history load failed:', e.message);
+      console.error('[healthcheck] alert_history load failed:', internalErrorCode(e));
     }
   }
   return alertHistory;
@@ -122,7 +128,7 @@ function saveAlertHistory() {
     const lines = alertHistory.map(e => JSON.stringify(e)).join('\n') + '\n';
     writeFileSync(resolveAlertHistoryPath(), lines);
   } catch (e) {
-    console.error('[healthcheck] alert_history save failed:', e.message);
+    console.error('[healthcheck] alert_history save failed:', internalErrorCode(e));
   }
 }
 
@@ -156,11 +162,11 @@ export function clearLastChecks() {
     const p = resolveAlertHistoryPath();
     if (existsSync(p)) {
       try { unlinkSync(p); } catch (e) {
-        console.error('[healthcheck] clearLastChecks unlink failed:', e.message, 'path=', p);
+        console.error('[healthcheck] clearLastChecks unlink failed:', internalErrorCode(e));
       }
     }
   } catch (e) {
-    console.error('[healthcheck] clearLastChecks resolvePath failed:', e.message);
+    console.error('[healthcheck] clearLastChecks resolvePath failed:', internalErrorCode(e));
   }
 }
 

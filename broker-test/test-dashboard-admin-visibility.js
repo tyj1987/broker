@@ -54,6 +54,8 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   const auditUi = readFileSync(join(root, 'admin/audit.js'), 'utf8');
   const clientsUi = readFileSync(join(root, 'admin/clients.js'), 'utf8');
   const server = readFileSync(join(root, '..', 'server.js'), 'utf8');
+  assert(!server.includes('error: err.message'), 'upstream exception text is not returned or audited');
+  assert(!server.includes('Upstream error: ${err.message}'), 'proxy errors do not interpolate upstream exception text');
   assert(!html.includes('btn-audit-clear'), 'dashboard has no audit deletion control');
   assert(!auditUi.includes('clearAuditLogs'), 'dashboard cannot request audit deletion');
   assert(server.includes("jsonError(res, 405, 'Audit records are immutable')"), 'server denies audit deletion');

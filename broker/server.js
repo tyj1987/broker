@@ -900,7 +900,7 @@ function audit(event, options = {}) {
       auditBytes = 0;
     }
   } catch (err) {
-    console.error('[audit] write failed:', err.message);
+    console.error('[audit] write failed: audit_storage_unavailable');
     if (options.mandatory === true) throw err;
   }
   // Broadcast to any live SSE subscribers. setImmediate keeps the audit
@@ -2632,8 +2632,10 @@ async function handle(req, res) {
         ...(classified.error ? { error: classified.error } : {}),
       });
     } catch (err) {
-      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error: err.message });
-      return send(res, 502, { ok: false, error: err.message, method, path, latency_ms: Date.now() - start });
+      // Upstream exception text may contain response bodies, URLs or credential
+      // material. Keep diagnostics out of both the client response and audit.
+      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error_code: 'upstream_request_failed' });
+      return send(res, 502, { ok: false, error: 'upstream_request_failed', method, path, latency_ms: Date.now() - start });
     }
   }
 
@@ -3015,8 +3017,10 @@ async function handle(req, res) {
       res.writeHead(r.status, { ...r.headers, 'X-Broker-Latency-Ms': String(r.latency), 'X-Broker-Version': BROKER_VERSION });
       return res.end(r.body);
     } catch (err) {
-      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'error', error: err.message });
-      return jsonError(res, 502, `Upstream error: ${err.message}`);
+      // Do not reflect upstream exception text: it can contain response bodies,
+      // URLs or credential material and is not an authenticated diagnostic API.
+      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'error', error_code: 'upstream_request_failed' });
+      return jsonError(res, 502, 'upstream_request_failed');
     }
   }
 

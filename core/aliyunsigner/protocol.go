@@ -171,7 +171,7 @@ func NewServer(signer RequestSigner, bindings BindingAuthorizer, peers PeerAutho
 }
 
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
-	if server == nil || listener == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
+	if server == nil || listener == nil || ctx == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
 		return fail("server_invalid")
 	}
 	done := make(chan struct{})
@@ -213,7 +213,7 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 }
 
 func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error {
-	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil || connection == nil {
+	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil || connection == nil || ctx == nil {
 		return fail("server_invalid")
 	}
 	if server.Deadline <= 0 || server.Deadline > 10*time.Second || server.Clock == nil {
@@ -228,16 +228,28 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 	if err := server.Peers.AuthorizePeer(requestContext, connection); err != nil {
 		return fail("peer_denied")
 	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
+	}
 	request, err := readRequest(connection)
 	if err != nil {
 		return err
 	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
+	}
 	if err := server.Bindings.AuthorizeBinding(requestContext, request); err != nil {
 		return fail("binding_denied")
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	signed, err := server.Signer.Sign(requestContext, request)
 	if err != nil {
 		return fail("signing_failed")
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	response, err := buildResponse(request, signed, now)
 	if err != nil {

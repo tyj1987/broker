@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -22,7 +23,7 @@ const (
 )
 
 type memoryConn struct {
-	input    *bytes.Reader
+	input    io.Reader
 	output   bytes.Buffer
 	deadline time.Time
 	closed   bool
@@ -48,6 +49,17 @@ type testAddr string
 func (address testAddr) Network() string { return "test" }
 func (address testAddr) String() string  { return string(address) }
 
+type countingReader struct {
+	reader io.Reader
+	read   int
+}
+
+func (reader *countingReader) Read(value []byte) (int, error) {
+	count, err := reader.reader.Read(value)
+	reader.read += count
+	return count, err
+}
+
 func encodePart(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -69,6 +81,11 @@ func signingInput(t *testing.T, mutate func(map[string]any, map[string]any)) str
 		mutate(header, claims)
 	}
 	return encodePart(t, header) + "." + encodePart(t, claims)
+}
+
+func rawSigningInput(header string, claims string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(header)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(claims))
 }
 
 func requestLine(t *testing.T, mutate func(map[string]any)) string {
@@ -257,6 +274,11 @@ func TestRequestAndJWTValidation(t *testing.T) {
 		"crlf":                {strings.TrimSuffix(requestLine(t, nil), "\n") + "\r\n", "request_invalid"},
 		"trailing":            {requestLine(t, nil) + "{}\n", "request_invalid"},
 		"oversized":           {strings.Repeat("x", MaxRequestBytes+1) + "\n", "request_invalid"},
+		"invalid utf8":        {string([]byte{'{', 0xff, '}', '\n'}), "request_invalid"},
+		"duplicate field":     {strings.Replace(requestLine(t, nil), `"version":2`, `"version":2,"version":2`, 1), "request_invalid"},
+		"wrong field case":    {strings.Replace(requestLine(t, nil), `"account_ref":`, `"ACCOUNT_REF":`, 1), "request_invalid"},
+		"case alias":          {strings.Replace(requestLine(t, nil), `"account_ref":`, `"ACCOUNT_REF":"other","account_ref":`, 1), "request_invalid"},
+		"null field":          {strings.Replace(requestLine(t, nil), `"account_ref":"github-primary"`, `"account_ref":null`, 1), "request_invalid"},
 		"unknown field":       {requestLine(t, func(value map[string]any) { value["private_key"] = "canary" }), "request_invalid"},
 		"wrong version":       {requestLine(t, func(value map[string]any) { value["version"] = 1 }), "request_invalid"},
 		"wrong algorithm":     {requestLine(t, func(value map[string]any) { value["algorithm"] = "none" }), "request_invalid"},
@@ -274,6 +296,18 @@ func TestRequestAndJWTValidation(t *testing.T) {
 		"unknown jwt claim": {requestLine(t, func(value map[string]any) {
 			value["signing_input"] = signingInput(t, func(_ map[string]any, claims map[string]any) { claims["key"] = "canary" })
 		}), "jwt_invalid"},
+		"jwt header case alias": {requestLine(t, func(value map[string]any) {
+			value["signing_input"] = rawSigningInput(
+				`{"Alg":"RS256","typ":"JWT"}`,
+				fmt.Sprintf(`{"iat":%d,"exp":%d,"iss":"Iv1.protocol-test"}`, testNow.Unix()-60, testNow.Unix()+540),
+			)
+		}), "jwt_invalid"},
+		"duplicate jwt claim": {requestLine(t, func(value map[string]any) {
+			value["signing_input"] = rawSigningInput(
+				`{"alg":"RS256","typ":"JWT"}`,
+				fmt.Sprintf(`{"iat":%d,"exp":%d,"exp":%d,"iss":"Iv1.protocol-test"}`, testNow.Unix()-60, testNow.Unix()+540, testNow.Unix()+540),
+			)
+		}), "jwt_invalid"},
 		"expired": {requestLine(t, func(value map[string]any) {
 			value["signing_input"] = signingInput(t, func(_ map[string]any, claims map[string]any) { claims["exp"] = testNow.Unix() })
 		}), "jwt_invalid"},
@@ -286,6 +320,11 @@ func TestRequestAndJWTValidation(t *testing.T) {
 				claims["exp"] = testNow.Unix() + 541
 			})
 		}), "jwt_invalid"},
+		"overflow lifetime": {requestLine(t, func(value map[string]any) {
+			value["signing_input"] = signingInput(t, func(_ map[string]any, claims map[string]any) {
+				claims["exp"] = int64(9_223_372_036_854_775_807)
+			})
+		}), "jwt_invalid"},
 		"padded base64": {requestLine(t, func(value map[string]any) { value["signing_input"] = "e30=.e30" }), "jwt_invalid"},
 	}
 	for name, test := range tests {
@@ -296,6 +335,56 @@ func TestRequestAndJWTValidation(t *testing.T) {
 				t.Fatalf("expected %s, got %v", test.code, err)
 			}
 		})
+	}
+}
+
+func TestRequestReadAndSignerTimeAreBounded(t *testing.T) {
+	reader := &countingReader{reader: strings.NewReader(strings.Repeat("x", MaxRequestBytes*4))}
+	dependencyCalls := 0
+	server := newTestServer(t,
+		DigestSignerFunc(func(context.Context, DigestRequest) ([]byte, error) {
+			dependencyCalls++
+			return bytes.Repeat([]byte{1}, MinSignatureBytes), nil
+		}),
+		BindingAuthorizerFunc(func(context.Context, string, string, string) error {
+			dependencyCalls++
+			return nil
+		}),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	if err := server.ServeConn(context.Background(), &memoryConn{input: reader}); protocolCode(err) != "request_invalid" {
+		t.Fatalf("unexpected oversized request error %v", err)
+	}
+	if reader.read > MaxRequestBytes+1 || dependencyCalls != 0 {
+		t.Fatalf("unbounded read or dependency call: bytes=%d calls=%d", reader.read, dependencyCalls)
+	}
+
+	server = newTestServer(t,
+		DigestSignerFunc(func(ctx context.Context, _ DigestRequest) ([]byte, error) {
+			<-ctx.Done()
+			return bytes.Repeat([]byte{1}, MinSignatureBytes), nil
+		}),
+		BindingAuthorizerFunc(func(context.Context, string, string, string) error { return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	server.Deadline = 20 * time.Millisecond
+	started := time.Now()
+	connection := newMemoryConn(requestLine(t, nil))
+	if err := server.ServeConn(context.Background(), connection); protocolCode(err) != "deadline_exceeded" || time.Since(started) > time.Second || connection.output.Len() != 0 {
+		t.Fatalf("signer deadline was not enforced: %v", err)
+	}
+	signerCalled := false
+	server = newTestServer(t,
+		DigestSignerFunc(func(context.Context, DigestRequest) ([]byte, error) {
+			signerCalled = true
+			return bytes.Repeat([]byte{1}, MinSignatureBytes), nil
+		}),
+		BindingAuthorizerFunc(func(ctx context.Context, _ string, _ string, _ string) error { <-ctx.Done(); return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	server.Deadline = 20 * time.Millisecond
+	if err := server.ServeConn(context.Background(), newMemoryConn(requestLine(t, nil))); protocolCode(err) != "deadline_exceeded" || signerCalled {
+		t.Fatalf("expired binding advanced to signer: %v", err)
 	}
 }
 
@@ -360,10 +449,16 @@ func TestServerDependencyAndConnectionFailures(t *testing.T) {
 	if protocolCode(server.Serve(context.Background(), listener)) != "server_invalid" {
 		t.Fatal("invalid concurrency accepted")
 	}
-	_ = listener.Close()
 	server.MaxConcurrent = DefaultConcurrency
+	if protocolCode(server.Serve(nil, listener)) != "server_invalid" {
+		t.Fatal("nil serve context accepted")
+	}
+	_ = listener.Close()
 	if protocolCode(server.ServeConn(context.Background(), nil)) != "server_invalid" {
 		t.Fatal("nil connection accepted")
+	}
+	if protocolCode(server.ServeConn(nil, newMemoryConn(requestLine(t, nil)))) != "server_invalid" {
+		t.Fatal("nil context accepted")
 	}
 	server.Deadline = 11 * time.Second
 	if protocolCode(server.ServeConn(context.Background(), newMemoryConn(requestLine(t, nil)))) != "server_invalid" {
@@ -396,4 +491,12 @@ func TestDecodeStrictRejectsTrailingJSON(t *testing.T) {
 	server := &Server{OnError: func(string) { panic("canary-callback") }}
 	server.report("safe_code")
 	(&Server{}).report("ignored")
+	for _, value := range [][]byte{
+		[]byte(`{"outer":[{"key":1,"key":2}]}`),
+		[]byte(`{"outer":[1,true,null,{"ok":2}]} {}`),
+	} {
+		if err := rejectDuplicateKeys(value); err == nil {
+			t.Fatalf("ambiguous JSON accepted: %q", value)
+		}
+	}
 }

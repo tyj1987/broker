@@ -47,6 +47,12 @@ type testAddr string
 func (address testAddr) Network() string { return "test" }
 func (address testAddr) String() string  { return string(address) }
 
+type failingListener struct{}
+
+func (failingListener) Accept() (net.Conn, error) { return nil, errors.New("accept failed") }
+func (failingListener) Close() error              { return nil }
+func (failingListener) Addr() net.Addr            { return testAddr("listener") }
+
 type countingReader struct {
 	reader io.Reader
 	read   int
@@ -344,7 +350,7 @@ func TestSignerReceivesBoundedContext(t *testing.T) {
 	server := newTestServer(t,
 		RequestSignerFunc(func(ctx context.Context, _ SigningRequest) (SignedRequest, error) {
 			<-ctx.Done()
-			return SignedRequest{}, ctx.Err()
+			return validSigned(), nil
 		}),
 		BindingAuthorizerFunc(func(context.Context, SigningRequest) error { return nil }),
 		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
@@ -355,8 +361,21 @@ func TestSignerReceivesBoundedContext(t *testing.T) {
 		context.Background(),
 		newMemoryConn(requestLine(t, OperationCallerIdentity, nil)),
 	)
-	if protocolCode(errorValue) != "signing_failed" || time.Since(started) > time.Second {
+	if protocolCode(errorValue) != "deadline_exceeded" || time.Since(started) > time.Second {
 		t.Fatalf("signer deadline was not enforced: %v", errorValue)
+	}
+	signerCalled := false
+	server = newTestServer(t,
+		RequestSignerFunc(func(context.Context, SigningRequest) (SignedRequest, error) {
+			signerCalled = true
+			return validSigned(), nil
+		}),
+		BindingAuthorizerFunc(func(ctx context.Context, _ SigningRequest) error { <-ctx.Done(); return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	server.Deadline = 20 * time.Millisecond
+	if err := server.ServeConn(context.Background(), newMemoryConn(requestLine(t, OperationCallerIdentity, nil))); protocolCode(err) != "deadline_exceeded" || signerCalled {
+		t.Fatalf("expired binding advanced to signer: %v", err)
 	}
 }
 
@@ -487,8 +506,14 @@ func TestServerConfigurationAndHelpers(t *testing.T) {
 	if protocolCode(server.Serve(context.Background(), nil)) != "server_invalid" {
 		t.Fatal("nil listener accepted")
 	}
+	if protocolCode(server.Serve(nil, failingListener{})) != "server_invalid" {
+		t.Fatal("nil serve context accepted")
+	}
 	if protocolCode(server.ServeConn(context.Background(), nil)) != "server_invalid" {
 		t.Fatal("nil connection accepted")
+	}
+	if protocolCode(server.ServeConn(nil, newMemoryConn(requestLine(t, OperationCallerIdentity, nil)))) != "server_invalid" {
+		t.Fatal("nil context accepted")
 	}
 	server.Deadline = 11 * time.Second
 	if protocolCode(server.ServeConn(context.Background(), newMemoryConn(requestLine(t, OperationCallerIdentity, nil)))) != "server_invalid" {

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tyj1987/broker/core/auditanchor"
 )
@@ -41,6 +42,12 @@ var (
 	idPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	digestPattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	reasonCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
+)
+
+var (
+	wireRequestKeys       = []string{"version", "purpose", "request_id", "operation", "stream_id", "parameters"}
+	publishParameterKeys  = []string{"expected_previous_digest", "envelope"}
+	readPageParameterKeys = []string{"after_sequence", "through_sequence", "limit"}
 )
 
 var (
@@ -134,7 +141,7 @@ func NewServer(config Config, repository Repository, verifier EnvelopeVerifier, 
 func validConfig(config Config) bool { return idPattern.MatchString(config.StreamID) }
 
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
-	if server == nil || listener == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > maximumConcurrency {
+	if server == nil || listener == nil || ctx == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > maximumConcurrency {
 		return fail("server_invalid")
 	}
 	done := make(chan struct{})
@@ -178,20 +185,28 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error {
 	if server == nil || !validConfig(server.Config) || server.Repository == nil ||
 		server.Verifier == nil || server.Peers == nil || connection == nil ||
-		server.Clock == nil || server.Deadline < writeDeadline || server.Deadline > 60*time.Second ||
+		ctx == nil || server.Clock == nil || server.Deadline < writeDeadline || server.Deadline > 60*time.Second ||
 		server.MaxConcurrent < 1 || server.MaxConcurrent > maximumConcurrency {
 		return fail("server_invalid")
 	}
 	if err := connection.SetDeadline(server.Clock().UTC().Add(server.Deadline)); err != nil {
 		return fail("connection_invalid")
 	}
-	role, err := server.Peers.AuthorizePeer(ctx, connection)
+	requestContext, requestCancel := context.WithTimeout(ctx, server.Deadline)
+	defer requestCancel()
+	role, err := server.Peers.AuthorizePeer(requestContext, connection)
 	if err != nil || (role != ExporterRole && role != RecoveryRole) {
 		return fail("peer_denied")
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	request, err := readRequest(connection, server.Config)
 	if err != nil {
 		return err
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	if !roleAllows(role, request.Operation) {
 		err = fail("operation_denied")
@@ -203,9 +218,12 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 	if request.Operation == "publish" || request.Operation == "read_page" {
 		operationDeadline = writeDeadline
 	}
-	operationContext, cancel := context.WithTimeout(ctx, operationDeadline)
+	operationContext, cancel := context.WithTimeout(requestContext, operationDeadline)
 	defer cancel()
 	result, err := server.execute(operationContext, request)
+	if err == nil && operationContext.Err() != nil {
+		err = fail("deadline_exceeded")
+	}
 	if err != nil {
 		code := protocolErrorCode(err)
 		if writeErr := server.writeError(connection, request, code); writeErr != nil {
@@ -263,16 +281,17 @@ type wireErrorResponse struct {
 
 func readRequest(reader io.Reader, config Config) (wireRequest, error) {
 	buffered := bufio.NewReaderSize(reader, MaxRequestBytes+1)
-	line, err := buffered.ReadString('\n')
-	if err != nil || len(line) > MaxRequestBytes || buffered.Buffered() > 0 {
+	lineBytes, err := buffered.ReadSlice('\n')
+	if err != nil || len(lineBytes) > MaxRequestBytes || buffered.Buffered() > 0 {
 		return wireRequest{}, fail("request_invalid")
 	}
+	line := string(lineBytes)
 	line = strings.TrimSuffix(line, "\n")
-	if line == "" || strings.HasSuffix(line, "\r") || rejectDuplicateJSONKeys([]byte(line)) != nil {
+	if line == "" || strings.HasSuffix(line, "\r") {
 		return wireRequest{}, fail("request_invalid")
 	}
 	var request wireRequest
-	if decodeStrict([]byte(line), &request) != nil || request.Version != ProtocolVersion ||
+	if decodeExactObject([]byte(line), &request, wireRequestKeys) != nil || request.Version != ProtocolVersion ||
 		request.Purpose != Purpose || !idPattern.MatchString(request.RequestID) ||
 		request.StreamID != config.StreamID || !validOperation(request.Operation) ||
 		len(request.Parameters) == 0 {
@@ -323,7 +342,7 @@ func (server *Server) execute(ctx context.Context, request wireRequest) (any, er
 
 func decodeEmptyParameters(value []byte) error {
 	var parameters emptyParameters
-	if rejectDuplicateJSONKeys(value) != nil || decodeStrict(value, &parameters) != nil || string(value) != "{}" {
+	if decodeExactObject(value, &parameters, nil) != nil {
 		return fail("request_invalid")
 	}
 	return nil
@@ -331,7 +350,7 @@ func decodeEmptyParameters(value []byte) error {
 
 func (server *Server) publish(ctx context.Context, value []byte) (any, error) {
 	var parameters publishParameters
-	if rejectDuplicateJSONKeys(value) != nil || decodeStrict(value, &parameters) != nil ||
+	if decodeExactObject(value, &parameters, publishParameterKeys) != nil ||
 		!digestPattern.MatchString(parameters.ExpectedPreviousDigest) {
 		return nil, fail("request_invalid")
 	}
@@ -412,7 +431,7 @@ func (server *Server) readHead(ctx context.Context) (any, error) {
 
 func (server *Server) readPage(ctx context.Context, value []byte) (any, error) {
 	var parameters readPageParameters
-	if rejectDuplicateJSONKeys(value) != nil || decodeStrict(value, &parameters) != nil ||
+	if decodeExactObject(value, &parameters, readPageParameterKeys) != nil ||
 		parameters.AfterSequence < 0 || parameters.AfterSequence > MaxSafeInteger ||
 		parameters.ThroughSequence < 1 || parameters.ThroughSequence > MaxSafeInteger ||
 		parameters.AfterSequence >= parameters.ThroughSequence || parameters.Limit < 1 ||
@@ -524,6 +543,9 @@ func writeResponse(writer io.Writer, response any) error {
 }
 
 func decodeStrict(value []byte, target any) error {
+	if !utf8.Valid(value) || rejectDuplicateJSONKeys(value) != nil {
+		return errors.New("invalid json")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -532,6 +554,23 @@ func decodeStrict(value []byte, target any) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return errors.New("trailing json")
+	}
+	return nil
+}
+
+func decodeExactObject(value []byte, target any, required []string) error {
+	if err := decodeStrict(value, target); err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(value, &object) != nil || object == nil || len(object) != len(required) {
+		return errors.New("invalid object")
+	}
+	for _, key := range required {
+		raw, present := object[key]
+		if !present || string(raw) == "null" {
+			return errors.New("invalid object")
+		}
 	}
 	return nil
 }

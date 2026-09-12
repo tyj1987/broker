@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -18,12 +19,23 @@ var testNow = time.Unix(2_000_000_000, 0).UTC()
 var testConfig = Config{StreamID: "broker-production"}
 
 type memoryConn struct {
-	input         *bytes.Reader
+	input         io.Reader
 	output        bytes.Buffer
 	deadline      time.Time
 	deadlineError error
 	writeError    error
 	shortWrite    bool
+}
+
+type countingReader struct {
+	reader io.Reader
+	read   int
+}
+
+func (reader *countingReader) Read(value []byte) (int, error) {
+	count, err := reader.reader.Read(value)
+	reader.read += count
+	return count, err
 }
 
 func newMemoryConn(input string) *memoryConn {
@@ -85,17 +97,18 @@ func (verifier *fakeVerifier) Verify(value []byte) (auditanchor.EnvelopeMetadata
 }
 
 type fakeRepository struct {
-	publishResult PublishResult
-	publishError  error
-	published     *PublishRequest
-	head          Head
-	headError     error
-	page          [][]byte
-	pageError     error
-	pageArgs      [3]int64
-	health        Health
-	healthError   error
-	healthCalled  chan struct{}
+	publishResult        PublishResult
+	publishError         error
+	published            *PublishRequest
+	head                 Head
+	headError            error
+	page                 [][]byte
+	pageError            error
+	pageArgs             [3]int64
+	health               Health
+	healthError          error
+	healthCalled         chan struct{}
+	healthWaitForContext bool
 }
 
 func (repository *fakeRepository) Publish(_ context.Context, request PublishRequest) (PublishResult, error) {
@@ -111,12 +124,15 @@ func (repository *fakeRepository) ReadPage(_ context.Context, after, through int
 	repository.pageArgs = [3]int64{after, through, int64(limit)}
 	return repository.page, repository.pageError
 }
-func (repository *fakeRepository) Health(context.Context) (Health, error) {
+func (repository *fakeRepository) Health(ctx context.Context) (Health, error) {
 	if repository.healthCalled != nil {
 		select {
 		case repository.healthCalled <- struct{}{}:
 		default:
 		}
+	}
+	if repository.healthWaitForContext {
+		<-ctx.Done()
 	}
 	return repository.health, repository.healthError
 }
@@ -367,6 +383,9 @@ func TestStrictRequestsRejectUnknownDuplicateAndMalformedFields(t *testing.T) {
 		line string
 	}{
 		{"unknown root", requestLine(t, "health", map[string]any{}, func(value map[string]any) { value["extra"] = true })},
+		{"wrong root case", strings.Replace(requestLine(t, "health", map[string]any{}, nil), `"request_id":`, `"REQUEST_ID":`, 1)},
+		{"root case alias", strings.Replace(requestLine(t, "health", map[string]any{}, nil), `"request_id":`, `"REQUEST_ID":"other","request_id":`, 1)},
+		{"null parameters", requestLine(t, "health", nil, nil)},
 		{"wrong version", requestLine(t, "health", map[string]any{}, func(value map[string]any) { value["version"] = 2 })},
 		{"wrong purpose", requestLine(t, "health", map[string]any{}, func(value map[string]any) { value["purpose"] = "other" })},
 		{"wrong stream", requestLine(t, "health", map[string]any{}, func(value map[string]any) { value["stream_id"] = "other" })},
@@ -375,6 +394,9 @@ func TestStrictRequestsRejectUnknownDuplicateAndMalformedFields(t *testing.T) {
 		{"unknown parameter", requestLine(t, "health", map[string]any{"provider": "oss"}, nil)},
 		{"duplicate root", `{"version":1,"version":1,"purpose":"` + Purpose + `","request_id":"req-123","operation":"health","stream_id":"` + testConfig.StreamID + `","parameters":{}}\n`},
 		{"duplicate parameter", `{"version":1,"purpose":"` + Purpose + `","request_id":"req-123","operation":"read_page","stream_id":"` + testConfig.StreamID + `","parameters":{"after_sequence":0,"after_sequence":0,"through_sequence":1,"limit":1}}\n`},
+		{"parameter case alias", requestLine(t, "publish", map[string]any{"EXPECTED_PREVIOUS_DIGEST": strings.Repeat("a", 64), "expected_previous_digest": strings.Repeat("a", 64), "envelope": map[string]any{}}, nil)},
+		{"null publish envelope", requestLine(t, "publish", map[string]any{"expected_previous_digest": strings.Repeat("a", 64), "envelope": nil}, nil)},
+		{"invalid utf8", string([]byte{'{', 0xff, '}', '\n'})},
 		{"carriage return", strings.TrimSuffix(requestLine(t, "health", map[string]any{}, nil), "\n") + "\r\n"},
 		{"trailing request", requestLine(t, "health", map[string]any{}, nil) + requestLine(t, "health", map[string]any{}, nil)},
 	}
@@ -387,6 +409,59 @@ func TestStrictRequestsRejectUnknownDuplicateAndMalformedFields(t *testing.T) {
 				t.Fatalf("error code = %q", code)
 			}
 		})
+	}
+}
+
+func TestRequestReadIsBoundedBeforeRepository(t *testing.T) {
+	reader := &countingReader{reader: strings.NewReader(strings.Repeat("x", MaxRequestBytes*4))}
+	connection := newMemoryConn("")
+	connection.input = reader
+	repository := &fakeRepository{}
+	server := testServer(t, repository, &fakeVerifier{}, ExporterRole)
+	if code := protocolCode(server.ServeConn(context.Background(), connection)); code != "request_invalid" {
+		t.Fatalf("error code = %q", code)
+	}
+	if reader.read > MaxRequestBytes+1 || repository.published != nil || repository.pageArgs != [3]int64{} {
+		t.Fatalf("unbounded read or repository call: bytes=%d", reader.read)
+	}
+}
+
+func TestPeerReceivesRequestDeadline(t *testing.T) {
+	var peerContext context.Context
+	server, err := NewServer(testConfig, &fakeRepository{health: Health{
+		Status: "ready", LockContract: "verified", MirrorState: "in_sync", ReasonCode: "ok",
+	}}, &fakeVerifier{}, PeerAuthorizerFunc(func(ctx context.Context, _ net.Conn) (PeerRole, error) {
+		peerContext = ctx
+		return ExporterRole, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Clock = func() time.Time { return testNow }
+	if err := server.ServeConn(context.Background(), newMemoryConn(requestLine(t, "health", map[string]any{}, nil))); err != nil {
+		t.Fatal(err)
+	}
+	deadline, ok := peerContext.Deadline()
+	if !ok || time.Until(deadline) > server.Deadline || time.Until(deadline) <= 0 {
+		t.Fatal("peer authorizer did not receive bounded request context")
+	}
+}
+
+func TestExpiredRepositoryCannotProduceSuccess(t *testing.T) {
+	repository := &fakeRepository{
+		health:               Health{Status: "ready", LockContract: "verified", MirrorState: "in_sync", ReasonCode: "ok"},
+		healthWaitForContext: true,
+	}
+	server := testServer(t, repository, &fakeVerifier{}, ExporterRole)
+	connection := newMemoryConn(requestLine(t, "health", map[string]any{}, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := server.ServeConn(ctx, connection); protocolCode(err) != "deadline_exceeded" {
+		t.Fatalf("expired repository result was accepted: %v", err)
+	}
+	response := responseDocument(t, connection)
+	if response["status"] != "error" || response["error_code"] != "deadline_exceeded" {
+		t.Fatalf("expired repository produced success: %#v", response)
 	}
 }
 
@@ -425,6 +500,9 @@ func TestPeerDenialAndRuntimeFailuresFailClosed(t *testing.T) {
 	}
 	server.Clock = func() time.Time { return testNow }
 	connection := newMemoryConn(requestLine(t, "health", map[string]any{}, nil))
+	if code := protocolCode(server.ServeConn(nil, connection)); code != "server_invalid" {
+		t.Fatalf("nil context code = %q", code)
+	}
 	if code := protocolCode(server.ServeConn(context.Background(), connection)); code != "peer_denied" || connection.output.Len() != 0 {
 		t.Fatal("denied peer received a response")
 	}
@@ -468,6 +546,10 @@ func TestConstructorsRejectInvalidSecurityConfiguration(t *testing.T) {
 		if server, err := NewServer(test.config, test.repository, test.verifier, test.peers); err == nil || server != nil {
 			t.Fatal("invalid configuration was accepted")
 		}
+	}
+	server := testServer(t, repository, verifier, ExporterRole)
+	if code := protocolCode(server.Serve(nil, &failingListener{})); code != "server_invalid" {
+		t.Fatalf("nil serve context code = %q", code)
 	}
 }
 

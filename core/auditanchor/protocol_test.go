@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -24,10 +25,21 @@ var testConfig = Config{
 }
 
 type memoryConn struct {
-	input      *bytes.Reader
+	input      io.Reader
 	output     bytes.Buffer
 	deadline   time.Time
 	writeError error
+}
+
+type countingReader struct {
+	reader io.Reader
+	read   int
+}
+
+func (reader *countingReader) Read(value []byte) (int, error) {
+	count, err := reader.reader.Read(value)
+	reader.read += count
+	return count, err
 }
 
 func newMemoryConn(input string) *memoryConn {
@@ -164,6 +176,11 @@ func TestRequestValidationFailsClosedBeforeAuthorization(t *testing.T) {
 		"trailing":              requestLine(t, nil) + "{}\n",
 		"oversized":             strings.Repeat("x", MaxRequestBytes+1) + "\n",
 		"unknown field":         requestLine(t, func(value map[string]any) { value["private_key"] = "canary" }),
+		"duplicate field":       strings.Replace(requestLine(t, nil), `"version":2`, `"version":2,"version":2`, 1),
+		"wrong field case":      strings.Replace(requestLine(t, nil), `"stream_id":`, `"STREAM_ID":`, 1),
+		"case alias":            strings.Replace(requestLine(t, nil), `"stream_id":`, `"STREAM_ID":"other","stream_id":`, 1),
+		"null field":            strings.Replace(requestLine(t, nil), `"stream_id":"`+testConfig.StreamID+`"`, `"stream_id":null`, 1),
+		"invalid utf8":          string([]byte{'{', 0xff, '}', '\n'}),
 		"wrong version":         requestLine(t, func(value map[string]any) { value["version"] = 1 }),
 		"wrong purpose":         requestLine(t, func(value map[string]any) { value["purpose"] = "generic-signing" }),
 		"wrong algorithm":       requestLine(t, func(value map[string]any) { value["algorithm"] = "rsa-pss-sha256" }),
@@ -193,6 +210,91 @@ func TestRequestValidationFailsClosedBeforeAuthorization(t *testing.T) {
 	}
 	if authorizerCalls != 0 || signerCalls != 0 {
 		t.Fatal("invalid request reached an authority")
+	}
+}
+
+func TestRequestReadIsBoundedBeforeAuthorities(t *testing.T) {
+	reader := &countingReader{reader: strings.NewReader(strings.Repeat("x", MaxRequestBytes*4))}
+	connection := newMemoryConn("")
+	connection.input = reader
+	dependencyCalls := 0
+	server := testServer(t,
+		SignerFunc(func(context.Context, SignRequest) ([]byte, error) { dependencyCalls++; return nil, nil }),
+		AnchorAuthorizerFunc(func(context.Context, SignRequest) error { dependencyCalls++; return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	if code := errorCode(server.ServeConn(context.Background(), connection)); code != "request_invalid" {
+		t.Fatalf("error code = %q", code)
+	}
+	if reader.read > MaxRequestBytes+1 || dependencyCalls != 0 {
+		t.Fatalf("unbounded read or dependency call: bytes=%d calls=%d", reader.read, dependencyCalls)
+	}
+}
+
+func TestAuthoritiesReceiveRequestDeadline(t *testing.T) {
+	contexts := make(chan context.Context, 3)
+	server := testServer(t,
+		SignerFunc(func(ctx context.Context, _ SignRequest) ([]byte, error) {
+			contexts <- ctx
+			return bytes.Repeat([]byte{1}, 64), nil
+		}),
+		AnchorAuthorizerFunc(func(ctx context.Context, _ SignRequest) error { contexts <- ctx; return nil }),
+		PeerAuthorizerFunc(func(ctx context.Context, _ net.Conn) error { contexts <- ctx; return nil }),
+	)
+	if err := server.ServeConn(context.Background(), newMemoryConn(requestLine(t, nil))); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		ctx := <-contexts
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > server.Deadline || time.Until(deadline) <= 0 {
+			t.Fatal("authority did not receive bounded request context")
+		}
+	}
+}
+
+func TestExpiredAuthorityCannotAdvanceOrRespond(t *testing.T) {
+	signerCalled := false
+	server := testServer(t,
+		SignerFunc(func(context.Context, SignRequest) ([]byte, error) {
+			signerCalled = true
+			return bytes.Repeat([]byte{1}, 64), nil
+		}),
+		AnchorAuthorizerFunc(func(ctx context.Context, _ SignRequest) error { <-ctx.Done(); return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := server.ServeConn(ctx, newMemoryConn(requestLine(t, nil))); errorCode(err) != "deadline_exceeded" || signerCalled {
+		t.Fatalf("expired authorization advanced to signer: %v", err)
+	}
+
+	server = testServer(t,
+		SignerFunc(func(ctx context.Context, _ SignRequest) ([]byte, error) {
+			<-ctx.Done()
+			return bytes.Repeat([]byte{1}, 64), nil
+		}),
+		AnchorAuthorizerFunc(func(context.Context, SignRequest) error { return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	connection := newMemoryConn(requestLine(t, nil))
+	ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := server.ServeConn(ctx, connection); errorCode(err) != "deadline_exceeded" || connection.output.Len() != 0 {
+		t.Fatalf("expired signer produced a response: %v", err)
+	}
+}
+
+func TestStrictJSONWalkerRejectsNestedAmbiguity(t *testing.T) {
+	for _, value := range [][]byte{
+		[]byte(`{"outer":[{"key":1,"key":2}]}`),
+		[]byte(`{"outer":[1,true,null,{"ok":2}]} {}`),
+		{'{', '"', 'x', '"', ':', 0xff, '}'},
+	} {
+		var target map[string]any
+		if decodeStrict(value, &target) == nil {
+			t.Fatalf("ambiguous JSON accepted: %q", value)
+		}
 	}
 }
 
@@ -327,6 +429,9 @@ func TestServeAndReportingBoundaries(t *testing.T) {
 		AnchorAuthorizerFunc(func(context.Context, SignRequest) error { return nil }),
 		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
 	)
+	if code := errorCode(server.Serve(nil, failingListener{err: errors.New("unused")})); code != "server_invalid" {
+		t.Fatalf("nil serve context code %q", code)
+	}
 	for name, candidate := range map[string]*Server{
 		"nil":                nil,
 		"zero concurrency":   {MaxConcurrent: 0},
@@ -381,6 +486,9 @@ func TestServeConnRejectsInvalidRuntimeAndDeadlineFailure(t *testing.T) {
 	}
 	if code := errorCode(server.ServeConn(context.Background(), nil)); code != "server_invalid" {
 		t.Fatalf("unexpected nil connection code %q", code)
+	}
+	if code := errorCode(server.ServeConn(nil, newMemoryConn(requestLine(t, nil)))); code != "server_invalid" {
+		t.Fatalf("unexpected nil context code %q", code)
 	}
 	connection := newMemoryConn(requestLine(t, nil))
 	connection.deadline = testNow

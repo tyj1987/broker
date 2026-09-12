@@ -97,12 +97,23 @@ continue.
   stream and purpose to `publish`, `read_head`, `read_page` and `health`, uses
   exact non-root exporter/recovery UID roles, bounds pages and wire sizes, and
   independently verifies returned envelopes. Its fixed-path Node client maps
-  only those operations to the existing exporter and recovery contracts. It
-  does not resolve restart-safe dual-cloud head discovery or independently
-  prove recovery freshness. Runnable signer/store services, immutable buckets,
-  mirror worker, credentials, retention locks and recovery authority are not
-  deployed yet, so there is no claim of independent non-repudiation and RR-012
-  remains open.
+  only those operations to the existing exporter and recovery contracts. The
+  socket boundary does not by itself resolve restart-safe dual-cloud head
+  discovery or independently prove recovery freshness. This source checkpoint
+  adds bounded OSS/COS object-key pagination and a provider-backed repository
+  that derives the contiguous common sequence from both clouds without a
+  Broker-host head. It permits only one repairable primary-only tail and rejects
+  gaps, mirror leads, content divergence, invalid retention and pagination
+  exhaustion. A conflicting retry may be reported only after the existing
+  primary tail is mirrored and read back. Repository operations serialize
+  through a context-cancellable gate. The default and hard enumeration
+  capacities are 128,000 and 512,000 anchors respectively; capacity alerting,
+  stream rollover and lifecycle after retention expiry remain operational
+  design gaps. CI enforces Go statement coverage, while the 85 percent
+  branch-coverage release evidence remains open. Runnable signer/store services,
+  immutable buckets, mirror worker, credentials, retention locks and recovery
+  authority are not deployed yet, so there is no claim of independent
+  non-repudiation and RR-012 remains open.
 
 ## DQ-004: provider signing and account-binding authority
 

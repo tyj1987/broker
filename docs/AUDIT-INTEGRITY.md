@@ -184,13 +184,33 @@ socket access, but the store still authorizes its exact UID for read-only
 operations.
 
 This protocol is hermetic source evidence, not a claim that the cloud store is
-restart-safe or independently recoverable. A production repository must derive
-the longest identical, contiguous and retained prefix from both clouds after a
-restart. The current SDK boundary has no bounded object-list operation yet, so
-an in-memory or Broker-host checkpoint must not be used as the authoritative
-head. Likewise, recovery through the store socket is useful for contract tests
-but cannot by itself prove freshness against a compromised store process; the
-independent recovery authority must read both clouds or verify an independently
+deployed or independently recoverable. The OSS and COS SDK boundaries now
+expose one fixed-bucket, fixed-prefix, lexicographically ordered object-key page
+with a maximum of 1,000 entries. They reject arbitrary delimiter, endpoint,
+header and continuation inputs, malformed ordering, unexpected prefixes,
+oversized anchor objects and non-progressing pagination.
+
+`core/auditstore.DualCloudRepository` uses those pages rather than a local head
+file or in-memory checkpoint. On every operation it revalidates both retention
+contracts and derives the identical contiguous prefix from sequence one. A
+single primary-only tail is reported as `repair_required` and can be completed
+idempotently; a gap, mirror lead, multi-object lead, key divergence, content
+divergence or invalid retention blocks the store. Head and recovery reads
+compare both clouds, verify canonical signatures and validate COS COMPLIANCE
+retention. Enumeration is bounded to 128 pages by default and 512 pages at the
+hard maximum, so exhausting the configured bound fails closed instead of
+trusting a partial view. This removes the Broker-host checkpoint as an
+authority, but the repository and service are still source-only. At the
+maximum 1,000-object page size this admits 128,000 sequences by default and
+512,000 at the hard limit. Operators must size the configured bound for the
+retention-period publication rate and alert before 80 percent; no automatic
+stream rollover or post-retention deletion is implemented. The Go CI gate
+measures statement coverage with `go tool cover`; the separate release
+requirement for 85 percent branch coverage remains pending dedicated evidence.
+
+Recovery through the store socket is useful for contract tests but cannot by
+itself prove freshness against a compromised store process. The independent
+recovery authority must read both clouds directly or verify an independently
 held freshness checkpoint.
 
 The selected primary contract uses Alibaba Cloud KMS `EC_P256` with

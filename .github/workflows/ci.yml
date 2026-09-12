@@ -166,21 +166,25 @@ jobs:
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - run: go test -race -coverprofile=coverage.out ./policy
-      - name: Enforce core line coverage
+      - name: Enforce core statement coverage
         run: |
           test "$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=signer-coverage.out ./githubsigner
-      - name: Enforce signer protocol line coverage
+      - name: Enforce signer protocol statement coverage
         run: |
           test "$(go tool cover -func=signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=provider-credential-coverage.out ./providercredential
-      - name: Enforce provider credential protocol line coverage
+      - name: Enforce provider credential protocol statement coverage
         run: |
           test "$(go tool cover -func=provider-credential-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=audit-anchor-coverage.out ./auditanchor
-      - name: Enforce audit anchor protocol line coverage
+      - name: Enforce audit anchor protocol statement coverage
         run: |
           test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-store-coverage.out ./auditstore
+      - name: Enforce audit store protocol statement coverage
+        run: |
+          test "$(go tool cover -func=audit-store-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race ./server
       - run: go build ./...
 

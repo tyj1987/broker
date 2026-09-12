@@ -13,6 +13,14 @@ import (
 	tencentcos "github.com/tencentyun/cos-go-sdk-v5"
 )
 
+const ImmutableListMaxKeys = 1000
+
+type ObjectKeyPage struct {
+	Keys      []string
+	NextAfter string
+	Truncated bool
+}
+
 var (
 	ErrImmutableSDKRequestRejected = errors.New("immutable store SDK request rejected")
 	ErrImmutableSDKUnavailable     = errors.New("immutable store SDK unavailable")
@@ -23,6 +31,7 @@ var (
 type ossSDKAPI interface {
 	GetBucketWorm(context.Context, *alioss.GetBucketWormRequest, ...func(*alioss.Options)) (*alioss.GetBucketWormResult, error)
 	GetBucketVersioning(context.Context, *alioss.GetBucketVersioningRequest, ...func(*alioss.Options)) (*alioss.GetBucketVersioningResult, error)
+	ListObjectsV2(context.Context, *alioss.ListObjectsV2Request, ...func(*alioss.Options)) (*alioss.ListObjectsV2Result, error)
 	PutObject(context.Context, *alioss.PutObjectRequest, ...func(*alioss.Options)) (*alioss.PutObjectResult, error)
 	GetObject(context.Context, *alioss.GetObjectRequest, ...func(*alioss.Options)) (*alioss.GetObjectResult, error)
 }
@@ -156,9 +165,50 @@ func (client *OSSSDKImmutableClient) ReadObject(ctx context.Context, bucket, key
 	return readBoundedSDKBody(result.Body, result.StatusCode)
 }
 
+// ListObjectKeys exposes one strictly bounded, lexicographically ordered page
+// below the configured audit prefix. The provider continuation token is not
+// exposed; callers resume from the last returned key through StartAfter.
+func (client *OSSSDKImmutableClient) ListObjectKeys(ctx context.Context, bucket, prefix, after string, limit int) (ObjectKeyPage, error) {
+	if !validSDKListCall(ctx, bucket, clientBucket(client), prefix, after, limit, client != nil && client.api != nil) {
+		return ObjectKeyPage{}, ErrImmutableSDKRequestRejected
+	}
+	request := &alioss.ListObjectsV2Request{
+		Bucket: ptr(bucket), Prefix: ptr(prefix), MaxKeys: int32(limit), FetchOwner: false,
+	}
+	if after != "" {
+		request.StartAfter = ptr(after)
+	}
+	result, err := client.api.ListObjectsV2(ctx, request)
+	if err != nil {
+		return ObjectKeyPage{}, ErrImmutableSDKUnavailable
+	}
+	if ctx.Err() != nil {
+		return ObjectKeyPage{}, ErrImmutableSDKRequestRejected
+	}
+	if result == nil || result.StatusCode != http.StatusOK || !equalOptional(result.Name, bucket) ||
+		!equalOptional(result.Prefix, prefix) || !equalOptional(result.StartAfter, after) ||
+		result.MaxKeys != int32(limit) || result.KeyCount != len(result.Contents) ||
+		len(result.Contents) > limit || len(result.CommonPrefixes) != 0 ||
+		(result.Delimiter != nil && *result.Delimiter != "") {
+		return ObjectKeyPage{}, ErrImmutableSDKResponseInvalid
+	}
+	keys, valid := validatedObjectKeys(result.Contents, prefix, after)
+	if !valid || (result.IsTruncated && len(keys) == 0) ||
+		(result.IsTruncated && (result.NextContinuationToken == nil || *result.NextContinuationToken == "")) ||
+		(!result.IsTruncated && result.NextContinuationToken != nil && *result.NextContinuationToken != "") {
+		return ObjectKeyPage{}, ErrImmutableSDKResponseInvalid
+	}
+	page := ObjectKeyPage{Keys: keys, Truncated: result.IsTruncated}
+	if page.Truncated {
+		page.NextAfter = keys[len(keys)-1]
+	}
+	return page, nil
+}
+
 type cosBucketSDKAPI interface {
 	GetObjectLockConfiguration(context.Context) (*tencentcos.BucketGetObjectLockResult, *tencentcos.Response, error)
 	GetVersioning(context.Context) (*tencentcos.BucketGetVersionResult, *tencentcos.Response, error)
+	Get(context.Context, *tencentcos.BucketGetOptions) (*tencentcos.BucketGetResult, *tencentcos.Response, error)
 }
 
 type cosObjectSDKAPI interface {
@@ -304,8 +354,88 @@ func (client *COSSDKImmutableClient) ReadObjectRetention(ctx context.Context, bu
 	return COSObjectRetention{Mode: result.Mode, RetainUntil: retainUntil}, nil
 }
 
+// ListObjectKeys exposes one fixed-bucket COS listing page and uses Marker only
+// as the opaque-free resume position. The method never accepts an endpoint,
+// delimiter, header or provider-specific query option from its caller.
+func (client *COSSDKImmutableClient) ListObjectKeys(ctx context.Context, bucket, prefix, after string, limit int) (ObjectKeyPage, error) {
+	if !validSDKListCall(ctx, bucket, cosClientBucket(client), prefix, after, limit, client != nil && client.bucketAPI != nil) {
+		return ObjectKeyPage{}, ErrImmutableSDKRequestRejected
+	}
+	result, response, err := client.bucketAPI.Get(ctx, &tencentcos.BucketGetOptions{
+		Prefix: prefix, Marker: after, MaxKeys: limit,
+	})
+	if err != nil {
+		return ObjectKeyPage{}, ErrImmutableSDKUnavailable
+	}
+	if ctx.Err() != nil {
+		return ObjectKeyPage{}, ErrImmutableSDKRequestRejected
+	}
+	if result == nil || !validCOSResponse(response) || result.Name != bucket || result.Prefix != prefix ||
+		result.Marker != after || result.MaxKeys != limit || len(result.Contents) > limit ||
+		len(result.CommonPrefixes) != 0 || result.Delimiter != "" || result.EncodingType != "" {
+		return ObjectKeyPage{}, ErrImmutableSDKResponseInvalid
+	}
+	keys, valid := validatedCOSObjectKeys(result.Contents, prefix, after)
+	if !valid || (result.IsTruncated && (len(keys) == 0 || result.NextMarker == "")) ||
+		(!result.IsTruncated && result.NextMarker != "") {
+		return ObjectKeyPage{}, ErrImmutableSDKResponseInvalid
+	}
+	page := ObjectKeyPage{Keys: keys, Truncated: result.IsTruncated}
+	if page.Truncated {
+		page.NextAfter = keys[len(keys)-1]
+	}
+	return page, nil
+}
+
 func validSDKCall(ctx context.Context, bucket, expected string, available bool) bool {
 	return ctx != nil && ctx.Err() == nil && available && bucket == expected && bucketPattern.MatchString(bucket)
+}
+
+func validSDKListCall(ctx context.Context, bucket, expected, prefix, after string, limit int, available bool) bool {
+	return validSDKCall(ctx, bucket, expected, available) && validSDKObjectPrefix(prefix) &&
+		(after == "" || validSDKObjectKey(after) && strings.HasPrefix(after, prefix)) &&
+		limit >= 1 && limit <= ImmutableListMaxKeys
+}
+
+func validSDKObjectPrefix(prefix string) bool {
+	return len(prefix) >= 2 && len(prefix) <= 1000 && strings.HasSuffix(prefix, "/") &&
+		!strings.HasPrefix(prefix, "/") && !strings.Contains(prefix, "\\") &&
+		!strings.Contains(prefix, "..") && !strings.Contains(prefix, "//")
+}
+
+func validatedObjectKeys(contents []alioss.ObjectProperties, prefix, after string) ([]string, bool) {
+	keys := make([]string, 0, len(contents))
+	for _, object := range contents {
+		if object.Key == nil || object.Size < 1 || object.Size > AuditObjectMaxBytes ||
+			!appendValidatedObjectKey(&keys, *object.Key, prefix, after) {
+			return nil, false
+		}
+	}
+	return keys, true
+}
+
+func validatedCOSObjectKeys(contents []tencentcos.Object, prefix, after string) ([]string, bool) {
+	keys := make([]string, 0, len(contents))
+	for _, object := range contents {
+		if object.Size < 1 || object.Size > AuditObjectMaxBytes ||
+			!appendValidatedObjectKey(&keys, object.Key, prefix, after) {
+			return nil, false
+		}
+	}
+	return keys, true
+}
+
+func appendValidatedObjectKey(keys *[]string, key, prefix, after string) bool {
+	if !validSDKObjectKey(key) || !strings.HasPrefix(key, prefix) || key <= after ||
+		(len(*keys) > 0 && key <= (*keys)[len(*keys)-1]) {
+		return false
+	}
+	*keys = append(*keys, key)
+	return true
+}
+
+func equalOptional(value *string, expected string) bool {
+	return expected == "" && (value == nil || *value == "") || value != nil && *value == expected
 }
 
 func validSDKObjectKey(key string) bool {

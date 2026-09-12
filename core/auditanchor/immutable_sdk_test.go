@@ -31,14 +31,18 @@ type fakeOSSSDK struct {
 	putErr         error
 	getResult      *alioss.GetObjectResult
 	getErr         error
+	listResult     *alioss.ListObjectsV2Result
+	listErr        error
 	wormRequest    *alioss.GetBucketWormRequest
 	versionRequest *alioss.GetBucketVersioningRequest
 	putRequest     *alioss.PutObjectRequest
 	getRequest     *alioss.GetObjectRequest
+	listRequest    *alioss.ListObjectsV2Request
 	afterWorm      func()
 	afterVersion   func()
 	afterPut       func()
 	afterGet       func()
+	afterList      func()
 }
 
 func (fake *fakeOSSSDK) GetBucketWorm(_ context.Context, request *alioss.GetBucketWormRequest, _ ...func(*alioss.Options)) (*alioss.GetBucketWormResult, error) {
@@ -73,6 +77,14 @@ func (fake *fakeOSSSDK) GetObject(_ context.Context, request *alioss.GetObjectRe
 	return fake.getResult, fake.getErr
 }
 
+func (fake *fakeOSSSDK) ListObjectsV2(_ context.Context, request *alioss.ListObjectsV2Request, _ ...func(*alioss.Options)) (*alioss.ListObjectsV2Result, error) {
+	fake.listRequest = request
+	if fake.afterList != nil {
+		fake.afterList()
+	}
+	return fake.listResult, fake.listErr
+}
+
 func validOSSSDKFake() *fakeOSSSDK {
 	return &fakeOSSSDK{
 		wormResult: &alioss.GetBucketWormResult{
@@ -85,6 +97,11 @@ func validOSSSDKFake() *fakeOSSSDK {
 		putResult:     &alioss.PutObjectResult{ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK}},
 		getResult: &alioss.GetObjectResult{
 			Body:         io.NopCloser(bytes.NewReader([]byte("anchor"))),
+			ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK},
+		},
+		listResult: &alioss.ListObjectsV2Result{
+			Name: ptr(ossSDKTestBucket), Prefix: ptr("audit-anchors/v1/stream/"), MaxKeys: 2,
+			Contents: []alioss.ObjectProperties{{Key: ptr(sdkTestKey), Size: 512}}, KeyCount: 1,
 			ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK},
 		},
 	}
@@ -353,7 +370,12 @@ type fakeCOSBucketSDK struct {
 	versionResult   *tencentcos.BucketGetVersionResult
 	versionResponse *tencentcos.Response
 	versionErr      error
+	listResult      *tencentcos.BucketGetResult
+	listResponse    *tencentcos.Response
+	listErr         error
+	listOptions     *tencentcos.BucketGetOptions
 	afterLock       func()
+	afterList       func()
 }
 
 func (fake *fakeCOSBucketSDK) GetObjectLockConfiguration(context.Context) (*tencentcos.BucketGetObjectLockResult, *tencentcos.Response, error) {
@@ -365,6 +387,14 @@ func (fake *fakeCOSBucketSDK) GetObjectLockConfiguration(context.Context) (*tenc
 
 func (fake *fakeCOSBucketSDK) GetVersioning(context.Context) (*tencentcos.BucketGetVersionResult, *tencentcos.Response, error) {
 	return fake.versionResult, fake.versionResponse, fake.versionErr
+}
+
+func (fake *fakeCOSBucketSDK) Get(_ context.Context, options *tencentcos.BucketGetOptions) (*tencentcos.BucketGetResult, *tencentcos.Response, error) {
+	fake.listOptions = options
+	if fake.afterList != nil {
+		fake.afterList()
+	}
+	return fake.listResult, fake.listResponse, fake.listErr
 }
 
 type fakeCOSObjectSDK struct {
@@ -417,6 +447,11 @@ func validCOSSDKFakes() (*fakeCOSBucketSDK, *fakeCOSObjectSDK) {
 		lockResponse:    cosResponse(http.StatusOK, nil),
 		versionResult:   &tencentcos.BucketGetVersionResult{Status: "Enabled"},
 		versionResponse: cosResponse(http.StatusOK, nil),
+		listResult: &tencentcos.BucketGetResult{
+			Name: cosSDKTestBucket, Prefix: "audit-anchors/v1/stream/", MaxKeys: 2,
+			Contents: []tencentcos.Object{{Key: sdkTestKey, Size: 512}},
+		},
+		listResponse: cosResponse(http.StatusOK, nil),
 	}, &fakeCOSObjectSDK{
 		getResponse:       cosResponse(http.StatusOK, io.NopCloser(bytes.NewReader([]byte("anchor")))),
 		putResponse:       cosResponse(http.StatusOK, nil),
@@ -743,6 +778,239 @@ func TestCOSSDKRejectsUnboundRequestsAndInvalidConstruction(t *testing.T) {
 	}
 	if _, err := newCOSSDKImmutableClient(cosSDKTestBucket, bucket, nil); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("nil object API constructor error = %v", err)
+	}
+}
+
+func TestOSSSDKListObjectKeysUsesBoundedStartAfter(t *testing.T) {
+	fake := validOSSSDKFake()
+	second := "audit-anchors/v1/stream/00000000000000000002-anchor.json"
+	fake.listResult.Contents = []alioss.ObjectProperties{
+		{Key: ptr(sdkTestKey), Size: 512}, {Key: ptr(second), Size: 513},
+	}
+	fake.listResult.KeyCount = 2
+	fake.listResult.IsTruncated = true
+	fake.listResult.NextContinuationToken = ptr("provider-token")
+	page, err := newTestOSSClient(t, fake).ListObjectKeys(
+		context.Background(), ossSDKTestBucket, "audit-anchors/v1/stream/", "", 2,
+	)
+	if err != nil {
+		t.Fatalf("ListObjectKeys() error = %v", err)
+	}
+	if len(page.Keys) != 2 || page.Keys[0] != sdkTestKey || page.Keys[1] != second ||
+		!page.Truncated || page.NextAfter != second {
+		t.Fatalf("unexpected page: %#v", page)
+	}
+	request := fake.listRequest
+	if request == nil || request.Bucket == nil || *request.Bucket != ossSDKTestBucket ||
+		request.Prefix == nil || *request.Prefix != "audit-anchors/v1/stream/" ||
+		request.StartAfter != nil || request.MaxKeys != 2 || request.FetchOwner ||
+		request.Delimiter != nil || request.ContinuationToken != nil || request.RequestPayer != nil {
+		t.Fatalf("unexpected list request: %#v", request)
+	}
+
+	fake.listResult = &alioss.ListObjectsV2Result{
+		Name: ptr(ossSDKTestBucket), Prefix: ptr("audit-anchors/v1/stream/"), StartAfter: ptr(sdkTestKey),
+		MaxKeys: 2, Contents: []alioss.ObjectProperties{{Key: ptr(second), Size: 513}}, KeyCount: 1,
+		ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK},
+	}
+	page, err = newTestOSSClient(t, fake).ListObjectKeys(
+		context.Background(), ossSDKTestBucket, "audit-anchors/v1/stream/", sdkTestKey, 2,
+	)
+	if err != nil || len(page.Keys) != 1 || page.Keys[0] != second || page.Truncated || page.NextAfter != "" ||
+		fake.listRequest.StartAfter == nil || *fake.listRequest.StartAfter != sdkTestKey {
+		t.Fatalf("unexpected resumed page: %#v, %v", page, err)
+	}
+}
+
+func TestOSSSDKListObjectKeysFailsClosed(t *testing.T) {
+	prefix := "audit-anchors/v1/stream/"
+	for name, call := range map[string]func(*OSSSDKImmutableClient) error{
+		"bucket": func(client *OSSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), "other-bucket", prefix, "", 2)
+			return err
+		},
+		"prefix": func(client *OSSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), ossSDKTestBucket, "../audit/", "", 2)
+			return err
+		},
+		"after": func(client *OSSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), ossSDKTestBucket, prefix, "other/key", 2)
+			return err
+		},
+		"limit_zero": func(client *OSSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), ossSDKTestBucket, prefix, "", 0)
+			return err
+		},
+		"limit_large": func(client *OSSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), ossSDKTestBucket, prefix, "", ImmutableListMaxKeys+1)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(newTestOSSClient(t, validOSSSDKFake())); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+				t.Fatalf("request error = %v", err)
+			}
+		})
+	}
+
+	fake := validOSSSDKFake()
+	fake.listErr = errors.New("provider detail")
+	if _, err := newTestOSSClient(t, fake).ListObjectKeys(context.Background(), ossSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKUnavailable) {
+		t.Fatalf("provider error = %v", err)
+	}
+	fake = validOSSSDKFake()
+	ctx, cancel := context.WithCancel(context.Background())
+	fake.afterList = cancel
+	if _, err := newTestOSSClient(t, fake).ListObjectKeys(ctx, ossSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	fake = validOSSSDKFake()
+	fake.listResult = nil
+	if _, err := newTestOSSClient(t, fake).ListObjectKeys(context.Background(), ossSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKResponseInvalid) {
+		t.Fatalf("nil response error = %v", err)
+	}
+
+	mutations := map[string]func(*alioss.ListObjectsV2Result){
+		"nil_key":        func(result *alioss.ListObjectsV2Result) { result.Contents[0].Key = nil },
+		"wrong_bucket":   func(result *alioss.ListObjectsV2Result) { result.Name = ptr("other-bucket") },
+		"wrong_prefix":   func(result *alioss.ListObjectsV2Result) { result.Prefix = ptr("other/") },
+		"wrong_limit":    func(result *alioss.ListObjectsV2Result) { result.MaxKeys = 3 },
+		"wrong_count":    func(result *alioss.ListObjectsV2Result) { result.KeyCount = 2 },
+		"wrong_status":   func(result *alioss.ListObjectsV2Result) { result.StatusCode = http.StatusCreated },
+		"outside_prefix": func(result *alioss.ListObjectsV2Result) { result.Contents[0].Key = ptr("other/key") },
+		"duplicate_key": func(result *alioss.ListObjectsV2Result) {
+			result.Contents = append(result.Contents, result.Contents[0])
+			result.KeyCount = 2
+		},
+		"empty_object":     func(result *alioss.ListObjectsV2Result) { result.Contents[0].Size = 0 },
+		"oversized_object": func(result *alioss.ListObjectsV2Result) { result.Contents[0].Size = AuditObjectMaxBytes + 1 },
+		"truncated_empty": func(result *alioss.ListObjectsV2Result) {
+			result.Contents = nil
+			result.KeyCount = 0
+			result.IsTruncated = true
+			result.NextContinuationToken = ptr("token")
+		},
+		"truncated_token":  func(result *alioss.ListObjectsV2Result) { result.IsTruncated = true },
+		"unexpected_token": func(result *alioss.ListObjectsV2Result) { result.NextContinuationToken = ptr("token") },
+		"common_prefix": func(result *alioss.ListObjectsV2Result) {
+			result.CommonPrefixes = []alioss.CommonPrefix{{Prefix: ptr("x/")}}
+		},
+		"delimiter": func(result *alioss.ListObjectsV2Result) { result.Delimiter = ptr("/") },
+	}
+	for name, mutate := range mutations {
+		t.Run("response_"+name, func(t *testing.T) {
+			value := validOSSSDKFake()
+			mutate(value.listResult)
+			if _, err := newTestOSSClient(t, value).ListObjectKeys(context.Background(), ossSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKResponseInvalid) {
+				t.Fatalf("response error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCOSSDKListObjectKeysUsesBoundedMarker(t *testing.T) {
+	bucket, object := validCOSSDKFakes()
+	second := "audit-anchors/v1/stream/00000000000000000002-anchor.json"
+	bucket.listResult.Contents = []tencentcos.Object{{Key: sdkTestKey, Size: 512}, {Key: second, Size: 513}}
+	bucket.listResult.IsTruncated = true
+	bucket.listResult.NextMarker = "provider-marker"
+	page, err := newTestCOSClient(t, bucket, object).ListObjectKeys(
+		context.Background(), cosSDKTestBucket, "audit-anchors/v1/stream/", "", 2,
+	)
+	if err != nil || len(page.Keys) != 2 || page.Keys[1] != second || !page.Truncated || page.NextAfter != second {
+		t.Fatalf("unexpected page: %#v, %v", page, err)
+	}
+	if bucket.listOptions == nil || bucket.listOptions.Prefix != "audit-anchors/v1/stream/" ||
+		bucket.listOptions.Marker != "" || bucket.listOptions.MaxKeys != 2 || bucket.listOptions.Delimiter != "" ||
+		bucket.listOptions.EncodingType != "" || bucket.listOptions.XOptionHeader != nil {
+		t.Fatalf("unexpected list options: %#v", bucket.listOptions)
+	}
+}
+
+func TestCOSSDKListObjectKeysFailsClosed(t *testing.T) {
+	prefix := "audit-anchors/v1/stream/"
+	bucket, object := validCOSSDKFakes()
+	bucket.listErr = errors.New("provider detail")
+	if _, err := newTestCOSClient(t, bucket, object).ListObjectKeys(context.Background(), cosSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKUnavailable) {
+		t.Fatalf("provider error = %v", err)
+	}
+	bucket, object = validCOSSDKFakes()
+	ctx, cancel := context.WithCancel(context.Background())
+	bucket.afterList = cancel
+	if _, err := newTestCOSClient(t, bucket, object).ListObjectKeys(ctx, cosSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	bucket, object = validCOSSDKFakes()
+	bucket.listResult = nil
+	if _, err := newTestCOSClient(t, bucket, object).ListObjectKeys(context.Background(), cosSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKResponseInvalid) {
+		t.Fatalf("nil response error = %v", err)
+	}
+
+	mutations := map[string]func(*tencentcos.BucketGetResult, *tencentcos.Response){
+		"wrong_bucket": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.Name = "other-bucket" },
+		"wrong_prefix": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.Prefix = "other/" },
+		"wrong_marker": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.Marker = "unexpected" },
+		"wrong_limit":  func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.MaxKeys = 3 },
+		"wrong_status": func(_ *tencentcos.BucketGetResult, response *tencentcos.Response) {
+			response.StatusCode = http.StatusCreated
+		},
+		"outside_prefix": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.Contents[0].Key = "other/key" },
+		"duplicate_key": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) {
+			result.Contents = append(result.Contents, result.Contents[0])
+		},
+		"empty_object": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.Contents[0].Size = 0 },
+		"oversized_object": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) {
+			result.Contents[0].Size = AuditObjectMaxBytes + 1
+		},
+		"truncated_empty": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) {
+			result.Contents = nil
+			result.IsTruncated = true
+		},
+		"truncated_marker": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) {
+			result.IsTruncated = true
+			result.NextMarker = ""
+		},
+		"unexpected_marker": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.NextMarker = sdkTestKey },
+		"common_prefix": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) {
+			result.CommonPrefixes = []string{"x/"}
+		},
+		"delimiter": func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.Delimiter = "/" },
+		"encoding":  func(result *tencentcos.BucketGetResult, _ *tencentcos.Response) { result.EncodingType = "url" },
+	}
+	for name, mutate := range mutations {
+		t.Run("response_"+name, func(t *testing.T) {
+			value, objectValue := validCOSSDKFakes()
+			mutate(value.listResult, value.listResponse)
+			if _, err := newTestCOSClient(t, value, objectValue).ListObjectKeys(context.Background(), cosSDKTestBucket, prefix, "", 2); !errors.Is(err, ErrImmutableSDKResponseInvalid) {
+				t.Fatalf("response error = %v", err)
+			}
+		})
+	}
+
+	for name, call := range map[string]func(*COSSDKImmutableClient) error{
+		"bucket": func(client *COSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), "other-bucket", prefix, "", 2)
+			return err
+		},
+		"prefix": func(client *COSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), cosSDKTestBucket, "../audit/", "", 2)
+			return err
+		},
+		"after": func(client *COSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), cosSDKTestBucket, prefix, "other/key", 2)
+			return err
+		},
+		"limit": func(client *COSSDKImmutableClient) error {
+			_, err := client.ListObjectKeys(context.Background(), cosSDKTestBucket, prefix, "", ImmutableListMaxKeys+1)
+			return err
+		},
+	} {
+		t.Run("request_"+name, func(t *testing.T) {
+			value, objectValue := validCOSSDKFakes()
+			if err := call(newTestCOSClient(t, value, objectValue)); !errors.Is(err, ErrImmutableSDKRequestRejected) {
+				t.Fatalf("request error = %v", err)
+			}
+		})
 	}
 }
 

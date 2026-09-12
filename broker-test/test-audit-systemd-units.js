@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const deployHelper = read('../deploy/bin/secret-broker-deploy');
+const dockerfile = read('../Dockerfile');
 
 const services = Object.freeze({
   signer: {
@@ -75,5 +76,16 @@ for (const name of ['signer', 'store', 'recovery']) {
 
 assert.match(deployHelper, /audit service identity does not match the pinned contract/);
 assert.doesNotMatch(deployHelper, /audit_user.*!= broker/);
+
+for (const binary of ['secret-broker-audit-store', 'secret-broker-audit-store-health']) {
+  assert.match(
+    dockerfile,
+    new RegExp(`-o /out/${binary} \\.\\/cmd\\/${binary.replace('secret-broker-', '')}`),
+  );
+  assert.doesNotMatch(
+    dockerfile,
+    new RegExp(`COPY --from=core-build /out/${binary} /app/bin/${binary}`),
+  );
+}
 
 console.log('audit systemd contracts: four pinned identities and fail-closed sandboxes passed');

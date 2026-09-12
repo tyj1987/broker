@@ -80,14 +80,16 @@ RUN go mod edit \
     && /out/sops --version
 
 # ============================================================
-# Stage 4: Go policy core
+# Stage 4: Go security cores
 # ============================================================
 FROM golang:1.27.1-alpine3.24@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS core-build
 WORKDIR /src
 COPY core/go.mod ./
 COPY core/ ./
 RUN CGO_ENABLED=0 go test ./... \
-    && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-policy ./cmd/policy-server
+    && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-policy ./cmd/policy-server \
+    && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-store ./cmd/audit-store \
+    && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-store-health ./cmd/audit-store-health
 
 # ============================================================
 # Stage 5: production (non-root; deployment supplies a read-only rootfs)

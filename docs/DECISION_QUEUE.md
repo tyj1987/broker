@@ -128,9 +128,15 @@ continue.
   root-managed path and verifies ownership, write protection, no-follow open and
   file identity. The store socket rejects concurrent active instances and only
   reclaims a same-owner stale endpoint. The checked-in default factory returns
-  `identity_unavailable`; neither command is packaged and no live cloud identity,
-  bucket or retention lock has been created. Linux peer/socket E2E and the
-  existing provider-backed repository tests are the next CI evidence point.
+  `identity_unavailable`. The hermetic container build stage now compiles the
+  audit-store service and bounded health helper, but intentionally does not copy
+  them into the Node production image or ECS release payload. No live cloud
+  identity, bucket or retention lock has been created. Packaging remains blocked
+  until the independent service identities can execute only their own binaries,
+  deployment atomically restarts and verifies the exact audit processes, and
+  rollback proves the prior audit runtime is executable. Linux peer/socket E2E
+  and the existing provider-backed repository tests remain the current CI
+  evidence point.
 
 ## DQ-004: provider signing and account-binding authority
 

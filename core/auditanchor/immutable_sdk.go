@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,7 @@ var (
 	ErrImmutableSDKUnavailable     = errors.New("immutable store SDK unavailable")
 	ErrImmutableSDKResponseInvalid = errors.New("immutable store SDK response invalid")
 	ErrImmutableObjectNotFound     = errors.New("immutable store object not found")
+	ossContentRangePattern         = regexp.MustCompile(`^bytes ([0-9]+)-([0-9]+)/([0-9]+)$`)
 )
 
 type ossSDKAPI interface {
@@ -162,7 +165,14 @@ func (client *OSSSDKImmutableClient) ReadObject(ctx context.Context, bucket, key
 	if result == nil {
 		return nil, ErrImmutableSDKResponseInvalid
 	}
-	return readBoundedSDKBody(result.Body, result.StatusCode)
+	value, readErr := readBoundedSDKBody(result.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
+	if !validOSSReadResponse(result, len(value)) {
+		return nil, ErrImmutableSDKResponseInvalid
+	}
+	return value, nil
 }
 
 // ListObjectKeys exposes one strictly bounded, lexicographically ordered page
@@ -333,7 +343,14 @@ func (client *COSSDKImmutableClient) ReadObject(ctx context.Context, bucket, key
 	if response == nil {
 		return nil, ErrImmutableSDKResponseInvalid
 	}
-	return readBoundedSDKBody(response.Body, response.StatusCode)
+	value, readErr := readBoundedSDKBody(response.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, ErrImmutableSDKResponseInvalid
+	}
+	return value, nil
 }
 
 func (client *COSSDKImmutableClient) ReadObjectRetention(ctx context.Context, bucket, key string) (COSObjectRetention, error) {
@@ -447,8 +464,8 @@ func validCOSResponse(response *tencentcos.Response) bool {
 	return response != nil && response.Response != nil && response.StatusCode == http.StatusOK
 }
 
-func readBoundedSDKBody(body io.ReadCloser, status int) ([]byte, error) {
-	if body == nil || status != http.StatusOK {
+func readBoundedSDKBody(body io.ReadCloser) ([]byte, error) {
+	if body == nil {
 		return nil, ErrImmutableSDKResponseInvalid
 	}
 	value, readErr := io.ReadAll(io.LimitReader(body, AuditObjectMaxBytes+1))
@@ -460,6 +477,29 @@ func readBoundedSDKBody(body io.ReadCloser, status int) ([]byte, error) {
 		return nil, ErrImmutableSDKResponseInvalid
 	}
 	return value, nil
+}
+
+func validOSSReadResponse(result *alioss.GetObjectResult, bodyLength int) bool {
+	if result == nil || bodyLength < 1 || bodyLength > AuditObjectMaxBytes ||
+		result.ContentLength != int64(bodyLength) || result.VersionId != nil {
+		return false
+	}
+	if result.StatusCode == http.StatusOK {
+		return result.ContentRange == nil
+	}
+	if result.StatusCode != http.StatusPartialContent || result.ContentRange == nil {
+		return false
+	}
+	parts := ossContentRangePattern.FindStringSubmatch(*result.ContentRange)
+	if len(parts) != 4 {
+		return false
+	}
+	start, startErr := strconv.ParseInt(parts[1], 10, 64)
+	end, endErr := strconv.ParseInt(parts[2], 10, 64)
+	total, totalErr := strconv.ParseInt(parts[3], 10, 64)
+	length := int64(bodyLength)
+	return startErr == nil && endErr == nil && totalErr == nil && start == 0 &&
+		end == length-1 && total == length
 }
 
 func clientBucket(client *OSSSDKImmutableClient) string {

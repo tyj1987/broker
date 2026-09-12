@@ -13,6 +13,8 @@ const DEFAULT_PATHS = Object.freeze({
   policySocket: '/run/secret-broker/core.sock',
   githubSignerDirectory: '/run/secret-broker-signer',
   githubSignerSocket: '/run/secret-broker-signer/github.sock',
+  auditStoreHealthHelper: '/opt/secret-broker/broker/bin/secret-broker-audit-store-health',
+  auditStoreSocket: '/run/secret-broker-audit-store/store.sock',
   forbiddenKeyRoots: [
     '/etc/secret-broker/pki/ca',
     '/etc/secret-broker/pki/clients',
@@ -75,7 +77,10 @@ const CHECKS = Object.freeze([
     (snapshot) =>
       exactAuditIdentity(snapshot, 'exporter') && exactAuditIdentity(snapshot, 'signer'),
   ],
-  ['audit_store_lock_active', (snapshot) => snapshot.auditStoreLockActive === true],
+  [
+    'audit_store_lock_ready',
+    (snapshot) => snapshot.auditStoreActive === true && snapshot.auditStoreHealthReady === true,
+  ],
   ['audit_store_independent_identity', (snapshot) => exactAuditIdentity(snapshot, 'store')],
   ['audit_recovery_authority_active', (snapshot) => snapshot.auditRecoveryAuthorityActive === true],
   ['audit_recovery_independent_identity', (snapshot) => exactAuditIdentity(snapshot, 'recovery')],
@@ -149,6 +154,50 @@ async function loopbackHealth(fetchImpl) {
   }
 }
 
+export function parseAuditStoreHealth(stdout) {
+  if (typeof stdout !== 'string' || Buffer.byteLength(stdout, 'utf8') > 1024) return false;
+  let value;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return false;
+  }
+  if (value === null || Array.isArray(value) || typeof value !== 'object') return false;
+  const expectedKeys = new Set([
+    'status',
+    'lock_contract',
+    'mirror_state',
+    'common_sequence',
+    'reason_code',
+  ]);
+  const keys = Object.keys(value);
+  return (
+    keys.length === expectedKeys.size &&
+    keys.every((key) => expectedKeys.has(key)) &&
+    value.status === 'ready' &&
+    value.lock_contract === 'verified' &&
+    value.mirror_state === 'in_sync' &&
+    Number.isSafeInteger(value.common_sequence) &&
+    value.common_sequence >= 0 &&
+    value.reason_code === 'ok'
+  );
+}
+
+function auditStoreHealth(command, paths) {
+  const result = command('/usr/sbin/runuser', [
+    '--user',
+    AUDIT_IDENTITIES.recovery.user,
+    '--',
+    '/usr/bin/env',
+    '-i',
+    'PATH=/usr/bin:/bin',
+    paths.auditStoreHealthHelper,
+    '--socket',
+    paths.auditStoreSocket,
+  ]);
+  return result.ok && parseAuditStoreHealth(result.stdout);
+}
+
 export function evaluateProductionReadiness(snapshot) {
   const checks = CHECKS.map(([name, predicate]) => ({
     name,
@@ -174,8 +223,15 @@ export async function collectProductionSnapshot({
   isExecutableImpl = isExecutable,
   countPrivateKeysImpl = countPrivateKeys,
   loopbackHealthImpl = loopbackHealth,
+  auditStoreHealthImpl = auditStoreHealth,
   githubSignerRequired = process.env.BROKER_REQUIRE_GITHUB_SIGNER === '1',
 } = {}) {
+  let auditStoreHealthReady = false;
+  try {
+    auditStoreHealthReady = (await auditStoreHealthImpl(command, paths)) === true;
+  } catch {
+    auditStoreHealthReady = false;
+  }
   const brokerUser = command('systemctl', [
     'show',
     'secret-broker.service',
@@ -206,7 +262,7 @@ export async function collectProductionSnapshot({
     '--quiet',
     'secret-broker-audit-exporter.service',
   ]);
-  const auditStoreLockActive = command('systemctl', [
+  const auditStoreActive = command('systemctl', [
     'is-active',
     '--quiet',
     'secret-broker-audit-store.service',
@@ -297,7 +353,8 @@ export async function collectProductionSnapshot({
     policyActive: policyActive.ok,
     auditSignerActive: auditSignerActive.ok,
     auditExporterActive: auditExporterActive.ok,
-    auditStoreLockActive: auditStoreLockActive.ok,
+    auditStoreActive: auditStoreActive.ok,
+    auditStoreHealthReady,
     auditRecoveryAuthorityActive: auditRecoveryAuthorityActive.ok,
     auditSignerUser: auditSignerUser.ok ? auditSignerUser.stdout : '',
     auditExporterUser: auditExporterUser.ok ? auditExporterUser.stdout : '',

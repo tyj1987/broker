@@ -5,6 +5,7 @@ import {
   collectProductionSnapshot,
   evaluateProductionReadiness,
   isDirectExecution,
+  parseAuditStoreHealth,
   renderProductionReadiness,
 } from '../deploy/bin/secret-broker-production-preflight.mjs';
 
@@ -27,7 +28,8 @@ const readySnapshot = {
   githubSignerRequired: false,
   auditSignerActive: true,
   auditExporterActive: true,
-  auditStoreLockActive: true,
+  auditStoreActive: true,
+  auditStoreHealthReady: true,
   auditRecoveryAuthorityActive: true,
   auditSignerUser: 'broker-audit-signer',
   auditExporterUser: 'broker-audit-exporter',
@@ -80,7 +82,8 @@ for (const [field, unsafeValue] of [
   ['auditExporterGroup', 'broker'],
   ['auditSignerUser', 'broker-audit-exporter'],
   ['auditSignerGroup', 'broker'],
-  ['auditStoreLockActive', false],
+  ['auditStoreActive', false],
+  ['auditStoreHealthReady', false],
   ['auditStoreUser', 'broker'],
   ['auditStoreGroup', 'broker'],
   ['auditRecoveryAuthorityActive', false],
@@ -116,6 +119,8 @@ const fakePaths = {
   policySocket: '/policy.sock',
   githubSignerDirectory: '/signer',
   githubSignerSocket: '/signer/github.sock',
+  auditStoreHealthHelper: '/release/bin/secret-broker-audit-store-health',
+  auditStoreSocket: '/audit-store.sock',
   forbiddenKeyRoots: ['/offline-ca', '/offline-clients'],
 };
 const fakeStats = new Map([
@@ -143,6 +148,24 @@ const command = (name, args) => {
   if (invocation.includes('-p User')) return { ok: true, stdout: 'broker' };
   if (invocation.includes('-p Group')) return { ok: true, stdout: 'broker' };
   if (name === 'nginx') return { ok: true, stdout: '  proxy_ssl_verify on;\n' };
+  if (name === '/usr/sbin/runuser') {
+    assert.deepEqual(args, [
+      '--user',
+      'broker-audit-recovery',
+      '--',
+      '/usr/bin/env',
+      '-i',
+      'PATH=/usr/bin:/bin',
+      '/release/bin/secret-broker-audit-store-health',
+      '--socket',
+      '/audit-store.sock',
+    ]);
+    return {
+      ok: true,
+      stdout:
+        '{"status":"ready","lock_contract":"verified","mirror_state":"in_sync","common_sequence":7,"reason_code":"ok"}',
+    };
+  }
   if (name === 'id' && args[0] === '-u') return { ok: true, stdout: '1001' };
   if (name === 'id' && args[0] === '-G') return { ok: true, stdout: '1001 1002' };
   return {
@@ -164,6 +187,21 @@ assert.equal(evaluateProductionReadiness(collected).ready, true);
 assert.equal(collected.nginxVerifyOnCount, 1);
 assert.equal(collected.nginxVerifyOffCount, 0);
 assert.equal(collected.githubSignerRequired, false);
+assert.equal(collected.auditStoreActive, true);
+assert.equal(collected.auditStoreHealthReady, true);
+const healthProbeFailure = await collectProductionSnapshot({
+  command,
+  fetchImpl: async () => ({ ok: true }),
+  paths: fakePaths,
+  pathInfoImpl: async (path) => fakeStats.get(path) ?? null,
+  isExecutableImpl: async () => true,
+  countPrivateKeysImpl: async () => 0,
+  auditStoreHealthImpl: async () => {
+    throw new Error('provider detail must not escape');
+  },
+});
+assert.equal(healthProbeFailure.auditStoreHealthReady, false);
+assert.equal(evaluateProductionReadiness(healthProbeFailure).ready, false);
 for (const [path, replacement] of [
   ['/signer', { ...fakeStats.get('/signer'), gid: 9999 }],
   ['/signer', { ...fakeStats.get('/signer'), mode: 0o040740 }],
@@ -188,5 +226,25 @@ assert.equal(
   true,
 );
 assert.equal(isDirectExecution('/tmp/other.mjs', 'file:///tmp/preflight.mjs'), false);
+
+const readyStoreHealth =
+  '{"status":"ready","lock_contract":"verified","mirror_state":"in_sync","common_sequence":7,"reason_code":"ok"}';
+assert.equal(parseAuditStoreHealth(readyStoreHealth), true);
+for (const invalid of [
+  '',
+  'not-json',
+  'null',
+  '[]',
+  '{"status":"ready"}',
+  readyStoreHealth.replace('"verified"', '"unverified"'),
+  readyStoreHealth.replace('"in_sync"', '"lagging"'),
+  readyStoreHealth.replace('"ok"', '"other"'),
+  readyStoreHealth.replace('"common_sequence":7', '"common_sequence":-1'),
+  readyStoreHealth.replace('"common_sequence":7', '"common_sequence":1.5'),
+  readyStoreHealth.slice(0, -1) + ',"extra":true}',
+  ' '.repeat(1025),
+]) {
+  assert.equal(parseAuditStoreHealth(invalid), false, 'invalid store health must fail closed');
+}
 
 console.log('production preflight: 22 fail-closed deployment gates passed');

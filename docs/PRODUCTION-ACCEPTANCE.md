@@ -144,7 +144,9 @@ configuration body was emitted by the preflight.
 Local regression at this checkpoint passed the complete Node verification and
 coverage gate. The current preflight has 22 deterministic gates, including the
 four independent audit services and their pinned, mutually distinct users and
-groups; its success,
+groups. The immutable-store gate also requires a fresh exact health response as
+the recovery identity; an active process alone cannot satisfy the lock/mirror
+gate. Its success,
 per-gate failure and output non-disclosure tests pass. This is source and
 read-only runtime evidence; it is not a migration or release approval.
 

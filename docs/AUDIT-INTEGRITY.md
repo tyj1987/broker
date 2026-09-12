@@ -130,9 +130,13 @@ work; an in-memory or Broker-owned implementation cannot satisfy DQ-003.
 Four hardened systemd unit contracts pin mutually distinct signer, exporter,
 store and recovery identities. The 22-item production preflight now requires
 both the exporter and signer to be active and rejects shared or generic audit
-users and groups. The units intentionally cannot start until their reviewed
-binaries and provider configuration validators are packaged; their presence
-does not constitute live KMS, WORM, mirror or recovery evidence.
+users and groups. The store gate requires both an active process and a fresh
+typed health response obtained as the fixed recovery UID; only `ready`,
+`verified`, `in_sync` and `ok` with an exact bounded response pass. Process
+liveness alone cannot claim that WORM or mirror state was checked. The units
+intentionally cannot start until their reviewed binaries and provider
+configuration validators are packaged; their presence does not constitute live
+KMS, WORM, mirror or recovery evidence.
 
 `core/auditanchor.ImmutableObjectWriter` now defines the typed dual-cloud
 write boundary. It accepts only a canonicalizable signed-anchor envelope,
@@ -167,6 +171,13 @@ idempotent existing object. The COS transport applies COMPLIANCE mode and the
 exact retain-until timestamp in the original PutObject request. These are still
 source-only transports: credentials, cloud resources and a runnable store
 service do not yet exist.
+
+OSS read-back requests a bounded byte range. A valid range response is `206
+Partial Content`, so the transport accepts it only when `Content-Range` proves
+that the returned bytes start at zero and comprise the complete object, the
+declared length matches, and the total is within the 16 KiB anchor limit. It
+also accepts an exact bounded `200` full response with no `Content-Range`.
+Partial, oversized, versioned, malformed or unclosed responses fail closed.
 
 `core/auditstore` and
 `broker/lib/local-audit-anchor-store-client.js` now define the bounded local

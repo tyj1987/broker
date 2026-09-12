@@ -96,8 +96,9 @@ func validOSSSDKFake() *fakeOSSSDK {
 		versionResult: &alioss.GetBucketVersioningResult{ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK}},
 		putResult:     &alioss.PutObjectResult{ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK}},
 		getResult: &alioss.GetObjectResult{
-			Body:         io.NopCloser(bytes.NewReader([]byte("anchor"))),
-			ResultCommon: alioss.ResultCommon{StatusCode: http.StatusOK},
+			Body: io.NopCloser(bytes.NewReader([]byte("anchor"))), ContentLength: 6,
+			ContentRange: ptr("bytes 0-5/6"),
+			ResultCommon: alioss.ResultCommon{StatusCode: http.StatusPartialContent},
 		},
 		listResult: &alioss.ListObjectsV2Result{
 			Name: ptr(ossSDKTestBucket), Prefix: ptr("audit-anchors/v1/stream/"), MaxKeys: 2,
@@ -243,6 +244,13 @@ func TestOSSSDKCreateAndReadRejectInvalidResponses(t *testing.T) {
 	if err != nil || string(got) != "anchor" || fake.getRequest == nil || *fake.getRequest.Range != "bytes=0-16384" {
 		t.Fatalf("ReadObject() = %q, %v, request=%#v", got, err, fake.getRequest)
 	}
+	fake = validOSSSDKFake()
+	fake.getResult.StatusCode = http.StatusOK
+	fake.getResult.ContentRange = nil
+	got, err = newTestOSSClient(t, fake).ReadObject(context.Background(), ossSDKTestBucket, sdkTestKey)
+	if err != nil || string(got) != "anchor" {
+		t.Fatalf("full ReadObject() = %q, %v", got, err)
+	}
 	readCases := []struct {
 		name   string
 		mutate func(*fakeOSSSDK)
@@ -254,7 +262,18 @@ func TestOSSSDKCreateAndReadRejectInvalidResponses(t *testing.T) {
 		}, ErrImmutableObjectNotFound},
 		{"nil response", func(value *fakeOSSSDK) { value.getResult = nil }, ErrImmutableSDKResponseInvalid},
 		{"nil body", func(value *fakeOSSSDK) { value.getResult.Body = nil }, ErrImmutableSDKResponseInvalid},
-		{"wrong status", func(value *fakeOSSSDK) { value.getResult.StatusCode = http.StatusPartialContent }, ErrImmutableSDKResponseInvalid},
+		{"wrong status", func(value *fakeOSSSDK) { value.getResult.StatusCode = http.StatusCreated }, ErrImmutableSDKResponseInvalid},
+		{"missing content range", func(value *fakeOSSSDK) { value.getResult.ContentRange = nil }, ErrImmutableSDKResponseInvalid},
+		{"malformed content range", func(value *fakeOSSSDK) { value.getResult.ContentRange = ptr("bytes 0-5/*") }, ErrImmutableSDKResponseInvalid},
+		{"partial object", func(value *fakeOSSSDK) {
+			value.getResult.Body = io.NopCloser(bytes.NewReader([]byte("ancho")))
+			value.getResult.ContentLength = 5
+			value.getResult.ContentRange = ptr("bytes 0-4/6")
+		}, ErrImmutableSDKResponseInvalid},
+		{"nonzero range start", func(value *fakeOSSSDK) { value.getResult.ContentRange = ptr("bytes 1-6/6") }, ErrImmutableSDKResponseInvalid},
+		{"content length mismatch", func(value *fakeOSSSDK) { value.getResult.ContentLength = 5 }, ErrImmutableSDKResponseInvalid},
+		{"versioned response", func(value *fakeOSSSDK) { value.getResult.VersionId = ptr("unexpected") }, ErrImmutableSDKResponseInvalid},
+		{"unexpected range on 200", func(value *fakeOSSSDK) { value.getResult.StatusCode = http.StatusOK }, ErrImmutableSDKResponseInvalid},
 		{"oversized", func(value *fakeOSSSDK) {
 			value.getResult.Body = io.NopCloser(bytes.NewReader(make([]byte, AuditObjectMaxBytes+1)))
 		}, ErrImmutableSDKResponseInvalid},
@@ -273,6 +292,16 @@ func TestOSSSDKCreateAndReadRejectInvalidResponses(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("invalid response body is closed", func(t *testing.T) {
+		value := validOSSSDKFake()
+		body := &testReadCloser{reader: bytes.NewReader([]byte("anchor"))}
+		value.getResult.Body = body
+		value.getResult.StatusCode = http.StatusCreated
+		if _, err := newTestOSSClient(t, value).ReadObject(context.Background(), ossSDKTestBucket, sdkTestKey); !errors.Is(err, ErrImmutableSDKResponseInvalid) || !body.closed {
+			t.Fatalf("error = %v, closed=%t", err, body.closed)
+		}
+	})
 }
 
 func TestOSSSDKRejectsUnboundRequests(t *testing.T) {

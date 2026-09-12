@@ -114,6 +114,12 @@ continue.
   immutable buckets, mirror worker, credentials, retention locks and recovery
   authority are not deployed yet, so there is no claim of independent
   non-repudiation and RR-012 remains open.
+  The OSS bounded read contract accepts `206 Partial Content` only when the
+  response metadata proves the range is the complete object; this corrects the
+  prior source path that rejected normal OSS range reads. The 22-item production
+  preflight now combines store process liveness with an exact fresh health probe
+  executed as the recovery UID, so an active placeholder cannot assert verified
+  lock or mirror state.
 
 ## DQ-004: provider signing and account-binding authority
 

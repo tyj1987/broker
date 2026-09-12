@@ -533,6 +533,17 @@ const failureAudit = failureObserved.find((event) => event.task_id === throwing.
 assert.equal(failureAudit.result, 'failed');
 assert.equal(failureAudit.error, 'executor_failed');
 
+const sensitiveCodeBroker = failureBroker(async () => {
+  throw new V2Error('canary-secret-token', 'canary must never escape', 502);
+});
+const sensitiveCodeTask = await sensitiveCodeBroker.create(human, {
+  ...lowInput, idempotency_key: 'task-case-sensitive1',
+});
+const sensitiveCodeResult = await sensitiveCodeBroker.run(human, sensitiveCodeTask.id);
+assert.deepEqual(sensitiveCodeResult.error, { code: 'operation_failed' });
+assert.ok(!JSON.stringify(sensitiveCodeResult).includes('canary'));
+assert.ok(!JSON.stringify(sensitiveCodeBroker.eventsFor(human, sensitiveCodeTask.id)).includes('canary'));
+
 const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });
 assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code, 'schema_mismatch');

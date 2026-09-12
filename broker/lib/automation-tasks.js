@@ -21,6 +21,8 @@ const VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{16,128}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
+const TASK_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
+const SENSITIVE_TASK_CODE_RE = /(secret|password|private|canary|pem|material)/i;
 const MAX_TASKS = 10_000;
 const MAX_EVENTS = 64;
 const STATE_VERSION = 2;
@@ -47,6 +49,15 @@ function hash(value) {
 
 function stateCorrupt(message) {
   return new V2Error('state_corrupt', `automation task state is invalid: ${message}`, 500);
+}
+
+// Failure codes are public task data. Never expose adapter exception text or
+// credential-shaped values through a task error or event reason.
+function safeTaskCode(value, fallback = 'operation_failed') {
+  return typeof value === 'string' && TASK_CODE_RE.test(value)
+    && !SENSITIVE_TASK_CODE_RE.test(value)
+    ? value
+    : fallback;
 }
 
 function hasExactKeys(value, keys) {
@@ -122,7 +133,7 @@ function exportedTask(task) {
     approval_id: task.approvalId || null,
     execution_id: task.executionId || null,
     result: task.state === 'SUCCEEDED' ? structuredClone(task.result) : null,
-    error: task.state === 'FAILED' ? task.error : null,
+    error: task.state === 'FAILED' ? safeTaskCode(task.error) : null,
     latency_ms: Number.isFinite(task.latencyMs) ? task.latencyMs : null,
   };
 }
@@ -228,7 +239,7 @@ function restoreTaskRecord(value, toolRegistry) {
     createdAt: value.created_at, updatedAt: value.updated_at, expiresAt: value.expires_at,
     ...(approvalId ? { approvalId } : {}), ...(executionId ? { executionId } : {}),
     ...(value.state === 'SUCCEEDED' ? { result } : {}),
-    ...(value.state === 'FAILED' ? { error: value.error } : {}),
+    ...(value.state === 'FAILED' ? { error: safeTaskCode(value.error) } : {}),
     ...(value.latency_ms !== null ? { latencyMs: value.latency_ms } : {}),
     running: false,
   };
@@ -305,7 +316,7 @@ function publicTask(task) {
     approval_id: task.approvalId || null,
     execution_id: task.executionId || null,
     result: task.state === 'SUCCEEDED' ? structuredClone(task.result) : undefined,
-    error: task.error ? { code: task.error } : undefined,
+    error: task.error ? { code: safeTaskCode(task.error) } : undefined,
     latency_ms: Number.isFinite(task.latencyMs) ? task.latencyMs : undefined,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
@@ -532,7 +543,10 @@ export class AutomationTaskBroker {
   eventsFor(identity, id) {
     const task = this.getOwned(identity, id);
     this.expire(task);
-    return task.events.map((event) => structuredClone(event));
+    return task.events.map((event) => ({
+      ...structuredClone(event),
+      reason: safeTaskCode(event.reason),
+    }));
   }
 
   async run(identity, id) {
@@ -736,8 +750,9 @@ export class AutomationTaskBroker {
   }
 
   fail(task, code) {
-    this.transition(task, 'FAILED', code);
-    task.error = code;
+    const safeCode = safeTaskCode(code);
+    this.transition(task, 'FAILED', safeCode);
+    task.error = safeCode;
   }
 
   completePreExecutionFailure(task, approvalClaim, code, { state = 'FAILED', rateLimitConsumed = false } = {}) {
@@ -777,14 +792,15 @@ export class AutomationTaskBroker {
     if (!STATES.has(state)) throw new V2Error('invalid_state', 'unknown task state', 500);
     if (!TRANSITIONS.get(task.state)?.has(state)) throw new V2Error('invalid_state', `task cannot transition from ${task.state || 'NEW'} to ${state}`, 409);
     const timestamp = new Date(this.now()).toISOString();
-    const event = { sequence: task.nextSequence, state, reason, at: timestamp };
+    const safeReason = safeTaskCode(reason);
+    const event = { sequence: task.nextSequence, state, reason: safeReason, at: timestamp };
     this.onEvent({
       task_id: task.id, execution_id: task.executionId || null, actor: task.owner,
       identity: task.identityMethod, role: task.role, policy_decision: task.policyDecision,
       tool: task.tool.name, target: redactDeep(task.parameters.resource_ref), environment: task.environment,
       risk_level: task.tool.risk_level, approval_id: task.approvalId || null,
       result: TERMINAL.has(state) ? state.toLowerCase() : undefined,
-      error: state === 'FAILED' ? reason : undefined,
+      error: state === 'FAILED' ? safeReason : undefined,
       latency_ms: task.latencyMs, ...event,
     });
     // State is committed only after the mandatory audit sink accepts the

@@ -111,6 +111,7 @@ async function handleTunnel(req, res, { send, jsonError, readBody, audit, ctx, c
 
 async function handleTunnelStop(req, res, { send, jsonError, readBody, audit, ctx }) {
   if (!ctx?.client) return jsonError(res, 401, 'Authentication required');
+  if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
   const body = await readBody(req) || {};
   const { id } = body;
   if (!id) return jsonError(res, 400, 'id required');
@@ -121,6 +122,7 @@ async function handleTunnelStop(req, res, { send, jsonError, readBody, audit, ct
 
 async function handleTunnelList(res, { send, jsonError, ctx, config }) {
   if (!ctx?.client) return jsonError(res, 401, 'Authentication required');
+  if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
   const items = listTunnels();
   res.statusCode = 200;
   res.setHeader('content-type', 'application/json; charset=utf-8');

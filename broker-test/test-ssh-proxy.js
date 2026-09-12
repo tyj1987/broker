@@ -162,6 +162,8 @@ section('sshExec error paths');
   ok('SSH route does not expose executor exception text',
     !routeSource.includes('ssh exec failed: ${e.message}')
       && !routeSource.includes('tunnel open failed: ${e.message}'));
+  ok('SSH tunnel stop/list require admin role',
+    (routeSource.match(/ctx\.client\.role !== 'admin'/g) || []).length >= 2);
 }
 {
   let threw = false;

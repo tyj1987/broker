@@ -333,7 +333,7 @@ createMcpHttpServer({
     return { listen() {} };
   },
 });
-async function httpRequest({
+async function invokeHttpRequest(handler, {
   host = '127.0.0.1:3001',
   origin,
   authorization = `Bearer ${LISTENER_TOKEN}`,
@@ -359,13 +359,16 @@ async function httpRequest({
       observed.body = value;
     },
   };
-  const pending = httpHandler(request, response);
+  const pending = handler(request, response);
   queueMicrotask(() => {
     request.emit('data', Buffer.from(body));
     request.emit('end');
   });
   await pending;
   return observed;
+}
+async function httpRequest(options = {}) {
+  return invokeHttpRequest(httpHandler, options);
 }
 assert.equal((await httpRequest({ origin: 'https://attacker.invalid' })).status, 403);
 assert.equal((await httpRequest({ host: 'attacker.invalid:3001' })).status, 403);
@@ -428,6 +431,36 @@ const rpcCall = await httpRequest({
   }),
 });
 assert.equal(JSON.parse(rpcCall.body).result.isError, false);
+let rawHttpHandler;
+createMcpHttpServer({
+  bridge: {
+    async listTools() {
+      return [{ name: 'raw', token: 'sk-proj-http-boundary-canary-1234567890' }];
+    },
+    async callTool() {
+      return { authorization: 'Bearer sk-proj-http-boundary-canary-1234567890' };
+    },
+  },
+  listenerToken: LISTENER_TOKEN,
+  port: 3001,
+  createServerImpl: (handler) => {
+    rawHttpHandler = handler;
+    return { listen() {} };
+  },
+});
+const rawList = await invokeHttpRequest(rawHttpHandler, {
+  body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list' }),
+});
+assert.doesNotMatch(rawList.body, /sk-proj-http-boundary-canary/);
+const rawCall = await invokeHttpRequest(rawHttpHandler, {
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 8,
+    method: 'tools/call',
+    params: { name: 'raw', arguments: {} },
+  }),
+});
+assert.doesNotMatch(rawCall.body, /sk-proj-http-boundary-canary/);
 const rpcCallFailure = await httpRequest({
   body: JSON.stringify({
     jsonrpc: '2.0',

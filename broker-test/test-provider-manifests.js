@@ -27,6 +27,16 @@ for (const filename of manifests) {
   if (ids.has(document.id)) throw new Error(`${filename}: duplicate id`);
   ids.add(document.id);
   if (document.status === 'production') throw new Error(`${filename}: cannot be production before a real contract test`);
+  if (!Array.isArray(document.official_docs) || document.official_docs.length < 1) {
+    throw new Error(`${filename}: at least one official documentation URL is required`);
+  }
+  if (!Array.isArray(document.origins)) throw new Error(`${filename}: origins must be an array`);
+  if (!Array.isArray(document.authentication?.priority) || document.authentication.priority.length < 1
+    || !document.authentication.inject || typeof document.authentication.inject !== 'object'
+    || typeof document.authentication.rotation !== 'string' || !document.authentication.rotation
+    || typeof document.authentication.revocation !== 'string' || !document.authentication.revocation) {
+    throw new Error(`${filename}: authentication priority, injection, rotation and revocation are required`);
+  }
   if (document.contract_test?.required !== true || document.contract_test?.last_result !== 'not_run') {
     throw new Error(`${filename}: must retain an explicit unverified contract gate`);
   }

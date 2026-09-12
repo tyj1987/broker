@@ -12,16 +12,18 @@
     "checked_at": { "type": "string", "format": "date" },
     "status": { "enum": ["draft", "contract_required", "production"] },
     "official_docs": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://" } },
-    "origins": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://[^/]+/?$" } },
+    "origins": { "type": "array", "minItems": 0, "items": { "type": "string", "format": "uri", "pattern": "^https://[^/]+/?$" } },
     "authentication": {
       "type": "object", "additionalProperties": false,
       "required": ["priority", "inject"],
       "properties": {
         "priority": { "type": "array", "minItems": 1, "items": { "type": "string" } },
         "inject": { "type": "object", "additionalProperties": { "type": "string" } },
+        "scope": { "type": "string", "minLength": 1 },
         "maximum_ttl_seconds": { "type": "integer", "minimum": 60 },
         "rotation": { "type": "string" },
-        "revocation": { "type": "string" }
+        "revocation": { "type": "string" },
+        "signer_boundary": { "type": "string", "minLength": 1 }
       }
     },
     "operations": {
@@ -50,6 +52,10 @@
         "account": { "type": "string" }, "required": { "type": "boolean" },
         "last_result": { "enum": ["not_run", "passed", "failed"] }
       }
+    },
+    "implementation_evidence": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
     }
   }
 }

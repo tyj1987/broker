@@ -6,7 +6,7 @@ import { stdin as processStdin, stdout as processStdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createMcpTaskBridge } from './lib/mcp-task-bridge.js';
-import { redact } from './lib/redact.js';
+import { redact, redactDeep } from './lib/redact.js';
 
 const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -226,14 +226,16 @@ async function handleRpc(bridge, request) {
   if (request.method === 'ping') return rpcResult(request.id, {});
   if (request.method === 'tools/list') {
     try {
-      return rpcResult(request.id, { tools: await bridge.listTools() });
+      return rpcResult(request.id, { tools: redactDeep(await bridge.listTools()) });
     } catch (error) {
       return rpcError(request.id, -32603, safeMcpErrorCode(error, 'tool_list_failed'));
     }
   }
   if (request.method === 'tools/call') {
     try {
-      const data = await bridge.callTool(request.params?.name, request.params?.arguments || {});
+      const data = redactDeep(
+        await bridge.callTool(request.params?.name, request.params?.arguments || {}),
+      );
       return rpcResult(request.id, {
         content: [{ type: 'text', text: JSON.stringify(data) }],
         isError: false,

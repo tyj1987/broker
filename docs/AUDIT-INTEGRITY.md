@@ -74,10 +74,13 @@ Run the protocol and chain tests together:
 npm --prefix broker run test:audit-hash-chain
 ```
 
-This module is a contract and verifier, not an active exporter. It does not
-choose an immutable store, KMS/HSM identity, retention policy, or disaster
-recovery authority. Production export remains disabled until DQ-003 is decided
-and its storage-outage, retention-lock, signer-rotation and recovery tests pass.
+This module is a contract and verifier, not an active exporter. DQ-003 now
+selects a non-exportable Alibaba Cloud KMS signing key, an independently
+administered OSS BucketWorm store with 365-day retention, and a typed mirror to
+a separate Tencent Cloud COS account with per-object 365-day COMPLIANCE
+retention. Production export remains disabled until those independent
+workloads and stores exist and their storage-outage, retention-lock,
+signer-rotation, cross-cloud lag and recovery tests pass.
 
 `broker/lib/audit-anchor-exporter.js` adds the provider-neutral publication
 coordinator without selecting those controls. It verifies an externally signed
@@ -105,9 +108,38 @@ public anchor metadata and the domain-separated signing input. It never carries
 audit events or private-key material. This client is source-only until a
 separately managed signer workload is selected and deployed.
 
+`core/auditanchor` is the server-side protocol core for that signer workload.
+It independently validates the exact purpose, configured algorithm, key,
+stream, positive sequence, lowercase SHA-256 payload digest and canonical
+domain-separated signing input before consulting the sequence authority or
+signing backend. Linux peer credentials bind the request to the configured
+non-root Broker UID. The KMS adapter receives both the validated public input
+and its SHA-256 digest, but no event body or credential. An injected independent
+anchor authority must reject conflicting signatures for the same stream and
+sequence.
+
+The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
+`ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the
+exact signing key. The OSS writer can only create objects in the audit prefix;
+it cannot delete objects or change WORM policy. BucketWorm must be completed
+and read back as `Locked` with a 365-day retention period before the exporter
+can become healthy. The Tencent mirror applies COMPLIANCE retention to each
+object rather than relying only on a mutable bucket default. The initial mirror
+storage class remains STANDARD until a real account proves that direct archive
+upload, object lock and the recovery-time target work together.
+
+Official contracts checked on 2026-09-12:
+
+- [Alibaba Cloud KMS Sign](https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/sign-1)
+- [Alibaba Cloud KMS key specifications](https://www.alibabacloud.com/help/en/kms/key-management-service/user-guide/key-types-and-specifications)
+- [Alibaba Cloud OSS retention policies](https://www.alibabacloud.com/help/en/oss/user-guide/oss-retention-policies)
+- [Tencent Cloud COS Object Lock](https://cloud.tencent.com/document/product/436/55294)
+- [Tencent Cloud Object Lock condition keys](https://cloud.tencent.com/document/product/436/71307)
+
 ## Open production gate
 
 Local hashing is tamper-evident, not independently non-repudiable. Production
-acceptance requires signed chain heads exported to an independently
-administered immutable store. Until that anchor and its recovery verification
-exist, residual risk RR-012 remains open.
+acceptance requires signed chain heads exported to the selected independently
+administered immutable stores. Until the KMS signer, both retention locks,
+cross-cloud reconciliation and recovery verification exist as live evidence,
+residual risk RR-012 remains open.

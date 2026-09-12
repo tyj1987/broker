@@ -32,11 +32,19 @@ continue.
 
 ## DQ-003: independent audit anchor
 
-- Status: open
+- Status: accepted; implementation and live evidence pending
+- Decision authority: the user approved the recommended design on 2026-09-12.
+  This approval selects the architecture but does not approve cloud resource
+  creation, production cutover, or deployment of an unverified release.
 - Needed before: production acceptance
-- Decision: select the independently administered immutable store and KMS or
-  HSM identity used to sign retained audit-chain heads. The signing identity
-  must not be available to the Broker application process.
+- Decision: use a non-exportable Alibaba Cloud KMS signing key behind an
+  independently owned signer workload, publish signed heads to an independently
+  administered Alibaba Cloud OSS bucket locked with BucketWorm for 365 days,
+  and mirror the same signed envelopes to a separate Tencent Cloud COS account
+  with per-object COMPLIANCE retention of at least 365 days. The mirror is an
+  explicit typed worker because neither cloud provides native continuous
+  cross-cloud replication. The signing identity must not be available to the
+  Broker application process.
 - Required evidence: signed-head verification, suffix and full-chain deletion
   detection, signer revocation, clock rollback, storage outage, retention-lock
   enforcement and disaster-recovery tests.
@@ -51,9 +59,13 @@ continue.
   Deterministic tests cover payload/signature tampering, signer trust and
   revocation, predecessor/sequence continuity, clock and count rollback,
   retained anchors on growing chains, publication conflicts, signer/store
-  outages, incomplete recovery and recovery bounds. No external signer,
-  immutable retention store or recovery authority
-  is selected, so there is no claim of independent non-repudiation and RR-012
+  outages, incomplete recovery and recovery bounds. The Go `auditanchor`
+  protocol core now validates the fixed purpose, algorithm, key, stream,
+  sequence, payload digest and domain-separated signing input before an
+  injected independent authority or KMS backend can be called. It authenticates
+  the local peer on Linux and returns only stable error codes. No KMS backend,
+  immutable bucket, mirror worker, retention lock or recovery authority is
+  deployed yet, so there is no claim of independent non-repudiation and RR-012
   remains open.
 
 ## DQ-004: provider signing and account-binding authority

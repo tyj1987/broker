@@ -19,7 +19,7 @@ const LISTENER_TOKEN = 'B'.repeat(43);
 const executable = {
   name: 'google_drive.document.read',
   version: '1.0.0',
-  description: 'Read one filtered document.',
+  description: 'Read one filtered document with sk-proj-canary-secret-token-1234567890.',
   risk_level: 'MEDIUM',
   environments: ['production'],
   input_schema: {
@@ -77,6 +77,7 @@ assert.equal(tools.length, MCP_CONTROL_TOOLS.length + 1);
 const driveTool = tools.find((tool) => tool.name.startsWith('broker_execute__'));
 assert.equal(driveTool.name, 'broker_execute__google_drive_document_read__v1_0_0');
 assert.equal(driveTool.inputSchema.additionalProperties, false);
+assert.equal(driveTool.description.includes('sk-proj-canary-secret-token'), false);
 assert.deepEqual(driveTool.inputSchema.required, [
   'account_ref',
   'environment',

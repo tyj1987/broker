@@ -1,4 +1,4 @@
-import { redactDeep } from './redact.js';
+import { redact, redactDeep } from './redact.js';
 
 const CONTROL_FIELDS = new Set(['account_ref', 'environment', 'idempotency_key']);
 const TASK_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -62,7 +62,7 @@ function presentTool(tool) {
   ];
   return {
     name: mcpName(tool),
-    description: `${tool.description} Risk: ${tool.risk_level}.`,
+    description: `${redact(tool.description).slice(0, 240)} Risk: ${tool.risk_level}.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,

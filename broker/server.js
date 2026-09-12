@@ -299,7 +299,7 @@ console.log('============================================');
 function sopsDecrypt(filePath) {
   return new Promise((resolve, reject) => {
     if (!existsSync(filePath)) {
-      return reject(new Error(`File not found: ${filePath}`));
+      return reject(Object.assign(new Error('sops_file_unavailable'), { cause: { filePath } }));
     }
     const env = { ...process.env };
     if (AGE_KEY_FILE) env.SOPS_AGE_KEY_FILE = AGE_KEY_FILE;
@@ -329,9 +329,9 @@ function sopsDecrypt(filePath) {
     let out = '', err = '';
     child.stdout.on('data', d => out += d.toString());
     child.stderr.on('data', d => err += d.toString());
-    child.on('error', e => reject(new Error(`sops spawn failed: ${e.message}. Is sops installed?`)));
+    child.on('error', e => reject(Object.assign(new Error('sops_decrypt_unavailable'), { cause: e })));
     child.on('close', code => {
-      if (code !== 0) return reject(new Error(`sops decrypt failed (code ${code}): ${err}`));
+      if (code !== 0) return reject(Object.assign(new Error('sops_decrypt_failed'), { cause: { code, stderr: err } }));
       resolve(out);
     });
   });
@@ -358,7 +358,7 @@ function sopsEncryptAtomic(targetPath, plaintext) {
     try {
       writeFileSync(tmpPath, plaintext, { encoding: 'utf8', mode: 0o600 });
     } catch (e) {
-      return reject(new Error(`write tmp failed: ${e.message}`));
+      return reject(Object.assign(new Error('sops_temp_write_failed'), { cause: e }));
     }
     const args = ['--encrypt', '--in-place', tmpPath];
     if (existsSync(AGE_KEY_FILE)) {
@@ -368,19 +368,19 @@ function sopsEncryptAtomic(targetPath, plaintext) {
     const child = spawn('sops', args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let err = '';
     child.stderr.on('data', d => err += d.toString());
-    child.on('error', e => reject(new Error(`sops spawn failed: ${e.message}. Is sops installed?`)));
+    child.on('error', e => reject(Object.assign(new Error('sops_encrypt_unavailable'), { cause: e })));
     child.on('close', code => {
       if (code !== 0) {
         // leave tmp for forensics, but DON'T touch the original file
         try { unlinkSync(tmpPath); } catch {}
-        return reject(new Error(`sops encrypt failed (code ${code}): ${err}; tmp cleaned at ${tmpPath}`));
+        return reject(Object.assign(new Error('sops_encrypt_failed'), { cause: { code, stderr: err } }));
       }
       try {
         renameSync(tmpPath, targetPath);
         resolve();
       } catch (e) {
         try { unlinkSync(tmpPath); } catch {}
-        reject(new Error(`rename tmp to target failed: ${e.message}; tmp cleaned`));
+        reject(Object.assign(new Error('sops_target_replace_failed'), { cause: e }));
       }
     });
   });

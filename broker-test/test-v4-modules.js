@@ -8,8 +8,10 @@ import { TYPE_SCHEMAS, getTypeSchema, validateFields } from '../broker/type-sche
 import { SERVICE_TEMPLATES, publicTemplateList } from '../broker/service-templates.js';
 import { configureWebAuthn, beginRegistration, beginAuthentication, finishRegistration, finishAuthentication, ensureWebAuthnFactors, listCredentials, parseAuthenticatorData, noopVerifier } from '../broker/webauthn.js';
 import { parseOpenAPI, extractAuthFromDocs, extractUpstreamFromDocs } from '../broker/lib/template-parser.js';
+import { sopsDecrypt } from '../broker/lib/sops.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import assert from 'node:assert/strict';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -17,6 +19,18 @@ function ok(name, cond) {
   else { fail++; console.error(`  FAIL  ${name}`); }
 }
 function section(t) { console.log(`\n[${t}]`); }
+
+section('sops error boundary');
+{
+  await assert.rejects(
+    sopsDecrypt(join(process.cwd(), 'definitely-missing-sops-file.yaml')),
+    (error) => error?.message === 'sops_file_unavailable' && !error.message.includes('definitely-missing'),
+  );
+  const source = readFileSync(join(process.cwd(), 'lib', 'sops.js'), 'utf8');
+  ok('sops failures use stable codes', source.includes("sopsFailure('sops_decrypt_failed'")
+    && source.includes("sopsFailure('sops_encrypt_failed'")
+    && !source.includes('stderr}: ${err}'));
+}
 
 // ============================================================
 // auto-rotate

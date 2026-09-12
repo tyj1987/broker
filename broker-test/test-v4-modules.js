@@ -496,13 +496,16 @@ curl -H "x-api-key: sk-abc" \\
 `;
   const r1 = extractAuthFromDocs(docs);
   ok('extracts Bearer from docs', r1.auth_type === 'bearer');
-  ok('Bearer sample present', r1.sample && r1.sample.includes('Bearer'));
+  ok('Bearer sample is a safe format', r1.sample === 'Authorization: Bearer <redacted>');
+  ok('Bearer sample omits source value', !r1.sample.includes('ghp_xxxx'));
   const r2 = extractAuthFromDocs('# nothing here');
   ok('default bearer when no match', r2.auth_type === 'bearer');
   const r3 = extractAuthFromDocs('Authorization: Basic dXNlcjpwYXNz');
   ok('extracts Basic', r3.auth_type === 'basic');
+  ok('Basic sample is redacted', r3.sample === 'Authorization: Basic <redacted>');
   const r4 = extractAuthFromDocs('x-api-key: sk-abc123');
   ok('extracts header auth', r4.auth_type === 'header');
+  ok('header sample is redacted', r4.sample === 'x-api-key: <redacted>');
 }
 {
   // extract upstream

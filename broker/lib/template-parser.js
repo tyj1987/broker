@@ -115,15 +115,15 @@ export function extractAuthFromDocs(html) {
   if (!html) return { auth_type: 'bearer', sample: null };
   const bearer = /Authorization:\s*Bearer\s+[^\s<"]+/i.exec(html);
   if (bearer) {
-    return { auth_type: 'bearer', sample: bearer[0] };
+    return { auth_type: 'bearer', sample: 'Authorization: Bearer <redacted>' };
   }
   const basic = /Authorization:\s*Basic\s+[A-Za-z0-9+/=]+/i.exec(html);
   if (basic) {
-    return { auth_type: 'basic', sample: basic[0] };
+    return { auth_type: 'basic', sample: 'Authorization: Basic <redacted>' };
   }
   const apikey = /x-api-key:\s*[^\s<"]+/i.exec(html);
   if (apikey) {
-    return { auth_type: 'header', sample: apikey[0] };
+    return { auth_type: 'header', sample: 'x-api-key: <redacted>' };
   }
   return { auth_type: 'bearer', sample: null };
 }

@@ -190,7 +190,7 @@ export async function sshExec(opts, deps = {}) {
       action: 'ssh_exec',
       status: 'error',
       target: opts.target,
-      error: String(e?.message || e),
+      error_code: 'ssh_exec_failed',
       duration_ms: Date.now() - startedAt,
       request_id: deps.requestId,
     });

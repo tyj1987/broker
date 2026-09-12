@@ -69,7 +69,7 @@ async function handleExec(req, res, { send, jsonError, readBody, audit, ctx, con
       target,
     });
   } catch (e) {
-    jsonError(res, 502, `ssh exec failed: ${e.message}`);
+    jsonError(res, 502, 'ssh_exec_failed');
   }
 }
 
@@ -105,7 +105,7 @@ async function handleTunnel(req, res, { send, jsonError, readBody, audit, ctx, c
       startedAt: t.startedAt,
     });
   } catch (e) {
-    jsonError(res, 400, `tunnel open failed: ${e.message}`);
+    jsonError(res, 400, 'ssh_tunnel_open_failed');
   }
 }
 

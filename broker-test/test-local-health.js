@@ -89,6 +89,26 @@ console.log('=== local TCP health listener ===');
   }
 }
 
+console.log('=== probe error redaction ===');
+{
+  const res = {
+    status: 0, body: null,
+    writeHead(s) { this.status = s; },
+    end(b) { this.body = JSON.parse(b); },
+  };
+  await handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
+    send,
+    surface: 'local',
+    config: {},
+    secretCache: new Map([['X', {}]]),
+    runReadyProbes: async () => { throw new Error('synthetic-probe-path-canary'); },
+  });
+  assert(res.status === 503, 'probe failure makes readiness fail');
+  assert(Array.isArray(res.body.probes) && res.body.probes.length === 0
+    && !JSON.stringify(res.body).includes('synthetic-probe-path-canary'),
+    `probe exception text is not exposed: ${JSON.stringify(res.body)}`);
+}
+
 console.log('=== handleStatic missing file is 500 not fall-through ===');
 {
   const dir = mkdtempSync(join(tmpdir(), 'broker-dash-'));

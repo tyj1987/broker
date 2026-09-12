@@ -67,7 +67,7 @@ export async function handleHealth(req, res, route, deps) {
       try {
         probesResult = await deps.runReadyProbes();
       } catch (e) {
-        probesResult = { ok: false, probes: [], error: String(e?.message || e) };
+        probesResult = { ok: false, probes: [], error: 'probe_failed' };
       }
     }
     const probesOk = !probesResult || probesResult.ok;

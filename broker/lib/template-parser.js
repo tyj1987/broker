@@ -40,7 +40,11 @@ export function parseOpenAPI(specText) {
   }
   let spec;
   try { spec = tryParse(specText); }
-  catch (e) { throw new Error('parseOpenAPI: not valid JSON or YAML: ' + e.message); }
+  catch (e) {
+    const error = new Error('openapi_spec_invalid');
+    error.cause = e;
+    throw error;
+  }
   if (!spec || typeof spec !== 'object') {
     throw new Error('parseOpenAPI: spec root is not an object');
   }

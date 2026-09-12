@@ -473,7 +473,11 @@ paths:
 {
   // Invalid input
   let threw = false;
-  try { parseOpenAPI('not json or yaml at all: {{'); } catch (_e) { threw = true; }
+  try { parseOpenAPI('canary-secret-token: ['); } catch (e) {
+    threw = true;
+    ok('invalid spec uses stable error', e.message === 'openapi_spec_invalid');
+    ok('invalid spec does not reflect input', !String(e.message).includes('canary-secret-token'));
+  }
   ok('invalid spec throws', threw);
 }
 {

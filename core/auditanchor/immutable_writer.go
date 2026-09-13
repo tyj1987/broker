@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	AuditObjectRetentionDays = 365
-	AuditObjectMaxBytes      = 16 * 1024
-	COSComplianceMode        = "COMPLIANCE"
-	objectRetentionGrace     = 5 * time.Minute
+	AuditObjectRetentionDays  = 365
+	AuditObjectRetentionGrace = 6 * time.Minute
+	AuditObjectMaxBytes       = 16 * 1024
+	COSComplianceMode         = "COMPLIANCE"
 )
 
 var (
@@ -171,7 +171,7 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 	if now.IsZero() || now.Year() < 2020 || now.Year() > 9998 || now.Before(envelope.Payload.CapturedAt) {
 		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
 	}
-	retainUntil := now.Add(AuditObjectRetentionDays*24*time.Hour + objectRetentionGrace)
+	retainUntil := now.Add(AuditObjectRetentionDays*24*time.Hour + AuditObjectRetentionGrace)
 	key := auditObjectKey(writer.config.Prefix, envelope.Payload.StreamID, envelope.Payload.Sequence)
 	bodyDigest := sha256.Sum256(canonical)
 

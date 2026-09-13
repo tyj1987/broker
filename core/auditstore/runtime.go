@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tyj1987/broker/core/auditanchor"
+	"github.com/tyj1987/broker/core/auditmirror"
 )
 
 var (
@@ -18,18 +19,20 @@ type OSSCloudClient interface {
 	ListObjectKeys(context.Context, string, string, string, int) (auditanchor.ObjectKeyPage, error)
 }
 
-type COSCloudClient interface {
-	auditanchor.COSImmutableClient
-	ListObjectKeys(context.Context, string, string, string, int) (auditanchor.ObjectKeyPage, error)
-}
-
-// CloudClientFactory is the only point allowed to exchange a workload identity
-// for provider clients. It receives non-secret, prevalidated bindings and must
+// PrimaryClientFactory is the only point in this process allowed to exchange
+// its workload identity for an Alibaba OSS client. It receives a non-secret,
+// prevalidated binding and must
 // not fall back to account keys, shared credential files or caller-controlled
 // endpoints.
-type CloudClientFactory interface {
+type PrimaryClientFactory interface {
 	NewOSS(context.Context, ProviderBinding) (OSSCloudClient, error)
-	NewCOS(context.Context, ProviderBinding) (COSCloudClient, error)
+}
+
+// MirrorClientFactory connects to a separately authenticated, provider-neutral
+// mirror worker. It never returns a COS SDK client or COS credential to this
+// process.
+type MirrorClientFactory interface {
+	NewMirror(context.Context, auditmirror.Binding) (auditmirror.Client, error)
 }
 
 type Runtime struct {
@@ -38,8 +41,13 @@ type Runtime struct {
 	Verifier   *auditanchor.EnvelopeVerifier
 }
 
-func NewRuntime(ctx context.Context, config ServiceConfig, factory CloudClientFactory) (*Runtime, error) {
-	if ctx == nil || ctx.Err() != nil || factory == nil {
+func NewRuntime(
+	ctx context.Context,
+	config ServiceConfig,
+	primaryFactory PrimaryClientFactory,
+	mirrorFactory MirrorClientFactory,
+) (*Runtime, error) {
+	if ctx == nil || ctx.Err() != nil || primaryFactory == nil || mirrorFactory == nil {
 		return nil, ErrServiceRuntimeInvalid
 	}
 	safeConfig, err := cloneServiceConfig(config)
@@ -51,13 +59,21 @@ func NewRuntime(ctx context.Context, config ServiceConfig, factory CloudClientFa
 	if err != nil {
 		return nil, ErrServiceConfigInvalid
 	}
-	ossClient, err := factory.NewOSS(ctx, safeConfig.OSS)
+	binding, err := mirrorBinding(safeConfig)
+	if err != nil {
+		return nil, ErrServiceConfigInvalid
+	}
+	ossClient, err := primaryFactory.NewOSS(ctx, safeConfig.OSS)
 	if err != nil || ossClient == nil || ctx.Err() != nil {
 		return nil, ErrServiceIdentityUnavailable
 	}
-	cosClient, err := factory.NewCOS(ctx, safeConfig.COS)
-	if err != nil || cosClient == nil || ctx.Err() != nil {
+	mirrorClient, err := mirrorFactory.NewMirror(ctx, binding)
+	if err != nil || mirrorClient == nil || ctx.Err() != nil {
 		return nil, ErrServiceIdentityUnavailable
+	}
+	cosClient, err := newMirrorCOSAdapter(safeConfig, mirrorClient, verifier)
+	if err != nil {
+		return nil, err
 	}
 	writer, err := auditanchor.NewImmutableObjectWriter(auditanchor.ImmutableObjectWriterConfig{
 		OSSBucket: safeConfig.OSS.Bucket, COSBucket: safeConfig.COS.Bucket,
@@ -78,14 +94,18 @@ func NewRuntime(ctx context.Context, config ServiceConfig, factory CloudClientFa
 	return &Runtime{StreamID: safeConfig.StreamID, Repository: repository, Verifier: verifier}, nil
 }
 
-// UnavailableCloudClientFactory keeps the checked-in command fail closed until
-// a reviewed workload-identity implementation is selected explicitly.
-type UnavailableCloudClientFactory struct{}
+// UnavailablePrimaryClientFactory keeps the checked-in command fail closed
+// until a reviewed Alibaba workload-identity implementation is selected.
+type UnavailablePrimaryClientFactory struct{}
 
-func (UnavailableCloudClientFactory) NewOSS(context.Context, ProviderBinding) (OSSCloudClient, error) {
+func (UnavailablePrimaryClientFactory) NewOSS(context.Context, ProviderBinding) (OSSCloudClient, error) {
 	return nil, ErrServiceIdentityUnavailable
 }
 
-func (UnavailableCloudClientFactory) NewCOS(context.Context, ProviderBinding) (COSCloudClient, error) {
+// UnavailableMirrorClientFactory prevents the checked-in command from
+// selecting a cross-cloud transport before that trust boundary is approved.
+type UnavailableMirrorClientFactory struct{}
+
+func (UnavailableMirrorClientFactory) NewMirror(context.Context, auditmirror.Binding) (auditmirror.Client, error) {
 	return nil, ErrServiceIdentityUnavailable
 }

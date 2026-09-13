@@ -24,9 +24,10 @@ const (
 type storeDependencies struct {
 	loadConfig func(string) (auditstore.ServiceConfig, error)
 	lookupUID  func(string) (uint32, error)
-	newRuntime func(context.Context, auditstore.ServiceConfig, auditstore.CloudClientFactory) (*auditstore.Runtime, error)
+	newRuntime func(context.Context, auditstore.ServiceConfig, auditstore.PrimaryClientFactory, auditstore.MirrorClientFactory) (*auditstore.Runtime, error)
 	serve      func(context.Context, *auditstore.Runtime, uint32, uint32, string) error
-	factory    auditstore.CloudClientFactory
+	primary    auditstore.PrimaryClientFactory
+	mirror     auditstore.MirrorClientFactory
 }
 
 func defaultStoreDependencies() storeDependencies {
@@ -35,7 +36,8 @@ func defaultStoreDependencies() storeDependencies {
 		lookupUID:  lookupUID,
 		newRuntime: auditstore.NewRuntime,
 		serve:      auditstore.ServeRuntime,
-		factory:    auditstore.UnavailableCloudClientFactory{},
+		primary:    auditstore.UnavailablePrimaryClientFactory{},
+		mirror:     auditstore.UnavailableMirrorClientFactory{},
 	}
 }
 
@@ -47,7 +49,8 @@ func runStore(ctx context.Context, args []string, dependencies storeDependencies
 		return 64, "usage_invalid"
 	}
 	if ctx == nil || dependencies.loadConfig == nil || dependencies.lookupUID == nil ||
-		dependencies.newRuntime == nil || dependencies.serve == nil || dependencies.factory == nil {
+		dependencies.newRuntime == nil || dependencies.serve == nil ||
+		dependencies.primary == nil || dependencies.mirror == nil {
 		return 70, "runtime_invalid"
 	}
 	config, err := dependencies.loadConfig(*configPath)
@@ -62,7 +65,7 @@ func runStore(ctx context.Context, args []string, dependencies storeDependencies
 	if err != nil || recoveryUID == exporterUID {
 		return 78, "identity_unavailable"
 	}
-	runtime, err := dependencies.newRuntime(ctx, config, dependencies.factory)
+	runtime, err := dependencies.newRuntime(ctx, config, dependencies.primary, dependencies.mirror)
 	if err != nil {
 		if errors.Is(err, auditstore.ErrServiceIdentityUnavailable) {
 			return 78, "identity_unavailable"

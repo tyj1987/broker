@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,9 @@ func TestQueryHealthUsesOneBoundedUnixExchange(t *testing.T) {
 }
 
 func TestQueryHealthUsesPublicUnixClient(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("production AF_UNIX transport is exercised on Linux; Windows AF_UNIX teardown is nondeterministic")
+	}
 	placeholder, err := os.CreateTemp("", "broker-audit-health-*.sock")
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +71,7 @@ func TestQueryHealthUsesPublicUnixClient(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(path) })
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
-		t.Skipf("Unix sockets unavailable: %v", err)
+		t.Fatalf("production Unix socket unavailable: %v", err)
 	}
 	defer listener.Close()
 	serverDone := make(chan error, 1)
@@ -79,11 +83,21 @@ func TestQueryHealthUsesPublicUnixClient(t *testing.T) {
 		}
 		defer connection.Close()
 		if _, acceptErr = bufio.NewReader(connection).ReadBytes('\n'); acceptErr == nil {
-			_, acceptErr = connection.Write([]byte(validHealthResponse() + "\n"))
+			var written int
+			response := validHealthResponse() + "\n"
+			written, acceptErr = io.WriteString(connection, response)
+			if acceptErr == nil && written != len(response) {
+				acceptErr = io.ErrShortWrite
+			}
+			if acceptErr == nil {
+				acceptErr = connection.CloseWrite()
+			}
 		}
 		serverDone <- acceptErr
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// Windows AF_UNIX scheduling can exceed one second under repeated package
+	// tests; keep the test below the production client's ten-second bound.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	health, err := QueryHealth(ctx, path, "broker-production")
 	if err != nil || health.Status != "ready" {

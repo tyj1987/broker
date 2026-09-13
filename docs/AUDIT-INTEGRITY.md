@@ -228,9 +228,15 @@ On Linux, the production loader accepts only the fixed root-managed audit
 configuration directory, rejects writable or incorrectly owned path elements,
 opens without following links, and verifies that the opened file is the one
 that was inspected. The runtime passes only those non-secret bindings to an
-injected workload-identity factory. Its checked-in default deliberately returns
-`identity_unavailable`, so source presence cannot be mistaken for a configured
-cloud identity.
+injected primary workload-identity factory. A distinct mirror factory receives
+only a provider-neutral immutable binding; the checked-in production command
+has no concrete COS identity factory. Its typed requests carry a bound sequence and, for create,
+one verified envelope; they contain no cloud endpoint, bucket, object key,
+header, credential or mutation primitive. The store derives keys locally and
+revalidates mirror signatures, ordering, COMPLIANCE state and retention results.
+Both checked-in factories deliberately return `identity_unavailable`, so source
+presence cannot be mistaken for a configured cloud identity. The independent
+mirror transport and worker-side verification are not implemented or deployed.
 
 The Linux service creates only the fixed `store.sock` name below a private,
 service-owned, non-writable runtime directory. A non-blocking process lock
@@ -300,4 +306,7 @@ Local hashing is tamper-evident, not independently non-repudiable. Production
 acceptance requires signed chain heads exported to the selected independently
 administered immutable stores. Until the KMS signer, both retention locks,
 cross-cloud reconciliation and recovery verification exist as live evidence,
-residual risk RR-012 remains open.
+residual risk RR-012 remains open. The typed mirror seam and unavailable default
+reduce the future integration surface, but only a verified out-of-process
+transport and independently authenticated worker can prove identity isolation.
+This source boundary is not live independent deletion evidence.

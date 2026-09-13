@@ -190,6 +190,10 @@ jobs:
       - name: Enforce audit anchor protocol statement coverage
         run: |
           test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-mirror-coverage.out ./auditmirror
+      - name: Enforce audit mirror contract statement coverage
+        run: |
+          test "$(go tool cover -func=audit-mirror-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=audit-store-coverage.out ./auditstore
       - name: Enforce audit store protocol statement coverage
         run: |

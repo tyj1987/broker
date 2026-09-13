@@ -148,6 +148,19 @@ continue.
   retained-chain parity, a quiet filesystem snapshot, exact release packaging
   and rollback evidence.
 
+  The store runtime now has separate primary and mirror factories. Only the
+  primary factory may return an OSS SDK capability. The mirror factory returns
+  a provider-neutral client bound to the stream, prefix, mirror profile and
+  trusted-key generation; its request types expose only inspect, immutable
+  create, read, bounded sequence listing and retention inspection. They contain
+  no endpoint, bucket, object key, header, credential, delete, overwrite or
+  retention-policy mutation field. The adapter revalidates canonical signatures,
+  sequence-derived keys, contiguous pages, COMPLIANCE state and cancellation,
+  and normalizes provider failures. The checked-in mirror factory remains
+  unavailable. This is a provider-neutral dependency seam, not proof of process
+  isolation: no out-of-process transport, independently authenticated worker,
+  Tencent identity, COS resource or independent recovery evidence exists yet.
+
 ## DQ-004: provider signing and account-binding authority
 
 - Status: open

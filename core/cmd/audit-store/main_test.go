@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/tyj1987/broker/core/auditstore"
@@ -28,7 +30,7 @@ func validStoreDependencies(t *testing.T) storeDependencies {
 				return 0, errors.New("unexpected")
 			}
 		},
-		newRuntime: func(_ context.Context, config auditstore.ServiceConfig, _ auditstore.CloudClientFactory) (*auditstore.Runtime, error) {
+		newRuntime: func(_ context.Context, config auditstore.ServiceConfig, _ auditstore.PrimaryClientFactory, _ auditstore.MirrorClientFactory) (*auditstore.Runtime, error) {
 			if config.Version != 1 {
 				t.Fatalf("config = %#v", config)
 			}
@@ -40,7 +42,8 @@ func validStoreDependencies(t *testing.T) storeDependencies {
 			}
 			return nil
 		},
-		factory: auditstore.UnavailableCloudClientFactory{},
+		primary: auditstore.UnavailablePrimaryClientFactory{},
+		mirror:  auditstore.UnavailableMirrorClientFactory{},
 	}
 }
 
@@ -48,6 +51,25 @@ func TestRunStoreUsesFixedConfigIdentityAndSocketBindings(t *testing.T) {
 	code, reason := runStore(context.Background(), []string{"--config", storeConfigPath}, validStoreDependencies(t))
 	if code != 0 || reason != "" {
 		t.Fatalf("result = %d, %q", code, reason)
+	}
+}
+
+func TestDefaultStoreBuildHasNoInProcessCOSIdentityFactory(t *testing.T) {
+	dependencies := defaultStoreDependencies()
+	if _, ok := dependencies.primary.(auditstore.UnavailablePrimaryClientFactory); !ok {
+		t.Fatalf("unexpected primary factory %T", dependencies.primary)
+	}
+	if _, ok := dependencies.mirror.(auditstore.UnavailableMirrorClientFactory); !ok {
+		t.Fatalf("unexpected mirror factory %T", dependencies.mirror)
+	}
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"NewCOS", "COSCloudClient", "cos-go-sdk", "tencentcloud"} {
+		if strings.Contains(string(source), forbidden) {
+			t.Fatalf("production command contains in-process COS capability %q", forbidden)
+		}
 	}
 }
 
@@ -80,12 +102,12 @@ func TestRunStoreFailsClosedWithStableReasons(t *testing.T) {
 			value.lookupUID = func(string) (uint32, error) { return 1001, nil }
 		}, 78, "identity_unavailable"},
 		"cloud identity": {func(value *storeDependencies) {
-			value.newRuntime = func(context.Context, auditstore.ServiceConfig, auditstore.CloudClientFactory) (*auditstore.Runtime, error) {
+			value.newRuntime = func(context.Context, auditstore.ServiceConfig, auditstore.PrimaryClientFactory, auditstore.MirrorClientFactory) (*auditstore.Runtime, error) {
 				return nil, auditstore.ErrServiceIdentityUnavailable
 			}
 		}, 78, "identity_unavailable"},
 		"runtime": {func(value *storeDependencies) {
-			value.newRuntime = func(context.Context, auditstore.ServiceConfig, auditstore.CloudClientFactory) (*auditstore.Runtime, error) {
+			value.newRuntime = func(context.Context, auditstore.ServiceConfig, auditstore.PrimaryClientFactory, auditstore.MirrorClientFactory) (*auditstore.Runtime, error) {
 				return nil, errors.New("provider detail")
 			}
 		}, 70, "runtime_invalid"},

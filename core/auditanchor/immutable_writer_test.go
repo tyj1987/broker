@@ -249,7 +249,7 @@ func TestImmutableObjectWriterCreatesBothLockedCopies(t *testing.T) {
 	}
 	if cos.request.LockMode != COSComplianceMode || cos.request.StorageClass != "STANDARD" ||
 		cos.request.ContentType != "application/json" || cos.request.Key != wantKey ||
-		!cos.request.RetainUntil.Equal(writerNow.Add(365*24*time.Hour+objectRetentionGrace)) {
+		!cos.request.RetainUntil.Equal(writerNow.Add(365*24*time.Hour+AuditObjectRetentionGrace)) {
 		t.Fatalf("unexpected COS request: %#v", cos.request)
 	}
 	if !bytes.Equal(oss.createdBody, cos.createdBody) || bytes.Contains(oss.createdBody, []byte{'\n'}) {

@@ -62,6 +62,35 @@ The operator must retain the signed plan digest, exact release SHA, timestamp,
 provider-side audit event references and the safe receipt outside the source
 repository. The runner does not collect or print those external references.
 
+Production preflight accepts that material only through the version 1 signed
+evidence contract in `contracts/provider-contract-evidence-v1.schema.json`.
+The canonical evidence contains exactly one GitHub receipt followed by one
+Alibaba Cloud receipt and binds each plan digest and provider-audit reference
+digest to the exact release SHA, current provider binding generation and exact
+bytes of both protected signer authority configurations. Its validity is at
+most 15 minutes. A detached Ed25519 signature is checked against a root-owned
+keyring; the Broker receives no evidence-signing private key.
+
+The verifier reads release-specific root-owned files from
+`/var/lib/secret-broker/provider-contract-evidence/<release-sha>` and fixed
+signer configuration and keyring files under `/etc/secret-broker`,
+rejects symbolic links, writable parent directories, unsafe modes, unstable
+files, non-canonical JSON, key ambiguity, expired evidence and release or
+configuration drift. It queries the binding digest twice over the Broker-owned
+mode `0600` Unix health socket and rejects any change during verification. It
+emits only `provider_contract_evidence_ready=yes` or `no`. Missing evidence
+remains a production-preflight failure.
+
+The deployment helper validates candidate-SHA evidence before changing the
+managed release symlink. After switching, it restarts every release-bound
+signer, audit, policy and Broker service, waits on the protected Unix health
+socket, then runs all 22 production preflight checks. Any failure atomically
+returns the symlink to the previous release, restarts the previous workloads
+and verifies runtime readiness. The deployment remains failed even when
+availability is restored. Full rollback acceptance remains closed until fresh,
+release-specific evidence is issued; an expired prior receipt is never treated
+as successful security verification.
+
 ## Evidence boundary
 
 This runner proves the bound provider principal, active read path and two
@@ -70,6 +99,13 @@ Provider-side credential or role revocation, rotation overlap, wrong-workload
 denial, regional outage behavior and audit continuity are separate required
 phases. A passing receipt alone must not change a provider manifest from
 `contract_required` to `production`.
+
+The verifier currently binds the protected signer configuration on disk. It
+does not yet receive an authenticated generation from the configuration
+actually parsed by each running signer. Production acceptance therefore remains
+blocked until the signer protocols expose and the preflight double-samples that
+non-secret loaded-authority generation. A separate pre-start marker is not
+accepted because it would leave a configuration-open race.
 
 The 2026-09-12 production capability probe did not run either provider
 operation: the deployed registry exposed only `broker.tools.inspect`, and both

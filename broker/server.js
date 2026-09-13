@@ -80,6 +80,7 @@ import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
 import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js';
+import { providerBindingGeneration } from './lib/provider-binding-generation.js';
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
 import { createV2Routes } from './routes/v2.js';
@@ -3391,6 +3392,7 @@ function start() {
             config: CONFIG,
             requireSops: true,
             surface: 'local',
+            providerBindingGeneration: () => providerBindingGeneration(CONFIG),
             runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
           });
           if (!handled && !res.headersSent) {

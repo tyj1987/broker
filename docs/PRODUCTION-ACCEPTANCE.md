@@ -13,15 +13,32 @@ optional: both socket units and services must be active, and both services must
 have exact and numerically distinct configured and runtime identities, protected
 final socket metadata, exact supplementary-group allowlists, stable processes
 and executables bound to the current release. The deployment account is part of
-the numeric collision check. The collection path also defaults isolated-account contract evidence
-to false, so unit and process metadata alone cannot produce a green production
-result.
+the numeric collision check. The collection path now requires a canonical,
+detached-Ed25519 signed evidence file that binds both isolated-account receipts
+to the exact release SHA, current provider configuration generation and both
+protected signer authority configurations. The evidence is valid for no more
+than 15 minutes and configuration is double-sampled over a Broker-owned Unix
+socket. Missing, expired, unsafe or mismatched evidence fails closed, so unit and process
+metadata alone cannot produce a green production result.
+
+The evidence verifier currently hashes protected signer configuration files but
+does not bind a generation emitted from the configuration actually loaded by
+the running signer. This remains a DQ-004 production blocker; a pre-start marker
+is explicitly insufficient because it cannot close the open-file race.
 
 This is source and automated-test preparation only. No signer executable,
 cloud authority, protected signer configuration or isolated-account contract
 receipt has been deployed. The live preflight must therefore remain red until
 those dependencies are implemented and independently verified. No DQ-009 trust
 domain or socket cutover is authorized by this checkpoint.
+
+The deployment helper is prepared to validate candidate-SHA evidence before
+the symlink switch and to run the complete 22-item preflight after restarting
+all release-bound workloads. A post-switch failure restores the previous
+symlink and workloads, then verifies runtime readiness. The deployment still
+fails, and full production acceptance remains closed until fresh evidence for
+the restored release is available. This is source-only preparation; it does
+not authorize an actual production cutover.
 
 ## Current rollout checkpoint (2026-09-11)
 
@@ -158,7 +175,7 @@ workflow: dedicated Broker user and group, active Go policy core, managed
 release symlink, executable deployment helper, dedicated deployment account,
 enabled nginx upstream certificate verification with no disabled location,
 absence of co-located CA/final-client private keys, encrypted control-plane
-state and protected key, protected policy socket, and loopback port 9080 health.
+state and protected key, protected policy socket, and protected local health socket.
 No credential value, certificate body, private key, environment file or nginx
 configuration body was emitted by the preflight.
 

@@ -123,6 +123,7 @@ const fakePaths = {
   controlPlaneState: '/state',
   controlPlaneStateKey: '/state-key',
   policySocket: '/policy.sock',
+  healthSocket: '/health.sock',
   providerSigners: {
     github: {
       directory: '/github-signer',
@@ -150,6 +151,10 @@ const fakeStats = new Map([
   ['/state', { isFile: () => true, isSymbolicLink: () => false }],
   ['/state-key', { isFile: () => true, isSymbolicLink: () => false, uid: 0, mode: 0o100600 }],
   ['/policy.sock', { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660 }],
+  [
+    '/health.sock',
+    { isSocket: () => true, isSymbolicLink: () => false, uid: 1001, gid: 1002, mode: 0o140600 },
+  ],
   [
     '/github-signer',
     { isDirectory: () => true, isSymbolicLink: () => false, uid: 0, gid: 1101, mode: 0o040750 },
@@ -326,6 +331,12 @@ assert.equal(collected.providerSignersReady, true);
 assert.equal(collected.isolatedRuntimeIdentities, true);
 assert.equal(collected.auditStoreActive, true);
 assert.equal(collected.auditStoreHealthReady, true);
+const unsafeHealthSocket = new Map(fakeStats);
+unsafeHealthSocket.set('/health.sock', {
+  ...fakeStats.get('/health.sock'),
+  mode: 0o140666,
+});
+assert.equal(evaluateProductionReadiness(await collectWithStats(unsafeHealthSocket)).ready, false);
 const healthProbeFailure = await collectProductionSnapshot({
   command,
   fetchImpl: async () => ({ ok: true }),
@@ -612,6 +623,23 @@ const missingProviderContractEvidence = await collectWithOverrides({
   providerContractEvidenceImpl: undefined,
 });
 assert.equal(missingProviderContractEvidence.providerSignersReady, false);
+
+let evidenceInvocation = null;
+const retainedProviderContractEvidence = await collectWithOverrides({
+  providerContractEvidenceImpl: undefined,
+  command: (name, args) => {
+    if (name === fakePaths.nodeRuntime && args[0]?.endsWith('/provider-contract-evidence-check.js')) {
+      evidenceInvocation = { name, args };
+      return { ok: true, stdout: 'provider_contract_evidence_ready=yes' };
+    }
+    return command(name, args);
+  },
+});
+assert.deepEqual(evidenceInvocation, {
+  name: fakePaths.nodeRuntime,
+  args: ['/release/bin/provider-contract-evidence-check.js', '--release', '/release'],
+});
+assert.equal(retainedProviderContractEvidence.providerSignersReady, true);
 
 for (const [description, overrides] of [
   [

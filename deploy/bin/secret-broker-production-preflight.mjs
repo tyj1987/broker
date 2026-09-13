@@ -14,6 +14,7 @@ const DEFAULT_PATHS = Object.freeze({
   controlPlaneState: '/var/lib/secret-broker/control-plane-state.enc',
   controlPlaneStateKey: '/etc/secret-broker/control-plane-state.key',
   policySocket: '/run/secret-broker/core.sock',
+  healthSocket: '/run/secret-broker-health/health.sock',
   providerSigners: Object.freeze({
     github: Object.freeze({
       directory: '/run/secret-broker-github-signer',
@@ -209,6 +210,16 @@ function sameIDSet(actual, expected) {
   );
 }
 
+function sameSocketMetadata(left, right) {
+  return (
+    left?.isSocket() === true &&
+    right?.isSocket() === true &&
+    left.isSymbolicLink() === false &&
+    right.isSymbolicLink() === false &&
+    ['dev', 'ino', 'mode', 'uid', 'gid'].every((field) => left[field] === right[field])
+  );
+}
+
 async function pathInfo(path) {
   try {
     return await lstat(path);
@@ -247,20 +258,18 @@ async function countPrivateKeys(path) {
   return count;
 }
 
-async function loopbackHealth(fetchImpl) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const response = await fetchImpl('http://127.0.0.1:9080/health', {
-      signal: controller.signal,
-      redirect: 'error',
-    });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
+async function localHealth(command, paths) {
+  const result = command('curl', [
+    '--fail',
+    '--silent',
+    '--show-error',
+    '--max-time',
+    '3',
+    '--unix-socket',
+    paths.healthSocket,
+    'http://localhost/health',
+  ]);
+  return result.ok;
 }
 
 export function parseAuditStoreHealth(stdout) {
@@ -724,16 +733,22 @@ export function renderProductionReadiness(result) {
 
 export async function collectProductionSnapshot({
   command = commandResult,
-  fetchImpl = globalThis.fetch,
   paths = DEFAULT_PATHS,
   pathInfoImpl = pathInfo,
   isExecutableImpl = isExecutable,
   countPrivateKeysImpl = countPrivateKeys,
-  loopbackHealthImpl = loopbackHealth,
+  loopbackHealthImpl = localHealth,
   auditStoreHealthImpl = auditStoreHealth,
   realpathImpl = realpath,
   readFileImpl = readFile,
-  providerContractEvidenceImpl = async () => false,
+  providerContractEvidenceImpl = async ({ release }) => {
+    const result = command(paths.nodeRuntime, [
+      path.join(release, 'bin', 'provider-contract-evidence-check.js'),
+      '--release',
+      release,
+    ]);
+    return result.ok && result.stdout === 'provider_contract_evidence_ready=yes';
+  },
 } = {}) {
   const brokerUser = command('systemctl', [
     'show',
@@ -912,11 +927,11 @@ export async function collectProductionSnapshot({
     await Promise.all(paths.forbiddenKeyRoots.map((path) => countPrivateKeysImpl(path)))
   ).reduce((sum, value) => sum + value, 0);
   const deployHelperExecutable = await isExecutableImpl(paths.deployHelper);
-  const loopbackHealth = await loopbackHealthImpl(fetchImpl);
   // Keep the release/process double-sample last. No asynchronous probe may
   // extend the acceptance window after this point.
   let providerSignerPaths = null;
   let providerContractEvidenceReady = false;
+  let localHealthReady = false;
   const auditRuntime = await collectStableAuditRuntimeSnapshot({
     command,
     realpathImpl,
@@ -932,6 +947,8 @@ export async function collectProductionSnapshot({
         ),
       }),
     endpointProbe: async (release) => {
+      const healthSocketBefore = await pathInfoImpl(paths.healthSocket);
+      const healthReady = await loopbackHealthImpl(command, paths);
       providerSignerPaths = Object.fromEntries(
         await Promise.all(
           PROVIDER_SIGNER_NAMES.map(async (signer) => [
@@ -948,6 +965,13 @@ export async function collectProductionSnapshot({
           release,
           providers: PROVIDER_SIGNER_NAMES,
         })) === true;
+      const healthSocketAfter = await pathInfoImpl(paths.healthSocket);
+      localHealthReady =
+        healthReady &&
+        sameSocketMetadata(healthSocketBefore, healthSocketAfter) &&
+        healthSocketAfter.uid === brokerUid &&
+        healthSocketAfter.gid === brokerGid &&
+        (healthSocketAfter.mode & 0o077) === 0;
       return true;
     },
   });
@@ -1102,7 +1126,7 @@ export async function collectProductionSnapshot({
       providerSignerIdentitiesIndependent &&
       providerContractEvidenceReady &&
       auditRuntime.providerSignerProcessesReleaseBound === true,
-    loopbackHealth,
+    loopbackHealth: localHealthReady,
   };
 }
 

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const service = read('../deploy/systemd/secret-broker.service');
+const policyService = read('../deploy/systemd/secret-broker-policy.service');
 const deployment = read('../deploy/helm/broker/templates/deployment.yaml');
 const values = read('../deploy/helm/broker/values.yaml');
 const migration = read('../deploy/PRODUCTION-MIGRATION.md');
@@ -39,10 +40,19 @@ assert.doesNotMatch(service, /CONTROL_PLANE_STATE_KEY=/);
 assert.match(service, /ExecStart=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
 assert.match(service, /Environment=TLS_CA=\/etc\/secret-broker\/pki\/ca\/ca\.crt/);
 assert.match(service, /Environment=TLS_KEY=\/etc\/secret-broker\/pki\/server\/server\.key/);
+assert.match(service, /Environment=BROKER_HEALTH_SOCKET=\/run\/secret-broker-health\/health\.sock/);
+assert.match(service, /RuntimeDirectory=secret-broker-health/);
+assert.match(service, /RuntimeDirectoryMode=0700/);
+assert.doesNotMatch(service, /BROKER_HEALTH_BIND=/);
+assert.doesNotMatch(service, /RuntimeDirectory=secret-broker(?:\r?\n|$)/);
+assert.match(policyService, /RuntimeDirectory=secret-broker/);
+assert.doesNotMatch(policyService, /RuntimeDirectory=secret-broker-health/);
 assert.match(migration, /`root:broker`, `0750`/);
 assert.match(migration, /Separately extract the verified candidate artifact/);
 assert.match(deployHelper, /readonly NODE_RUNTIME=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
-assert.match(deployHelper, /readonly HEALTH_URL=http:\/\/127\.0\.0\.1:9080\/ready/);
+assert.match(deployHelper, /readonly GH_CLI=\/usr\/bin\/gh/);
+assert.match(deployHelper, /github-attestation-trusted-root\.jsonl/);
+assert.match(deployHelper, /readonly HEALTH_SOCKET=\/run\/secret-broker-health\/health\.sock/);
 assert.match(deployHelper, /chown -R root:broker/);
 assert.match(deployHelper, /find "\$PAYLOAD" -type d -exec chmod 0550/);
 assert.match(deployHelper, /for _ in \{1\.\.20\}/);
@@ -50,6 +60,39 @@ assert.match(deployHelper, /-f "\$PAYLOAD\/tools\/registry\.json"/);
 assert.match(deployHelper, /\.failed-\$RELEASE_SHA-/);
 assert.match(deployHelper, /runuser -u broker -- env AUDIT_DIR=/);
 assert.match(deployHelper, /candidate cannot read the current audit chain/);
+assert.match(deployHelper, /provider-contract-evidence-check\.js/);
+assert.match(deployHelper, /candidate provider contract evidence is unavailable/);
+assert.match(deployHelper, /attestation verify "broker-\$RELEASE_SHA\.tgz"/);
+assert.match(deployHelper, /--bundle "broker-\$RELEASE_SHA\.attestation\.jsonl"/);
+assert.match(deployHelper, /--custom-trusted-root "\$ATTESTATION_TRUST_ROOT"/);
+assert.match(deployHelper, /--repo tyj1987\/broker/);
+assert.match(deployHelper, /--signer-workflow tyj1987\/broker\/\.github\/workflows\/deploy-ecs\.yml/);
+assert.match(deployHelper, /--source-ref refs\/heads\/master/);
+assert.match(deployHelper, /--source-digest "\$RELEASE_SHA"/);
+assert.match(deployHelper, /--deny-self-hosted-runners/);
+assert.match(deployWorkflow, /gh attestation download/);
+assert.match(deployWorkflow, /broker-\$\{\{ env\.RELEASE_SHA \}\}\.attestation\.jsonl/);
+assert.ok(
+  deployHelper.indexOf('release provenance verification failed') <
+    deployHelper.indexOf('tar --extract'),
+  'untrusted payload must be rejected before extraction or candidate execution',
+);
+assert.match(
+  deployHelper,
+  /provider-contract-evidence-check\.js[\s\S]*FAILED_CANDIDATE=.*\.failed-\$RELEASE_SHA-[\s\S]*mv -- "\$RELEASE" "\$FAILED_CANDIDATE"/,
+);
+assert.match(deployHelper, /secret-broker-production-preflight\.mjs/);
+assert.match(deployHelper, /production acceptance remains closed pending fresh release evidence/);
+assert.ok(
+  deployHelper.indexOf('candidate provider contract evidence is unavailable')
+    < deployHelper.indexOf('ln -s "releases/$RELEASE_SHA"'),
+  'candidate evidence must be verified before the release symlink changes',
+);
+assert.ok(
+  deployHelper.indexOf('if ! full_preflight; then') > deployHelper.indexOf('if ! wait_ready; then'),
+  'the complete production preflight must run after post-switch readiness',
+);
+assert.doesNotMatch(deployHelper, /rollback\(\)[\s\S]*wait_ready && \\\n+    full_preflight/);
 assert.match(deployHelper, /rollback failed readiness verification/);
 assert.match(deployHelper, /exit 71/);
 assert.match(deployHelper, /secret-broker-audit-exporter\.service/);

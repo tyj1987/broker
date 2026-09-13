@@ -238,13 +238,26 @@ continue.
   access, exact runtime supplementary-group allowlists, actual process
   credentials, stable processes and executables bound to the active release.
   The privileged deployment account is also included in numeric collision
-  checks. The collected production gate additionally defaults the
-  isolated-account contract evidence to false; only a future independently
-  verified evidence implementation may satisfy it. The Node clients use the
-  same future paths. This prepares,
+  checks. The collected production gate now invokes a release-bound verifier
+  for canonical, detached-Ed25519 signed evidence. The evidence binds the
+  exact release SHA, current provider configuration generation, exact protected
+  signer-authority configuration generations, both bounded read receipts,
+  their plan digests and provider-side audit reference digests;
+  unsafe, missing, stale or mismatched files fail closed without exposing
+  evidence contents. Evidence expires after at most 15 minutes and the verifier
+  double-samples the Broker generation through its independently owned mode
+  `0600` Unix socket. The verifier has only a root-owned public keyring, never an evidence-signing
+  private key. The Node clients use the same future paths.
+  The verifier does not yet bind an authenticated generation emitted from the
+  configuration actually loaded by each running signer. DQ-004 and production
+  acceptance remain open until both signer protocols expose and preflight
+  double-samples that non-secret value; a separate pre-start marker is not an
+  acceptable substitute because it leaves an open-file race.
+  This prepares,
   but does not perform, DQ-009. Neither signer executable,
-  cloud authority, protected configuration nor isolated-account receipt exists
-  yet, so the gate intentionally fails in production and DQ-004 remains open.
+  cloud authority, protected configuration nor signed isolated-account receipt
+  exists yet, so the gate intentionally fails in production and DQ-004 remains
+  open.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

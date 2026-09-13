@@ -38,6 +38,7 @@ for (const [provider, expected] of Object.entries(signers)) {
       'm',
     ),
   );
+  assert.doesNotMatch(unit, /^ExecStartPre=\+/m);
   assert.match(unit, new RegExp(`^Requires=${binary}\\.socket$`, 'm'));
   assert.match(unit, new RegExp(`^After=.*${binary}\\.socket$`, 'm'));
   assert.match(unit, /^UMask=0007$/m);

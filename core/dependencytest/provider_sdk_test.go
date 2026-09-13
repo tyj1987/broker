@@ -39,6 +39,9 @@ func TestImmutableProviderSDKDependencyIsolation(t *testing.T) {
 	commands := dependencies(t, "./cmd/audit-store", "./cmd/audit-mirror-worker")
 	rejectDependency(t, commands, alibabaSDK, tencentSDK)
 
+	credentialSource := dependencies(t, "./tencentcredential")
+	rejectDependency(t, credentialSource, alibabaSDK, tencentSDK)
+
 	primary := dependencies(t, "./auditoss")
 	if !strings.Contains(primary, alibabaSDK) {
 		t.Fatal("Alibaba adapter does not contain its pinned SDK")

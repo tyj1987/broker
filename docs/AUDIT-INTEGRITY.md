@@ -292,10 +292,23 @@ the adapter verifies the same unique version immediately before and after that
 lookup and rejects any change. This is deterministic source evidence only: the
 production command still uses the unavailable factory, and the Tencent identity,
 single-writer policy and live race behavior remain unverified.
+`core/tencentcredential` now supplies the source-only workload-identity half of
+that boundary. It requests one configured CVM CAM role from the fixed
+`metadata.tencentyun.com` credential path, accepts only a link-local IPv4
+resolution, disables proxy/redirect behavior, and strictly binds the documented
+temporary ID, key, token and two equivalent expiration fields. It has no role
+discovery, environment/profile/static-key fallback or SDK default chain.
+Refresh failures clear cached authority and use a bounded cooldown; concurrent
+callers share one hard-deadline refresh, while caller cancellation, clock
+rollback and late responses fail closed. This package is not connected to the
+mirror command and no live metadata request is part of the evidence.
 The protocol choices are checked against Tencent's current
 [object-version listing](https://cloud.tencent.com/document/product/436/64993),
 [GET Object](https://cloud.tencent.com/document/api/436/7753) and
-[GET Object Retention](https://cloud.tencent.com/document/product/436/55292)
+[GET Object Retention](https://cloud.tencent.com/document/product/436/55292),
+plus the CVM documentation for
+[instance roles](https://cloud.tencent.com/document/product/213/47668) and
+[instance metadata](https://cloud.tencent.com/document/product/213/4934)
 contracts.
 
 `core/auditstore.DualCloudRepository` uses those pages rather than a local head

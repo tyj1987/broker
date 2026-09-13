@@ -189,6 +189,18 @@ continue.
   worker commands link neither provider SDK and that each adapter links only
   its own SDK. The concrete identity factories remain intentionally absent, so
   this adapter is not reachable from the production command.
+  A provider-independent Tencent CVM role credential source is now implemented
+  in `core/tencentcredential`. It requires one configured role name and the
+  exact documented metadata path; it never performs role discovery or reads
+  environment, profile or static credentials. Its HTTP transport disables
+  proxies, redirects and compression, resolves only the fixed Tencent metadata
+  hostname, and dials only an IPv4 link-local result. Responses are size-bounded
+  and strict: duplicate or unknown JSON keys, non-canonical timestamps,
+  mismatched `ExpiredTime`/`Expiration`, unsafe credential fields and invalid
+  lifetimes fail closed. Concurrent refreshes are coalesced, while cancellation,
+  clock rollback, late success and refresh failure cannot return stale
+  authority. The production COS factory remains unavailable; no metadata call,
+  cloud resource or credential was used by this source checkpoint.
 
 ## DQ-004: provider signing and account-binding authority
 
@@ -253,6 +265,15 @@ continue.
   explicitly verified policy and an ownership-checked local signer socket, and
   fails startup when either is missing. The isolated TC3 signer service, CAM
   role authority and account contract test remain required before activation.
+  The user approved GitHub and Alibaba Cloud as the first isolated read-only
+  account contracts. That execution order does not select the final
+  cross-provider credential authority and does not enable either provider.
+  Separately, the Tencent credential source supports only an explicitly named
+  CVM CAM role through the fixed metadata hostname/path and returns temporary
+  ID/key/token material only to a future in-process signer factory. It avoids
+  the COS SDK default credential chain and its automatic role selection. The
+  factory, TC3/COS transport wiring, isolated CAM policy and live account receipt
+  remain absent, so Tencent stays fail closed.
   A source-only version 2 contract runner now validates one exact GitHub or
   Alibaba Cloud read-only binding through the real `/api/v2/tasks` path. The
   same execution-bound signer path first calls a fixed GitHub App installation

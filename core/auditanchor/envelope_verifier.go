@@ -3,8 +3,13 @@ package auditanchor
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"math/big"
+	"sort"
 	"time"
 )
 
@@ -24,6 +29,51 @@ type EnvelopeMetadata struct {
 type EnvelopeVerifier struct {
 	streamID    string
 	trustedKeys map[string]TrustedSigningKey
+}
+
+// TrustedKeyGeneration returns a deterministic digest of the complete trust
+// set. It lets isolated workloads prove that their independently loaded
+// verifier configuration is identical without exposing key material over IPC.
+func TrustedKeyGeneration(trustedKeys map[string]TrustedSigningKey) ([sha256.Size]byte, error) {
+	cloned, valid := cloneTrustedSigningKeys(trustedKeys)
+	if !valid {
+		return [sha256.Size]byte{}, errors.New("audit anchor trust generation is invalid")
+	}
+	type generationKey struct {
+		KeyID                string `json:"key_id"`
+		PublicKeySPKIBase64  string `json:"public_key_spki_base64"`
+		ValidFromSequence    int64  `json:"valid_from_sequence"`
+		ValidThroughSequence int64  `json:"valid_through_sequence"`
+	}
+	ordered := make([]string, 0, len(cloned))
+	for keyID := range cloned {
+		ordered = append(ordered, keyID)
+	}
+	sort.Slice(ordered, func(left, right int) bool {
+		leftKey, rightKey := cloned[ordered[left]], cloned[ordered[right]]
+		if leftKey.ValidFromSequence == rightKey.ValidFromSequence {
+			return ordered[left] < ordered[right]
+		}
+		return leftKey.ValidFromSequence < rightKey.ValidFromSequence
+	})
+	canonical := make([]generationKey, 0, len(ordered))
+	for _, keyID := range ordered {
+		trustedKey := cloned[keyID]
+		der, err := x509.MarshalPKIXPublicKey(trustedKey.PublicKey)
+		if err != nil {
+			return [sha256.Size]byte{}, errors.New("audit anchor trust generation is invalid")
+		}
+		canonical = append(canonical, generationKey{
+			KeyID: keyID, PublicKeySPKIBase64: base64.StdEncoding.EncodeToString(der),
+			ValidFromSequence:    trustedKey.ValidFromSequence,
+			ValidThroughSequence: trustedKey.ValidThroughSequence,
+		})
+	}
+	value, err := json.Marshal(canonical)
+	if err != nil || len(value) == 0 {
+		return [sha256.Size]byte{}, errors.New("audit anchor trust generation is invalid")
+	}
+	return sha256.Sum256(value), nil
 }
 
 func NewEnvelopeVerifier(streamID string, trustedKeys map[string]TrustedSigningKey) (*EnvelopeVerifier, error) {
@@ -72,6 +122,27 @@ func cloneTrustedSigningKeys(source map[string]TrustedSigningKey) (map[string]Tr
 			Y:     new(big.Int).Set(trustedKey.PublicKey.Y),
 		}
 		cloned[keyID] = trustedKey
+	}
+	type epoch struct {
+		keyID string
+		key   TrustedSigningKey
+	}
+	epochs := make([]epoch, 0, len(cloned))
+	for keyID, trustedKey := range cloned {
+		epochs = append(epochs, epoch{keyID: keyID, key: trustedKey})
+	}
+	sort.Slice(epochs, func(left, right int) bool {
+		if epochs[left].key.ValidFromSequence == epochs[right].key.ValidFromSequence {
+			return epochs[left].keyID < epochs[right].keyID
+		}
+		return epochs[left].key.ValidFromSequence < epochs[right].key.ValidFromSequence
+	})
+	for index := 1; index < len(epochs); index++ {
+		previous := epochs[index-1].key
+		if previous.ValidThroughSequence == 0 ||
+			previous.ValidThroughSequence >= epochs[index].key.ValidFromSequence {
+			return nil, false
+		}
 	}
 	return cloned, true
 }

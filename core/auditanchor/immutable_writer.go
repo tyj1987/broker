@@ -154,7 +154,8 @@ func validWriterConfig(config ImmutableObjectWriterConfig) bool {
 			return false
 		}
 	}
-	return true
+	_, valid := cloneTrustedSigningKeys(config.TrustedKeys)
+	return valid
 }
 
 func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []byte) (ImmutableObjectReceipt, error) {
@@ -171,7 +172,11 @@ func (writer *ImmutableObjectWriter) Write(ctx context.Context, envelopeJSON []b
 	if now.IsZero() || now.Year() < 2020 || now.Year() > 9998 || now.Before(envelope.Payload.CapturedAt) {
 		return ImmutableObjectReceipt{}, ErrObjectWriteRejected
 	}
-	retainUntil := now.Add(AuditObjectRetentionDays*24*time.Hour + AuditObjectRetentionGrace)
+	retentionBase := now.Truncate(time.Second)
+	if now.Nanosecond() != 0 {
+		retentionBase = retentionBase.Add(time.Second)
+	}
+	retainUntil := retentionBase.Add(AuditObjectRetentionDays*24*time.Hour + AuditObjectRetentionGrace)
 	key := auditObjectKey(writer.config.Prefix, envelope.Payload.StreamID, envelope.Payload.Sequence)
 	bodyDigest := sha256.Sum256(canonical)
 
@@ -332,7 +337,11 @@ func cloneWriterConfig(config ImmutableObjectWriterConfig) (ImmutableObjectWrite
 		return ImmutableObjectWriterConfig{}, false
 	}
 	cloned := config
-	cloned.TrustedKeys, _ = cloneTrustedSigningKeys(config.TrustedKeys)
+	var valid bool
+	cloned.TrustedKeys, valid = cloneTrustedSigningKeys(config.TrustedKeys)
+	if !valid {
+		return ImmutableObjectWriterConfig{}, false
+	}
 	return cloned, true
 }
 

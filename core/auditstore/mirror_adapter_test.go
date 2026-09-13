@@ -191,7 +191,7 @@ func TestMirrorAdapterTranslatesOnlyTypedBoundCapabilities(t *testing.T) {
 		Bucket: config.COS.Bucket, Key: adapter.objectKey(1), Body: body,
 		ContentType: "application/json", StorageClass: "STANDARD",
 		LockMode:    auditanchor.COSComplianceMode,
-		RetainUntil: time.Now().UTC().Add(365*24*time.Hour + auditmirror.RetentionGrace),
+		RetainUntil: time.Now().UTC().Truncate(time.Second).Add(365*24*time.Hour + auditmirror.RetentionGrace),
 	}
 	if result, err := adapter.CreateObject(ctx, request); err != nil || result.Status != "created" ||
 		client.sequence != 1 || !bytes.Equal(client.envelope, body) ||
@@ -241,7 +241,7 @@ func TestMirrorAdapterRejectsUnboundOrInvalidInputsAndResults(t *testing.T) {
 	validCreate := auditanchor.COSCreateObjectRequest{
 		Bucket: config.COS.Bucket, Key: adapter.objectKey(1), Body: body, ContentType: "application/json",
 		StorageClass: "STANDARD", LockMode: auditanchor.COSComplianceMode,
-		RetainUntil: time.Now().UTC().Add(365*24*time.Hour + auditmirror.RetentionGrace),
+		RetainUntil: time.Now().UTC().Truncate(time.Second).Add(365*24*time.Hour + auditmirror.RetentionGrace),
 	}
 	for name, mutate := range map[string]func(*auditanchor.COSCreateObjectRequest){
 		"bucket":       func(value *auditanchor.COSCreateObjectRequest) { value.Bucket = "other-bucket" },
@@ -251,10 +251,10 @@ func TestMirrorAdapterRejectsUnboundOrInvalidInputsAndResults(t *testing.T) {
 		"lock":         func(value *auditanchor.COSCreateObjectRequest) { value.LockMode = "GOVERNANCE" },
 		"tamper":       func(value *auditanchor.COSCreateObjectRequest) { value.Body = append(bytes.Clone(value.Body), ' ') },
 		"retention too short": func(value *auditanchor.COSCreateObjectRequest) {
-			value.RetainUntil = time.Now().UTC().Add(time.Hour)
+			value.RetainUntil = time.Now().UTC().Truncate(time.Second).Add(time.Hour)
 		},
 		"retention too long": func(value *auditanchor.COSCreateObjectRequest) {
-			value.RetainUntil = time.Now().UTC().Add(366 * 24 * time.Hour)
+			value.RetainUntil = time.Now().UTC().Truncate(time.Second).Add(366 * 24 * time.Hour)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -309,7 +309,7 @@ func TestMirrorAdapterFailsClosedAcrossResponseBoundaries(t *testing.T) {
 		Bucket: config.COS.Bucket, Key: adapter.objectKey(1), Body: body,
 		ContentType: "application/json", StorageClass: "STANDARD",
 		LockMode:    auditanchor.COSComplianceMode,
-		RetainUntil: time.Now().UTC().Add(365*24*time.Hour + auditmirror.RetentionGrace),
+		RetainUntil: time.Now().UTC().Truncate(time.Second).Add(365*24*time.Hour + auditmirror.RetentionGrace),
 	}
 
 	client.err = auditmirror.ErrContractRejected
@@ -382,7 +382,7 @@ func TestMirrorAdapterRejectsLateSuccessAfterCancellation(t *testing.T) {
 					Bucket: config.COS.Bucket, Key: adapter.objectKey(1), Body: body,
 					ContentType: "application/json", StorageClass: "STANDARD",
 					LockMode:    auditanchor.COSComplianceMode,
-					RetainUntil: time.Now().UTC().Add(365*24*time.Hour + auditmirror.RetentionGrace),
+					RetainUntil: time.Now().UTC().Truncate(time.Second).Add(365*24*time.Hour + auditmirror.RetentionGrace),
 				})
 			case "read":
 				_, err = adapter.ReadObject(ctx, config.COS.Bucket, adapter.objectKey(1))
@@ -430,6 +430,7 @@ func TestMirrorTrustGenerationIsStableAndKeyEpochBound(t *testing.T) {
 	second := config.TrustedKeys[0]
 	second.KeyID = "audit-key-2027"
 	second.ValidFromSequence = 100
+	config.TrustedKeys[0].ValidThroughSequence = 99
 	config.TrustedKeys = append(config.TrustedKeys, second)
 	first, err := mirrorTrustGeneration(config.TrustedKeys)
 	if err != nil {

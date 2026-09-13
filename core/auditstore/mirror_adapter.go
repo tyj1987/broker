@@ -4,12 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -65,38 +61,24 @@ func mirrorBinding(config ServiceConfig) (auditmirror.Binding, error) {
 }
 
 func mirrorTrustGeneration(keys []TrustedKeyBinding) ([sha256.Size]byte, error) {
-	type generationKey struct {
-		KeyID                string `json:"key_id"`
-		PublicKeySPKIBase64  string `json:"public_key_spki_base64"`
-		ValidFromSequence    int64  `json:"valid_from_sequence"`
-		ValidThroughSequence int64  `json:"valid_through_sequence"`
-	}
-	ordered := append([]TrustedKeyBinding(nil), keys...)
-	sort.Slice(ordered, func(left, right int) bool {
-		if ordered[left].ValidFromSequence == ordered[right].ValidFromSequence {
-			return ordered[left].KeyID < ordered[right].KeyID
-		}
-		return ordered[left].ValidFromSequence < ordered[right].ValidFromSequence
-	})
-	canonical := make([]generationKey, 0, len(ordered))
-	for _, key := range ordered {
+	trustedKeys := make(map[string]auditanchor.TrustedSigningKey, len(keys))
+	for _, key := range keys {
 		if key.PublicKey == nil {
 			return [sha256.Size]byte{}, ErrServiceConfigInvalid
 		}
-		der, err := x509.MarshalPKIXPublicKey(key.PublicKey)
-		if err != nil {
+		if _, duplicate := trustedKeys[key.KeyID]; duplicate {
 			return [sha256.Size]byte{}, ErrServiceConfigInvalid
 		}
-		canonical = append(canonical, generationKey{
-			KeyID: key.KeyID, PublicKeySPKIBase64: base64.StdEncoding.EncodeToString(der),
+		trustedKeys[key.KeyID] = auditanchor.TrustedSigningKey{
+			PublicKey:         key.PublicKey,
 			ValidFromSequence: key.ValidFromSequence, ValidThroughSequence: key.ValidThroughSequence,
-		})
+		}
 	}
-	value, err := json.Marshal(canonical)
-	if err != nil || len(value) == 0 {
+	generation, err := auditanchor.TrustedKeyGeneration(trustedKeys)
+	if err != nil {
 		return [sha256.Size]byte{}, ErrServiceConfigInvalid
 	}
-	return sha256.Sum256(value), nil
+	return generation, nil
 }
 
 func (adapter *mirrorCOSAdapter) InspectObjectLock(ctx context.Context, bucket string) (auditanchor.COSObjectLockState, error) {

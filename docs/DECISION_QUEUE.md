@@ -166,10 +166,14 @@ continue.
   typed requests, rechecks the complete binding and trusted clock, bounds
   concurrency, frames and deadlines, rejects late success, and emits only
   stable error codes. The audit-store command still uses the unavailable mirror
-  factory by default. This is source IPC evidence, not proof of an independently
-  runnable worker: the server socket lifecycle, worker-side envelope verifier
-  and COS backend, Tencent identity, COS resource and independent recovery
-  evidence do not exist yet.
+  factory by default. The next source layer now adds an independent worker
+  backend that recomputes the trust generation, re-verifies canonical envelopes,
+  serializes writes and requires exact body plus COMPLIANCE retention read-back
+  for both created and existing results. Provider retention is bound to UTC
+  whole-second precision and rounded upward. This is still not proof of an
+  independently runnable worker: its activated server command/service,
+  Tencent workload identity, version-bound concurrent-create semantics, COS
+  resource and independent recovery evidence do not exist yet.
 
 ## DQ-004: provider signing and account-binding authority
 

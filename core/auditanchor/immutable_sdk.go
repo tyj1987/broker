@@ -295,7 +295,8 @@ func (client *COSSDKImmutableClient) CreateObject(ctx context.Context, request C
 	if !validSDKCall(ctx, request.Bucket, cosClientBucket(client), client != nil && client.objectAPI != nil) ||
 		!validSDKObjectKey(request.Key) || len(request.Body) == 0 || len(request.Body) > AuditObjectMaxBytes ||
 		request.ContentType != "application/json" || request.StorageClass != "STANDARD" ||
-		request.LockMode != COSComplianceMode || request.RetainUntil.Location() != time.UTC || request.RetainUntil.IsZero() {
+		request.LockMode != COSComplianceMode || request.RetainUntil.Location() != time.UTC ||
+		request.RetainUntil.IsZero() || request.RetainUntil.Nanosecond() != 0 {
 		return ObjectCreateResult{}, ErrImmutableSDKRequestRejected
 	}
 	existing, err := client.objectAPI.Get(ctx, request.Key, nil)

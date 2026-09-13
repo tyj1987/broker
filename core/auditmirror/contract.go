@@ -113,7 +113,7 @@ type CreateRequest struct {
 
 func NewCreateRequest(binding Binding, sequence int64, envelope []byte, issuedAt time.Time) (CreateRequest, error) {
 	if !binding.valid() || sequence < 1 || sequence > MaxSequence ||
-		len(envelope) == 0 || len(envelope) > MaxEnvelopeBytes || !validUTC(issuedAt) {
+		len(envelope) == 0 || len(envelope) > MaxEnvelopeBytes || !validUTC(issuedAt) || issuedAt.Nanosecond() != 0 {
 		return CreateRequest{}, ErrContractRejected
 	}
 	return CreateRequest{
@@ -124,7 +124,8 @@ func NewCreateRequest(binding Binding, sequence int64, envelope []byte, issuedAt
 
 func (request CreateRequest) ValidFor(binding Binding) bool {
 	return request.binding.validFor(binding) && request.sequence > 0 && request.sequence <= MaxSequence &&
-		len(request.envelope) > 0 && len(request.envelope) <= MaxEnvelopeBytes && validUTC(request.issuedAt)
+		len(request.envelope) > 0 && len(request.envelope) <= MaxEnvelopeBytes && validUTC(request.issuedAt) &&
+		request.issuedAt.Nanosecond() == 0
 }
 func (request CreateRequest) ValidAt(binding Binding, workerNow time.Time) bool {
 	if !request.ValidFor(binding) || !validUTC(workerNow) {

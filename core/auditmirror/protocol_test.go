@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var protocolTestNow = time.Now().UTC().Truncate(time.Millisecond)
+var protocolTestNow = time.Now().UTC().Truncate(time.Second)
 
 type protocolBackend struct {
 	binding   Binding

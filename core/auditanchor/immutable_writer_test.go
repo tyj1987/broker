@@ -260,6 +260,18 @@ func TestImmutableObjectWriterCreatesBothLockedCopies(t *testing.T) {
 	}
 }
 
+func TestImmutableObjectWriterRoundsRetentionUpToProviderSeconds(t *testing.T) {
+	writer, _, cos := validWriterHarness(t)
+	writer.config.Now = func() time.Time { return writerNow.Add(250 * time.Millisecond) }
+	if _, err := writer.Write(context.Background(), validEnvelopeJSON(t)); err != nil {
+		t.Fatal(err)
+	}
+	expected := writerNow.Add(time.Second + 365*24*time.Hour + AuditObjectRetentionGrace)
+	if cos.request.RetainUntil != expected || cos.request.RetainUntil.Nanosecond() != 0 {
+		t.Fatalf("retain until = %v, want %v", cos.request.RetainUntil, expected)
+	}
+}
+
 func TestImmutableObjectWriterAcceptsVerifiedIdempotentRetry(t *testing.T) {
 	writer, oss, cos := validWriterHarness(t)
 	body := validEnvelopeJSON(t)
@@ -515,6 +527,14 @@ func TestImmutableObjectWriterRejectsInvalidConfigurationAndRequest(t *testing.T
 			key.ValidFromSequence = 2
 			key.ValidThroughSequence = 1
 			value.TrustedKeys[writerKeyID] = key
+			return value
+		}(),
+		func() ImmutableObjectWriterConfig {
+			value := validWriterTestConfig()
+			value.TrustedKeys = map[string]TrustedSigningKey{
+				writerKeyID:     {PublicKey: &writerPrivateKey.PublicKey, ValidFromSequence: 1},
+				nextWriterKeyID: {PublicKey: &nextWriterPrivateKey.PublicKey, ValidFromSequence: 2},
+			}
 			return value
 		}(),
 		func() ImmutableObjectWriterConfig { value := validWriterTestConfig(); value.Now = nil; return value }(),

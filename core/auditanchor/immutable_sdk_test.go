@@ -743,6 +743,12 @@ func TestCOSSDKRejectsUnboundRequestsAndInvalidConstruction(t *testing.T) {
 			return err
 		},
 		func() error {
+			request := validCOSCreateRequest()
+			request.RetainUntil = request.RetainUntil.Add(time.Nanosecond)
+			_, err := client.CreateObject(context.Background(), request)
+			return err
+		},
+		func() error {
 			_, err := client.ReadObject(context.Background(), cosSDKTestBucket, "bad//key")
 			return err
 		},

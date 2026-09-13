@@ -124,6 +124,10 @@ func TestRequestConstructorsFailClosed(t *testing.T) {
 			_, err := NewCreateRequest(binding, 1, []byte("x"), now.In(time.FixedZone("UTC-like", 0)))
 			return err
 		}()},
+		{"create subsecond time", func() error {
+			_, err := NewCreateRequest(binding, 1, []byte("x"), now.Add(time.Nanosecond))
+			return err
+		}()},
 		{"read zero", func() error { _, err := NewReadRequest(binding, 0); return err }()},
 		{"read excessive", func() error { _, err := NewReadRequest(binding, MaxSequence+1); return err }()},
 		{"list negative cursor", func() error { _, err := NewListRequest(binding, -1, 1); return err }()},

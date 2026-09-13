@@ -194,6 +194,10 @@ jobs:
       - name: Enforce audit mirror contract statement coverage
         run: |
           test "$(go tool cover -func=audit-mirror-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-mirror-worker-coverage.out ./auditmirrorworker
+      - name: Enforce audit mirror worker statement coverage
+        run: |
+          test "$(go tool cover -func=audit-mirror-worker-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=audit-store-coverage.out ./auditstore
       - name: Enforce audit store protocol statement coverage
         run: |

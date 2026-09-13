@@ -10,6 +10,8 @@ const deployScript = readFileSync(resolve(root, 'deploy/bin/secret-broker-deploy
 assert.equal((dockerfile.match(/COPY providers\/ \.\/providers\//g) || []).length, 2);
 assert.match(deployWorkflow, /-C \.\. providers/);
 assert.match(deployWorkflow, /cp deploy\/bin\/secret-broker-production-preflight\.mjs broker\/bin\//);
+assert.match(deployWorkflow, /broker\/bin\/secret-broker-github-signer \.\/cmd\/github-signer/);
+assert.match(deployWorkflow, /broker\/bin\/secret-broker-aliyun-signer \.\/cmd\/aliyun-signer/);
 assert.match(deployScript, /-d "\$PAYLOAD\/providers"/);
 assert.match(deployScript, /-name '\*\.yaml'/);
 assert.match(deployScript, /provider-contract-evidence-check\.js/);

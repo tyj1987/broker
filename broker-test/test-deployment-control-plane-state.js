@@ -51,10 +51,15 @@ assert.match(migration, /`root:broker`, `0750`/);
 assert.match(migration, /Separately extract the verified candidate artifact/);
 assert.match(deployHelper, /readonly NODE_RUNTIME=\/opt\/secret-broker\/runtime\/node\/bin\/node/);
 assert.match(deployHelper, /readonly GH_CLI=\/usr\/bin\/gh/);
+assert.match(deployHelper, /readonly SETFACL=\/usr\/bin\/setfacl/);
 assert.match(deployHelper, /github-attestation-trusted-root\.jsonl/);
 assert.match(deployHelper, /readonly HEALTH_SOCKET=\/run\/secret-broker-health\/health\.sock/);
 assert.match(deployHelper, /chown -R root:broker/);
 assert.match(deployHelper, /find "\$PAYLOAD" -type d -exec chmod 0550/);
+assert.match(deployHelper, /u:broker-github-signer:--x,u:broker-aliyun-signer:--x/);
+assert.match(deployHelper, /u:broker-github-signer:r-x/);
+assert.match(deployHelper, /u:broker-aliyun-signer:r-x/);
+assert.doesNotMatch(deployHelper, /chown[^\n]*broker-(?:github|aliyun)-signer/);
 assert.match(deployHelper, /for _ in \{1\.\.20\}/);
 assert.match(deployHelper, /-f "\$PAYLOAD\/tools\/registry\.json"/);
 assert.match(deployHelper, /\.failed-\$RELEASE_SHA-/);
@@ -107,7 +112,15 @@ assert.doesNotMatch(server, /local health listener failed:', e\.message/);
 assert.match(deployWorkflow, /cp -R tools broker\/tools/);
 assert.match(
   deployWorkflow,
-  /name: Build Go policy core[\s\S]*working-directory: core[\s\S]*-o \.\.\/broker\/bin\/secret-broker-policy \.\/cmd\/policy-server/,
+  /name: Build Go production binaries[\s\S]*working-directory: core[\s\S]*-o \.\.\/broker\/bin\/secret-broker-policy \.\/cmd\/policy-server/,
+);
+assert.match(
+  deployWorkflow,
+  /-o \.\.\/broker\/bin\/secret-broker-github-signer \.\/cmd\/github-signer/,
+);
+assert.match(
+  deployWorkflow,
+  /-o \.\.\/broker\/bin\/secret-broker-aliyun-signer \.\/cmd\/aliyun-signer/,
 );
 assert.match(nginx, /ssl_certificate \/etc\/nginx\/cert\/broker\.52trz\.com\/fullchain\.pem/);
 assert.match(nginx, /proxy_ssl_verify on;/);

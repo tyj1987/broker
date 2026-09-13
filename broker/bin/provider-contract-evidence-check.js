@@ -52,6 +52,40 @@ async function readProtectedFile(filePath, maxBytes, { lstatImpl, readFileImpl, 
   return bytes;
 }
 
+async function readSignerConfig(filePath, maxBytes, { lstatImpl, readFileImpl, realpathImpl }) {
+  const parent = path.dirname(filePath);
+  const [parentStat, resolvedParent] = await Promise.all([lstatImpl(parent), realpathImpl(parent)]);
+  if (
+    resolvedParent !== parent ||
+    !parentStat.isDirectory() ||
+    parentStat.isSymbolicLink() ||
+    parentStat.uid !== 0 ||
+    (parentStat.mode & 0o022) !== 0
+  ) {
+    throw new Error('unsafe signer configuration boundary');
+  }
+  const before = await lstatImpl(filePath);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.uid !== 0 ||
+    !Number.isSafeInteger(before.gid) ||
+    before.gid <= 0 ||
+    (before.mode & 0o777) !== 0o640 ||
+    before.size < 2 ||
+    before.size > maxBytes ||
+    (await realpathImpl(filePath)) !== filePath
+  ) {
+    throw new Error('unsafe signer configuration file');
+  }
+  const bytes = await readFileImpl(filePath);
+  const after = await lstatImpl(filePath);
+  if (!Buffer.isBuffer(bytes) || bytes.length !== before.size || !sameStat(before, after)) {
+    throw new Error('unstable signer configuration file');
+  }
+  return { bytes, gid: before.gid };
+}
+
 async function assertProtectedDirectory(directoryPath, { lstatImpl, realpathImpl }) {
   const [directoryStat, resolvedDirectory] = await Promise.all([
     lstatImpl(directoryPath),
@@ -168,14 +202,19 @@ export async function runProviderContractEvidenceCheck(
     const fileDeps = { lstatImpl, readFileImpl, realpathImpl };
     const evidenceDirectory = path.join(paths.evidenceRoot, releaseSha);
     await assertProtectedDirectory(paths.evidenceRoot, fileDeps);
-    const [evidenceBytes, signatureBytes, keyringBytes, githubConfig, aliyunConfig] =
+    const [evidenceBytes, signatureBytes, keyringBytes, githubConfigFile, aliyunConfigFile] =
       await Promise.all([
         readProtectedFile(path.join(evidenceDirectory, 'evidence.json'), 32 * 1024, fileDeps),
         readProtectedFile(path.join(evidenceDirectory, 'evidence.sig'), 256, fileDeps),
         readProtectedFile(paths.keyring, 32 * 1024, fileDeps),
-        readProtectedFile(paths.signerConfigs.github, 32 * 1024, fileDeps),
-        readProtectedFile(paths.signerConfigs.aliyun, 32 * 1024, fileDeps),
+        readSignerConfig(paths.signerConfigs.github, 32 * 1024, fileDeps),
+        readSignerConfig(paths.signerConfigs.aliyun, 32 * 1024, fileDeps),
       ]);
+    if (githubConfigFile.gid === aliyunConfigFile.gid) {
+      throw new Error('signer configuration groups are not isolated');
+    }
+    const githubConfig = githubConfigFile.bytes;
+    const aliyunConfig = aliyunConfigFile.bytes;
     const bindingAfter = await bindingGenerationImpl();
     if (bindingAfter !== bindingBefore) throw new Error('binding changed');
     const diskSignerAuthorityGeneration = {

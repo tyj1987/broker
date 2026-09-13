@@ -7,6 +7,7 @@ import { LOCAL_SIGNER_CONTRACT } from '../broker/lib/local-signer-client.js';
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const preflight = read('../deploy/bin/secret-broker-production-preflight.mjs');
 const tmpfiles = read('../deploy/tmpfiles.d/secret-broker-provider-signers.conf');
+const brokerUnit = read('../deploy/systemd/secret-broker.service');
 
 const signers = Object.freeze({
   github: {
@@ -64,6 +65,7 @@ for (const [provider, expected] of Object.entries(signers)) {
     socketUnit,
     new RegExp(`^ListenStream=${expected.socket.replaceAll('.', '\\.')}$`, 'm'),
   );
+  assert.match(socketUnit, new RegExp(`^FileDescriptorName=${provider}-signer$`, 'm'));
   assert.match(socketUnit, /^Accept=no$/m);
   assert.match(socketUnit, /^After=systemd-tmpfiles-setup\.service$/m);
   assert.match(socketUnit, /^SocketUser=root$/m);
@@ -85,6 +87,10 @@ for (const [provider, expected] of Object.entries(signers)) {
 assert.notEqual(signers.github.user, signers.aliyun.user);
 assert.notEqual(signers.github.directory, signers.aliyun.directory);
 assert.notEqual(signers.github.socket, signers.aliyun.socket);
+assert.match(
+  brokerUnit,
+  /^SupplementaryGroups=broker-github-signer broker-aliyun-signer$/m,
+);
 assert.doesNotMatch(preflight, /BROKER_REQUIRE_GITHUB_SIGNER/);
 
 console.log('provider signer systemd contracts: isolated identities and fail-closed paths passed');

@@ -180,6 +180,8 @@ jobs:
       - name: Enforce Alibaba signer protocol statement coverage
         run: |
           test "$(go tool cover -func=aliyun-signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - name: Test provider signer process boundaries
+        run: go test -race ./cmd/github-signer ./cmd/aliyun-signer ./internal/socketactivation ./internal/trustedconfig
       - run: go test -race -coverprofile=provider-credential-coverage.out ./providercredential
       - name: Enforce provider credential protocol statement coverage
         run: |
@@ -447,6 +449,13 @@ jobs:
       - run: node --check deploy/bin/secret-broker-production-preflight.mjs
       - run: node broker-test/test-audit-systemd-units.js
       - run: node broker-test/test-production-preflight.js
+      - name: Test isolated provider signer release permissions
+        run: |
+          sudo bash broker-test/test-provider-signer-release-permissions.sh
+          if sudo env BROKER_TEST_OPEN_CROSS_ACCESS=1 bash broker-test/test-provider-signer-release-permissions.sh; then
+            echo 'release permission test accepted cross-signer access' >&2
+            exit 1
+          fi
       - name: Verify deployment helper fail-closed invariants
         run: |
           grep -Fq 'policy core is not active' deploy/bin/secret-broker-deploy

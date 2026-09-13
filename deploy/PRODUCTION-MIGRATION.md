@@ -39,6 +39,8 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/run/secret-broker/core.sock` | `broker-core:broker`, `0660` | Local-only Go policy decision channel |
 | `/run/secret-broker-github-signer/signer.sock` | `root:broker-github-signer`, `0660`; parent `0750` | systemd-owned, signature-only GitHub App capability; private key remains in KMS/HSM |
 | `/run/secret-broker-aliyun-signer/signer.sock` | `root:broker-aliyun-signer`, `0660`; parent `0750` | systemd-owned, execution-bound Alibaba Cloud Signature V3 capability; long-term credentials remain outside Broker |
+| `/etc/secret-broker/providers/github-signer.json` | `root:broker-github-signer`, `0640` | Strict non-secret binding configuration; parent grants the signer execute-only traversal |
+| `/etc/secret-broker/providers/aliyun-signer.json` | `root:broker-aliyun-signer`, `0640` | Strict non-secret binding configuration; parent grants the signer execute-only traversal |
 | `secret-broker-audit-signer.service` | `broker-audit-signer:broker-audit-signer` | Uses only the pinned Alibaba KMS key and external monotonic state |
 | `secret-broker-audit-exporter.service` | `broker-audit-exporter:broker-audit-exporter` | Exports audit-chain heads without holding a cloud signing or storage identity |
 | `secret-broker-audit-store.service` | `broker-audit-store:broker-audit-store` | Publishes signed heads to locked OSS and COS stores |
@@ -46,12 +48,14 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 
 Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it. The service uses systemd credentials, so verify that the host supports `LoadCredential=` and the `%d` credential-directory specifier before the maintenance window.
 
-The checked-in GitHub and Alibaba Cloud signer units and their `tmpfiles.d`
-directory rules are deployment contracts,
-not runnable placeholders. Do not install or enable them until their exact
-release binaries, non-secret binding configurations, independently managed
-cloud authorities and isolated-account receipts have passed review. The
-production preflight intentionally remains red until that evidence exists.
+The release builds the GitHub and Alibaba Cloud signer command shells, and the
+deployment helper grants each signer identity execute-only traversal to its own
+binary with a POSIX ACL. Neither identity joins the `broker` group or gains
+directory listing access. The shipped commands still fail closed with
+`signing_identity_unavailable`; do not install or enable their units until the
+non-secret binding configurations, independently managed cloud authorities and
+isolated-account receipts have passed review. The production preflight
+intentionally remains red until that evidence exists.
 
 Before the first hardened start, create `/etc/secret-broker/control-plane-state.key` from 32 cryptographically random bytes, owned by `root:root` with mode `0600`. Never pass this key on a command line or store it in Git, a unit file, a deployment log, or Helm values. With the Broker stopped, initialize the state exactly once using the same protected credential and the persistent state path:
 

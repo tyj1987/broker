@@ -254,11 +254,20 @@ continue.
   inside the stable process/release window and requires them to match both the
   protected configuration hashes and the signed evidence. A separate pre-start
   marker remains unacceptable because it leaves an open-file race.
-  This prepares,
-  but does not perform, DQ-009. Neither runnable signer executable,
-  cloud authority, protected configuration nor signed isolated-account receipt
-  exists yet, so the gate intentionally fails in production and DQ-004 remains
-  open.
+  The release now builds both signer command shells. Each command accepts only
+  its fixed root-owned configuration path, computes the reported generation
+  from the exact bytes loaded through a no-symlink ownership boundary, accepts
+  exactly one named systemd socket, and authorizes the fixed non-root Broker
+  peer. Signer configuration files are non-secret but isolated as exact
+  `0640 root:provider-signer-group` files; the two groups must differ, and the
+  shared parent grants only explicit execute traversal. Release binaries use
+  per-signer POSIX ACLs so each workload can traverse to and execute only its
+  own binary without joining the Broker group or reading the release tree. The
+  shipped backend factory intentionally returns
+  `signing_identity_unavailable`; it has no file-key or environment-token
+  fallback. This prepares, but does not perform, DQ-009. No cloud signing
+  authority, protected configuration or signed isolated-account receipt exists
+  yet, so the gate intentionally fails in production and DQ-004 remains open.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

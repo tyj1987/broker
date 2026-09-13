@@ -109,9 +109,12 @@ receipt. The probe returns no credential material and performs no provider
 request. A separate pre-start marker is not accepted because it would leave a
 configuration-open race.
 
-This source contract does not make the signers production-ready by itself. The
-runnable signer commands, protected configurations, isolated workload
-identities and real account receipts are still required before DQ-004 can close.
+The release contains fail-closed signer command shells and exact configuration
+generation probes, but no production signing backend. The commands reject
+startup with `signing_identity_unavailable` until a separately reviewed
+KMS/HSM or workload-identity backend is installed. Protected configurations,
+isolated workload identities and real account receipts are still required
+before DQ-004 can close.
 
 The 2026-09-12 production capability probe did not run either provider
 operation: the deployed registry exposed only `broker.tools.inspect`, and both

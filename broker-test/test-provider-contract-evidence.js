@@ -161,15 +161,15 @@ assert.equal(
   false,
 );
 
-function stat(kind, size = 0) {
+function stat(kind, size = 0, { mode, gid = 0 } = {}) {
   return {
     dev: 1,
     ino: size + 10,
     size,
     mtimeMs: 1,
-    mode: (kind === 'dir' ? 0o040000 : 0o100000) | (kind === 'dir' ? 0o700 : 0o600),
+    mode: (kind === 'dir' ? 0o040000 : 0o100000) | (mode ?? (kind === 'dir' ? 0o700 : 0o600)),
     uid: 0,
-    gid: 0,
+    gid,
     isDirectory: () => kind === 'dir',
     isFile: () => kind === 'file',
     isSymbolicLink: () => false,
@@ -191,6 +191,16 @@ const files = new Map([
   [PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.github, githubConfig],
   [PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.aliyun, aliyunConfig],
 ]);
+function statForPath(path, bytes) {
+  if (!bytes) return stat('dir');
+  if (path === PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.github) {
+    return stat('file', bytes.length, { mode: 0o640, gid: 1101 });
+  }
+  if (path === PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.aliyun) {
+    return stat('file', bytes.length, { mode: 0o640, gid: 1102 });
+  }
+  return stat('file', bytes.length);
+}
 const run = async (
   overrides = {},
   argv = ['node', 'provider-contract-evidence-check.js', '--release', `/releases/${releaseSha}`],
@@ -201,7 +211,7 @@ const run = async (
     realpathImpl: async (path) => path,
     lstatImpl: async (path) => {
       const bytes = files.get(path);
-      return bytes ? stat('file', bytes.length) : stat('dir');
+      return statForPath(path, bytes);
     },
     readFileImpl: async (path) => files.get(path),
     bindingGenerationImpl: async () => binding,
@@ -253,6 +263,39 @@ assert.deepEqual(
 );
 assert.deepEqual(
   await run({
+    lstatImpl: async (path) => {
+      const value = statForPath(path, files.get(path));
+      return path === PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.github
+        ? { ...value, mode: 0o100600 }
+        : value;
+    },
+  }),
+  { ready: false, output: ['provider_contract_evidence_ready=no'] },
+);
+assert.deepEqual(
+  await run({
+    lstatImpl: async (path) => {
+      const value = statForPath(path, files.get(path));
+      return path === PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.aliyun
+        ? { ...value, mode: 0o100644 }
+        : value;
+    },
+  }),
+  { ready: false, output: ['provider_contract_evidence_ready=no'] },
+);
+assert.deepEqual(
+  await run({
+    lstatImpl: async (path) => {
+      const value = statForPath(path, files.get(path));
+      return path === PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.aliyun
+        ? { ...value, gid: 1101 }
+        : value;
+    },
+  }),
+  { ready: false, output: ['provider_contract_evidence_ready=no'] },
+);
+assert.deepEqual(
+  await run({
     readFileImpl: async (path) =>
       path === PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.github
         ? Buffer.from('changed signer authority\n')
@@ -264,7 +307,7 @@ assert.deepEqual(
   await run({
     lstatImpl: async (path) => {
       const bytes = files.get(path);
-      const value = bytes ? stat('file', bytes.length) : stat('dir');
+      const value = statForPath(path, bytes);
       return path === evidenceDirectory ? { ...value, mode: 0o040770 } : value;
     },
   }),
@@ -275,7 +318,7 @@ assert.deepEqual(
   await run({
     lstatImpl: async (path) => {
       const bytes = files.get(path);
-      const value = bytes ? stat('file', bytes.length) : stat('dir');
+      const value = statForPath(path, bytes);
       if (path.endsWith('/evidence.json') && evidenceStats++ > 0) {
         return { ...value, mtimeMs: 2 };
       }
@@ -288,7 +331,7 @@ assert.deepEqual(
   await run({
     lstatImpl: async (path) => {
       const bytes = files.get(path);
-      const value = bytes ? stat('file', bytes.length) : stat('dir');
+      const value = statForPath(path, bytes);
       return path === PROVIDER_CONTRACT_EVIDENCE_PATHS.evidenceRoot
         ? { ...value, mode: 0o040770 }
         : value;
@@ -300,7 +343,7 @@ assert.deepEqual(
   await run({
     lstatImpl: async (path) => {
       const bytes = files.get(path);
-      const value = bytes ? stat('file', bytes.length) : stat('dir');
+      const value = statForPath(path, bytes);
       return path.endsWith('/evidence.json') ? { ...value, size: 32 * 1024 + 1 } : value;
     },
   }),
@@ -310,7 +353,7 @@ assert.deepEqual(
   await run({
     lstatImpl: async (path) => {
       const bytes = files.get(path);
-      const value = bytes ? stat('file', bytes.length) : stat('dir');
+      const value = statForPath(path, bytes);
       return path.endsWith('/evidence.json') ? { ...value, mode: 0o100644 } : value;
     },
   }),

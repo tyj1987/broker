@@ -43,6 +43,7 @@ for (const [provider, expected] of Object.entries(signers)) {
   assert.match(unit, new RegExp(`^Requires=${binary}\\.socket$`, 'm'));
   assert.match(unit, new RegExp(`^After=.*${binary}\\.socket$`, 'm'));
   assert.match(unit, /^UMask=0007$/m);
+  assert.match(unit, /^LimitCORE=0$/m);
   assert.match(unit, /^AmbientCapabilities=$/m);
   assert.match(unit, /^CapabilityBoundingSet=$/m);
   assert.match(unit, /^LockPersonality=true$/m);
@@ -83,6 +84,12 @@ for (const [provider, expected] of Object.entries(signers)) {
   assert.match(preflight, new RegExp(`directory: '${expected.directory}'`));
   assert.match(preflight, new RegExp(`socket: '${expected.socket}'`));
 }
+
+const aliyunUnit = read('../deploy/systemd/secret-broker-aliyun-signer.service');
+assert.match(aliyunUnit, /^IPAddressDeny=any$/m);
+assert.match(aliyunUnit, /^IPAddressAllow=100\.100\.100\.200\/32$/m);
+const githubUnit = read('../deploy/systemd/secret-broker-github-signer.service');
+assert.doesNotMatch(githubUnit, /^IPAddressAllow=/m);
 
 assert.notEqual(signers.github.user, signers.aliyun.user);
 assert.notEqual(signers.github.directory, signers.aliyun.directory);

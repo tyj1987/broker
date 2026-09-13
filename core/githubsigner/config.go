@@ -2,7 +2,10 @@ package githubsigner
 
 import (
 	"bytes"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,7 +15,7 @@ import (
 )
 
 const (
-	ServiceConfigVersion  = 1
+	ServiceConfigVersion  = 2
 	MaxServiceConfigBytes = 32 * 1024
 	serviceConfigPath     = "/etc/secret-broker/providers/github-signer.json"
 	serviceConfigDir      = "/etc/secret-broker/providers"
@@ -24,6 +27,7 @@ type ServiceConfig struct {
 	Version                   int
 	ProviderProfileID         string
 	Bindings                  []Binding
+	SigningAuthorities        []SigningAuthority
 	AuthorityGenerationSHA256 string
 }
 
@@ -34,9 +38,23 @@ type serviceConfigWire struct {
 }
 
 type bindingWire struct {
-	AccountRef  string `json:"account_ref"`
-	Environment string `json:"environment"`
-	ClientID    string `json:"client_id"`
+	AccountRef       string `json:"account_ref"`
+	Environment      string `json:"environment"`
+	ClientID         string `json:"client_id"`
+	KMSKeyID         string `json:"kms_key_id"`
+	KMSKeyVersionID  string `json:"kms_key_version_id"`
+	PublicKeySPKIDER string `json:"public_key_spki_der_base64"`
+	PublicKeySHA256  string `json:"public_key_sha256"`
+}
+
+// SigningAuthority binds one GitHub identity tuple to one exact, non-exportable
+// KMS key version and a pinned public key used to verify every returned signature.
+type SigningAuthority struct {
+	Binding         Binding
+	KMSKeyID        string
+	KMSKeyVersionID string
+	PublicKey       *rsa.PublicKey
+	PublicKeySHA256 string
 }
 
 func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
@@ -58,7 +76,9 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 	}
 	for _, binding := range rawBindings {
 		var object map[string]json.RawMessage
-		if json.Unmarshal(binding, &object) != nil || !exactNonNullKeys(object, "account_ref", "environment", "client_id") {
+		if json.Unmarshal(binding, &object) != nil || !exactNonNullKeys(object,
+			"account_ref", "environment", "client_id", "kms_key_id", "kms_key_version_id",
+			"public_key_spki_der_base64", "public_key_sha256") {
 			return ServiceConfig{}, ErrServiceConfigInvalid
 		}
 	}
@@ -68,9 +88,26 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 		return ServiceConfig{}, ErrServiceConfigInvalid
 	}
 	bindings := make([]Binding, 0, len(wire.Bindings))
+	authorities := make([]SigningAuthority, 0, len(wire.Bindings))
 	for _, binding := range wire.Bindings {
-		bindings = append(bindings, Binding{
+		boundIdentity := Binding{
 			AccountRef: binding.AccountRef, Environment: binding.Environment, ClientID: binding.ClientID,
+		}
+		publicKeyDER, decodeErr := base64.StdEncoding.Strict().DecodeString(binding.PublicKeySPKIDER)
+		parsedKey, parseErr := x509.ParsePKIXPublicKey(publicKeyDER)
+		publicKey, isRSA := parsedKey.(*rsa.PublicKey)
+		publicKeyDigest := sha256.Sum256(publicKeyDER)
+		if decodeErr != nil || parseErr != nil || !isRSA || !validKMSRSAKey(publicKey) ||
+			publicKey.E != 65537 || !kmsKeyIDPattern.MatchString(binding.KMSKeyID) ||
+			!kmsKeyVersionIDPattern.MatchString(binding.KMSKeyVersionID) ||
+			!publicKeyDigestPattern.MatchString(binding.PublicKeySHA256) ||
+			hex.EncodeToString(publicKeyDigest[:]) != binding.PublicKeySHA256 {
+			return ServiceConfig{}, ErrServiceConfigInvalid
+		}
+		bindings = append(bindings, boundIdentity)
+		authorities = append(authorities, SigningAuthority{
+			Binding: boundIdentity, KMSKeyID: binding.KMSKeyID, KMSKeyVersionID: binding.KMSKeyVersionID,
+			PublicKey: publicKey, PublicKeySHA256: binding.PublicKeySHA256,
 		})
 	}
 	if _, err = NewBindingSet(bindings); err != nil {
@@ -79,6 +116,7 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 	digest := sha256.Sum256(value)
 	return ServiceConfig{
 		Version: wire.Version, ProviderProfileID: wire.ProviderProfileID, Bindings: bindings,
+		SigningAuthorities:        authorities,
 		AuthorityGenerationSHA256: hex.EncodeToString(digest[:]),
 	}, nil
 }

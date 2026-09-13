@@ -37,6 +37,7 @@ var (
 	accountRefPattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	environmentPattern         = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 	regionPattern              = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+){1,4}$`)
+	roleNamePattern            = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.@_-]{0,63}$`)
 	executionIDPattern         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	requestBindingPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	credentialBindingPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)

@@ -109,12 +109,38 @@ receipt. The probe returns no credential material and performs no provider
 request. A separate pre-start marker is not accepted because it would leave a
 configuration-open race.
 
-The release contains fail-closed signer command shells and exact configuration
-generation probes, but no production signing backend. The commands reject
-startup with `signing_identity_unavailable` until a separately reviewed
-KMS/HSM or workload-identity backend is installed. Protected configurations,
-isolated workload identities and real account receipts are still required
-before DQ-004 can close.
+The Alibaba signer contains an IMDSv2-only ECS RAM Role credential backend and
+the fixed Signature V3 implementation. It has no IMDSv1, environment variable,
+shared-profile or long-term access-key fallback. Its unit restricts IP egress to
+the ECS metadata address; a dedicated workload and production egress controls
+must still be verified before enablement. The GitHub signer contains the strict
+KMS digest-signing boundary, exact key-version routing and pinned-public-key
+verification, but no production KMS transport yet, so its shipped command still
+rejects startup with `signing_identity_unavailable`.
+
+GitHub does not document a way to upload an arbitrary externally generated App
+public key. The approved design therefore requires a human-controlled ceremony
+to import a GitHub-generated RSA private key into Alibaba KMS/HSM as BYOK. That
+ceremony, the KMS transport, protected configurations, isolated workload
+identities and real account receipts are still required before DQ-004 can
+close. Unit or mock-signature success is not provider contract evidence.
+
+Both version 2 service configurations remain non-secret and exact-schema. The Alibaba
+configuration names one `ecs_ram_role_name` and one or more exact
+account/environment/resource/region bindings. The GitHub configuration binds
+each account/environment/client tuple to a KMS `key_id`, immutable key-version
+ID, base64-encoded RSA SPKI public key and its SHA-256 digest. Unknown, null,
+duplicate, weak-RSA, mismatched-digest and credential-like fields are rejected.
+No access key, session token, GitHub private key or KMS client credential is a
+valid configuration field.
+
+Runtime behavior follows the current official contracts: GitHub App JWTs use
+RS256 and remain at most ten minutes; Alibaba ECS role credentials are obtained
+with IMDSv2 and the temporary security token is included in the canonical
+Signature V3 headers. The implementation sources and dates are recorded in the
+versioned provider manifests. Before production, the ECS instance itself must
+be independently verified with metadata `HttpTokens=required`, and the KMS key
+version/public-key pin must match the human-reviewed BYOK receipt.
 
 The 2026-09-12 production capability probe did not run either provider
 operation: the deployed registry exposed only `broker.tools.inspect`, and both

@@ -48,14 +48,16 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 
 Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it. The service uses systemd credentials, so verify that the host supports `LoadCredential=` and the `%d` credential-directory specifier before the maintenance window.
 
-The release builds the GitHub and Alibaba Cloud signer command shells, and the
+The release builds the GitHub and Alibaba Cloud signer commands, and the
 deployment helper grants each signer identity execute-only traversal to its own
 binary with a POSIX ACL. Neither identity joins the `broker` group or gains
-directory listing access. The shipped commands still fail closed with
-`signing_identity_unavailable`; do not install or enable their units until the
-non-secret binding configurations, independently managed cloud authorities and
-isolated-account receipts have passed review. The production preflight
-intentionally remains red until that evidence exists.
+directory listing access. The Alibaba command uses only its configured ECS RAM
+Role through IMDSv2 and has no static-key or IMDSv1 fallback. The GitHub command
+still fails closed with `signing_identity_unavailable` until its reviewed KMS
+transport is present. Do not install or enable either unit until the non-secret
+binding configurations, dedicated workload/network boundaries, independently
+managed cloud authorities and isolated-account receipts have passed review.
+The production preflight intentionally remains red until that evidence exists.
 
 Before the first hardened start, create `/etc/secret-broker/control-plane-state.key` from 32 cryptographically random bytes, owned by `root:root` with mode `0600`. Never pass this key on a command line or store it in Git, a unit file, a deployment log, or Helm values. With the Broker stopped, initialize the state exactly once using the same protected credential and the persistent state path:
 

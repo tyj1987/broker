@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/tyj1987/broker/core/aliyunsigner"
 	"github.com/tyj1987/broker/core/internal/socketactivation"
@@ -23,8 +24,6 @@ const (
 	socketName = "aliyun-signer"
 	socketPath = "/run/secret-broker-aliyun-signer/signer.sock"
 )
-
-var errBackendUnavailable = errors.New("signing backend is unavailable")
 
 type dependencies struct {
 	loadConfig func(string) (aliyunsigner.ServiceConfig, error)
@@ -40,8 +39,12 @@ func defaultDependencies() dependencies {
 		loadConfig: aliyunsigner.LoadServiceConfigFile,
 		lookupUID:  lookupUID,
 		newPeer:    aliyunsigner.NewOSPeerAuthorizer,
-		newSigner: func(context.Context, aliyunsigner.ServiceConfig) (aliyunsigner.RequestSigner, error) {
-			return nil, errBackendUnavailable
+		newSigner: func(_ context.Context, config aliyunsigner.ServiceConfig) (aliyunsigner.RequestSigner, error) {
+			provider, err := aliyunsigner.NewIMDSv2CredentialProvider(config.ECSRAMRoleName, 2*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			return aliyunsigner.NewSignatureV3Signer(provider, config.ECSRAMRoleName, config.Bindings)
 		},
 		listener: socketactivation.Listener,
 		serve: func(ctx context.Context, server *aliyunsigner.Server, listener net.Listener) error {

@@ -24,7 +24,7 @@ func validDependencies(listener *testListener) dependencies {
 	return dependencies{
 		loadConfig: func(string) (githubsigner.ServiceConfig, error) {
 			return githubsigner.ServiceConfig{
-				Version: 1, ProviderProfileID: "profile",
+				Version: 2, ProviderProfileID: "profile",
 				Bindings:                  []githubsigner.Binding{{AccountRef: "account", Environment: "staging", ClientID: "123"}},
 				AuthorityGenerationSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			}, nil

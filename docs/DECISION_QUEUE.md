@@ -263,9 +263,16 @@ continue.
   shared parent grants only explicit execute traversal. Release binaries use
   per-signer POSIX ACLs so each workload can traverse to and execute only its
   own binary without joining the Broker group or reading the release tree. The
-  shipped backend factory intentionally returns
-  `signing_identity_unavailable`; it has no file-key or environment-token
-  fallback. This prepares, but does not perform, DQ-009. No cloud signing
+  Alibaba signer now has a strict IMDSv2-only ECS RAM Role credential backend
+  and fixed Signature V3 implementation. Its source unit permits IP egress only
+  to the ECS metadata address, and it has no IMDSv1, environment, shared-profile
+  or static-key fallback. The GitHub signer now has an exact KMS key-version
+  digest boundary and verifies every returned RSA PKCS#1 SHA-256 signature
+  against a pinned public key, but its production KMS transport is still absent
+  and the command remains fail closed. GitHub's documented App key flow requires
+  a human-controlled BYOK import ceremony because it does not provide arbitrary
+  public-key registration. This source work prepares, but does not perform,
+  DQ-009. No cloud signing
   authority, protected configuration or signed isolated-account receipt exists
   yet, so the gate intentionally fails in production and DQ-004 remains open.
 

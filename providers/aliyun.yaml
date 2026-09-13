@@ -7,6 +7,11 @@ official_docs:
   - https://www.alibabacloud.com/help/en/ram/use-cases/ensure-security-of-alibaba-cloud-resources
   - https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-assumerolewithoidc
   - https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature
+  - https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata/
+  - https://www.alibabacloud.com/help/en/ecs/user-guide/access-instance-metadata-using-hardened-only-mode
+  - https://www.alibabacloud.com/help/en/sdk/developer-reference/v2-manage-go-access-credentials
+  - https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/sign-1
+  - https://www.alibabacloud.com/help/en/kms/key-management-service/user-guide/import-key-material-into-an-asymmetric-key
   - https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-getcalleridentity
   - https://www.alibabacloud.com/help/en/ecs/developer-reference/api-ecs-2014-05-26-describeinstances
 origins: [https://ecs.cn-hangzhou.aliyuncs.com, https://sts.aliyuncs.com]
@@ -37,4 +42,6 @@ authority_probe:
 contract_test: { version: 2, account: isolated_ram_role, authority_attestation: required, required: true, last_result: not_run }
 implementation_evidence:
   signature_v3_official_vector: passed
+  ecs_ram_role_imdsv2_backend: passed_mock
+  imdsv1_fallback: forbidden
   isolated_account_contract: not_run

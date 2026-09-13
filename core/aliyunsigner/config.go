@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ServiceConfigVersion  = 1
+	ServiceConfigVersion  = 2
 	MaxServiceConfigBytes = 32 * 1024
 	serviceConfigPath     = "/etc/secret-broker/providers/aliyun-signer.json"
 	serviceConfigDir      = "/etc/secret-broker/providers"
@@ -23,6 +23,7 @@ var ErrServiceConfigInvalid = errors.New("aliyun signer service configuration is
 type ServiceConfig struct {
 	Version                   int
 	ProviderProfileID         string
+	ECSRAMRoleName            string
 	Bindings                  []Binding
 	AuthorityGenerationSHA256 string
 }
@@ -30,6 +31,7 @@ type ServiceConfig struct {
 type serviceConfigWire struct {
 	Version           int           `json:"version"`
 	ProviderProfileID string        `json:"provider_profile_id"`
+	ECSRAMRoleName    string        `json:"ecs_ram_role_name"`
 	Bindings          []bindingWire `json:"bindings"`
 }
 
@@ -50,7 +52,8 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 		return ServiceConfig{}, ErrServiceConfigInvalid
 	}
 	var raw map[string]json.RawMessage
-	if json.Unmarshal(value, &raw) != nil || !exactNonNullKeys(raw, "version", "provider_profile_id", "bindings") {
+	if json.Unmarshal(value, &raw) != nil ||
+		!exactNonNullKeys(raw, "version", "provider_profile_id", "ecs_ram_role_name", "bindings") {
 		return ServiceConfig{}, ErrServiceConfigInvalid
 	}
 	var rawBindings []json.RawMessage
@@ -66,7 +69,7 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 	}
 	var wire serviceConfigWire
 	if decodeStrict(value, &wire) != nil || wire.Version != ServiceConfigVersion ||
-		!accountRefPattern.MatchString(wire.ProviderProfileID) {
+		!accountRefPattern.MatchString(wire.ProviderProfileID) || !roleNamePattern.MatchString(wire.ECSRAMRoleName) {
 		return ServiceConfig{}, ErrServiceConfigInvalid
 	}
 	bindings := make([]Binding, 0, len(wire.Bindings))
@@ -81,7 +84,8 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 	}
 	digest := sha256.Sum256(value)
 	return ServiceConfig{
-		Version: wire.Version, ProviderProfileID: wire.ProviderProfileID, Bindings: bindings,
+		Version: wire.Version, ProviderProfileID: wire.ProviderProfileID,
+		ECSRAMRoleName: wire.ECSRAMRoleName, Bindings: bindings,
 		AuthorityGenerationSHA256: hex.EncodeToString(digest[:]),
 	}, nil
 }

@@ -24,7 +24,7 @@ func validDependencies(listener *testListener) dependencies {
 	return dependencies{
 		loadConfig: func(string) (aliyunsigner.ServiceConfig, error) {
 			return aliyunsigner.ServiceConfig{
-				Version: 1, ProviderProfileID: "profile",
+				Version: 2, ProviderProfileID: "profile", ECSRAMRoleName: "broker-readonly",
 				Bindings:                  []aliyunsigner.Binding{{AccountRef: "account", Environment: "staging", ResourceRef: "resource", RegionID: "cn-hangzhou"}},
 				AuthorityGenerationSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			}, nil
@@ -102,8 +102,15 @@ func TestRunFailsClosedByStage(t *testing.T) {
 	}
 }
 
-func TestDefaultBackendIsUnavailable(t *testing.T) {
+func TestDefaultBackendRequiresBoundRoleAndUsesIMDSv2Signer(t *testing.T) {
 	if signer, err := defaultDependencies().newSigner(context.Background(), aliyunsigner.ServiceConfig{}); err == nil || signer != nil {
-		t.Fatal("default backend did not fail closed")
+		t.Fatal("default backend accepted an unbound role")
+	}
+	signer, err := defaultDependencies().newSigner(context.Background(), aliyunsigner.ServiceConfig{
+		ECSRAMRoleName: "broker-readonly",
+		Bindings:       []aliyunsigner.Binding{{AccountRef: "account", Environment: "staging", ResourceRef: "resource", RegionID: "cn-hangzhou"}},
+	})
+	if err != nil || signer == nil {
+		t.Fatalf("default backend was not constructed: %v", err)
 	}
 }

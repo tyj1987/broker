@@ -106,8 +106,38 @@ func TestOSDialerAuthenticatesWorkerBeforeReturningConnection(t *testing.T) {
 	if connection, err = dial(context.Background(), "tcp", path); connection != nil || err == nil {
 		t.Fatalf("wrong transport dial = %#v, %v", connection, err)
 	}
+	if connection, err = dial(nil, "unix", path); connection != nil || err == nil {
+		t.Fatalf("nil context dial = %#v, %v", connection, err)
+	}
+	if connection, err = dial(context.Background(), "unix", path+".other"); connection != nil || err == nil {
+		t.Fatalf("wrong path dial = %#v, %v", connection, err)
+	}
 	if _, err = newOSDialerForPath(0, path); err == nil {
 		t.Fatal("root worker uid accepted")
+	}
+}
+
+func TestOSDialerFailsClosedWhenSocketIsUnavailable(t *testing.T) {
+	uid := uint32(os.Geteuid())
+	if uid == 0 {
+		t.Skip("test requires a non-root process identity")
+	}
+	path := filepath.Join(t.TempDir(), "missing.sock")
+	dial, err := newOSDialerForPath(uid, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := dial(context.Background(), "unix", path)
+	if connection != nil || err == nil {
+		t.Fatalf("unavailable socket dial = %#v, %v", connection, err)
+	}
+}
+
+func TestNewOSUnixClientRejectsRootWorkerIdentity(t *testing.T) {
+	binding := testBinding(t)
+	client, err := NewOSUnixClient(binding, 0)
+	if client != nil || err == nil {
+		t.Fatalf("root worker client = %#v, %v", client, err)
 	}
 }
 

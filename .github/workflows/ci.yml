@@ -193,11 +193,31 @@ jobs:
       - run: go test -race -coverprofile=audit-oss-coverage.out ./auditoss
       - name: Enforce Alibaba immutable adapter statement coverage
         run: |
-          test "$(go tool cover -func=audit-oss-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+          go tool cover -func=audit-oss-coverage.out | awk '
+            $1 == "total:" { gsub("%", "", $3); found += 1; coverage = $3 + 0 }
+            END {
+              if (found != 1) {
+                print "expected exactly one total coverage row" > "/dev/stderr"
+                exit 1
+              }
+              printf "Alibaba immutable adapter statement coverage: %.1f%%\n", coverage
+              exit coverage >= 90 ? 0 : 1
+            }
+          '
       - run: go test -race -coverprofile=audit-cos-coverage.out ./auditcos
       - name: Enforce Tencent immutable adapter statement coverage
         run: |
-          test "$(go tool cover -func=audit-cos-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+          go tool cover -func=audit-cos-coverage.out | awk '
+            $1 == "total:" { gsub("%", "", $3); found += 1; coverage = $3 + 0 }
+            END {
+              if (found != 1) {
+                print "expected exactly one total coverage row" > "/dev/stderr"
+                exit 1
+              }
+              printf "Tencent immutable adapter statement coverage: %.1f%%\n", coverage
+              exit coverage >= 90 ? 0 : 1
+            }
+          '
       - name: Enforce immutable provider SDK dependency isolation
         run: |
           if go list -deps ./cmd/audit-store ./cmd/audit-mirror-worker | grep -Eq 'github.com/(aliyun|tencentyun)/'; then

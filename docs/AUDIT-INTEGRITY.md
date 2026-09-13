@@ -247,6 +247,11 @@ the trusted-key generation, verifies every canonical signed envelope again, seri
 maps only sequence-derived object keys, and forces both new and existing COS
 objects through exact body and COMPLIANCE-retention read-back. Retention times
 are rounded up to COS's whole-second wire precision, never down. The worker
+now also requires a non-null opaque version ID for every create result and
+uses that exact version for body and retention read-back. Ordinary reads and
+predecessor checks first require the provider adapter to resolve one unambiguous
+version, then address only that version. Missing, null, malformed or ambiguous
+version identity fails closed. The provider-neutral contract is present, but
 concrete Tencent workload-identity factory, version-bound concurrent-create
 proof and cloud resources are still absent. A dedicated command now accepts
 only a root-owned, exact-schema configuration, authenticates the audit-store UID and consumes the
@@ -307,13 +312,15 @@ object rather than relying only on a mutable bucket default. The initial mirror
 storage class remains STANDARD until a real account proves that direct archive
 upload, object lock and the recovery-time target work together.
 
-Official contracts checked on 2026-09-12:
+Official contracts checked on 2026-09-13:
 
 - [Alibaba Cloud KMS Sign](https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/sign-1)
 - [Alibaba Cloud KMS key specifications](https://www.alibabacloud.com/help/en/kms/key-management-service/user-guide/key-types-and-specifications)
 - [Alibaba Cloud OSS retention policies](https://www.alibabacloud.com/help/en/oss/user-guide/oss-retention-policies)
 - [Alibaba Cloud OSS PutObject](https://www.alibabacloud.com/help/en/oss/developer-reference/putobject)
 - [Tencent Cloud COS Object Lock](https://cloud.tencent.com/document/product/436/55294)
+- [Tencent Cloud COS upload response version ID](https://cloud.tencent.com/document/product/436/65820)
+- [Tencent Cloud COS object-version listing](https://cloud.tencent.com/document/product/436/64993)
 - [Tencent Cloud COS PUT Object Retention](https://cloud.tencent.com/document/product/436/95768)
 - [Tencent Cloud Object Lock condition keys](https://cloud.tencent.com/document/product/436/71307)
 

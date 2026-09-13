@@ -18,10 +18,22 @@ import (
 	"github.com/tyj1987/broker/core/auditmirror"
 )
 
-var bucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+var (
+	bucketPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+	versionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]{0,255}$`)
+)
+
+type COSCreateResult struct {
+	Status    string
+	VersionID string
+}
 
 type COSClient interface {
-	auditanchor.COSImmutableClient
+	InspectObjectLock(context.Context, string) (auditanchor.COSObjectLockState, error)
+	CreateVersionedObject(context.Context, auditanchor.COSCreateObjectRequest) (COSCreateResult, error)
+	ResolveObjectVersion(context.Context, string, string) (string, error)
+	ReadObjectVersion(context.Context, string, string, string) ([]byte, error)
+	ReadObjectRetentionVersion(context.Context, string, string, string) (auditanchor.COSObjectRetention, error)
 	ListObjectKeys(context.Context, string, string, string, int) (auditanchor.ObjectKeyPage, error)
 }
 
@@ -128,19 +140,20 @@ func (backend *Backend) Create(ctx context.Context, request auditmirror.CreateRe
 		return auditmirror.CreateResult{}, auditmirror.ErrUnavailable
 	}
 	key := backend.objectKey(request.Sequence())
-	result, err := backend.client.CreateObject(operationContext, auditanchor.COSCreateObjectRequest{
+	result, err := backend.client.CreateVersionedObject(operationContext, auditanchor.COSCreateObjectRequest{
 		Bucket: backend.bucket, Key: key, Body: canonical, ContentType: "application/json",
 		StorageClass: "STANDARD", LockMode: auditanchor.COSComplianceMode,
 		RetainUntil: request.ExpectedRetainUntil(),
 	})
-	if err != nil || operationContext.Err() != nil || (result.Status != "created" && result.Status != "exists") {
+	if err != nil || operationContext.Err() != nil || (result.Status != "created" && result.Status != "exists") ||
+		!validVersionID(result.VersionID) {
 		return auditmirror.CreateResult{}, auditmirror.ErrUnavailable
 	}
-	stored, err := backend.client.ReadObject(operationContext, backend.bucket, key)
+	stored, err := backend.client.ReadObjectVersion(operationContext, backend.bucket, key, result.VersionID)
 	if err != nil || operationContext.Err() != nil || !bytes.Equal(stored, canonical) || !backend.validEnvelope(stored, request.Sequence()) {
 		return auditmirror.CreateResult{}, auditmirror.ErrUnavailable
 	}
-	retention, err := backend.client.ReadObjectRetention(operationContext, backend.bucket, key)
+	retention, err := backend.client.ReadObjectRetentionVersion(operationContext, backend.bucket, key, result.VersionID)
 	if err != nil || operationContext.Err() != nil || retention.Mode != auditanchor.COSComplianceMode ||
 		retention.RetainUntil.Location() != time.UTC || !retention.RetainUntil.Equal(request.ExpectedRetainUntil()) {
 		return auditmirror.CreateResult{}, auditmirror.ErrUnavailable
@@ -152,12 +165,17 @@ func (backend *Backend) Read(ctx context.Context, request auditmirror.ReadReques
 	if !backend.valid(ctx) || !request.ValidFor(backend.binding) {
 		return auditmirror.ReadResult{}, auditmirror.ErrContractRejected
 	}
-	value, err := backend.client.ReadObject(ctx, backend.bucket, backend.objectKey(request.Sequence()))
-	if ctx.Err() != nil {
+	key := backend.objectKey(request.Sequence())
+	versionID, err := backend.client.ResolveObjectVersion(ctx, backend.bucket, key)
+	if err != nil || ctx.Err() != nil || !validVersionID(versionID) {
+		if errors.Is(err, auditanchor.ErrImmutableObjectNotFound) && ctx.Err() == nil {
+			return auditmirror.ReadResult{}, auditmirror.ErrNotFound
+		}
 		return auditmirror.ReadResult{}, auditmirror.ErrUnavailable
 	}
-	if errors.Is(err, auditanchor.ErrImmutableObjectNotFound) {
-		return auditmirror.ReadResult{}, auditmirror.ErrNotFound
+	value, err := backend.client.ReadObjectVersion(ctx, backend.bucket, key, versionID)
+	if ctx.Err() != nil {
+		return auditmirror.ReadResult{}, auditmirror.ErrUnavailable
 	}
 	if err != nil || !backend.validEnvelope(value, request.Sequence()) {
 		return auditmirror.ReadResult{}, auditmirror.ErrUnavailable
@@ -199,12 +217,17 @@ func (backend *Backend) Retention(ctx context.Context, request auditmirror.ReadR
 	if !backend.valid(ctx) || !request.ValidFor(backend.binding) {
 		return auditmirror.RetentionResult{}, auditmirror.ErrContractRejected
 	}
-	value, err := backend.client.ReadObjectRetention(ctx, backend.bucket, backend.objectKey(request.Sequence()))
-	if ctx.Err() != nil {
+	key := backend.objectKey(request.Sequence())
+	versionID, err := backend.client.ResolveObjectVersion(ctx, backend.bucket, key)
+	if err != nil || ctx.Err() != nil || !validVersionID(versionID) {
+		if errors.Is(err, auditanchor.ErrImmutableObjectNotFound) && ctx.Err() == nil {
+			return auditmirror.RetentionResult{}, auditmirror.ErrNotFound
+		}
 		return auditmirror.RetentionResult{}, auditmirror.ErrUnavailable
 	}
-	if errors.Is(err, auditanchor.ErrImmutableObjectNotFound) {
-		return auditmirror.RetentionResult{}, auditmirror.ErrNotFound
+	value, err := backend.client.ReadObjectRetentionVersion(ctx, backend.bucket, key, versionID)
+	if ctx.Err() != nil {
+		return auditmirror.RetentionResult{}, auditmirror.ErrUnavailable
 	}
 	if err != nil || value.Mode != auditanchor.COSComplianceMode ||
 		value.RetainUntil.IsZero() || value.RetainUntil.Location() != time.UTC {
@@ -229,7 +252,11 @@ func (backend *Backend) validPredecessor(ctx context.Context, metadata auditanch
 		return true
 	}
 	key := backend.objectKey(metadata.Sequence - 1)
-	value, err := backend.client.ReadObject(ctx, backend.bucket, key)
+	versionID, err := backend.client.ResolveObjectVersion(ctx, backend.bucket, key)
+	if err != nil || ctx.Err() != nil || !validVersionID(versionID) {
+		return false
+	}
+	value, err := backend.client.ReadObjectVersion(ctx, backend.bucket, key, versionID)
 	if err != nil || ctx.Err() != nil {
 		return false
 	}
@@ -238,10 +265,14 @@ func (backend *Backend) validPredecessor(ctx context.Context, metadata auditanch
 		previous.Sequence != metadata.Sequence-1 || previous.PayloadDigest != metadata.PreviousAnchorDigest {
 		return false
 	}
-	retention, err := backend.client.ReadObjectRetention(ctx, backend.bucket, key)
+	retention, err := backend.client.ReadObjectRetentionVersion(ctx, backend.bucket, key, versionID)
 	return err == nil && ctx.Err() == nil && retention.Mode == auditanchor.COSComplianceMode &&
 		retention.RetainUntil.Location() == time.UTC &&
 		!retention.RetainUntil.Before(previous.CapturedAt.Add(time.Duration(auditmirror.RetentionDays)*24*time.Hour))
+}
+
+func validVersionID(value string) bool {
+	return value != "null" && versionIDPattern.MatchString(value)
 }
 
 func (backend *Backend) objectKey(sequence int64) string {

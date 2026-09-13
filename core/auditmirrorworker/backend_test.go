@@ -23,23 +23,29 @@ import (
 var workerNow = time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 
 type fakeCOS struct {
-	state       auditanchor.COSObjectLockState
-	create      auditanchor.ObjectCreateResult
-	body        []byte
-	retention   auditanchor.COSObjectRetention
-	page        auditanchor.ObjectKeyPage
-	err         error
-	createInput auditanchor.COSCreateObjectRequest
-	reads       int
-	puts        int
-	bodies      map[string][]byte
-	retentions  map[string]auditanchor.COSObjectRetention
-	putStarted  chan struct{}
-	putRelease  chan struct{}
-	inspectHook func()
-	putHook     func()
-	readHook    func()
-	retainHook  func()
+	state         auditanchor.COSObjectLockState
+	create        COSCreateResult
+	body          []byte
+	retention     auditanchor.COSObjectRetention
+	versionID     string
+	page          auditanchor.ObjectKeyPage
+	err           error
+	readErr       error
+	retentionErr  error
+	createInput   auditanchor.COSCreateObjectRequest
+	reads         int
+	puts          int
+	bodies        map[string][]byte
+	retentions    map[string]auditanchor.COSObjectRetention
+	putStarted    chan struct{}
+	putRelease    chan struct{}
+	inspectHook   func()
+	putHook       func()
+	readHook      func()
+	retainHook    func()
+	resolveHook   func()
+	readVersion   string
+	retainVersion string
 }
 
 func (fake *fakeCOS) InspectObjectLock(context.Context, string) (auditanchor.COSObjectLockState, error) {
@@ -48,7 +54,7 @@ func (fake *fakeCOS) InspectObjectLock(context.Context, string) (auditanchor.COS
 	}
 	return fake.state, fake.err
 }
-func (fake *fakeCOS) CreateObject(_ context.Context, request auditanchor.COSCreateObjectRequest) (auditanchor.ObjectCreateResult, error) {
+func (fake *fakeCOS) CreateVersionedObject(_ context.Context, request auditanchor.COSCreateObjectRequest) (COSCreateResult, error) {
 	fake.createInput = request
 	fake.puts++
 	if fake.putStarted != nil {
@@ -62,10 +68,25 @@ func (fake *fakeCOS) CreateObject(_ context.Context, request auditanchor.COSCrea
 	}
 	return fake.create, fake.err
 }
-func (fake *fakeCOS) ReadObject(_ context.Context, _ string, key string) ([]byte, error) {
+func (fake *fakeCOS) ResolveObjectVersion(_ context.Context, _, key string) (string, error) {
+	if fake.resolveHook != nil {
+		fake.resolveHook()
+	}
+	if fake.bodies != nil {
+		if _, exists := fake.bodies[key]; !exists {
+			return "", auditanchor.ErrImmutableObjectNotFound
+		}
+	}
+	return fake.versionID, fake.err
+}
+func (fake *fakeCOS) ReadObjectVersion(_ context.Context, _ string, key, versionID string) ([]byte, error) {
 	fake.reads++
+	fake.readVersion = versionID
 	if fake.readHook != nil {
 		fake.readHook()
+	}
+	if fake.readErr != nil {
+		return nil, fake.readErr
 	}
 	if fake.bodies != nil {
 		value, exists := fake.bodies[key]
@@ -76,9 +97,13 @@ func (fake *fakeCOS) ReadObject(_ context.Context, _ string, key string) ([]byte
 	}
 	return bytes.Clone(fake.body), fake.err
 }
-func (fake *fakeCOS) ReadObjectRetention(_ context.Context, _ string, key string) (auditanchor.COSObjectRetention, error) {
+func (fake *fakeCOS) ReadObjectRetentionVersion(_ context.Context, _ string, key, versionID string) (auditanchor.COSObjectRetention, error) {
+	fake.retainVersion = versionID
 	if fake.retainHook != nil {
 		fake.retainHook()
+	}
+	if fake.retentionErr != nil {
+		return auditanchor.COSObjectRetention{}, fake.retentionErr
 	}
 	if fake.retentions != nil {
 		value, exists := fake.retentions[key]
@@ -151,7 +176,7 @@ func workerHarness(t *testing.T) (*Backend, *fakeCOS, *ecdsa.PrivateKey, []byte)
 	body := workerEnvelope(t, privateKey, 1)
 	fake := &fakeCOS{
 		state:  auditanchor.COSObjectLockState{Enabled: true, VersioningState: "Enabled"},
-		create: auditanchor.ObjectCreateResult{Status: "created"}, body: body,
+		create: COSCreateResult{Status: "created", VersionID: "version-1"}, body: body, versionID: "version-1",
 		retention: auditanchor.COSObjectRetention{Mode: auditanchor.COSComplianceMode, RetainUntil: workerNow.Add(365*24*time.Hour + auditmirror.RetentionGrace)},
 	}
 	backend, err := newBackend(workerConfig(privateKey), fake, func() time.Time { return workerNow })
@@ -171,7 +196,8 @@ func TestBackendExecutesCompleteBoundMirrorContract(t *testing.T) {
 	}
 	create, _ := auditmirror.NewCreateRequest(backend.Binding(), 1, body, workerNow)
 	created, err := backend.Create(ctx, create)
-	if err != nil || created.Status != "created" || fake.reads != 1 {
+	if err != nil || created.Status != "created" || fake.reads != 1 ||
+		fake.readVersion != "version-1" || fake.retainVersion != "version-1" {
 		t.Fatalf("create = %#v, %v", created, err)
 	}
 	if fake.createInput.Bucket != workerConfig(&ecdsa.PrivateKey{}).Bucket || fake.createInput.Key != backend.objectKey(1) ||
@@ -182,7 +208,7 @@ func TestBackendExecutesCompleteBoundMirrorContract(t *testing.T) {
 	}
 	read, _ := auditmirror.NewReadRequest(backend.Binding(), 1)
 	got, err := backend.Read(ctx, read)
-	if err != nil || !bytes.Equal(got.Envelope, body) {
+	if err != nil || !bytes.Equal(got.Envelope, body) || fake.readVersion != fake.versionID {
 		t.Fatalf("read = %#v, %v", got, err)
 	}
 	fake.page = auditanchor.ObjectKeyPage{Keys: []string{backend.objectKey(1)}, Truncated: true, NextAfter: backend.objectKey(1)}
@@ -192,7 +218,8 @@ func TestBackendExecutesCompleteBoundMirrorContract(t *testing.T) {
 		t.Fatalf("list = %#v, %v", page, err)
 	}
 	retention, err := backend.Retention(ctx, read)
-	if err != nil || retention.Mode != auditanchor.COSComplianceMode || retention.RetainUntil != fake.retention.RetainUntil {
+	if err != nil || retention.Mode != auditanchor.COSComplianceMode || retention.RetainUntil != fake.retention.RetainUntil ||
+		fake.retainVersion != fake.versionID {
 		t.Fatalf("retention = %#v, %v", retention, err)
 	}
 }
@@ -261,6 +288,24 @@ func TestBackendFailsClosedOnMirrorDivergence(t *testing.T) {
 		t.Fatalf("not found retention error = %v", err)
 	}
 	fake.err = nil
+	fake.readErr = auditanchor.ErrImmutableObjectNotFound
+	if _, err := backend.Read(context.Background(), read); !errors.Is(err, auditmirror.ErrUnavailable) {
+		t.Fatalf("resolved version disappeared error = %v", err)
+	}
+	fake.readErr = nil
+	fake.retentionErr = auditanchor.ErrImmutableObjectNotFound
+	if _, err := backend.Retention(context.Background(), read); !errors.Is(err, auditmirror.ErrUnavailable) {
+		t.Fatalf("resolved retention disappeared error = %v", err)
+	}
+	fake.retentionErr = nil
+	fake.versionID = "null"
+	if _, err := backend.Read(context.Background(), read); !errors.Is(err, auditmirror.ErrUnavailable) {
+		t.Fatalf("null version read error = %v", err)
+	}
+	if _, err := backend.Retention(context.Background(), read); !errors.Is(err, auditmirror.ErrUnavailable) {
+		t.Fatalf("null version retention error = %v", err)
+	}
+	fake.versionID = "version-1"
 	fake.page = auditanchor.ObjectKeyPage{Keys: []string{backend.objectKey(1), backend.objectKey(3)}}
 	if _, err := backend.List(context.Background(), list); !errors.Is(err, auditmirror.ErrUnavailable) {
 		t.Fatalf("gapped list error = %v", err)
@@ -338,7 +383,15 @@ func TestBackendRejectsProviderFailuresAndMalformedResults(t *testing.T) {
 	if _, err := backend.Create(context.Background(), create); !errors.Is(err, auditmirror.ErrUnavailable) {
 		t.Fatalf("invalid create status error = %v", err)
 	}
+	fake.create.Status = "created"
+	for _, versionID := range []string{"", "null", "bad/version", strings.Repeat("a", 257)} {
+		fake.create.VersionID = versionID
+		if _, err := backend.Create(context.Background(), create); !errors.Is(err, auditmirror.ErrUnavailable) {
+			t.Fatalf("invalid version ID %q error = %v", versionID, err)
+		}
+	}
 	fake.create.Status = "exists"
+	fake.create.VersionID = "version-1"
 	fake.retention = auditanchor.COSObjectRetention{Mode: auditanchor.COSComplianceMode, RetainUntil: create.ExpectedRetainUntil().Add(-time.Second)}
 	if _, err := backend.Create(context.Background(), create); !errors.Is(err, auditmirror.ErrUnavailable) {
 		t.Fatalf("short retention error = %v", err)
@@ -408,13 +461,13 @@ func TestBackendLateCancellationTakesPrecedenceOverNotFound(t *testing.T) {
 	read, _ := auditmirror.NewReadRequest(backend.Binding(), 1)
 	readContext, cancelRead := context.WithCancel(context.Background())
 	fake.err = auditanchor.ErrImmutableObjectNotFound
-	fake.readHook = cancelRead
+	fake.resolveHook = cancelRead
 	if _, err := backend.Read(readContext, read); !errors.Is(err, auditmirror.ErrUnavailable) {
 		t.Fatalf("late canceled read error = %v", err)
 	}
-	fake.readHook = nil
+	fake.resolveHook = nil
 	retentionContext, cancelRetention := context.WithCancel(context.Background())
-	fake.retainHook = cancelRetention
+	fake.resolveHook = cancelRetention
 	if _, err := backend.Retention(retentionContext, read); !errors.Is(err, auditmirror.ErrUnavailable) {
 		t.Fatalf("late canceled retention error = %v", err)
 	}

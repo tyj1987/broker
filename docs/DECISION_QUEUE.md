@@ -172,9 +172,12 @@ continue.
   production mirror. The source now includes a dedicated worker command,
   root-owned systemd socket, exact non-secret configuration grammar and
   audit-store peer-UID check, but its default cloud factory remains unavailable
-  and its service unit denies all IP egress. Tencent workload identity,
-  version-bound concurrent-create semantics, COS resource and independent
-  recovery evidence do not exist yet.
+  and its service unit denies all IP egress. The worker contract now rejects a
+  create without a non-null provider version ID and binds body, retention,
+  ordinary reads and predecessor verification to an exact resolved version.
+  The concrete adapter must still reject ambiguous histories. Tencent workload
+  identity, race-tested concurrent-create semantics, COS resource and
+  independent recovery evidence do not exist yet.
 
 ## DQ-004: provider signing and account-binding authority
 

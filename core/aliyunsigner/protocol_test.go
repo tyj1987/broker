@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -15,9 +16,10 @@ import (
 var testNow = time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
 
 const (
-	testExecutionID    = "12345678-1234-4123-8123-123456789abc"
-	testRequestBinding = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testCredentialBind = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testExecutionID         = "12345678-1234-4123-8123-123456789abc"
+	testRequestBinding      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testAuthorityGeneration = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testCredentialBind      = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
 type memoryConn struct {
@@ -113,12 +115,49 @@ func protocolCode(errorValue error) string {
 
 func newTestServer(t *testing.T, signer RequestSigner, bindings BindingAuthorizer, peers PeerAuthorizer) *Server {
 	t.Helper()
-	server, err := NewServer(signer, bindings, peers)
+	server, err := NewServer(signer, bindings, peers, testAuthorityGeneration)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server.Clock = func() time.Time { return testNow }
 	return server
+}
+
+func TestServeConnReportsLoadedAuthorityGeneration(t *testing.T) {
+	signerCalls, bindingCalls, peerCalls := 0, 0, 0
+	server := newTestServer(t,
+		RequestSignerFunc(func(context.Context, SigningRequest) (SignedRequest, error) {
+			signerCalls++
+			return validSigned(), nil
+		}),
+		BindingAuthorizerFunc(func(context.Context, SigningRequest) error {
+			bindingCalls++
+			return nil
+		}),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error {
+			peerCalls++
+			return nil
+		}),
+	)
+	challenge := "ccccccccccccccccccccccccccccccccccccccccccc"
+	connection := newMemoryConn(fmt.Sprintf(`{"version":1,"operation":"authority_generation.read","challenge":"%s"}`+"\n", challenge))
+	if err := server.ServeConn(context.Background(), connection); err != nil {
+		t.Fatal(err)
+	}
+	if signerCalls != 0 || bindingCalls != 0 || peerCalls != 1 {
+		t.Fatal("authority probe crossed the signing or binding boundary")
+	}
+	var response authorityProbeResponse
+	if err := json.Unmarshal(connection.output.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Version != ProbeVersion || response.Operation != ProbeOperation ||
+		response.Challenge != challenge || response.AuthorityGenerationSHA256 != testAuthorityGeneration {
+		t.Fatalf("unexpected probe response %#v", response)
+	}
+	if protocolCode(server.ServeConn(context.Background(), newMemoryConn(`{"version":1,"operation":"authority_generation.read","challenge":"short"}`+"\n"))) != "request_invalid" {
+		t.Fatal("malformed authority probe accepted")
+	}
 }
 
 func TestServeConnSignsOnlyValidatedECSRequest(t *testing.T) {
@@ -498,14 +537,17 @@ func TestServerConfigurationAndHelpers(t *testing.T) {
 	validSigner := RequestSignerFunc(func(context.Context, SigningRequest) (SignedRequest, error) { return validSigned(), nil })
 	validBindings := BindingAuthorizerFunc(func(context.Context, SigningRequest) error { return nil })
 	validPeers := PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil })
-	if _, err := NewServer(nil, validBindings, validPeers); err == nil {
+	if _, err := NewServer(nil, validBindings, validPeers, testAuthorityGeneration); err == nil {
 		t.Fatal("nil signer accepted")
 	}
-	if _, err := NewServer(validSigner, nil, validPeers); err == nil {
+	if _, err := NewServer(validSigner, nil, validPeers, testAuthorityGeneration); err == nil {
 		t.Fatal("nil bindings accepted")
 	}
-	if _, err := NewServer(validSigner, validBindings, nil); err == nil {
+	if _, err := NewServer(validSigner, validBindings, nil, testAuthorityGeneration); err == nil {
 		t.Fatal("nil peers accepted")
+	}
+	if _, err := NewServer(validSigner, validBindings, validPeers, "invalid"); err == nil {
+		t.Fatal("invalid authority generation accepted")
 	}
 	server := newTestServer(t, validSigner, validBindings, validPeers)
 	if protocolCode(server.Serve(context.Background(), nil)) != "server_invalid" {
@@ -528,6 +570,11 @@ func TestServerConfigurationAndHelpers(t *testing.T) {
 	server.Clock = nil
 	if protocolCode(server.ServeConn(context.Background(), newMemoryConn(requestLine(t, OperationCallerIdentity, nil)))) != "server_invalid" {
 		t.Fatal("nil clock accepted")
+	}
+	server = newTestServer(t, validSigner, validBindings, validPeers)
+	server.AuthorityGenerationSHA256 = "invalid"
+	if protocolCode(server.ServeConn(context.Background(), newMemoryConn(requestLine(t, OperationCallerIdentity, nil)))) != "server_invalid" {
+		t.Fatal("invalid loaded authority generation accepted")
 	}
 	server = newTestServer(t, validSigner, validBindings, validPeers)
 	server.MaxConcurrent = 0

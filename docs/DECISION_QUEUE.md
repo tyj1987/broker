@@ -248,13 +248,14 @@ continue.
   double-samples the Broker generation through its independently owned mode
   `0600` Unix socket. The verifier has only a root-owned public keyring, never an evidence-signing
   private key. The Node clients use the same future paths.
-  The verifier does not yet bind an authenticated generation emitted from the
-  configuration actually loaded by each running signer. DQ-004 and production
-  acceptance remain open until both signer protocols expose and preflight
-  double-samples that non-secret value; a separate pre-start marker is not an
-  acceptable substitute because it leaves an open-file race.
+  Both signer protocol cores now require a loaded-authority generation and
+  expose it only through a peer-authorized, random-challenge probe on their
+  fixed Unix sockets. Production preflight double-samples those responses
+  inside the stable process/release window and requires them to match both the
+  protected configuration hashes and the signed evidence. A separate pre-start
+  marker remains unacceptable because it leaves an open-file race.
   This prepares,
-  but does not perform, DQ-009. Neither signer executable,
+  but does not perform, DQ-009. Neither runnable signer executable,
   cloud authority, protected configuration nor signed isolated-account receipt
   exists yet, so the gate intentionally fails in production and DQ-004 remains
   open.

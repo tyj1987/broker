@@ -21,12 +21,14 @@ than 15 minutes and configuration is double-sampled over a Broker-owned Unix
 socket. Missing, expired, unsafe or mismatched evidence fails closed, so unit and process
 metadata alone cannot produce a green production result.
 
-The evidence verifier currently hashes protected signer configuration files but
-does not bind a generation emitted from the configuration actually loaded by
-the running signer. This remains a DQ-004 production blocker; a pre-start marker
-is explicitly insufficient because it cannot close the open-file race.
+The signer protocol cores now expose the generation of the configuration they
+actually loaded through a peer-authorized random-challenge probe. Preflight
+samples both signers before and after evidence verification and requires those
+values to remain stable and match both the protected configuration files and
+the signed receipt. This closes the source-level open-file race without a
+separate pre-start marker.
 
-This is source and automated-test preparation only. No signer executable,
+This is source and automated-test preparation only. No runnable signer executable,
 cloud authority, protected signer configuration or isolated-account contract
 receipt has been deployed. The live preflight must therefore remain red until
 those dependencies are implemented and independently verified. No DQ-009 trust
@@ -149,16 +151,16 @@ environment files and credential values were not opened or printed.
 
 ## Production blockers observed
 
-| Severity | Evidence | Required remediation |
-|---|---|---|
-| P0 | Effective nginx configuration uses `proxy_ssl_verify off` for Broker upstream locations. | Enable CA and hostname verification, deploy the dedicated nginx workload certificate, and regression-test forged headers and direct backend access. |
-| P0 | CA private keys and multiple final-client private keys are stored together on the Broker host, including an old CA backup; the deployed config has no trusted-proxy fingerprint allowlist. | Replace the full CA hierarchy through an offline ceremony, re-enroll every client, revoke the old trust domain, remove all CA/client private keys from the host, and verify old identities are rejected. |
-| P0 | Production still runs the pre-upgrade `master@450c3ed` Node boundary while the Go policy service is inactive. Current branch security fixes and decision enforcement are not deployed. | Complete staging and credential-rotation gates, then deploy one digest-addressed release with the Go policy service required and verify fail-closed behavior. |
-| P1 | `secret-broker.service` runs as `root`. | Run under a dedicated locked system account with only the required writable paths. |
-| P1 | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present. | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment. |
-| P1 | nginx 1.20.1 is the active production version. | Move to a vendor-supported security-maintained release and record the package provenance. |
-| P0 | The production preflight now requires independent audit signer, exporter, immutable-store/retention-lock, and recovery-authority services under exact, mutually distinct identities; no production evidence for these services exists yet. | Package, deploy and independently attest all four services, verify KMS signing, signed-head export, retention lock and recovery authority, then repeat the 22-gate preflight and retain pass/fail-only evidence. |
-| P2 | Broker listens only on `127.0.0.1:8443`, which prevents direct public access, but it has no separate observed `9080` health listener in the live configuration. | Deploy and verify the loopback-only health listener used by the hardened workflow. |
+| Severity | Evidence                                                                                                                                                                                                                                   | Required remediation                                                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0       | Effective nginx configuration uses `proxy_ssl_verify off` for Broker upstream locations.                                                                                                                                                   | Enable CA and hostname verification, deploy the dedicated nginx workload certificate, and regression-test forged headers and direct backend access.                                                              |
+| P0       | CA private keys and multiple final-client private keys are stored together on the Broker host, including an old CA backup; the deployed config has no trusted-proxy fingerprint allowlist.                                                 | Replace the full CA hierarchy through an offline ceremony, re-enroll every client, revoke the old trust domain, remove all CA/client private keys from the host, and verify old identities are rejected.         |
+| P0       | Production still runs the pre-upgrade `master@450c3ed` Node boundary while the Go policy service is inactive. Current branch security fixes and decision enforcement are not deployed.                                                     | Complete staging and credential-rotation gates, then deploy one digest-addressed release with the Go policy service required and verify fail-closed behavior.                                                    |
+| P1       | `secret-broker.service` runs as `root`.                                                                                                                                                                                                    | Run under a dedicated locked system account with only the required writable paths.                                                                                                                               |
+| P1       | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present.                                                                                   | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment.                                                                                                   |
+| P1       | nginx 1.20.1 is the active production version.                                                                                                                                                                                             | Move to a vendor-supported security-maintained release and record the package provenance.                                                                                                                        |
+| P0       | The production preflight now requires independent audit signer, exporter, immutable-store/retention-lock, and recovery-authority services under exact, mutually distinct identities; no production evidence for these services exists yet. | Package, deploy and independently attest all four services, verify KMS signing, signed-head export, retention lock and recovery authority, then repeat the 22-gate preflight and retain pass/fail-only evidence. |
+| P2       | Broker listens only on `127.0.0.1:8443`, which prevents direct public access, but it has no separate observed `9080` health listener in the live configuration.                                                                            | Deploy and verify the loopback-only health listener used by the hardened workflow.                                                                                                                               |
 
 Production remains **not approved**. No deployment was attempted because P0/P1 gates, repository CI, credential rotation evidence, signed artifacts, provider contract tests, Android physical-device tests, and disaster-recovery rehearsal are incomplete.
 

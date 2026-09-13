@@ -146,6 +146,7 @@ const fakePaths = {
   },
   forbiddenKeyRoots: ['/offline-ca', '/offline-clients'],
 };
+const fakeSignerGenerations = Object.freeze({ github: '1'.repeat(64), aliyun: '2'.repeat(64) });
 const fakeStats = new Map([
   ['/release', { isSymbolicLink: () => true }],
   ['/state', { isFile: () => true, isSymbolicLink: () => false }],
@@ -223,6 +224,19 @@ const command = (name, args) => {
   if (invocation.includes('-p Group')) return { ok: true, stdout: 'broker' };
   if (name === 'nginx') return { ok: true, stdout: '  proxy_ssl_verify on;\n' };
   if (name === '/usr/sbin/runuser') {
+    if (args.at(-1)?.endsWith('/provider-signer-authority-generation.js')) {
+      assert.deepEqual(args, [
+        '--user',
+        'broker',
+        '--',
+        '/usr/bin/env',
+        '-i',
+        'PATH=/usr/bin:/bin',
+        '/runtime/node',
+        '/release/bin/provider-signer-authority-generation.js',
+      ]);
+      return { ok: true, stdout: JSON.stringify(fakeSignerGenerations) };
+    }
     assert.deepEqual(args, [
       '--user',
       'broker-audit-recovery',
@@ -318,6 +332,7 @@ const collectWithOverrides = (overrides = {}) =>
     loopbackHealthImpl: async () => true,
     realpathImpl,
     readFileImpl,
+    providerSignerAuthorityGenerationImpl: async () => fakeSignerGenerations,
     providerContractEvidenceImpl: async () => true,
     ...overrides,
   });
@@ -624,11 +639,47 @@ const missingProviderContractEvidence = await collectWithOverrides({
 });
 assert.equal(missingProviderContractEvidence.providerSignersReady, false);
 
+const missingProviderSignerGeneration = await collectWithOverrides({
+  providerSignerAuthorityGenerationImpl: async () => null,
+});
+assert.equal(missingProviderSignerGeneration.providerSignersReady, false);
+
+let generationReads = 0;
+const changedProviderSignerGeneration = await collectWithOverrides({
+  providerSignerAuthorityGenerationImpl: async () => ({
+    ...fakeSignerGenerations,
+    github: (generationReads++ === 0 ? '1' : '3').repeat(64),
+  }),
+});
+assert.equal(changedProviderSignerGeneration.providerSignersReady, false);
+
 let evidenceInvocation = null;
+let generationInvocations = 0;
 const retainedProviderContractEvidence = await collectWithOverrides({
   providerContractEvidenceImpl: undefined,
+  providerSignerAuthorityGenerationImpl: undefined,
   command: (name, args) => {
-    if (name === fakePaths.nodeRuntime && args[0]?.endsWith('/provider-contract-evidence-check.js')) {
+    if (
+      name === '/usr/sbin/runuser' &&
+      args.at(-1)?.endsWith('/provider-signer-authority-generation.js')
+    ) {
+      assert.deepEqual(args, [
+        '--user',
+        'broker',
+        '--',
+        '/usr/bin/env',
+        '-i',
+        'PATH=/usr/bin:/bin',
+        fakePaths.nodeRuntime,
+        '/release/bin/provider-signer-authority-generation.js',
+      ]);
+      generationInvocations += 1;
+      return { ok: true, stdout: JSON.stringify(fakeSignerGenerations) };
+    }
+    if (
+      name === fakePaths.nodeRuntime &&
+      args[0]?.endsWith('/provider-contract-evidence-check.js')
+    ) {
       evidenceInvocation = { name, args };
       return { ok: true, stdout: 'provider_contract_evidence_ready=yes' };
     }
@@ -637,9 +688,34 @@ const retainedProviderContractEvidence = await collectWithOverrides({
 });
 assert.deepEqual(evidenceInvocation, {
   name: fakePaths.nodeRuntime,
-  args: ['/release/bin/provider-contract-evidence-check.js', '--release', '/release'],
+  args: [
+    '/release/bin/provider-contract-evidence-check.js',
+    '--release',
+    '/release',
+    '--github-authority-generation',
+    fakeSignerGenerations.github,
+    '--aliyun-authority-generation',
+    fakeSignerGenerations.aliyun,
+  ],
 });
+assert.equal(generationInvocations, 2);
 assert.equal(retainedProviderContractEvidence.providerSignersReady, true);
+
+for (const invalidGenerationOutput of [
+  `{"github":["${'1'.repeat(64)}"],"aliyun":"${'2'.repeat(64)}"}`,
+  `{"github":"invalid","github":"${'1'.repeat(64)}","aliyun":"${'2'.repeat(64)}"}`,
+  `{"aliyun":"${'2'.repeat(64)}","github":"${'1'.repeat(64)}"}`,
+]) {
+  const invalidGenerationSnapshot = await collectWithOverrides({
+    providerSignerAuthorityGenerationImpl: undefined,
+    command: (name, args) =>
+      name === '/usr/sbin/runuser' &&
+      args.at(-1)?.endsWith('/provider-signer-authority-generation.js')
+        ? { ok: true, stdout: invalidGenerationOutput }
+        : command(name, args),
+  });
+  assert.equal(invalidGenerationSnapshot.providerSignersReady, false);
+}
 
 for (const [description, overrides] of [
   [

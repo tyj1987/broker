@@ -20,6 +20,8 @@ import (
 
 const (
 	ProtocolVersion    = 3
+	ProbeVersion       = 1
+	ProbeOperation     = "authority_generation.read"
 	MaxRequestBytes    = 8 * 1024
 	DefaultDeadline    = 2 * time.Second
 	DefaultConcurrency = 32
@@ -32,24 +34,39 @@ const (
 )
 
 var (
-	accountRefPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	environmentPattern       = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	regionPattern            = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+){1,4}$`)
-	executionIDPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	requestBindingPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-	credentialBindingPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-	nextTokenPattern         = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
-	noncePattern             = regexp.MustCompile(`^[A-Za-z0-9-]{8,128}$`)
-	authorizationPattern     = regexp.MustCompile(`^ACS3-HMAC-SHA256 Credential=[^,\s]+,SignedHeaders=host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-security-token;x-acs-signature-nonce;x-acs-version,Signature=[0-9a-f]{64}$`)
-	emptyPayloadDigest       = sha256.Sum256(nil)
-	emptyPayloadHash         = hex.EncodeToString(emptyPayloadDigest[:])
-	wireRequestRequiredKeys  = []string{
+	accountRefPattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	environmentPattern         = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	regionPattern              = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+){1,4}$`)
+	executionIDPattern         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	requestBindingPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	credentialBindingPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	nextTokenPattern           = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+	noncePattern               = regexp.MustCompile(`^[A-Za-z0-9-]{8,128}$`)
+	authorityGenerationPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	probeChallengePattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	authorizationPattern       = regexp.MustCompile(`^ACS3-HMAC-SHA256 Credential=[^,\s]+,SignedHeaders=host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-security-token;x-acs-signature-nonce;x-acs-version,Signature=[0-9a-f]{64}$`)
+	emptyPayloadDigest         = sha256.Sum256(nil)
+	emptyPayloadHash           = hex.EncodeToString(emptyPayloadDigest[:])
+	wireRequestRequiredKeys    = []string{
 		"version", "provider", "operation_id", "account_ref", "environment",
 		"resource_ref", "region_id", "execution_id", "request_binding", "method", "path", "query",
 	}
 	ecsQueryRequiredKeys = []string{"MaxResults", "RegionId"}
 	ecsQueryOptionalKeys = []string{"NextToken"}
 )
+
+type authorityProbeRequest struct {
+	Version   int    `json:"version"`
+	Operation string `json:"operation"`
+	Challenge string `json:"challenge"`
+}
+
+type authorityProbeResponse struct {
+	Version                   int    `json:"version"`
+	Operation                 string `json:"operation"`
+	Challenge                 string `json:"challenge"`
+	AuthorityGenerationSHA256 string `json:"authority_generation_sha256"`
+}
 
 type wireRequest struct {
 	Version        int             `json:"version"`
@@ -151,22 +168,24 @@ func (protocolError *ProtocolError) Error() string { return protocolError.Code }
 func fail(code string) error { return &ProtocolError{Code: code} }
 
 type Server struct {
-	Signer        RequestSigner
-	Bindings      BindingAuthorizer
-	Peers         PeerAuthorizer
-	Clock         func() time.Time
-	Deadline      time.Duration
-	MaxConcurrent int
-	OnError       func(string)
+	Signer                    RequestSigner
+	Bindings                  BindingAuthorizer
+	Peers                     PeerAuthorizer
+	AuthorityGenerationSHA256 string
+	Clock                     func() time.Time
+	Deadline                  time.Duration
+	MaxConcurrent             int
+	OnError                   func(string)
 }
 
-func NewServer(signer RequestSigner, bindings BindingAuthorizer, peers PeerAuthorizer) (*Server, error) {
-	if signer == nil || bindings == nil || peers == nil {
+func NewServer(signer RequestSigner, bindings BindingAuthorizer, peers PeerAuthorizer, authorityGenerationSHA256 string) (*Server, error) {
+	if signer == nil || bindings == nil || peers == nil || !authorityGenerationPattern.MatchString(authorityGenerationSHA256) {
 		return nil, errors.New("signer dependencies are required")
 	}
 	return &Server{
 		Signer: signer, Bindings: bindings, Peers: peers,
-		Clock: time.Now, Deadline: DefaultDeadline, MaxConcurrent: DefaultConcurrency,
+		AuthorityGenerationSHA256: authorityGenerationSHA256,
+		Clock:                     time.Now, Deadline: DefaultDeadline, MaxConcurrent: DefaultConcurrency,
 	}, nil
 }
 
@@ -213,7 +232,8 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 }
 
 func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error {
-	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil || connection == nil || ctx == nil {
+	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil ||
+		!authorityGenerationPattern.MatchString(server.AuthorityGenerationSHA256) || connection == nil || ctx == nil {
 		return fail("server_invalid")
 	}
 	if server.Deadline <= 0 || server.Deadline > 10*time.Second || server.Clock == nil {
@@ -231,7 +251,26 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 	if requestContext.Err() != nil {
 		return fail("deadline_exceeded")
 	}
-	request, err := readRequest(connection)
+	frame, err := readFrame(connection)
+	if err != nil {
+		return err
+	}
+	if probe, matched, probeErr := decodeAuthorityProbe(frame); matched {
+		if probeErr != nil {
+			return probeErr
+		}
+		if requestContext.Err() != nil {
+			return fail("deadline_exceeded")
+		}
+		if err := json.NewEncoder(connection).Encode(authorityProbeResponse{
+			Version: ProbeVersion, Operation: ProbeOperation, Challenge: probe.Challenge,
+			AuthorityGenerationSHA256: server.AuthorityGenerationSHA256,
+		}); err != nil {
+			return fail("response_failed")
+		}
+		return nil
+	}
+	request, err := decodeRequest(frame)
 	if err != nil {
 		return err
 	}
@@ -262,19 +301,31 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 }
 
 func readRequest(reader io.Reader) (SigningRequest, error) {
+	frame, err := readFrame(reader)
+	if err != nil {
+		return SigningRequest{}, err
+	}
+	return decodeRequest(frame)
+}
+
+func readFrame(reader io.Reader) ([]byte, error) {
 	buffered := bufio.NewReaderSize(reader, MaxRequestBytes+1)
 	lineBytes, err := buffered.ReadSlice('\n')
 	if err != nil || len(lineBytes) > MaxRequestBytes || buffered.Buffered() > 0 {
-		return SigningRequest{}, fail("request_invalid")
+		return nil, fail("request_invalid")
 	}
 	line := string(lineBytes)
 	line = strings.TrimSuffix(line, "\n")
 	if strings.HasSuffix(line, "\r") || line == "" {
-		return SigningRequest{}, fail("request_invalid")
+		return nil, fail("request_invalid")
 	}
+	return []byte(line), nil
+}
+
+func decodeRequest(frame []byte) (SigningRequest, error) {
 	var request wireRequest
-	if decodeStrict([]byte(line), &request) != nil ||
-		!hasExactObjectKeys([]byte(line), wireRequestRequiredKeys, nil) ||
+	if decodeStrict(frame, &request) != nil ||
+		!hasExactObjectKeys(frame, wireRequestRequiredKeys, nil) ||
 		request.Version != ProtocolVersion || request.Provider != "aliyun" ||
 		(request.OperationID != OperationECSInstancesList && request.OperationID != OperationCallerIdentity) ||
 		!accountRefPattern.MatchString(request.AccountRef) ||
@@ -321,6 +372,24 @@ func readRequest(reader io.Reader) (SigningRequest, error) {
 	result.MaxResults = maxResults
 	result.NextToken = nextToken
 	return result, nil
+}
+
+func decodeAuthorityProbe(frame []byte) (authorityProbeRequest, bool, error) {
+	var object map[string]json.RawMessage
+	if decodeStrict(frame, &object) != nil || object == nil {
+		return authorityProbeRequest{}, false, nil
+	}
+	if _, present := object["operation"]; !present {
+		return authorityProbeRequest{}, false, nil
+	}
+	var probe authorityProbeRequest
+	if decodeStrict(frame, &probe) != nil ||
+		!hasExactObjectKeys(frame, []string{"version", "operation", "challenge"}, nil) ||
+		probe.Version != ProbeVersion || probe.Operation != ProbeOperation ||
+		!probeChallengePattern.MatchString(probe.Challenge) {
+		return authorityProbeRequest{}, true, fail("request_invalid")
+	}
+	return probe, true, nil
 }
 
 func buildResponse(request SigningRequest, signed SignedRequest, now time.Time) (wireResponse, error) {

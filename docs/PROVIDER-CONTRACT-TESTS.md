@@ -100,12 +100,18 @@ denial, regional outage behavior and audit continuity are separate required
 phases. A passing receipt alone must not change a provider manifest from
 `contract_required` to `production`.
 
-The verifier currently binds the protected signer configuration on disk. It
-does not yet receive an authenticated generation from the configuration
-actually parsed by each running signer. Production acceptance therefore remains
-blocked until the signer protocols expose and the preflight double-samples that
-non-secret loaded-authority generation. A separate pre-start marker is not
-accepted because it would leave a configuration-open race.
+The signer protocol cores require the generation of the configuration actually
+loaded at construction time and return it only for a peer-authorized random
+challenge on the fixed Unix socket. Production preflight samples both signers
+before and after evidence verification and accepts only when those generations
+remain stable and equal the protected configuration hashes and the signed
+receipt. The probe returns no credential material and performs no provider
+request. A separate pre-start marker is not accepted because it would leave a
+configuration-open race.
+
+This source contract does not make the signers production-ready by itself. The
+runnable signer commands, protected configurations, isolated workload
+identities and real account receipts are still required before DQ-004 can close.
 
 The 2026-09-12 production capability probe did not run either provider
 operation: the deployed registry exposed only `broker.tools.inspect`, and both

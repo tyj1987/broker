@@ -18,8 +18,14 @@ const evidenceSchema = JSON.parse(
   readFileSync(new URL('../contracts/provider-contract-evidence-v1.schema.json', import.meta.url)),
 );
 assert.equal(evidenceSchema.properties.receipts.items, false);
-assert.equal(evidenceSchema.properties.receipts.prefixItems[0].allOf[1].properties.provider.const, 'github');
-assert.equal(evidenceSchema.properties.receipts.prefixItems[1].allOf[1].properties.provider.const, 'aliyun');
+assert.equal(
+  evidenceSchema.properties.receipts.prefixItems[0].allOf[1].properties.provider.const,
+  'github',
+);
+assert.equal(
+  evidenceSchema.properties.receipts.prefixItems[1].allOf[1].properties.provider.const,
+  'aliyun',
+);
 const releaseSha = 'a'.repeat(40);
 const binding = 'b'.repeat(64);
 const signerAuthorityGeneration = { github: '1'.repeat(64), aliyun: '2'.repeat(64) };
@@ -185,25 +191,50 @@ const files = new Map([
   [PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.github, githubConfig],
   [PROVIDER_CONTRACT_EVIDENCE_PATHS.signerConfigs.aliyun, aliyunConfig],
 ]);
-const run = async (overrides = {}) => {
+const run = async (
+  overrides = {},
+  argv = ['node', 'provider-contract-evidence-check.js', '--release', `/releases/${releaseSha}`],
+) => {
   const output = [];
-  const ready = await runProviderContractEvidenceCheck(
-    ['node', 'provider-contract-evidence-check.js', '--release', `/releases/${releaseSha}`],
-    {
-      now: () => now,
-      realpathImpl: async (path) => path,
-      lstatImpl: async (path) => {
-        const bytes = files.get(path);
-        return bytes ? stat('file', bytes.length) : stat('dir');
-      },
-      readFileImpl: async (path) => files.get(path),
-      bindingGenerationImpl: async () => binding,
-      writeOutput: (value) => output.push(value),
-      ...overrides,
+  const ready = await runProviderContractEvidenceCheck(argv, {
+    now: () => now,
+    realpathImpl: async (path) => path,
+    lstatImpl: async (path) => {
+      const bytes = files.get(path);
+      return bytes ? stat('file', bytes.length) : stat('dir');
     },
-  );
+    readFileImpl: async (path) => files.get(path),
+    bindingGenerationImpl: async () => binding,
+    writeOutput: (value) => output.push(value),
+    ...overrides,
+  });
   return { ready, output };
 };
+
+const liveArgv = [
+  'node',
+  'provider-contract-evidence-check.js',
+  '--release',
+  `/releases/${releaseSha}`,
+  '--github-authority-generation',
+  evidence.signer_authority_generation_sha256.github,
+  '--aliyun-authority-generation',
+  evidence.signer_authority_generation_sha256.aliyun,
+];
+assert.deepEqual(await run({}, liveArgv), {
+  ready: true,
+  output: ['provider_contract_evidence_ready=yes'],
+});
+const mismatchedLiveArgv = [...liveArgv];
+mismatchedLiveArgv[5] = '9'.repeat(64);
+assert.deepEqual(await run({}, mismatchedLiveArgv), {
+  ready: false,
+  output: ['provider_contract_evidence_ready=no'],
+});
+assert.deepEqual(await run({}, [...liveArgv, '--extra']), {
+  ready: false,
+  output: ['provider_contract_evidence_ready=no'],
+});
 
 assert.deepEqual(await run(), {
   ready: true,

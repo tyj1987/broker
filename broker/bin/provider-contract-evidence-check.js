@@ -146,7 +146,17 @@ export async function runProviderContractEvidenceCheck(
 ) {
   let ready = false;
   try {
-    if (argv.length !== 4 || argv[2] !== '--release' || !path.isAbsolute(argv[3])) {
+    const liveGenerationMode = argv.length === 8;
+    if (
+      (argv.length !== 4 && !liveGenerationMode) ||
+      argv[2] !== '--release' ||
+      !path.isAbsolute(argv[3]) ||
+      (liveGenerationMode &&
+        (argv[4] !== '--github-authority-generation' ||
+          !SHA256_RE.test(argv[5] || '') ||
+          argv[6] !== '--aliyun-authority-generation' ||
+          !SHA256_RE.test(argv[7] || '')))
+    ) {
       throw new Error('invalid invocation');
     }
     const release = await realpathImpl(argv[3]);
@@ -158,13 +168,7 @@ export async function runProviderContractEvidenceCheck(
     const fileDeps = { lstatImpl, readFileImpl, realpathImpl };
     const evidenceDirectory = path.join(paths.evidenceRoot, releaseSha);
     await assertProtectedDirectory(paths.evidenceRoot, fileDeps);
-    const [
-      evidenceBytes,
-      signatureBytes,
-      keyringBytes,
-      githubConfig,
-      aliyunConfig,
-    ] =
+    const [evidenceBytes, signatureBytes, keyringBytes, githubConfig, aliyunConfig] =
       await Promise.all([
         readProtectedFile(path.join(evidenceDirectory, 'evidence.json'), 32 * 1024, fileDeps),
         readProtectedFile(path.join(evidenceDirectory, 'evidence.sig'), 256, fileDeps),
@@ -174,10 +178,19 @@ export async function runProviderContractEvidenceCheck(
       ]);
     const bindingAfter = await bindingGenerationImpl();
     if (bindingAfter !== bindingBefore) throw new Error('binding changed');
-    const expectedSignerAuthorityGeneration = {
+    const diskSignerAuthorityGeneration = {
       github: createHash('sha256').update(githubConfig).digest('hex'),
       aliyun: createHash('sha256').update(aliyunConfig).digest('hex'),
     };
+    const expectedSignerAuthorityGeneration = liveGenerationMode
+      ? { github: argv[5], aliyun: argv[7] }
+      : diskSignerAuthorityGeneration;
+    if (
+      expectedSignerAuthorityGeneration.github !== diskSignerAuthorityGeneration.github ||
+      expectedSignerAuthorityGeneration.aliyun !== diskSignerAuthorityGeneration.aliyun
+    ) {
+      throw new Error('loaded signer authority differs from protected configuration');
+    }
     ready = verifyProviderContractEvidence({
       evidenceBytes,
       signatureBytes,

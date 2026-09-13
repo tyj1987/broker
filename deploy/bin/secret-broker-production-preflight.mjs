@@ -70,6 +70,35 @@ const PROVIDER_SIGNERS = Object.freeze({
   }),
 });
 const PROVIDER_SIGNER_NAMES = Object.freeze(Object.keys(PROVIDER_SIGNERS));
+const SHA256_RE = /^[a-f0-9]{64}$/u;
+
+function parseProviderSignerAuthorityGenerations(result) {
+  if (!result?.ok || typeof result.stdout !== 'string' || result.stdout.length > 256) return null;
+  let value;
+  try {
+    value = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  const keys =
+    value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [];
+  return keys.length === 2 &&
+    keys.every((key) => PROVIDER_SIGNER_NAMES.includes(key)) &&
+    PROVIDER_SIGNER_NAMES.every(
+      (provider) => typeof value[provider] === 'string' && SHA256_RE.test(value[provider]),
+    ) &&
+    result.stdout === JSON.stringify({ github: value.github, aliyun: value.aliyun })
+    ? Object.freeze({ github: value.github, aliyun: value.aliyun })
+    : null;
+}
+
+function sameProviderSignerAuthorityGenerations(left, right) {
+  return (
+    left !== null &&
+    right !== null &&
+    PROVIDER_SIGNER_NAMES.every((provider) => left[provider] === right[provider])
+  );
+}
 
 function exactAuditIdentity(snapshot, service) {
   const expected = AUDIT_IDENTITIES[service];
@@ -741,12 +770,34 @@ export async function collectProductionSnapshot({
   auditStoreHealthImpl = auditStoreHealth,
   realpathImpl = realpath,
   readFileImpl = readFile,
-  providerContractEvidenceImpl = async ({ release }) => {
-    const result = command(paths.nodeRuntime, [
+  providerSignerAuthorityGenerationImpl = async ({ release }) =>
+    parseProviderSignerAuthorityGenerations(
+      command('/usr/sbin/runuser', [
+        '--user',
+        'broker',
+        '--',
+        '/usr/bin/env',
+        '-i',
+        'PATH=/usr/bin:/bin',
+        paths.nodeRuntime,
+        path.join(release, 'bin', 'provider-signer-authority-generation.js'),
+      ]),
+    ),
+  providerContractEvidenceImpl = async ({ release, signerAuthorityGeneration }) => {
+    const args = [
       path.join(release, 'bin', 'provider-contract-evidence-check.js'),
       '--release',
       release,
-    ]);
+    ];
+    if (signerAuthorityGeneration !== null) {
+      args.push(
+        '--github-authority-generation',
+        signerAuthorityGeneration.github,
+        '--aliyun-authority-generation',
+        signerAuthorityGeneration.aliyun,
+      );
+    }
+    const result = command(paths.nodeRuntime, args);
     return result.ok && result.stdout === 'provider_contract_evidence_ready=yes';
   },
 } = {}) {
@@ -960,11 +1011,18 @@ export async function collectProductionSnapshot({
           ]),
         ),
       );
-      providerContractEvidenceReady =
+      const signerAuthorityBefore = await providerSignerAuthorityGenerationImpl({ release });
+      const evidenceReady =
+        signerAuthorityBefore !== null &&
         (await providerContractEvidenceImpl({
           release,
           providers: PROVIDER_SIGNER_NAMES,
+          signerAuthorityGeneration: signerAuthorityBefore,
         })) === true;
+      const signerAuthorityAfter = await providerSignerAuthorityGenerationImpl({ release });
+      providerContractEvidenceReady =
+        evidenceReady &&
+        sameProviderSignerAuthorityGenerations(signerAuthorityBefore, signerAuthorityAfter);
       const healthSocketAfter = await pathInfoImpl(paths.healthSocket);
       localHealthReady =
         healthReady &&

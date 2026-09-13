@@ -234,9 +234,17 @@ has no concrete COS identity factory. Its typed requests carry a bound sequence 
 one verified envelope; they contain no cloud endpoint, bucket, object key,
 header, credential or mutation primitive. The store derives keys locally and
 revalidates mirror signatures, ordering, COMPLIANCE state and retention results.
-Both checked-in factories deliberately return `identity_unavailable`, so source
-presence cannot be mistaken for a configured cloud identity. The independent
-mirror transport and worker-side verification are not implemented or deployed.
+The checked-in command still uses unavailable factories, so source presence
+cannot be mistaken for a configured cloud identity. `core/auditmirror` now
+contains a bounded one-request-per-connection transport for only `inspect`,
+`create`, `read`, `list` and `retention`. It binds every frame to the complete
+mirror contract, fixes the client to the approved Unix-socket path,
+authenticates exact non-root Linux peer UIDs on both sides, fails closed outside
+Linux, rechecks the worker clock and rejects late success. The store-side
+authenticated factory carries only the worker UID and typed binding; it has no
+cloud route or credential. This still does not constitute a runnable independent
+worker: the server socket lifecycle, worker-side envelope verifier and COS
+backend are not implemented or deployed.
 
 The Linux service creates only the fixed `store.sock` name below a private,
 service-owned, non-writable runtime directory. A non-blocking process lock

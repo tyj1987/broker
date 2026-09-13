@@ -156,10 +156,20 @@ continue.
   no endpoint, bucket, object key, header, credential, delete, overwrite or
   retention-policy mutation field. The adapter revalidates canonical signatures,
   sequence-derived keys, contiguous pages, COMPLIANCE state and cancellation,
-  and normalizes provider failures. The checked-in mirror factory remains
-  unavailable. This is a provider-neutral dependency seam, not proof of process
-  isolation: no out-of-process transport, independently authenticated worker,
-  Tencent identity, COS resource or independent recovery evidence exists yet.
+  and normalizes provider failures. A bounded one-request-per-connection mirror
+  protocol now transports only those five typed operations. Both peers are
+  designed for the fixed Linux Unix-socket path and authenticate the exact
+  non-root peer UID with kernel credentials before request data is accepted or
+  written; the client fixes that path while server socket lifecycle remains
+  intentionally absent;
+  other platforms fail closed. The worker protocol reconstructs the private
+  typed requests, rechecks the complete binding and trusted clock, bounds
+  concurrency, frames and deadlines, rejects late success, and emits only
+  stable error codes. The audit-store command still uses the unavailable mirror
+  factory by default. This is source IPC evidence, not proof of an independently
+  runnable worker: the server socket lifecycle, worker-side envelope verifier
+  and COS backend, Tencent identity, COS resource and independent recovery
+  evidence do not exist yet.
 
 ## DQ-004: provider signing and account-binding authority
 

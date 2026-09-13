@@ -178,22 +178,26 @@ func (request ListRequest) After() int64 { return request.after }
 func (request ListRequest) Limit() int   { return request.limit }
 
 type LockState struct {
-	Compliance      bool
-	Versioning      bool
-	RetentionDays   int
-	TrustGeneration [sha256.Size]byte
+	Compliance      bool              `json:"compliance"`
+	Versioning      bool              `json:"versioning"`
+	RetentionDays   int               `json:"retention_days"`
+	TrustGeneration [sha256.Size]byte `json:"trust_generation"`
 }
 
-type CreateResult struct{ Status string }
-type ReadResult struct{ Envelope []byte }
+type CreateResult struct {
+	Status string `json:"status"`
+}
+type ReadResult struct {
+	Envelope []byte `json:"envelope"`
+}
 type ListResult struct {
-	Sequences []int64
-	NextAfter int64
-	Truncated bool
+	Sequences []int64 `json:"sequences"`
+	NextAfter int64   `json:"next_after"`
+	Truncated bool    `json:"truncated"`
 }
 type RetentionResult struct {
-	Mode        string
-	RetainUntil time.Time
+	Mode        string    `json:"mode"`
+	RetainUntil time.Time `json:"retain_until"`
 }
 
 // Client implementations must authenticate an out-of-process worker. Before a

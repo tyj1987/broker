@@ -23,7 +23,7 @@ func validConfig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(der)
-	return fmt.Sprintf(`{"version":2,"provider_profile_id":"github-isolated-readonly","bindings":[{"account_ref":"github-test","environment":"staging","client_id":"123456","kms_key_id":"key/example","kms_key_version_id":"v1","public_key_spki_der_base64":"%s","public_key_sha256":"%s"}]}`,
+	return fmt.Sprintf(`{"version":3,"provider_profile_id":"github-isolated-readonly","kms_role_name":"broker-github-kms","kms_endpoint":"kst-example123.cryptoservice.kms.aliyuncs.com","kms_ca_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kms_allowed_cidrs":["10.20.0.0/24"],"bindings":[{"account_ref":"github-test","environment":"staging","client_id":"123456","kms_key_id":"key-example","kms_key_version_id":"v1","public_key_spki_der_base64":"%s","public_key_sha256":"%s"}]}`,
 		base64.StdEncoding.EncodeToString(der), hex.EncodeToString(digest[:]))
 }
 
@@ -38,7 +38,9 @@ func TestParseServiceConfigBindsGenerationToExactBytes(t *testing.T) {
 		t.Fatal("generation is not the exact configuration digest")
 	}
 	if config.ProviderProfileID != "github-isolated-readonly" || len(config.Bindings) != 1 ||
-		config.Bindings[0].ClientID != "123456" {
+		config.Bindings[0].ClientID != "123456" || config.KMSRoleName != "broker-github-kms" ||
+		config.KMSEndpoint != "kst-example123.cryptoservice.kms.aliyuncs.com" ||
+		len(config.KMSAllowedCIDRs) != 1 || config.KMSAllowedCIDRs[0].String() != "10.20.0.0/24" {
 		t.Fatalf("unexpected config: %#v", config)
 	}
 	if len(config.SigningAuthorities) != 1 || config.SigningAuthorities[0].PublicKey.N.BitLen() != 2048 {
@@ -54,11 +56,17 @@ func TestParseServiceConfigRejectsAmbiguousOrUnsafeInput(t *testing.T) {
 	valid := validConfig(t)
 	cases := []string{
 		``, `null`, `[]`,
-		`{"version":2,"version":2,"provider_profile_id":"profile","bindings":[]}`,
+		`{"version":3,"version":3,"provider_profile_id":"profile","bindings":[]}`,
 		strings.Replace(valid, `"bindings":`, `"private_key":"value","bindings":`, 1),
 		strings.Replace(valid, `"provider_profile_id":"github-isolated-readonly"`, `"provider_profile_id":null`, 1),
-		strings.Replace(valid, `"version":2`, `"version":1`, 1),
-		strings.Replace(valid, `"kms_key_id":"key/example"`, `"kms_key_id":"key/example","token":"value"`, 1),
+		strings.Replace(valid, `"version":3`, `"version":2`, 1),
+		strings.Replace(valid, `"kms_endpoint":"kst-example123.cryptoservice.kms.aliyuncs.com"`, `"kms_endpoint":"kms-vpc.cn-hangzhou.aliyuncs.com"`, 1),
+		strings.Replace(valid, `"kms_ca_sha256":"`, `"kms_ca_sha256":"0`, 1),
+		strings.Replace(valid, `"kms_allowed_cidrs":["10.20.0.0/24"]`, `"kms_allowed_cidrs":["100.100.100.200/32"]`, 1),
+		strings.Replace(valid, `"kms_allowed_cidrs":["10.20.0.0/24"]`, `"kms_allowed_cidrs":["10.0.0.0/8"]`, 1),
+		strings.Replace(valid, `"kms_allowed_cidrs":["10.20.0.0/24"]`, `"kms_allowed_cidrs":["10.20.0.1/24"]`, 1),
+		strings.Replace(valid, `"kms_key_id":"key-example"`, `"kms_key_id":"key-example","token":"value"`, 1),
+		strings.Replace(valid, `"kms_key_id":"key-example"`, `"kms_key_id":"alias/example"`, 1),
 		strings.Replace(valid, `"public_key_sha256":"`, `"public_key_sha256":"0`, 1),
 		strings.Replace(valid, `"kms_key_version_id":"v1"`, `"kms_key_version_id":null`, 1),
 	}

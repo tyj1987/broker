@@ -89,7 +89,10 @@ const aliyunUnit = read('../deploy/systemd/secret-broker-aliyun-signer.service')
 assert.match(aliyunUnit, /^IPAddressDeny=any$/m);
 assert.match(aliyunUnit, /^IPAddressAllow=100\.100\.100\.200\/32$/m);
 const githubUnit = read('../deploy/systemd/secret-broker-github-signer.service');
-assert.doesNotMatch(githubUnit, /^IPAddressAllow=/m);
+assert.match(githubUnit, /^IPAddressDeny=any$/m);
+assert.match(githubUnit, /^IPAddressAllow=100\.100\.100\.200\/32$/m);
+assert.match(githubUnit, /^IPAddressAllow=100\.100\.2\.136\/32$/m);
+assert.match(githubUnit, /^IPAddressAllow=100\.100\.2\.138\/32$/m);
 
 assert.notEqual(signers.github.user, signers.aliyun.user);
 assert.notEqual(signers.github.directory, signers.aliyun.directory);

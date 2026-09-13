@@ -16,6 +16,10 @@ official_docs:
   - https://docs.github.com/en/rest/issues/issues#list-repository-issues
   - https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository
   - https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request
+  - https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/api-kms-2016-01-20-asymmetricsign
+  - https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/initialize-the-client-1
+  - https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature
+  - https://www.alibabacloud.com/help/en/vpc/dhcp-option-set-and-dns-hostname
 origins: [https://api.github.com]
 authentication:
   priority: [github_app_installation_token, actions_oidc, fine_grained_pat]
@@ -84,6 +88,7 @@ authority_probe:
 contract_test: { version: 2, account: isolated_github_app, authority_attestation: required, required: true, last_result: not_run }
 implementation_evidence:
   kms_digest_contract: passed_mock
-  kms_transport: not_implemented
+  kms_dedicated_gateway_transport: passed_mock
+  kms_real_gateway_contract: not_run
   byok_ceremony: not_run
   isolated_account_contract: not_run

@@ -114,25 +114,48 @@ the fixed Signature V3 implementation. It has no IMDSv1, environment variable,
 shared-profile or long-term access-key fallback. Its unit restricts IP egress to
 the ECS metadata address; a dedicated workload and production egress controls
 must still be verified before enablement. The GitHub signer contains the strict
-KMS digest-signing boundary, exact key-version routing and pinned-public-key
-verification, but no production KMS transport yet, so its shipped command still
-rejects startup with `signing_identity_unavailable`.
+KMS digest-signing boundary, exact key-version routing, pinned-public-key
+verification and a dedicated-gateway `AsymmetricSign` transport. That transport
+uses only an explicit IMDSv2 ECS RAM Role, a fixed private gateway hostname,
+root-owned CA pin and configured private CIDRs. Its pure-Go resolver can query
+only Alibaba Cloud's documented VPC DNS addresses `100.100.2.136` and
+`100.100.2.138`; it cannot inherit `/etc/resolv.conf` or an environment proxy.
+It rejects redirects, DNS answers outside the configured KMS CIDRs, response
+drift and credential fallback.
 
 GitHub does not document a way to upload an arbitrary externally generated App
 public key. The approved design therefore requires a human-controlled ceremony
 to import a GitHub-generated RSA private key into Alibaba KMS/HSM as BYOK. That
-ceremony, the KMS transport, protected configurations, isolated workload
+ceremony, real KMS transport verification, protected configurations, isolated workload
 identities and real account receipts are still required before DQ-004 can
 close. Unit or mock-signature success is not provider contract evidence.
 
-Both version 2 service configurations remain non-secret and exact-schema. The Alibaba
+The Alibaba version 2 and GitHub version 3 service configurations remain non-secret and exact-schema. The Alibaba
 configuration names one `ecs_ram_role_name` and one or more exact
 account/environment/resource/region bindings. The GitHub configuration binds
 each account/environment/client tuple to a KMS `key_id`, immutable key-version
-ID, base64-encoded RSA SPKI public key and its SHA-256 digest. Unknown, null,
+ID, base64-encoded RSA SPKI public key and its SHA-256 digest. Its global fields
+also bind one ECS RAM Role, one dedicated KMS hostname, the exact CA file digest
+and one or more canonical private CIDRs. Unknown, null,
 duplicate, weak-RSA, mismatched-digest and credential-like fields are rejected.
 No access key, session token, GitHub private key or KMS client credential is a
 valid configuration field.
+
+The source GitHub signer unit denies all IP traffic by default and allows only
+IMDSv2 plus the two fixed VPC DNS endpoints. A reviewed root-owned systemd drop-in must add the exact configured KMS
+private CIDRs before activation. Application-layer DNS validation independently
+requires every answer to remain inside those same CIDRs and dials the verified
+IP directly while preserving TLS hostname validation. This is source-level
+fail-closed preparation, not evidence that production network controls exist.
+Configured ranges are bounded to `/24` or narrower for IPv4 and `/64` or
+narrower for IPv6; use `/32` or `/128` pins whenever gateway addressing is
+stable.
+
+The VPC DNS addresses are fixed from Alibaba Cloud's current ECS documentation:
+[DHCP options sets and DNS hostnames](https://www.alibabacloud.com/help/en/vpc/dhcp-option-set-and-dns-hostname).
+They must be revalidated during the production network ceremony; custom or
+non-ECS deployment requires a separately reviewed resolver design rather than a
+fallback to system DNS.
 
 Runtime behavior follows the current official contracts: GitHub App JWTs use
 RS256 and remain at most ten minutes; Alibaba ECS role credentials are obtained

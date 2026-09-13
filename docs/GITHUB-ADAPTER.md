@@ -98,7 +98,13 @@ DQ-004 and are not included in the Broker process. The Go `githubsigner`
 protocol core validates the peer, exact metadata binding and GitHub App JWT
 claims before passing only a SHA-256 digest to an injected backend. It does not
 contain a file-key fallback. Adding a private key to source, ordinary
-configuration, logs or an Agent response is prohibited.
+configuration, logs or an Agent response is prohibited. Its production command
+now composes that boundary with an IMDSv2-only ECS RAM Role and the dedicated
+Alibaba KMS `AsymmetricSign` API. The HTTP client fixes the gateway hostname,
+port, action, version, method and query shape, pins a root-owned CA by digest,
+rejects redirects and proxies, and connects only to configured private CIDRs.
+Every KMS signature is still verified locally against the binding's pinned RSA
+public key before it can leave the signer.
 
 ## Verification status
 
@@ -118,6 +124,15 @@ remains `contract_required` until a production-grade signer and account binding
 are configured and an isolated GitHub App account passes a real request and
 revocation test. Runtime wiring is covered by deterministic integration tests;
 that evidence is not a substitute for the external contract test.
+
+The KMS transport tests are mock-wire evidence only. They cover Signature V3,
+STS-token binding, canonical Base64 query encoding, CA and hostname pins, DNS
+target drift, redirects, response size/schema drift, cancellation, expiry and
+error redaction. Local transport tests perform real TLS handshakes for the valid
+chain and reject wrong-CA, wrong-hostname and expired certificates; a local UDP
+DNS test proves that a silent primary resolver times out and the second fixed
+resolver is used. No KMS instance, RAM policy, BYOK import or GitHub installation
+was changed by those tests.
 
 Official references checked on 2026-09-11:
 

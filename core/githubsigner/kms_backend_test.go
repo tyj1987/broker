@@ -35,7 +35,7 @@ func testKMSAuthorityBits(t *testing.T, bits int) (SigningAuthority, *rsa.Privat
 	pin := sha256.Sum256(der)
 	return SigningAuthority{
 		Binding:  Binding{AccountRef: "github-test", Environment: "staging", ClientID: "123456"},
-		KMSKeyID: "key/example", KMSKeyVersionID: "version-1",
+		KMSKeyID: "key-example", KMSKeyVersionID: "version-1",
 		PublicKey: &key.PublicKey, PublicKeySHA256: hex.EncodeToString(pin[:]),
 	}, key
 }
@@ -80,7 +80,7 @@ func TestKMSDigestSignerUsesExactDigestKeyAndAlgorithm(t *testing.T) {
 func TestKMSDigestSignerFailsClosedOnResponseDrift(t *testing.T) {
 	authority, key := testKMSAuthority(t)
 	tests := map[string]func(*KMSDigestOutput){
-		"wrong key":       func(output *KMSDigestOutput) { output.KeyID = "key/other" },
+		"wrong key":       func(output *KMSDigestOutput) { output.KeyID = "key-other" },
 		"wrong version":   func(output *KMSDigestOutput) { output.KeyVersionID = "version-2" },
 		"wrong algorithm": func(output *KMSDigestOutput) { output.Algorithm = "RSA_PSS_SHA_256" },
 		"bad signature":   func(output *KMSDigestOutput) { output.Signature[0] ^= 1 },

@@ -268,13 +268,20 @@ continue.
   to the ECS metadata address, and it has no IMDSv1, environment, shared-profile
   or static-key fallback. The GitHub signer now has an exact KMS key-version
   digest boundary and verifies every returned RSA PKCS#1 SHA-256 signature
-  against a pinned public key, but its production KMS transport is still absent
-  and the command remains fail closed. GitHub's documented App key flow requires
+  against a pinned public key. Its command now uses a strict dedicated-gateway
+  `AsymmetricSign` transport with an explicit IMDSv2 ECS RAM Role, exact gateway,
+  root-owned CA digest, private-CIDR DNS enforcement, no proxy or redirect, and
+  a pure-Go resolver limited to Alibaba's two documented VPC DNS addresses plus
+  a matching default-deny systemd IP policy. GitHub's documented App key flow requires
   a human-controlled BYOK import ceremony because it does not provide arbitrary
   public-key registration. This source work prepares, but does not perform,
-  DQ-009. No cloud signing
+  DQ-009. No real cloud signing
   authority, protected configuration or signed isolated-account receipt exists
   yet, so the gate intentionally fails in production and DQ-004 remains open.
+  Dedicated-gateway acceptance must use actual network-policy evidence and KMS
+  service logs exported to the independent immutable audit path; unsupported
+  `acs:SourceVpc` or `acs:VpcSourceIp` conditions and ActionTrail alone are not
+  accepted as proof of signer isolation.
 
 ## DQ-005: SSH target, host-key and certificate authority
 

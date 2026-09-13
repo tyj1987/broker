@@ -31,17 +31,19 @@ const (
 )
 
 var (
-	accountRefPattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	environmentPattern         = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	clientIDPattern            = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
-	kmsKeyIDPattern            = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$`)
-	kmsKeyVersionIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	publicKeyDigestPattern     = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	executionIDPattern         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	requestBindingPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-	authorityGenerationPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	probeChallengePattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-	wireRequestKeys            = []string{
+	accountRefPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	environmentPattern          = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	clientIDPattern             = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
+	kmsKeyIDPattern             = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{2,255}$`)
+	kmsKeyVersionIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
+	kmsRoleNamePattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.@_-]{0,63}$`)
+	kmsDedicatedEndpointPattern = regexp.MustCompile(`^kst-[a-z0-9](?:[a-z0-9-]{0,59}[a-z0-9])?\.cryptoservice\.kms\.aliyuncs\.com$`)
+	publicKeyDigestPattern      = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	executionIDPattern          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	requestBindingPattern       = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	authorityGenerationPattern  = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	probeChallengePattern       = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	wireRequestKeys             = []string{
 		"version", "algorithm", "signing_input", "account_ref", "environment",
 		"client_id", "execution_id", "request_binding",
 	}

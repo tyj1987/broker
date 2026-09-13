@@ -24,7 +24,7 @@ func validDependencies(listener *testListener) dependencies {
 	return dependencies{
 		loadConfig: func(string) (githubsigner.ServiceConfig, error) {
 			return githubsigner.ServiceConfig{
-				Version: 2, ProviderProfileID: "profile",
+				Version: 3, ProviderProfileID: "profile",
 				Bindings:                  []githubsigner.Binding{{AccountRef: "account", Environment: "staging", ClientID: "123"}},
 				AuthorityGenerationSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			}, nil
@@ -104,7 +104,7 @@ func TestRunFailsClosedByStage(t *testing.T) {
 	}
 }
 
-func TestDefaultBackendIsUnavailable(t *testing.T) {
+func TestDefaultBackendFailsClosedWithoutTrustedConfiguration(t *testing.T) {
 	if signer, err := defaultDependencies().newSigner(context.Background(), githubsigner.ServiceConfig{}); err == nil || signer != nil {
 		t.Fatal("default backend did not fail closed")
 	}

@@ -10,15 +10,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 
 	"github.com/tyj1987/broker/core/internal/trustedconfig"
 )
 
 const (
-	ServiceConfigVersion  = 2
-	MaxServiceConfigBytes = 32 * 1024
-	serviceConfigPath     = "/etc/secret-broker/providers/github-signer.json"
-	serviceConfigDir      = "/etc/secret-broker/providers"
+	ServiceConfigVersion     = 3
+	MaxServiceConfigBytes    = 32 * 1024
+	serviceConfigPath        = "/etc/secret-broker/providers/github-signer.json"
+	serviceConfigDir         = "/etc/secret-broker/providers"
+	kmsCACertificatePath     = "/etc/secret-broker/providers/github-kms-ca.pem"
+	maxKMSCACertificateBytes = 32 * 1024
 )
 
 var ErrServiceConfigInvalid = errors.New("github signer service configuration is invalid")
@@ -26,6 +29,10 @@ var ErrServiceConfigInvalid = errors.New("github signer service configuration is
 type ServiceConfig struct {
 	Version                   int
 	ProviderProfileID         string
+	KMSRoleName               string
+	KMSEndpoint               string
+	KMSCASHA256               string
+	KMSAllowedCIDRs           []netip.Prefix
 	Bindings                  []Binding
 	SigningAuthorities        []SigningAuthority
 	AuthorityGenerationSHA256 string
@@ -34,6 +41,10 @@ type ServiceConfig struct {
 type serviceConfigWire struct {
 	Version           int           `json:"version"`
 	ProviderProfileID string        `json:"provider_profile_id"`
+	KMSRoleName       string        `json:"kms_role_name"`
+	KMSEndpoint       string        `json:"kms_endpoint"`
+	KMSCASHA256       string        `json:"kms_ca_sha256"`
+	KMSAllowedCIDRs   []string      `json:"kms_allowed_cidrs"`
 	Bindings          []bindingWire `json:"bindings"`
 }
 
@@ -67,7 +78,9 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 		return ServiceConfig{}, ErrServiceConfigInvalid
 	}
 	var raw map[string]json.RawMessage
-	if json.Unmarshal(value, &raw) != nil || !exactNonNullKeys(raw, "version", "provider_profile_id", "bindings") {
+	if json.Unmarshal(value, &raw) != nil || !exactNonNullKeys(raw,
+		"version", "provider_profile_id", "kms_role_name", "kms_endpoint", "kms_ca_sha256",
+		"kms_allowed_cidrs", "bindings") {
 		return ServiceConfig{}, ErrServiceConfigInvalid
 	}
 	var rawBindings []json.RawMessage
@@ -84,8 +97,25 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 	}
 	var wire serviceConfigWire
 	if decodeStrict(value, &wire) != nil || wire.Version != ServiceConfigVersion ||
-		!clientIDPattern.MatchString(wire.ProviderProfileID) {
+		!clientIDPattern.MatchString(wire.ProviderProfileID) ||
+		!kmsRoleNamePattern.MatchString(wire.KMSRoleName) ||
+		!kmsDedicatedEndpointPattern.MatchString(wire.KMSEndpoint) ||
+		!publicKeyDigestPattern.MatchString(wire.KMSCASHA256) ||
+		len(wire.KMSAllowedCIDRs) < 1 || len(wire.KMSAllowedCIDRs) > 8 {
 		return ServiceConfig{}, ErrServiceConfigInvalid
+	}
+	allowedCIDRs := make([]netip.Prefix, 0, len(wire.KMSAllowedCIDRs))
+	seenCIDRs := make(map[netip.Prefix]struct{}, len(wire.KMSAllowedCIDRs))
+	for _, encoded := range wire.KMSAllowedCIDRs {
+		prefix, parseErr := netip.ParsePrefix(encoded)
+		if parseErr != nil || prefix != prefix.Masked() || prefix.String() != encoded || !safeKMSPrefix(prefix) {
+			return ServiceConfig{}, ErrServiceConfigInvalid
+		}
+		if _, duplicate := seenCIDRs[prefix]; duplicate {
+			return ServiceConfig{}, ErrServiceConfigInvalid
+		}
+		seenCIDRs[prefix] = struct{}{}
+		allowedCIDRs = append(allowedCIDRs, prefix)
 	}
 	bindings := make([]Binding, 0, len(wire.Bindings))
 	authorities := make([]SigningAuthority, 0, len(wire.Bindings))
@@ -115,10 +145,29 @@ func ParseServiceConfig(reader io.Reader) (ServiceConfig, error) {
 	}
 	digest := sha256.Sum256(value)
 	return ServiceConfig{
-		Version: wire.Version, ProviderProfileID: wire.ProviderProfileID, Bindings: bindings,
+		Version: wire.Version, ProviderProfileID: wire.ProviderProfileID,
+		KMSRoleName: wire.KMSRoleName, KMSEndpoint: wire.KMSEndpoint, KMSCASHA256: wire.KMSCASHA256,
+		KMSAllowedCIDRs: allowedCIDRs, Bindings: bindings,
 		SigningAuthorities:        authorities,
 		AuthorityGenerationSHA256: hex.EncodeToString(digest[:]),
 	}, nil
+}
+
+func LoadKMSCACertificateFile(expectedSHA256 string) ([]byte, error) {
+	if !publicKeyDigestPattern.MatchString(expectedSHA256) {
+		return nil, ErrServiceConfigInvalid
+	}
+	value, err := trustedconfig.ReadFileAt(
+		kmsCACertificatePath, serviceConfigDir, 0, maxKMSCACertificateBytes,
+	)
+	if err != nil {
+		return nil, ErrServiceConfigInvalid
+	}
+	digest := sha256.Sum256(value)
+	if hex.EncodeToString(digest[:]) != expectedSHA256 {
+		return nil, ErrServiceConfigInvalid
+	}
+	return value, nil
 }
 
 func LoadServiceConfigFile(path string) (ServiceConfig, error) {

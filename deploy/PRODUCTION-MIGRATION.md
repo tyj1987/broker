@@ -40,6 +40,7 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/run/secret-broker-github-signer/signer.sock` | `root:broker-github-signer`, `0660`; parent `0750` | systemd-owned, signature-only GitHub App capability; private key remains in KMS/HSM |
 | `/run/secret-broker-aliyun-signer/signer.sock` | `root:broker-aliyun-signer`, `0660`; parent `0750` | systemd-owned, execution-bound Alibaba Cloud Signature V3 capability; long-term credentials remain outside Broker |
 | `/etc/secret-broker/providers/github-signer.json` | `root:broker-github-signer`, `0640` | Strict non-secret binding configuration; parent grants the signer execute-only traversal |
+| `/etc/secret-broker/providers/github-kms-ca.pem` | `root:broker-github-signer`, `0640` | Dedicated KMS instance CA; exact file SHA-256 is bound in signer configuration |
 | `/etc/secret-broker/providers/aliyun-signer.json` | `root:broker-aliyun-signer`, `0640` | Strict non-secret binding configuration; parent grants the signer execute-only traversal |
 | `secret-broker-audit-signer.service` | `broker-audit-signer:broker-audit-signer` | Uses only the pinned Alibaba KMS key and external monotonic state |
 | `secret-broker-audit-exporter.service` | `broker-audit-exporter:broker-audit-exporter` | Exports audit-chain heads without holding a cloud signing or storage identity |
@@ -53,8 +54,15 @@ deployment helper grants each signer identity execute-only traversal to its own
 binary with a POSIX ACL. Neither identity joins the `broker` group or gains
 directory listing access. The Alibaba command uses only its configured ECS RAM
 Role through IMDSv2 and has no static-key or IMDSv1 fallback. The GitHub command
-still fails closed with `signing_identity_unavailable` until its reviewed KMS
-transport is present. Do not install or enable either unit until the non-secret
+uses the same IMDSv2-only identity to call only a configured dedicated KMS
+gateway over TLS, with an exact CA digest and private-CIDR DNS guard. Its base
+unit denies all IP traffic except IMDS and the two documented Alibaba VPC DNS
+addresses `100.100.2.136` and `100.100.2.138`. The process resolver is hard-coded
+to those addresses and still rejects every KMS answer outside the configured
+private CIDRs. A reviewed root-owned systemd drop-in
+must add only the exact KMS private CIDRs recorded in the configuration; do not
+add a public or broad private range or disable the deny rule. Prefer `/32` or
+`/128` when gateway addressing is stable. Do not install or enable either unit until the non-secret
 binding configurations, dedicated workload/network boundaries, independently
 managed cloud authorities and isolated-account receipts have passed review.
 The production preflight intentionally remains red until that evidence exists.

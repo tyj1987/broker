@@ -12,7 +12,9 @@ import (
 	"os/user"
 	"strconv"
 	"syscall"
+	"time"
 
+	"github.com/tyj1987/broker/core/aliyunsigner"
 	"github.com/tyj1987/broker/core/githubsigner"
 	"github.com/tyj1987/broker/core/internal/socketactivation"
 )
@@ -40,8 +42,30 @@ func defaultDependencies() dependencies {
 		loadConfig: githubsigner.LoadServiceConfigFile,
 		lookupUID:  lookupUID,
 		newPeer:    githubsigner.NewOSPeerAuthorizer,
-		newSigner: func(context.Context, githubsigner.ServiceConfig) (githubsigner.DigestSigner, error) {
-			return nil, errBackendUnavailable
+		newSigner: func(ctx context.Context, config githubsigner.ServiceConfig) (githubsigner.DigestSigner, error) {
+			if ctx == nil {
+				return nil, errBackendUnavailable
+			}
+			credentials, err := aliyunsigner.NewIMDSv2CredentialProvider(config.KMSRoleName, 1500*time.Millisecond)
+			if err != nil {
+				return nil, errBackendUnavailable
+			}
+			caPEM, err := githubsigner.LoadKMSCACertificateFile(config.KMSCASHA256)
+			if err != nil {
+				return nil, errBackendUnavailable
+			}
+			client, err := githubsigner.NewAlibabaKMSClient(
+				credentials, config.KMSEndpoint, config.KMSRoleName, caPEM,
+				config.KMSCASHA256, config.KMSAllowedCIDRs, 1500*time.Millisecond,
+			)
+			if err != nil {
+				return nil, errBackendUnavailable
+			}
+			signer, err := githubsigner.NewKMSDigestSigner(client, config.SigningAuthorities)
+			if err != nil {
+				return nil, errBackendUnavailable
+			}
+			return signer, nil
 		},
 		listener: socketactivation.Listener,
 		serve: func(ctx context.Context, server *githubsigner.Server, listener net.Listener) error {

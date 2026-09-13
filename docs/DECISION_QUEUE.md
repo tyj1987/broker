@@ -160,9 +160,7 @@ continue.
   protocol now transports only those five typed operations. Both peers are
   designed for the fixed Linux Unix-socket path and authenticate the exact
   non-root peer UID with kernel credentials before request data is accepted or
-  written; the client fixes that path while server socket lifecycle remains
-  intentionally absent;
-  other platforms fail closed. The worker protocol reconstructs the private
+  written; other platforms fail closed. The worker protocol reconstructs the private
   typed requests, rechecks the complete binding and trusted clock, bounds
   concurrency, frames and deadlines, rejects late success, and emits only
   stable error codes. The audit-store command still uses the unavailable mirror
@@ -170,10 +168,13 @@ continue.
   backend that recomputes the trust generation, re-verifies canonical envelopes,
   serializes writes and requires exact body plus COMPLIANCE retention read-back
   for both created and existing results. Provider retention is bound to UTC
-  whole-second precision and rounded upward. This is still not proof of an
-  independently runnable worker: its activated server command/service,
-  Tencent workload identity, version-bound concurrent-create semantics, COS
-  resource and independent recovery evidence do not exist yet.
+  whole-second precision and rounded upward. This is still not proof of a
+  production mirror. The source now includes a dedicated worker command,
+  root-owned systemd socket, exact non-secret configuration grammar and
+  audit-store peer-UID check, but its default cloud factory remains unavailable
+  and its service unit denies all IP egress. Tencent workload identity,
+  version-bound concurrent-create semantics, COS resource and independent
+  recovery evidence do not exist yet.
 
 ## DQ-004: provider signing and account-binding authority
 

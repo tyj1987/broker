@@ -97,6 +97,7 @@ func workerConfig(privateKey *ecdsa.PrivateKey) Config {
 	return Config{
 		StreamID: "broker-production", Prefix: "audit-anchors/v1",
 		ProfileID: "tencent-mirror-production", Bucket: "broker-audit-mirror-1250000000",
+		Region: "ap-singapore",
 		TrustedKeys: map[string]auditanchor.TrustedSigningKey{"worker-key": {
 			PublicKey: &privateKey.PublicKey, ValidFromSequence: 1,
 		}},
@@ -203,6 +204,7 @@ func TestBackendRejectsInvalidConstructionAndRequests(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
 		"stream": func(value *Config) { value.StreamID = "../bad" },
 		"bucket": func(value *Config) { value.Bucket = "BAD" },
+		"region": func(value *Config) { value.Region = "BAD" },
 		"trust":  func(value *Config) { value.TrustedKeys = nil },
 	} {
 		t.Run(name, func(t *testing.T) {

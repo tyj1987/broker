@@ -242,16 +242,18 @@ mirror contract, fixes the client to the approved Unix-socket path,
 authenticates exact non-root Linux peer UIDs on both sides, fails closed outside
 Linux, rechecks the worker clock and rejects late success. The store-side
 authenticated factory carries only the worker UID and typed binding; it has no
-cloud route or credential. This still does not constitute a runnable independent
-worker. `core/auditmirrorworker` now independently derives the trusted-key
-generation, verifies every canonical signed envelope again, serializes creates,
+cloud route or credential. `core/auditmirrorworker` now independently derives
+the trusted-key generation, verifies every canonical signed envelope again, serializes creates,
 maps only sequence-derived object keys, and forces both new and existing COS
 objects through exact body and COMPLIANCE-retention read-back. Retention times
 are rounded up to COS's whole-second wire precision, never down. The worker
-server socket lifecycle, dedicated command and service, concrete Tencent
-workload-identity factory, version-bound concurrent-create proof and cloud
-resources are still absent, so the checked-in production path remains
-unavailable and nothing here is deployment evidence.
+concrete Tencent workload-identity factory, version-bound concurrent-create
+proof and cloud resources are still absent. A dedicated command now accepts
+only a root-owned, exact-schema configuration, authenticates the audit-store UID and consumes the
+fixed systemd-activated Unix socket. Its checked-in cloud factory deliberately
+returns unavailable, and the service unit denies all IP egress. It therefore
+cannot be enabled as a functioning production mirror and is not deployment
+evidence.
 
 The Linux service creates only the fixed `store.sock` name below a private,
 service-owned, non-writable runtime directory. A non-blocking process lock

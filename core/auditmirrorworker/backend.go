@@ -30,6 +30,7 @@ type Config struct {
 	Prefix      string
 	ProfileID   string
 	Bucket      string
+	Region      string
 	TrustedKeys map[string]auditanchor.TrustedSigningKey
 }
 
@@ -49,6 +50,7 @@ func NewBackend(config Config, client COSClient) (*Backend, error) {
 
 func newBackend(config Config, client COSClient, now func() time.Time) (*Backend, error) {
 	if client == nil || now == nil || !bucketPattern.MatchString(config.Bucket) ||
+		!bucketPattern.MatchString(config.Region) ||
 		auditmirror.RetentionDays != auditanchor.AuditObjectRetentionDays ||
 		auditmirror.RetentionGrace != auditanchor.AuditObjectRetentionGrace {
 		return nil, auditmirror.ErrContractRejected

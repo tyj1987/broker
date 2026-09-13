@@ -3,7 +3,11 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const deployHelper = read('../deploy/bin/secret-broker-deploy');
+const productionPreflight = read('../deploy/bin/secret-broker-production-preflight.mjs');
 const dockerfile = read('../Dockerfile');
+const mirrorWorker = read('../deploy/systemd/secret-broker-audit-mirror-worker.service');
+const mirrorSocket = read('../deploy/systemd/secret-broker-audit-mirror-worker.socket');
+const mirrorTmpfiles = read('../deploy/tmpfiles.d/secret-broker-audit-mirror.conf');
 
 const services = Object.freeze({
   signer: {
@@ -67,6 +71,45 @@ assert.match(
 );
 const recovery = read('../deploy/systemd/secret-broker-audit-recovery.service');
 assert.match(recovery, /^SupplementaryGroups=broker-audit-store$/m);
+assert.doesNotMatch(read('../deploy/systemd/secret-broker-audit-store.service'), /^SupplementaryGroups=broker-audit-mirror$/m);
+assert.match(mirrorWorker, /^User=broker-audit-mirror$/m);
+assert.match(mirrorWorker, /^Group=broker-audit-mirror$/m);
+assert.match(mirrorWorker, /^ExecStart=\/opt\/secret-broker\/broker\/bin\/secret-broker-audit-mirror-worker --config \/etc\/secret-broker\/audit\/mirror-worker\.json$/m);
+assert.match(mirrorWorker, /^IPAddressDeny=any$/m);
+assert.match(mirrorWorker, /^PrivateNetwork=true$/m);
+assert.match(mirrorWorker, /^RestrictAddressFamilies=AF_UNIX$/m);
+for (const setting of [
+  'AmbientCapabilities=',
+  'CapabilityBoundingSet=',
+  'LockPersonality=true',
+  'MemoryDenyWriteExecute=true',
+  'NoNewPrivileges=true',
+  'PrivateDevices=true',
+  'PrivateTmp=true',
+  'ProtectClock=true',
+  'ProtectHome=true',
+  'ProtectProc=invisible',
+  'ProtectSystem=strict',
+  'RestrictNamespaces=true',
+  'RestrictSUIDSGID=true',
+  'SystemCallFilter=@system-service',
+]) {
+  assert.match(mirrorWorker, new RegExp(`^${setting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+}
+assert.doesNotMatch(mirrorWorker, /^IPAddressAllow=/m);
+assert.doesNotMatch(mirrorWorker, /^Restart=/m);
+assert.doesNotMatch(mirrorWorker, /^\[Install\]$/m);
+assert.doesNotMatch(mirrorWorker, /^Environment(File)?=/m);
+assert.doesNotMatch(mirrorWorker, /^LoadCredential=/m);
+assert.doesNotMatch(mirrorWorker, /^SupplementaryGroups=/m);
+assert.doesNotMatch(mirrorWorker, /^DynamicUser=/m);
+assert.match(mirrorSocket, /^ListenStream=\/run\/secret-broker-audit-mirror\/mirror\.sock$/m);
+assert.match(mirrorSocket, /^FileDescriptorName=audit-mirror$/m);
+assert.match(mirrorSocket, /^SocketUser=root$/m);
+assert.match(mirrorSocket, /^SocketGroup=broker-audit-store$/m);
+assert.match(mirrorSocket, /^SocketMode=0660$/m);
+assert.doesNotMatch(mirrorSocket, /^\[Install\]$/m);
+assert.equal(mirrorTmpfiles.trim(), 'd /run/secret-broker-audit-mirror 0750 root broker-audit-store -');
 for (const name of ['signer', 'store', 'recovery']) {
   assert.doesNotMatch(
     read(`../deploy/systemd/secret-broker-audit-${name}.service`),
@@ -87,5 +130,8 @@ for (const binary of ['secret-broker-audit-store', 'secret-broker-audit-store-he
     new RegExp(`COPY --from=core-build /out/${binary} /app/bin/${binary}`),
   );
 }
+assert.doesNotMatch(dockerfile, /secret-broker-audit-mirror-worker/);
+assert.doesNotMatch(deployHelper, /secret-broker-audit-mirror-worker/);
+assert.doesNotMatch(productionPreflight, /secret-broker-audit-mirror-worker/);
 
-console.log('audit systemd contracts: four pinned identities and fail-closed sandboxes passed');
+console.log('audit systemd contracts: isolated services and fail-closed mirror worker socket passed');

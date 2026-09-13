@@ -266,7 +266,11 @@ continue.
   Alibaba signer now has a strict IMDSv2-only ECS RAM Role credential backend
   and fixed Signature V3 implementation. Its source unit permits IP egress only
   to the ECS metadata address, and it has no IMDSv1, environment, shared-profile
-  or static-key fallback. The GitHub signer now has an exact KMS key-version
+  or static-key fallback. The role-bound provider coalesces refreshes and
+  caches only temporary in-memory authority, with a five-minute credential
+  refresh boundary, request-start token TTL, hard refresh timeout,
+  clock-rollback denial and no stale fallback after refresh failure. The
+  GitHub signer now has an exact KMS key-version
   digest boundary and verifies every returned RSA PKCS#1 SHA-256 signature
   against a pinned public key. Its command now uses a strict dedicated-gateway
   `AsymmetricSign` transport with an explicit IMDSv2 ECS RAM Role, exact gateway,

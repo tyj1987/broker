@@ -43,5 +43,6 @@ contract_test: { version: 2, account: isolated_ram_role, authority_attestation: 
 implementation_evidence:
   signature_v3_official_vector: passed
   ecs_ram_role_imdsv2_backend: passed_mock
+  imdsv2_refresh_cache: passed_mock
   imdsv1_fallback: forbidden
   isolated_account_contract: not_run

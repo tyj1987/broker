@@ -77,6 +77,7 @@ func TestIMDSv2CredentialProviderRejectsUnsafeCredentials(t *testing.T) {
 	bodies := []string{
 		`{"Code":"Success","AccessKeyId":"STS.TEST","AccessKeySecret":"temporary-secret","SecurityToken":"","Expiration":"2026-09-13T01:00:00Z","LastUpdated":"2026-09-13T00:00:00Z"}`,
 		`{"Code":"Success","AccessKeyId":"STS.TEST","AccessKeySecret":"temporary-secret","SecurityToken":"temporary-security-token","Expiration":"2026-09-13T00:00:30Z","LastUpdated":"2026-09-13T00:00:00Z"}`,
+		`{"Code":"Success","AccessKeyId":"STS.TEST","AccessKeySecret":"temporary-secret","SecurityToken":"temporary-security-token","Expiration":"2026-09-13T00:04:00Z","LastUpdated":"2026-09-13T00:00:00Z"}`,
 		`{"Code":"Success","AccessKeyId":"STS.TEST","AccessKeySecret":"temporary-secret","SecurityToken":"temporary-security-token","Expiration":"2026-09-13T01:00:00Z","LastUpdated":"2026-09-13T00:00:00Z","Unexpected":"field"}`,
 		`{"Code":"Success","AccessKeyId":"STS.FIRST","accesskeyid":"STS.OVERRIDE","AccessKeySecret":"temporary-secret","SecurityToken":"temporary-security-token","Expiration":"2026-09-13T01:00:00Z","LastUpdated":"2026-09-13T00:00:00Z"}`,
 		`{"Code":"Success","AccessKeyId":"STS.TEST","AccessKeySecret":"temporary-secret","SecurityToken":"temporary-security-token","Expiration":"2026-09-13T01:00:00Z"}`,

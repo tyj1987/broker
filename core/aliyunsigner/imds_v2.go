@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,10 @@ const (
 	imdsTokenPath            = "/latest/api/token"
 	imdsRoleCredentialPrefix = "/latest/meta-data/ram/security-credentials/"
 	imdsTokenTTLSeconds      = "21600"
+	imdsTokenLifetime        = 6 * time.Hour
+	imdsTokenRefreshSkew     = 5 * time.Minute
+	credentialRefreshSkew    = 5 * time.Minute
+	credentialRetryDelay     = time.Second
 	maxIMDSResponseBytes     = 16 * 1024
 	minimumCredentialLife    = time.Minute
 	maximumCredentialLife    = 24 * time.Hour
@@ -45,9 +50,27 @@ type httpDoer interface {
 // IMDSv2CredentialProvider deliberately has no IMDSv1 or default-credential
 // fallback. The fixed link-local endpoint is never read from configuration.
 type IMDSv2CredentialProvider struct {
-	client   httpDoer
-	roleName string
-	clock    func() time.Time
+	client         httpDoer
+	roleName       string
+	clock          func() time.Time
+	requestTimeout time.Duration
+
+	mu                     sync.Mutex
+	token                  string
+	tokenRefreshAt         time.Time
+	tokenLoadedAt          time.Time
+	tokenRefreshAfter      time.Duration
+	credential             TemporaryCredential
+	credentialRefreshAt    time.Time
+	credentialLoadedAt     time.Time
+	credentialRefreshAfter time.Duration
+	retryNotBefore         time.Time
+	refresh                *credentialRefresh
+}
+
+type credentialRefresh struct {
+	done chan struct{}
+	err  error
 }
 
 func NewIMDSv2CredentialProvider(roleName string, timeout time.Duration) (*IMDSv2CredentialProvider, error) {
@@ -55,7 +78,9 @@ func NewIMDSv2CredentialProvider(roleName string, timeout time.Duration) (*IMDSv
 	if err != nil || !roleNamePattern.MatchString(roleName) {
 		return nil, ErrWorkloadCredentialUnavailable
 	}
-	return &IMDSv2CredentialProvider{client: client, roleName: roleName, clock: time.Now}, nil
+	return &IMDSv2CredentialProvider{
+		client: client, roleName: roleName, clock: time.Now, requestTimeout: timeout,
+	}, nil
 }
 
 func newIMDSv2HTTPClient(timeout time.Duration) (*http.Client, error) {
@@ -79,23 +104,173 @@ func newTestIMDSv2CredentialProvider(client httpDoer, roleName string, clock fun
 	if client == nil || clock == nil || !roleNamePattern.MatchString(roleName) {
 		return nil, ErrWorkloadCredentialUnavailable
 	}
-	return &IMDSv2CredentialProvider{client: client, roleName: roleName, clock: clock}, nil
+	return &IMDSv2CredentialProvider{
+		client: client, roleName: roleName, clock: clock, requestTimeout: 2 * time.Second,
+	}, nil
 }
 
 func (provider *IMDSv2CredentialProvider) Credential(ctx context.Context) (TemporaryCredential, error) {
 	if provider == nil || provider.client == nil || provider.clock == nil || ctx == nil ||
+		provider.requestTimeout <= 0 || provider.requestTimeout > 5*time.Second ||
 		!roleNamePattern.MatchString(provider.roleName) {
 		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
 	}
-	token, err := provider.requestToken(ctx)
+	if contextCanceled(ctx) {
+		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+	}
+
+	provider.mu.Lock()
+	now := provider.clock()
+	if provider.credentialUsableLocked(now) {
+		credential := provider.credential
+		provider.mu.Unlock()
+		if contextCanceled(ctx) {
+			return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+		}
+		return credential, nil
+	}
+	if provider.refresh == nil && now.UTC().Before(provider.retryNotBefore) {
+		provider.mu.Unlock()
+		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+	}
+	refresh := provider.refresh
+	if refresh == nil {
+		refresh = &credentialRefresh{done: make(chan struct{})}
+		provider.refresh = refresh
+		go provider.runCredentialRefresh(refresh)
+	}
+	provider.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+	case <-refresh.done:
+		return provider.credentialAfterRefresh(ctx, refresh)
+	}
+}
+
+func (provider *IMDSv2CredentialProvider) credentialAfterRefresh(
+	ctx context.Context,
+	refresh *credentialRefresh,
+) (TemporaryCredential, error) {
+	if contextCanceled(ctx) || refresh == nil || refresh.err != nil {
+		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+	}
+	provider.mu.Lock()
+	if !provider.credentialUsableLocked(provider.clock()) {
+		provider.mu.Unlock()
+		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+	}
+	credential := provider.credential
+	provider.mu.Unlock()
+	if contextCanceled(ctx) {
+		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
+	}
+	return credential, nil
+}
+
+func (provider *IMDSv2CredentialProvider) runCredentialRefresh(refresh *credentialRefresh) {
+	ctx, cancel := context.WithTimeout(context.Background(), provider.requestTimeout)
+	defer cancel()
+
+	credential, err := provider.refreshCredential(ctx)
+	if err == nil && contextCanceled(ctx) {
+		err = ErrWorkloadCredentialUnavailable
+	}
+	provider.mu.Lock()
+	if err == nil {
+		now := provider.clock()
+		refreshAt := credentialRefreshTime(now, credential.Expiration)
+		refreshAfter := refreshAt.Sub(now.UTC())
+		if refreshAfter <= 0 {
+			err = ErrWorkloadCredentialUnavailable
+		} else {
+			provider.credential = credential
+			provider.credentialRefreshAt = refreshAt
+			provider.credentialLoadedAt = now
+			provider.credentialRefreshAfter = refreshAfter
+			provider.retryNotBefore = time.Time{}
+		}
+	}
+	if err != nil {
+		provider.credential = TemporaryCredential{}
+		provider.credentialRefreshAt = time.Time{}
+		provider.credentialLoadedAt = time.Time{}
+		provider.credentialRefreshAfter = 0
+		provider.retryNotBefore = provider.clock().UTC().Add(credentialRetryDelay)
+		credential = TemporaryCredential{}
+	}
+	refresh.err = err
+	provider.refresh = nil
+	close(refresh.done)
+	provider.mu.Unlock()
+}
+
+func (provider *IMDSv2CredentialProvider) refreshCredential(ctx context.Context) (TemporaryCredential, error) {
+	token, err := provider.cachedToken(ctx)
 	if err != nil {
 		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
 	}
 	credential, err := provider.requestCredential(ctx, token)
 	if err != nil {
+		provider.mu.Lock()
+		provider.token = ""
+		provider.tokenRefreshAt = time.Time{}
+		provider.tokenLoadedAt = time.Time{}
+		provider.tokenRefreshAfter = 0
+		provider.mu.Unlock()
 		return TemporaryCredential{}, ErrWorkloadCredentialUnavailable
 	}
 	return credential, nil
+}
+
+func (provider *IMDSv2CredentialProvider) cachedToken(ctx context.Context) (string, error) {
+	startedAt := provider.clock()
+	provider.mu.Lock()
+	if provider.tokenUsableLocked(startedAt) {
+		token := provider.token
+		provider.mu.Unlock()
+		return token, nil
+	}
+	provider.mu.Unlock()
+
+	token, err := provider.requestToken(ctx)
+	if err != nil || contextCanceled(ctx) {
+		return "", ErrWorkloadCredentialUnavailable
+	}
+	provider.mu.Lock()
+	provider.token = token
+	provider.tokenLoadedAt = startedAt
+	provider.tokenRefreshAfter = imdsTokenLifetime - imdsTokenRefreshSkew
+	provider.tokenRefreshAt = startedAt.UTC().Add(provider.tokenRefreshAfter)
+	provider.mu.Unlock()
+	return token, nil
+}
+
+func credentialRefreshTime(now, expiration time.Time) time.Time {
+	return expiration.UTC().Add(-credentialRefreshSkew)
+}
+
+func (provider *IMDSv2CredentialProvider) credentialUsableLocked(now time.Time) bool {
+	elapsed := now.Sub(provider.credentialLoadedAt)
+	return provider.credential.AccessKeyID != "" && provider.credentialRefreshAfter > 0 &&
+		elapsed >= 0 && elapsed < provider.credentialRefreshAfter &&
+		now.UTC().Before(provider.credentialRefreshAt) && now.UTC().Before(provider.credential.Expiration)
+}
+
+func (provider *IMDSv2CredentialProvider) tokenUsableLocked(now time.Time) bool {
+	elapsed := now.Sub(provider.tokenLoadedAt)
+	return provider.token != "" && provider.tokenRefreshAfter > 0 &&
+		elapsed >= 0 && elapsed < provider.tokenRefreshAfter && now.UTC().Before(provider.tokenRefreshAt)
+}
+
+func contextCanceled(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func (provider *IMDSv2CredentialProvider) requestToken(ctx context.Context) (string, error) {

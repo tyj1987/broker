@@ -123,6 +123,17 @@ only Alibaba Cloud's documented VPC DNS addresses `100.100.2.136` and
 It rejects redirects, DNS answers outside the configured KMS CIDRs, response
 drift and credential fallback.
 
+The shared IMDSv2 provider keeps the metadata token and temporary STS
+credential only in the immutable role-bound process instance. Credential
+refreshes are coalesced, have a hard timeout, and stop serving the cached value
+at a fixed five-minute refresh boundary. The token lifetime is measured from
+the token request start. Cache use requires both the absolute deadline and a
+non-negative local elapsed-time check, so a wall-clock rollback cannot extend
+authority. Cancellation never returns a cached credential, and a failed or
+late refresh clears the credential and fails closed through a bounded retry
+cooldown. These are source-level controls; they are not evidence of ECS
+metadata behavior or credential revocation in an isolated account.
+
 GitHub does not document a way to upload an arbitrary externally generated App
 public key. The approved design therefore requires a human-controlled ceremony
 to import a GitHub-generated RSA private key into Alibaba KMS/HSM as BYOK. That

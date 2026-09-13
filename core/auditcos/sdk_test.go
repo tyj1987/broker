@@ -30,8 +30,17 @@ type fakeCOSBucketSDK struct {
 	listResponse    *tencentcos.Response
 	listErr         error
 	listOptions     *tencentcos.BucketGetOptions
+	objectVersions  []cosVersionReply
+	versionOptions  []*tencentcos.BucketGetObjectVersionsOptions
 	afterLock       func()
 	afterList       func()
+	afterVersions   func()
+}
+
+type cosVersionReply struct {
+	result   *tencentcos.BucketGetObjectVersionsResult
+	response *tencentcos.Response
+	err      error
 }
 
 func (fake *fakeCOSBucketSDK) GetObjectLockConfiguration(context.Context) (*tencentcos.BucketGetObjectLockResult, *tencentcos.Response, error) {
@@ -53,6 +62,22 @@ func (fake *fakeCOSBucketSDK) Get(_ context.Context, options *tencentcos.BucketG
 	return fake.listResult, fake.listResponse, fake.listErr
 }
 
+func (fake *fakeCOSBucketSDK) GetObjectVersions(_ context.Context, options *tencentcos.BucketGetObjectVersionsOptions) (*tencentcos.BucketGetObjectVersionsResult, *tencentcos.Response, error) {
+	fake.versionOptions = append(fake.versionOptions, options)
+	if fake.afterVersions != nil {
+		fake.afterVersions()
+	}
+	if len(fake.objectVersions) == 0 {
+		return nil, nil, errors.New("missing fake version response")
+	}
+	index := len(fake.versionOptions) - 1
+	if index >= len(fake.objectVersions) {
+		index = len(fake.objectVersions) - 1
+	}
+	reply := fake.objectVersions[index]
+	return reply.result, reply.response, reply.err
+}
+
 type fakeCOSObjectSDK struct {
 	getResponse       *tencentcos.Response
 	getErr            error
@@ -68,10 +93,13 @@ type fakeCOSObjectSDK struct {
 	putOptions        *tencentcos.ObjectPutOptions
 	retentionKey      string
 	afterGet          func()
+	afterRetention    func()
+	getVersionIDs     [][]string
 }
 
-func (fake *fakeCOSObjectSDK) Get(_ context.Context, key string, options *tencentcos.ObjectGetOptions, _ ...string) (*tencentcos.Response, error) {
+func (fake *fakeCOSObjectSDK) Get(_ context.Context, key string, options *tencentcos.ObjectGetOptions, versionIDs ...string) (*tencentcos.Response, error) {
 	fake.getKey, fake.getOptions = key, options
+	fake.getVersionIDs = append(fake.getVersionIDs, append([]string(nil), versionIDs...))
 	if fake.afterGet != nil {
 		fake.afterGet()
 	}
@@ -86,11 +114,14 @@ func (fake *fakeCOSObjectSDK) Put(_ context.Context, key string, body io.Reader,
 
 func (fake *fakeCOSObjectSDK) GetRetention(_ context.Context, key string, _ *tencentcos.ObjectGetRetentionOptions) (*tencentcos.ObjectGetRetentionResult, *tencentcos.Response, error) {
 	fake.retentionKey = key
+	if fake.afterRetention != nil {
+		fake.afterRetention()
+	}
 	return fake.retentionResult, fake.retentionResponse, fake.retentionErr
 }
 
 func cosResponse(status int, body io.ReadCloser) *tencentcos.Response {
-	return &tencentcos.Response{Response: &http.Response{StatusCode: status, Body: body}}
+	return &tencentcos.Response{Response: &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}}
 }
 
 func cosNotFound() error {
@@ -98,6 +129,15 @@ func cosNotFound() error {
 }
 
 func validCOSSDKFakes() (*fakeCOSBucketSDK, *fakeCOSObjectSDK) {
+	versionID := "version-1"
+	versionResult := &tencentcos.BucketGetObjectVersionsResult{
+		Name: cosSDKTestBucket, Prefix: sdkTestKey, MaxKeys: immutableVersionProbeLimit,
+		Version: []tencentcos.ListVersionsResultVersion{{
+			Key: sdkTestKey, VersionId: versionID, IsLatest: true, Size: 512, StorageClass: "STANDARD",
+		}},
+	}
+	putResponse := cosResponse(http.StatusOK, nil)
+	putResponse.Header.Set("x-cos-version-id", versionID)
 	return &fakeCOSBucketSDK{
 		lockResult:      &tencentcos.BucketGetObjectLockResult{ObjectLockEnabled: "Enabled"},
 		lockResponse:    cosResponse(http.StatusOK, nil),
@@ -107,10 +147,11 @@ func validCOSSDKFakes() (*fakeCOSBucketSDK, *fakeCOSObjectSDK) {
 			Name: cosSDKTestBucket, Prefix: "audit-anchors/v1/stream/", MaxKeys: 2,
 			Contents: []tencentcos.Object{{Key: sdkTestKey, Size: 512}},
 		},
-		listResponse: cosResponse(http.StatusOK, nil),
+		listResponse:   cosResponse(http.StatusOK, nil),
+		objectVersions: []cosVersionReply{{result: versionResult, response: cosResponse(http.StatusOK, nil)}},
 	}, &fakeCOSObjectSDK{
 		getResponse:       cosResponse(http.StatusOK, io.NopCloser(bytes.NewReader([]byte("anchor")))),
-		putResponse:       cosResponse(http.StatusOK, nil),
+		putResponse:       putResponse,
 		retentionResult:   &tencentcos.ObjectGetRetentionResult{Mode: COSComplianceMode, RetainUntilDate: "2027-09-12T12:05:00Z"},
 		retentionResponse: cosResponse(http.StatusOK, nil),
 	}

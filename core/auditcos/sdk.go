@@ -38,6 +38,7 @@ type cosBucketSDKAPI interface {
 	GetObjectLockConfiguration(context.Context) (*tencentcos.BucketGetObjectLockResult, *tencentcos.Response, error)
 	GetVersioning(context.Context) (*tencentcos.BucketGetVersionResult, *tencentcos.Response, error)
 	Get(context.Context, *tencentcos.BucketGetOptions) (*tencentcos.BucketGetResult, *tencentcos.Response, error)
+	GetObjectVersions(context.Context, *tencentcos.BucketGetObjectVersionsOptions) (*tencentcos.BucketGetObjectVersionsResult, *tencentcos.Response, error)
 }
 
 type cosObjectSDKAPI interface {
@@ -111,11 +112,7 @@ func (client *COSSDKImmutableClient) InspectObjectLock(ctx context.Context, buck
 }
 
 func (client *COSSDKImmutableClient) CreateObject(ctx context.Context, request COSCreateObjectRequest) (ObjectCreateResult, error) {
-	if !validSDKCall(ctx, request.Bucket, cosClientBucket(client), client != nil && client.objectAPI != nil) ||
-		!validSDKObjectKey(request.Key) || len(request.Body) == 0 || len(request.Body) > AuditObjectMaxBytes ||
-		request.ContentType != "application/json" || request.StorageClass != "STANDARD" ||
-		request.LockMode != COSComplianceMode || request.RetainUntil.Location() != time.UTC ||
-		request.RetainUntil.IsZero() || request.RetainUntil.Nanosecond() != 0 {
+	if !validCOSCreateCall(ctx, client, request) {
 		return ObjectCreateResult{}, ErrImmutableSDKRequestRejected
 	}
 	existing, err := client.objectAPI.Get(ctx, request.Key, nil)
@@ -131,15 +128,7 @@ func (client *COSSDKImmutableClient) CreateObject(ctx context.Context, request C
 	if ctx.Err() != nil {
 		return ObjectCreateResult{}, ErrImmutableSDKRequestRejected
 	}
-	headers := make(http.Header)
-	headers.Set("x-cos-object-lock-mode", request.LockMode)
-	headers.Set("x-cos-object-lock-retain-until-date", request.RetainUntil.Format(time.RFC3339))
-	response, err := client.objectAPI.Put(ctx, request.Key, bytes.NewReader(bytes.Clone(request.Body)), &tencentcos.ObjectPutOptions{
-		ObjectPutHeaderOptions: &tencentcos.ObjectPutHeaderOptions{
-			ContentType: request.ContentType, ContentLength: int64(len(request.Body)),
-			XCosStorageClass: request.StorageClass, XOptionHeader: &headers,
-		},
-	})
+	response, err := client.putObject(ctx, request)
 	if err != nil {
 		return ObjectCreateResult{}, ErrImmutableSDKUnavailable
 	}
@@ -147,6 +136,26 @@ func (client *COSSDKImmutableClient) CreateObject(ctx context.Context, request C
 		return ObjectCreateResult{}, ErrImmutableSDKResponseInvalid
 	}
 	return ObjectCreateResult{Status: "created"}, nil
+}
+
+func validCOSCreateCall(ctx context.Context, client *COSSDKImmutableClient, request COSCreateObjectRequest) bool {
+	return validSDKCall(ctx, request.Bucket, cosClientBucket(client), client != nil && client.objectAPI != nil) &&
+		validSDKObjectKey(request.Key) && len(request.Body) > 0 && len(request.Body) <= AuditObjectMaxBytes &&
+		request.ContentType == "application/json" && request.StorageClass == "STANDARD" &&
+		request.LockMode == COSComplianceMode && request.RetainUntil.Location() == time.UTC &&
+		!request.RetainUntil.IsZero() && request.RetainUntil.Nanosecond() == 0
+}
+
+func (client *COSSDKImmutableClient) putObject(ctx context.Context, request COSCreateObjectRequest) (*tencentcos.Response, error) {
+	headers := make(http.Header)
+	headers.Set("x-cos-object-lock-mode", request.LockMode)
+	headers.Set("x-cos-object-lock-retain-until-date", request.RetainUntil.Format(time.RFC3339))
+	return client.objectAPI.Put(ctx, request.Key, bytes.NewReader(bytes.Clone(request.Body)), &tencentcos.ObjectPutOptions{
+		ObjectPutHeaderOptions: &tencentcos.ObjectPutHeaderOptions{
+			ContentType: request.ContentType, ContentLength: int64(len(request.Body)),
+			XCosStorageClass: request.StorageClass, XOptionHeader: &headers,
+		},
+	})
 }
 
 func (client *COSSDKImmutableClient) ReadObject(ctx context.Context, bucket, key string) ([]byte, error) {

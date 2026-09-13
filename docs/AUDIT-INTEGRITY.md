@@ -283,6 +283,21 @@ with a maximum of 1,000 entries. They reject arbitrary delimiter, endpoint,
 header and continuation inputs, malformed ordering, unexpected prefixes,
 oversized anchor objects and non-progressing pagination.
 
+The COS package also implements the mirror worker's version-aware contract.
+It accepts a key only when a bounded version listing proves exactly one current,
+non-null `STANDARD` version and no delete marker, extra version or continuation.
+Create and exact-version read responses must echo the same
+`x-cos-version-id`. COS retention lookup does not expose a version selector, so
+the adapter verifies the same unique version immediately before and after that
+lookup and rejects any change. This is deterministic source evidence only: the
+production command still uses the unavailable factory, and the Tencent identity,
+single-writer policy and live race behavior remain unverified.
+The protocol choices are checked against Tencent's current
+[object-version listing](https://cloud.tencent.com/document/product/436/64993),
+[GET Object](https://cloud.tencent.com/document/api/436/7753) and
+[GET Object Retention](https://cloud.tencent.com/document/product/436/55292)
+contracts.
+
 `core/auditstore.DualCloudRepository` uses those pages rather than a local head
 file or in-memory checkpoint. On every operation it revalidates both retention
 contracts and derives the identical contiguous prefix from sequence one. A

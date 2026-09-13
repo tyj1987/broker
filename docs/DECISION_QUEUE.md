@@ -175,13 +175,20 @@ continue.
   and its service unit denies all IP egress. The worker contract now rejects a
   create without a non-null provider version ID and binds body, retention,
   ordinary reads and predecessor verification to an exact resolved version.
-  The concrete adapter must still reject ambiguous histories. Tencent workload
-  identity, race-tested concurrent-create semantics, COS resource and
-  independent recovery evidence do not exist yet.
+  The concrete COS adapter now lists at most two exact-prefix history entries
+  and accepts only one current, non-null `STANDARD` version with no delete
+  marker or continuation. Upload and exact-version reads bind the provider's
+  `x-cos-version-id` response header. Because COS `GET Object Retention` has no
+  version selector, retention reads require the same unique version immediately
+  before and after the call; any ambiguity or binding change fails closed.
+  Tencent workload identity, provider-policy exclusion of other writers,
+  race-tested live concurrent-create semantics, COS resources and independent
+  recovery evidence do not exist yet.
   Alibaba OSS and Tencent COS SDK transports are now isolated in distinct Go
   packages, with dependency-graph tests proving that the source-only store and
   worker commands link neither provider SDK and that each adapter links only
-  its own SDK. The concrete identity factories remain intentionally absent.
+  its own SDK. The concrete identity factories remain intentionally absent, so
+  this adapter is not reachable from the production command.
 
 ## DQ-004: provider signing and account-binding authority
 

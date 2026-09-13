@@ -452,10 +452,15 @@ func TestBindingSet(t *testing.T) {
 
 func TestServeEndToEndAndStopsWithContext(t *testing.T) {
 	server := newTestServer(t,
-		RequestSignerFunc(func(context.Context, SigningRequest) (SignedRequest, error) { return validSigned(), nil }),
+		RequestSignerFunc(func(context.Context, SigningRequest) (SignedRequest, error) {
+			signed := validSigned()
+			signed.Date = time.Now().UTC().Format(time.RFC3339)
+			return signed, nil
+		}),
 		BindingAuthorizerFunc(func(context.Context, SigningRequest) error { return nil }),
 		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
 	)
+	server.Clock = time.Now
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

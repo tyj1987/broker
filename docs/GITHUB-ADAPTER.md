@@ -86,7 +86,7 @@ provider_accounts:
 
 The runtime rejects unknown fields, so an App private key cannot be placed in
 this configuration. Before committing a configuration reload it probes the
-fixed `/run/secret-broker-signer/github.sock` boundary. The socket and its
+fixed `/run/secret-broker-github-signer/signer.sock` boundary. The socket and its
 directory must not be owned or replaceable by the Broker process. Requests use
 a bounded versioned protocol containing only the RS256 signing input and
 account metadata; responses contain only signature bytes. Socket errors,

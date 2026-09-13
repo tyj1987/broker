@@ -2,6 +2,27 @@
 
 This document records observed evidence separately from planned controls. Passing source tests does not approve a production release.
 
+## Current Goal checkpoint (2026-09-13)
+
+Draft PR [#30](https://github.com/tyj1987/broker/pull/30) now carries the active
+`codex/next-control-plane-clean` candidate. Its provider-signer deployment
+boundary reserves separate GitHub and Alibaba Cloud users, groups, runtime
+directories and root-owned systemd Unix sockets. The existing 22-item production
+preflight keeps one aggregate provider-signer gate, but that gate is no longer
+optional: both socket units and services must be active, and both services must
+have exact and numerically distinct configured and runtime identities, protected
+final socket metadata, exact supplementary-group allowlists, stable processes
+and executables bound to the current release. The deployment account is part of
+the numeric collision check. The collection path also defaults isolated-account contract evidence
+to false, so unit and process metadata alone cannot produce a green production
+result.
+
+This is source and automated-test preparation only. No signer executable,
+cloud authority, protected signer configuration or isolated-account contract
+receipt has been deployed. The live preflight must therefore remain red until
+those dependencies are implemented and independently verified. No DQ-009 trust
+domain or socket cutover is authorized by this checkpoint.
+
 ## Current rollout checkpoint (2026-09-11)
 
 The current source and deployed release baseline is

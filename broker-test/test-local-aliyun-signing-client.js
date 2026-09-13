@@ -7,8 +7,8 @@ import {
   LocalAliyunSigningError,
 } from '../broker/lib/local-aliyun-signing-client.js';
 
-const DIRECTORY = '/run/secret-broker-signer';
-const SOCKET = `${DIRECTORY}/aliyun.sock`;
+const DIRECTORY = '/run/secret-broker-aliyun-signer';
+const SOCKET = `${DIRECTORY}/signer.sock`;
 const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
 const REQUEST_BINDING = 'a'.repeat(43);
 const input = {

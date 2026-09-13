@@ -229,6 +229,22 @@ continue.
   principal or digest. The 2026-09-12 production probe was denied before
   provider execution because neither tool is deployed, so no real account contract has passed;
   revocation and rotation remain separate required phases.
+  The source deployment contract now assigns GitHub and Alibaba Cloud signers
+  distinct fixed users, groups, runtime directories and socket paths. The
+  22-item production preflight no longer accepts an environment variable that
+  makes the GitHub signer optional: its single provider-signer gate requires
+  both services and root-owned socket units, exact identities, exact
+  `0750`/`0660` boundaries, unique numeric UID/GID values, Broker group-only
+  access, exact runtime supplementary-group allowlists, actual process
+  credentials, stable processes and executables bound to the active release.
+  The privileged deployment account is also included in numeric collision
+  checks. The collected production gate additionally defaults the
+  isolated-account contract evidence to false; only a future independently
+  verified evidence implementation may satisfy it. The Node clients use the
+  same future paths. This prepares,
+  but does not perform, DQ-009. Neither signer executable,
+  cloud authority, protected configuration nor isolated-account receipt exists
+  yet, so the gate intentionally fails in production and DQ-004 remains open.
 
 ## DQ-005: SSH target, host-key and certificate authority
 
@@ -324,6 +340,11 @@ continue.
   no production plan has been populated or approved and no identity has been
   switched. Do not copy the old key hierarchy into the hardened layout or use
   it to satisfy the preflight.
+  The candidate source now reserves separate GitHub and Alibaba Cloud signer
+  runtime paths and validates them in the production preflight. This path
+  preparation changes no live service, account, socket or trust root. Activating
+  either path remains part of the maintenance-window report and requires the
+  explicit pre-cutover approval described above.
 
 ## DQ-010: DeepSeek credential authority and usage controls
 

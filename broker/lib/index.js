@@ -79,11 +79,43 @@ export {
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainProofSync,
   loadAuditChainStateSync,
   GENESIS_HASH,
 } from './audit-hash-chain.js';
 export {
+  ANCHOR_PURPOSE,
+  ANCHOR_VERSION,
+  SIGNATURE_ALGORITHMS,
+  AuditAnchorError,
+  attachAuditAnchorSignature,
+  createAuditAnchorRequest,
+  createAuditAnchorSigningInput,
+  verifyAuditAnchorEnvelope,
+} from './audit-anchor.js';
+export {
+  LOCAL_AUDIT_ANCHOR_SIGNER_CONTRACT,
+  LocalAuditAnchorSignerError,
+  createLocalAuditAnchorSignerClient,
+} from './local-audit-anchor-signer-client.js';
+export {
+  LOCAL_AUDIT_ANCHOR_STORE_CONTRACT,
+  LocalAuditAnchorStoreError,
+  createLocalAuditAnchorStoreClient,
+} from './local-audit-anchor-store-client.js';
+export {
+  AuditAnchorExporterError,
+  createAuditAnchorExporter,
+} from './audit-anchor-exporter.js';
+export {
+  AUDIT_ANCHOR_RECOVERY_LIMITS,
+  AuditAnchorRecoveryError,
+  createAuditAnchorRecoveryVerifier,
+} from './audit-anchor-recovery.js';
+export {
   validateBrokerConfig,
+  normalizeBrokerConfig,
+  validateClientMutationCandidate,
   requireValidBrokerConfig,
   preflightPaths,
   formatValidationReport,

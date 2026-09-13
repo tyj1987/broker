@@ -15,10 +15,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	ProtocolVersion    = 2
+	ProbeVersion       = 1
+	ProbeOperation     = "authority_generation.read"
 	MaxRequestBytes    = 8 * 1024
 	MaxSignatureBytes  = 1024
 	MinSignatureBytes  = 256
@@ -28,12 +31,33 @@ const (
 )
 
 var (
-	accountRefPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	environmentPattern    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	clientIDPattern       = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
-	executionIDPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	requestBindingPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	accountRefPattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	environmentPattern         = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	clientIDPattern            = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
+	executionIDPattern         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	requestBindingPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	authorityGenerationPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	probeChallengePattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	wireRequestKeys            = []string{
+		"version", "algorithm", "signing_input", "account_ref", "environment",
+		"client_id", "execution_id", "request_binding",
+	}
+	jwtHeaderKeys = []string{"alg", "typ"}
+	jwtClaimsKeys = []string{"iat", "exp", "iss"}
 )
+
+type authorityProbeRequest struct {
+	Version   int    `json:"version"`
+	Operation string `json:"operation"`
+	Challenge string `json:"challenge"`
+}
+
+type authorityProbeResponse struct {
+	Version                   int    `json:"version"`
+	Operation                 string `json:"operation"`
+	Challenge                 string `json:"challenge"`
+	AuthorityGenerationSHA256 string `json:"authority_generation_sha256"`
+}
 
 type wireRequest struct {
 	Version        int    `json:"version"`
@@ -118,29 +142,31 @@ func (protocolError *ProtocolError) Error() string { return protocolError.Code }
 func fail(code string) error { return &ProtocolError{Code: code} }
 
 type Server struct {
-	Signer        DigestSigner
-	Bindings      BindingAuthorizer
-	Peers         PeerAuthorizer
-	Clock         func() time.Time
-	Deadline      time.Duration
-	MaxConcurrent int
-	OnError       func(string)
+	Signer                    DigestSigner
+	Bindings                  BindingAuthorizer
+	Peers                     PeerAuthorizer
+	AuthorityGenerationSHA256 string
+	Clock                     func() time.Time
+	Deadline                  time.Duration
+	MaxConcurrent             int
+	OnError                   func(string)
 }
 
-func NewServer(signer DigestSigner, bindings BindingAuthorizer, peers PeerAuthorizer) (*Server, error) {
-	if signer == nil || bindings == nil || peers == nil {
+func NewServer(signer DigestSigner, bindings BindingAuthorizer, peers PeerAuthorizer, authorityGenerationSHA256 string) (*Server, error) {
+	if signer == nil || bindings == nil || peers == nil || !authorityGenerationPattern.MatchString(authorityGenerationSHA256) {
 		return nil, errors.New("signer dependencies are required")
 	}
 	return &Server{
 		Signer: signer, Bindings: bindings, Peers: peers,
-		Clock: time.Now, Deadline: DefaultDeadline, MaxConcurrent: DefaultConcurrency,
+		AuthorityGenerationSHA256: authorityGenerationSHA256,
+		Clock:                     time.Now, Deadline: DefaultDeadline, MaxConcurrent: DefaultConcurrency,
 	}, nil
 }
 
 // Serve accepts bounded concurrent connections until the context is cancelled.
 // It reports only stable error codes; dependency details never reach the callback.
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
-	if server == nil || listener == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
+	if server == nil || listener == nil || ctx == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
 		return fail("server_invalid")
 	}
 	done := make(chan struct{})
@@ -184,7 +210,8 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 // ServeConn accepts exactly one newline-delimited request and writes one response.
 // Callers retain ownership of the connection and must close it after this method.
 func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error {
-	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil || connection == nil {
+	if server == nil || server.Signer == nil || server.Bindings == nil || server.Peers == nil ||
+		!authorityGenerationPattern.MatchString(server.AuthorityGenerationSHA256) || connection == nil || ctx == nil {
 		return fail("server_invalid")
 	}
 	deadline := server.Deadline
@@ -196,29 +223,62 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 		return fail("server_invalid")
 	}
 	now := clock()
+	requestContext, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
 	if err := connection.SetDeadline(now.Add(deadline)); err != nil {
 		return fail("connection_invalid")
 	}
-	if err := server.Peers.AuthorizePeer(ctx, connection); err != nil {
+	if err := server.Peers.AuthorizePeer(requestContext, connection); err != nil {
 		return fail("peer_denied")
 	}
-	request, err := readRequest(connection, now)
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
+	}
+	frame, err := readFrame(connection)
 	if err != nil {
 		return err
 	}
+	if probe, matched, probeErr := decodeAuthorityProbe(frame); matched {
+		if probeErr != nil {
+			return probeErr
+		}
+		if requestContext.Err() != nil {
+			return fail("deadline_exceeded")
+		}
+		if err := json.NewEncoder(connection).Encode(authorityProbeResponse{
+			Version: ProbeVersion, Operation: ProbeOperation, Challenge: probe.Challenge,
+			AuthorityGenerationSHA256: server.AuthorityGenerationSHA256,
+		}); err != nil {
+			return fail("response_failed")
+		}
+		return nil
+	}
+	request, err := decodeRequest(frame, now)
+	if err != nil {
+		return err
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
+	}
 	if err := server.Bindings.AuthorizeBinding(
-		ctx, request.AccountRef, request.Environment, request.ClientID,
+		requestContext, request.AccountRef, request.Environment, request.ClientID,
 	); err != nil {
 		return fail("binding_denied")
 	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
+	}
 	digest := sha256.Sum256([]byte(request.SigningInput))
-	signature, err := server.Signer.SignDigest(ctx, DigestRequest{
+	signature, err := server.Signer.SignDigest(requestContext, DigestRequest{
 		AccountRef: request.AccountRef, Environment: request.Environment,
 		ClientID: request.ClientID, ExecutionID: request.ExecutionID,
 		RequestBinding: request.RequestBinding, Digest: digest,
 	})
 	if err != nil {
 		return fail("signing_failed")
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	if len(signature) < MinSignatureBytes || len(signature) > MaxSignatureBytes {
 		return fail("signature_invalid")
@@ -235,18 +295,23 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 	return nil
 }
 
-func readRequest(reader io.Reader, now time.Time) (wireRequest, error) {
+func readFrame(reader io.Reader) ([]byte, error) {
 	buffered := bufio.NewReaderSize(reader, MaxRequestBytes+1)
-	line, err := buffered.ReadString('\n')
-	if err != nil || len(line) > MaxRequestBytes || buffered.Buffered() > 0 {
-		return wireRequest{}, fail("request_invalid")
+	lineBytes, err := buffered.ReadSlice('\n')
+	if err != nil || len(lineBytes) > MaxRequestBytes || buffered.Buffered() > 0 {
+		return nil, fail("request_invalid")
 	}
+	line := string(lineBytes)
 	line = strings.TrimSuffix(line, "\n")
 	if strings.HasSuffix(line, "\r") || line == "" {
-		return wireRequest{}, fail("request_invalid")
+		return nil, fail("request_invalid")
 	}
+	return []byte(line), nil
+}
+
+func decodeRequest(frame []byte, now time.Time) (wireRequest, error) {
 	var request wireRequest
-	if err := decodeStrict([]byte(line), &request); err != nil {
+	if err := decodeExactObject(frame, &request, wireRequestKeys); err != nil {
 		return wireRequest{}, fail("request_invalid")
 	}
 	if request.Version != ProtocolVersion || request.Algorithm != "RS256" ||
@@ -261,6 +326,23 @@ func readRequest(reader io.Reader, now time.Time) (wireRequest, error) {
 		return wireRequest{}, err
 	}
 	return request, nil
+}
+
+func decodeAuthorityProbe(frame []byte) (authorityProbeRequest, bool, error) {
+	var object map[string]json.RawMessage
+	if decodeStrict(frame, &object) != nil || object == nil {
+		return authorityProbeRequest{}, false, nil
+	}
+	if _, present := object["operation"]; !present {
+		return authorityProbeRequest{}, false, nil
+	}
+	var probe authorityProbeRequest
+	if decodeExactObject(frame, &probe, []string{"version", "operation", "challenge"}) != nil ||
+		probe.Version != ProbeVersion || probe.Operation != ProbeOperation ||
+		!probeChallengePattern.MatchString(probe.Challenge) {
+		return authorityProbeRequest{}, true, fail("request_invalid")
+	}
+	return probe, true, nil
 }
 
 func validateSigningInput(value string, clientID string, now time.Time) error {
@@ -278,14 +360,17 @@ func validateSigningInput(value string, clientID string, now time.Time) error {
 	}
 	var header jwtHeader
 	var claims jwtClaims
-	if decodeStrict(headerBytes, &header) != nil || decodeStrict(claimsBytes, &claims) != nil ||
+	if decodeExactObject(headerBytes, &header, jwtHeaderKeys) != nil ||
+		decodeExactObject(claimsBytes, &claims, jwtClaimsKeys) != nil ||
 		header.Algorithm != "RS256" || header.Type != "JWT" || claims.Issuer != clientID {
 		return fail("jwt_invalid")
 	}
 	nowUnix := now.Unix()
+	maximumLifetimeSeconds := int64(MaxJWTLifetime / time.Second)
 	if claims.IssuedAt < nowUnix-120 || claims.IssuedAt > nowUnix+30 ||
 		claims.ExpiresAt <= nowUnix || claims.ExpiresAt <= claims.IssuedAt ||
-		time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > MaxJWTLifetime {
+		claims.IssuedAt > int64(^uint64(0)>>1)-maximumLifetimeSeconds ||
+		claims.ExpiresAt > claims.IssuedAt+maximumLifetimeSeconds {
 		return fail("jwt_invalid")
 	}
 	return nil
@@ -303,6 +388,9 @@ func decodeCanonicalBase64URL(value string) ([]byte, error) {
 }
 
 func decodeStrict(value []byte, target any) error {
+	if !utf8.Valid(value) || rejectDuplicateKeys(value) != nil {
+		return errors.New("invalid json")
+	}
 	decoder := json.NewDecoder(strings.NewReader(string(value)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -311,6 +399,85 @@ func decodeStrict(value []byte, target any) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return errors.New("trailing json")
+	}
+	return nil
+}
+
+func decodeExactObject(value []byte, target any, required []string) error {
+	if err := decodeStrict(value, target); err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(value, &object) != nil || object == nil || len(object) != len(required) {
+		return errors.New("invalid object")
+	}
+	for _, key := range required {
+		if raw, present := object[key]; !present || string(raw) == "null" {
+			return errors.New("invalid object")
+		}
+	}
+	return nil
+}
+
+func rejectDuplicateKeys(value []byte) error {
+	decoder := json.NewDecoder(strings.NewReader(string(value)))
+	if err := walkJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing json")
+	}
+	return nil
+}
+
+func walkJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, structured := token.(json.Delim)
+	if !structured {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		keys := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("invalid object key")
+			}
+			if _, duplicate := keys[key]; duplicate {
+				return errors.New("duplicate object key")
+			}
+			keys[key] = struct{}{}
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("invalid json delimiter")
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	expected := json.Delim('}')
+	if delimiter == '[' {
+		expected = ']'
+	}
+	if closing != expected {
+		return errors.New("invalid json delimiter")
 	}
 	return nil
 }

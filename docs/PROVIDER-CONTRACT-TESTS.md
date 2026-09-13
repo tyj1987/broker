@@ -1,0 +1,122 @@
+# Isolated provider contract tests
+
+Provider operations remain `contract_required` until a real isolated account
+has passed the active-path and revocation checks defined for that provider.
+Passing unit tests or enabling a tool in the registry is not contract evidence.
+
+The first executable contract runner covers these read-only operations:
+
+- `github.repository.read@1.0.0`
+- `aliyun.ecs.instances.list@1.0.0`
+
+For one exact provider, account, environment and resource binding, the version 2
+runner checks registry discovery, a fixed provider-principal probe, an exact
+authority match, one bounded read, secret-free output, wrong-account denial and
+wrong-resource denial. GitHub uses the authenticated App installation endpoint;
+Alibaba Cloud uses STS `GetCallerIdentity`. The adapter hashes every returned
+principal identifier before it can enter a task result. The runner accepts and
+compares only lowercase SHA-256 digests plus the bounded principal type.
+For Alibaba Cloud, signer protocol version 3 also returns an opaque,
+non-credential lease binding. The ECS request must use the same binding as the
+identity probe and the consumed task execution. The Node client, adapters and
+Go protocol core reject execution, request or credential binding drift before
+the ECS request is sent. All typed business parameters are validated before
+either signer or provider traffic occurs.
+
+It issues only typed `/api/v2/tasks` requests.
+It cannot submit a URL, authentication header, provider credential or arbitrary
+operation. An unexpected negative task is cancelled when possible and the run
+still fails.
+
+## Protected invocation
+
+The JSON plan and every credential input are absolute file paths supplied by
+the operator's existing protected local channel. Credential values are not
+accepted as command-line arguments or environment variables. A representative
+invocation is:
+
+```console
+npm run provider:contract -- \
+  --broker https://broker.52trz.com \
+  --plan-file /protected/dq004-plan.json \
+  --api-key-file /protected/broker-api-key \
+  --client-cert-file /protected/client.crt \
+  --client-key-file /protected/client.key \
+  --ca-file /protected/broker-ca.crt
+```
+
+The plan is an external evidence input and must not be committed. It contains
+only account and resource references plus expected authority digests, never
+raw provider identifiers or credentials. A version 2 plan must contain the
+provider-specific `expected_authority` object. GitHub requires SHA-256 digests
+of the installation ID, account ID and lowercase account login plus
+`target_type`; Alibaba Cloud requires SHA-256 digests of `AccountId`,
+`PrincipalId` and `Arn` plus `IdentityType`.
+
+The command emits a
+small pass/fail receipt containing provider, operation, environment and check
+names. It omits account references, resource references and provider results.
+Failures emit only a stable contract error code.
+
+The operator must retain the signed plan digest, exact release SHA, timestamp,
+provider-side audit event references and the safe receipt outside the source
+repository. The runner does not collect or print those external references.
+
+Production preflight accepts that material only through the version 1 signed
+evidence contract in `contracts/provider-contract-evidence-v1.schema.json`.
+The canonical evidence contains exactly one GitHub receipt followed by one
+Alibaba Cloud receipt and binds each plan digest and provider-audit reference
+digest to the exact release SHA, current provider binding generation and exact
+bytes of both protected signer authority configurations. Its validity is at
+most 15 minutes. A detached Ed25519 signature is checked against a root-owned
+keyring; the Broker receives no evidence-signing private key.
+
+The verifier reads release-specific root-owned files from
+`/var/lib/secret-broker/provider-contract-evidence/<release-sha>` and fixed
+signer configuration and keyring files under `/etc/secret-broker`,
+rejects symbolic links, writable parent directories, unsafe modes, unstable
+files, non-canonical JSON, key ambiguity, expired evidence and release or
+configuration drift. It queries the binding digest twice over the Broker-owned
+mode `0600` Unix health socket and rejects any change during verification. It
+emits only `provider_contract_evidence_ready=yes` or `no`. Missing evidence
+remains a production-preflight failure.
+
+The deployment helper validates candidate-SHA evidence before changing the
+managed release symlink. After switching, it restarts every release-bound
+signer, audit, policy and Broker service, waits on the protected Unix health
+socket, then runs all 22 production preflight checks. Any failure atomically
+returns the symlink to the previous release, restarts the previous workloads
+and verifies runtime readiness. The deployment remains failed even when
+availability is restored. Full rollback acceptance remains closed until fresh,
+release-specific evidence is issued; an expired prior receipt is never treated
+as successful security verification.
+
+## Evidence boundary
+
+This runner proves the bound provider principal, active read path and two
+authorization boundaries only.
+Provider-side credential or role revocation, rotation overlap, wrong-workload
+denial, regional outage behavior and audit continuity are separate required
+phases. A passing receipt alone must not change a provider manifest from
+`contract_required` to `production`.
+
+The signer protocol cores require the generation of the configuration actually
+loaded at construction time and return it only for a peer-authorized random
+challenge on the fixed Unix socket. Production preflight samples both signers
+before and after evidence verification and accepts only when those generations
+remain stable and equal the protected configuration hashes and the signed
+receipt. The probe returns no credential material and performs no provider
+request. A separate pre-start marker is not accepted because it would leave a
+configuration-open race.
+
+The release contains fail-closed signer command shells and exact configuration
+generation probes, but no production signing backend. The commands reject
+startup with `signing_identity_unavailable` until a separately reviewed
+KMS/HSM or workload-identity backend is installed. Protected configurations,
+isolated workload identities and real account receipts are still required
+before DQ-004 can close.
+
+The 2026-09-12 production capability probe did not run either provider
+operation: the deployed registry exposed only `broker.tools.inspect`, and both
+requested provider bindings were denied before execution. That result is a
+safe fail-closed observation, not a completed DQ-004 contract test.

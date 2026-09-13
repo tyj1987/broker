@@ -6,17 +6,14 @@ import { stdin as processStdin, stdout as processStdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createMcpTaskBridge } from './lib/mcp-task-bridge.js';
-import { redact } from './lib/redact.js';
+import { redact, redactDeep } from './lib/redact.js';
 
 const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const API_KEY_RE = /^mb_(?:live|test)_[0-9A-Za-z]{32}$/;
 const LISTENER_TOKEN_RE = /^[A-Za-z0-9_-]{43,128}$/;
 const TASK_PATH_RE = /^\/api\/v2\/(?:tools|tasks(?:\/[a-f0-9-]+(?:\/(?:run|cancel|events))?)?)$/;
-const ALLOWED_BROKER_ORIGINS = new Set([
-  'https://127.0.0.1:18443',
-  'https://broker.52trz.com',
-]);
+const ALLOWED_BROKER_ORIGINS = new Set(['https://127.0.0.1:18443', 'https://broker.52trz.com']);
 const SERVER_INFO = Object.freeze({
   name: 'secret-broker-mcp-server',
   version: '4.2.0',
@@ -71,14 +68,16 @@ function safeBrokerError(status, body) {
   let code = 'broker_request_failed';
   try {
     const parsed = JSON.parse(body);
-    const candidate = typeof parsed?.error === 'string'
-      ? parsed.error
-      : parsed?.error?.code || parsed?.code;
+    const candidate =
+      typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.code || parsed?.code;
     if (/^[a-z][a-z0-9_]{1,63}$/.test(candidate || '')) code = candidate;
   } catch {
     // Upstream bodies are intentionally omitted from MCP errors.
   }
-  return new Error(`Broker request failed (${status}, ${code})`);
+  const error = new Error(`Broker request failed (${status}, ${code})`);
+  error.code = code;
+  error.status = status;
+  return error;
 }
 
 export function createBrokerClient({
@@ -201,6 +200,15 @@ function rpcError(id, code, message) {
   return { jsonrpc: '2.0', id, error: { code, message } };
 }
 
+function safeMcpErrorCode(error, fallback = 'tool_execution_failed') {
+  const code = error?.code;
+  return typeof code === 'string' &&
+    /^[a-z][a-z0-9_]{1,63}$/.test(code) &&
+    !/(secret|password|private|canary|material)/i.test(code)
+    ? code
+    : fallback;
+}
+
 async function handleRpc(bridge, request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
     return rpcError(request?.id ?? null, -32600, 'Invalid JSON-RPC request');
@@ -217,21 +225,23 @@ async function handleRpc(bridge, request) {
   if (request.method === 'ping') return rpcResult(request.id, {});
   if (request.method === 'tools/list') {
     try {
-      return rpcResult(request.id, { tools: await bridge.listTools() });
+      return rpcResult(request.id, { tools: redactDeep(await bridge.listTools()) });
     } catch (error) {
-      return rpcError(request.id, -32603, redact(error.message));
+      return rpcError(request.id, -32603, safeMcpErrorCode(error, 'tool_list_failed'));
     }
   }
   if (request.method === 'tools/call') {
     try {
-      const data = await bridge.callTool(request.params?.name, request.params?.arguments || {});
+      const data = redactDeep(
+        await bridge.callTool(request.params?.name, request.params?.arguments || {}),
+      );
       return rpcResult(request.id, {
         content: [{ type: 'text', text: JSON.stringify(data) }],
         isError: false,
       });
     } catch (error) {
       return rpcResult(request.id, {
-        content: [{ type: 'text', text: `Error: ${redact(error.message)}` }],
+        content: [{ type: 'text', text: `Error: ${safeMcpErrorCode(error)}` }],
         isError: true,
       });
     }
@@ -239,7 +249,11 @@ async function handleRpc(bridge, request) {
   return rpcError(request.id, -32601, 'Method not found');
 }
 
-export function createMcpStdioServer({ bridge, input = processStdin, output = processStdout } = {}) {
+export function createMcpStdioServer({
+  bridge,
+  input = processStdin,
+  output = processStdout,
+} = {}) {
   if (!bridge || typeof bridge.listTools !== 'function' || typeof bridge.callTool !== 'function') {
     throw new TypeError('MCP bridge is invalid');
   }
@@ -286,21 +300,27 @@ export function createMcpStdioServer({ bridge, input = processStdin, output = pr
     while ((newline = buffer.indexOf(0x0a)) >= 0) {
       const line = buffer.subarray(0, newline).toString('utf8').replace(/\r$/, '');
       buffer = buffer.subarray(newline + 1);
-      pending = pending.then(() => processLine(line)).catch(() => {
-        write(rpcError(null, -32603, 'Internal error'));
-      });
+      pending = pending
+        .then(() => processLine(line))
+        .catch(() => {
+          write(rpcError(null, -32603, 'Internal error'));
+        });
     }
   });
   input.on('end', () => {
     if (stopped || buffer.byteLength === 0) return;
     const line = buffer.toString('utf8').replace(/\r$/, '');
     buffer = Buffer.alloc(0);
-    pending = pending.then(() => processLine(line)).catch(() => {
-      write(rpcError(null, -32603, 'Internal error'));
-    });
+    pending = pending
+      .then(() => processLine(line))
+      .catch(() => {
+        write(rpcError(null, -32603, 'Internal error'));
+      });
   });
   return Object.freeze({
-    get pending() { return pending; },
+    get pending() {
+      return pending;
+    },
   });
 }
 

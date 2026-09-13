@@ -43,7 +43,7 @@ async function handleExec(req, res, { send, jsonError, readBody, audit, ctx, con
   if (!command) return jsonError(res, 400, 'command required');
   let parsed;
   try { parsed = parseSshTarget(target); validateCommand(command); }
-  catch (e) { return jsonError(res, 400, e.message); }
+  catch (_e) { return jsonError(res, 400, 'ssh_request_invalid'); }
   const sName = secretName || secret_name || 'ssh.connection';
   let secret;
   try {
@@ -69,7 +69,7 @@ async function handleExec(req, res, { send, jsonError, readBody, audit, ctx, con
       target,
     });
   } catch (e) {
-    jsonError(res, 502, `ssh exec failed: ${e.message}`);
+    jsonError(res, 502, 'ssh_exec_failed');
   }
 }
 
@@ -105,12 +105,13 @@ async function handleTunnel(req, res, { send, jsonError, readBody, audit, ctx, c
       startedAt: t.startedAt,
     });
   } catch (e) {
-    jsonError(res, 400, `tunnel open failed: ${e.message}`);
+    jsonError(res, 400, 'ssh_tunnel_open_failed');
   }
 }
 
 async function handleTunnelStop(req, res, { send, jsonError, readBody, audit, ctx }) {
   if (!ctx?.client) return jsonError(res, 401, 'Authentication required');
+  if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
   const body = await readBody(req) || {};
   const { id } = body;
   if (!id) return jsonError(res, 400, 'id required');
@@ -121,6 +122,7 @@ async function handleTunnelStop(req, res, { send, jsonError, readBody, audit, ct
 
 async function handleTunnelList(res, { send, jsonError, ctx, config }) {
   if (!ctx?.client) return jsonError(res, 401, 'Authentication required');
+  if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
   const items = listTunnels();
   res.statusCode = 200;
   res.setHeader('content-type', 'application/json; charset=utf-8');

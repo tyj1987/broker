@@ -117,6 +117,14 @@ console.log('=== createSessionStore ===');
   store.clearLoginLock('u|pw');
   assert(store.checkLoginLock('u|pw') === true, 'cleared');
   assert(SESSION_TTL_MS === 10 * 60 * 1000, 'default TTL const');
+  for (const options of [
+    { ttlMs: Infinity }, { ttlMs: 0 }, { maxFails: 0 },
+    { lockoutMs: -1 }, { header: 'x-auth-token\n' }, { now: 1 },
+  ]) {
+    let rejected = false;
+    try { createSessionStore(options); } catch { rejected = true; }
+    assert(rejected, `malformed session options rejected: ${Object.keys(options)[0]}`);
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

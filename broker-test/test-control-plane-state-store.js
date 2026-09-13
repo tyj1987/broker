@@ -9,7 +9,7 @@ import {
   loadControlPlaneStateKey,
 } from '../broker/lib/control-plane-state-store.js';
 
-function component(initial) {
+function component(initial, validateRestoredState = null) {
   let state = structuredClone(initial);
   return {
     exportState: () => structuredClone(state),
@@ -17,6 +17,7 @@ function component(initial) {
       if (next?.reject === true) throw new Error('rejected state');
       state = structuredClone(next);
     },
+    ...(validateRestoredState ? { validateRestoredState } : {}),
   };
 }
 
@@ -45,7 +46,14 @@ try {
 
   const approvals = component({ version: 1, records: [{ id: 'approval-1' }] });
   const executionTokens = component({ version: 1, records: [{ id: 'execution-1' }] });
-  const tasks = component({ version: 1, tasks: [{ id: 'task-1' }], idempotency: [], rate_limits: [] });
+  let taskBindingValidations = 0;
+  const tasks = component(
+    { version: 1, tasks: [{ id: 'task-1' }], idempotency: [], rate_limits: [] },
+    (approvalState) => {
+      taskBindingValidations += 1;
+      assert.deepEqual(approvalState.records, [{ id: 'approval-1' }]);
+    },
+  );
   const operations = component({ version: 1, operations: [{ id: 'operation-1' }], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] });
   const coordinator = new ControlPlaneStateCoordinator({ approvals, executionTokens, tasks, operations, now: () => 1_700_000_000_000 });
   const store = new EncryptedControlPlaneStateStore({ path: statePath, key, coordinator });
@@ -77,7 +85,9 @@ try {
   executionTokens.restoreState({ version: 1, records: [] });
   tasks.restoreState({ version: 1, tasks: [], idempotency: [], rate_limits: [] });
   operations.restoreState({ version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] });
+  coordinator.generation = 0;
   assert.equal(store.load(), true);
+  assert.equal(taskBindingValidations, 1, 'task approval bindings are validated after component restore');
   assert.deepEqual(approvals.exportState().records, [{ id: 'approval-1' }]);
   assert.deepEqual(executionTokens.exportState().records, [{ id: 'execution-1' }]);
   assert.deepEqual(tasks.exportState().tasks, [{ id: 'task-1' }]);
@@ -88,6 +98,11 @@ try {
   assert.throws(
     () => coordinator.restoreState({ ...coordinator.exportState(), generation: 1 }),
     code('state_rollback_detected'),
+  );
+  assert.throws(
+    () => coordinator.restoreState({ ...coordinator.exportState(), generation: coordinator.generation }),
+    code('state_rollback_detected'),
+    'a snapshot from the active generation must not be replayed',
   );
   assert.throws(
     () => coordinator.restoreState({ ...coordinator.exportState(), approvals: [] }),

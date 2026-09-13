@@ -12,16 +12,18 @@
     "checked_at": { "type": "string", "format": "date" },
     "status": { "enum": ["draft", "contract_required", "production"] },
     "official_docs": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://" } },
-    "origins": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://[^/]+/?$" } },
+    "origins": { "type": "array", "minItems": 0, "items": { "type": "string", "format": "uri", "pattern": "^https://[^/]+/?$" } },
     "authentication": {
       "type": "object", "additionalProperties": false,
       "required": ["priority", "inject"],
       "properties": {
         "priority": { "type": "array", "minItems": 1, "items": { "type": "string" } },
         "inject": { "type": "object", "additionalProperties": { "type": "string" } },
+        "scope": { "type": "string", "minLength": 1 },
         "maximum_ttl_seconds": { "type": "integer", "minimum": 60 },
         "rotation": { "type": "string" },
-        "revocation": { "type": "string" }
+        "revocation": { "type": "string" },
+        "signer_boundary": { "type": "string", "minLength": 1 }
       }
     },
     "operations": {
@@ -43,13 +45,31 @@
       }
     },
     "redaction": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "authority_probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "method", "path_template", "mechanism", "output", "maximum_response_bytes"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,127}$" },
+        "method": { "enum": ["GET", "POST"] },
+        "path_template": { "type": "string", "pattern": "^/" },
+        "mechanism": { "enum": ["app_jwt", "signature_v3"] },
+        "output": { "const": "sha256_digests_only" },
+        "maximum_response_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    },
     "contract_test": {
       "type": "object", "additionalProperties": false,
       "required": ["account", "required", "last_result"],
       "properties": {
         "account": { "type": "string" }, "required": { "type": "boolean" },
-        "last_result": { "enum": ["not_run", "passed", "failed"] }
+        "last_result": { "enum": ["not_run", "passed", "failed"] },
+        "version": { "const": 2 },
+        "authority_attestation": { "const": "required" }
       }
+    },
+    "implementation_evidence": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
     }
   }
 }

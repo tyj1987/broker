@@ -4,6 +4,7 @@
 import { existsSync as nodeExistsSync } from 'node:fs';
 import { validatePolicyConditions } from './policy-conditions.js';
 import { validateParameterSchema } from './operation-policy.js';
+import { _rateLimitDimensions } from './rate-limit.js';
 
 /**
  * @typedef {{ level: 'error'|'warn', path: string, message: string }}
@@ -75,11 +76,11 @@ export function validateBrokerConfig(config, opts = {}) {
           errors.push({ level: 'error', path: `clients.${name}.factors.webauthn`, message: 'strict profile requires two non-synced hardware-bound credentials' });
         }
       }
-      if (c.rate_limit && typeof c.rate_limit === 'string' && !/^\d+\/(second|minute|hour|day)$/i.test(c.rate_limit)) {
-        warnings.push({
-          level: 'warn',
+      if (c.rate_limit !== undefined && _rateLimitDimensions(c.rate_limit) === null) {
+        errors.push({
+          level: 'error',
           path: `clients.${name}.rate_limit`,
-          message: `unusual rate_limit format: ${c.rate_limit}`,
+          message: 'invalid rate_limit policy',
         });
       }
     }
@@ -110,8 +111,61 @@ export function validateBrokerConfig(config, opts = {}) {
     }
   }
 
-  if (config.api_keys != null && typeof config.api_keys !== 'object') {
-    errors.push({ level: 'error', path: 'api_keys', message: 'must be object/array map' });
+  if (config.api_keys != null) {
+    if (typeof config.api_keys !== 'object') {
+      errors.push({ level: 'error', path: 'api_keys', message: 'must be object/array map' });
+    } else {
+      const entries = Array.isArray(config.api_keys)
+        ? config.api_keys.map((key, index) => [`[${index}]`, key])
+        : Object.entries(config.api_keys);
+      const seenIds = new Set();
+      const listFields = [
+        'scopes', 'child_scopes', 'allowed_secrets', 'allowed_services',
+        'allowed_operations', 'allowed_accounts', 'allowed_resources',
+        'allowed_environments', 'ip_whitelist',
+      ];
+      for (const [entryName, key] of entries) {
+        const path = `api_keys.${entryName}`;
+        if (!key || typeof key !== 'object' || Array.isArray(key)) {
+          errors.push({ level: 'error', path, message: 'must be an object' });
+          continue;
+        }
+        if (typeof key.id !== 'string' || key.id.length === 0) {
+          errors.push({ level: 'error', path: `${path}.id`, message: 'id is required' });
+        } else if (seenIds.has(key.id)) {
+          errors.push({ level: 'error', path: `${path}.id`, message: 'duplicate id' });
+        } else {
+          seenIds.add(key.id);
+        }
+        if (typeof key.client !== 'string' || key.client.length === 0) {
+          errors.push({ level: 'error', path: `${path}.client`, message: 'client is required' });
+        }
+        for (const field of listFields) {
+          if (key[field] !== undefined && (!Array.isArray(key[field])
+            || key[field].some((value) => typeof value !== 'string' || value.length === 0))) {
+            errors.push({ level: 'error', path: `${path}.${field}`, message: 'must be an array of non-empty strings' });
+          }
+        }
+        if (key.rate_limit !== undefined && _rateLimitDimensions(key.rate_limit) === null) {
+          errors.push({ level: 'error', path: `${path}.rate_limit`, message: 'invalid rate_limit policy' });
+        }
+        for (const field of ['expires_at', 'revoked_at', 'created_at', 'last_used_at']) {
+          if (key[field] !== undefined && key[field] !== null
+            && (typeof key[field] !== 'string' || !Number.isFinite(Date.parse(key[field])))) {
+            errors.push({ level: 'error', path: `${path}.${field}`, message: 'must be an ISO timestamp' });
+          }
+        }
+        if (key.fingerprint_sha256 !== undefined
+          && (typeof key.fingerprint_sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(key.fingerprint_sha256))) {
+          errors.push({ level: 'error', path: `${path}.fingerprint_sha256`, message: 'must be a SHA-256 hex digest' });
+        }
+        for (const field of ['is_master', 'can_create_child']) {
+          if (key[field] !== undefined && typeof key[field] !== 'boolean') {
+            errors.push({ level: 'error', path: `${path}.${field}`, message: 'must be boolean' });
+          }
+        }
+      }
+    }
   }
 
   if (
@@ -188,6 +242,41 @@ export function validateBrokerConfig(config, opts = {}) {
 
   const ok = errors.length === 0 && (!opts.strict || warnings.length === 0);
   return { ok, errors, warnings };
+}
+
+/**
+ * Normalize legacy object-map API keys at the configuration boundary. The
+ * runtime key store and management routes operate on arrays; keeping this
+ * conversion next to validation prevents a config that passes preflight from
+ * silently disabling every bearer key at runtime.
+ */
+export function normalizeBrokerConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
+  if (config.api_keys && typeof config.api_keys === 'object' && !Array.isArray(config.api_keys)) {
+    config.api_keys = Object.values(config.api_keys);
+  }
+  return config;
+}
+
+/**
+ * Validate one admin client mutation against the complete candidate config.
+ * Runtime mutations must share the same fail-closed rules as startup and
+ * reload; validating only the submitted fragment misses global invariants.
+ */
+export function validateClientMutationCandidate(config, name, client, opts = {}) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)
+    || typeof name !== 'string' || !name
+    || !client || typeof client !== 'object' || Array.isArray(client)) {
+    return {
+      ok: false,
+      errors: [{ level: 'error', path: 'clients', message: 'client mutation candidate is invalid' }],
+      warnings: [],
+    };
+  }
+  return validateBrokerConfig({
+    ...config,
+    clients: { ...(config.clients || {}), [name]: client },
+  }, opts);
 }
 
 export function requireValidBrokerConfig(config, opts = {}) {

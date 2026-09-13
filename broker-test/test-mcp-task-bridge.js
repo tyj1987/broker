@@ -19,14 +19,21 @@ const LISTENER_TOKEN = 'B'.repeat(43);
 const executable = {
   name: 'google_drive.document.read',
   version: '1.0.0',
-  description: 'Read one filtered document.',
+  description: 'Read one filtered document with sk-proj-canary-secret-token-1234567890.',
   risk_level: 'MEDIUM',
   environments: ['production'],
   input_schema: {
     type: 'object',
     additionalProperties: false,
     required: ['resource_ref'],
-    properties: { resource_ref: { type: 'string' } },
+    properties: {
+      resource_ref: {
+        type: 'string',
+        description: 'Use sk-proj-schema-canary-secret-token-1234567890 only for tests.',
+        default: 'Bearer sk-proj-schema-canary-secret-token-1234567890',
+        examples: ['https://private.example/sk-proj-schema-canary-secret-token-1234567890'],
+      },
+    },
   },
 };
 
@@ -57,9 +64,20 @@ const bridge = createMcpTaskBridge({
   callBroker: async (path, options) => {
     calls.push([path, options]);
     if (path === '/api/v2/tools') return { registry_version: 1, tools: [executable] };
-    if (path === '/api/v2/tasks') return { id: TASK_ID, state: createState };
+    if (path === '/api/v2/tasks')
+      return {
+        id: TASK_ID,
+        state: createState,
+        token: 'canary-secret-token',
+        result: { authorization: 'Bearer canary-secret-token' },
+      };
     if (path.endsWith('/events')) return { events: [] };
-    return { id: TASK_ID, state: path.endsWith('/cancel') ? 'CANCELLED' : 'SUCCEEDED' };
+    return {
+      id: TASK_ID,
+      state: path.endsWith('/cancel') ? 'CANCELLED' : 'SUCCEEDED',
+      token: 'canary-secret-token',
+      result: { authorization: 'Bearer canary-secret-token' },
+    };
   },
 });
 const tools = await bridge.listTools();
@@ -67,6 +85,10 @@ assert.equal(tools.length, MCP_CONTROL_TOOLS.length + 1);
 const driveTool = tools.find((tool) => tool.name.startsWith('broker_execute__'));
 assert.equal(driveTool.name, 'broker_execute__google_drive_document_read__v1_0_0');
 assert.equal(driveTool.inputSchema.additionalProperties, false);
+assert.equal(driveTool.description.includes('sk-proj-canary-secret-token'), false);
+const projectedSchema = JSON.stringify(driveTool.inputSchema.properties.resource_ref);
+assert.equal(projectedSchema.includes('schema-canary-secret-token'), false);
+assert.equal(projectedSchema.includes('sk-proj-***'), true);
 assert.deepEqual(driveTool.inputSchema.required, [
   'account_ref',
   'environment',
@@ -82,6 +104,8 @@ const completed = await bridge.callTool(driveTool.name, {
   resource_ref: '1AbCdEfGhIjKlMnOpQrStUvWxYz',
 });
 assert.equal(completed.state, 'SUCCEEDED');
+assert.equal(completed.token, '[REDACTED]');
+assert.equal(completed.result.authorization, '[REDACTED]');
 assert.deepEqual(calls[1], [
   '/api/v2/tasks',
   {
@@ -139,6 +163,28 @@ for (const invalidRegistry of [
   { registry_version: 1, tools: {} },
   { registry_version: 1, tools: [null] },
   { registry_version: 1, tools: [{ ...executable, version: 'latest' }] },
+  { registry_version: 1, tools: [{ ...executable, risk_level: 'ROOT' }] },
+  { registry_version: 1, tools: [{ ...executable, environments: ['production', 'unknown'] }] },
+  { registry_version: 1, tools: [{ ...executable, environments: ['production', 'production'] }] },
+  {
+    registry_version: 1,
+    tools: [
+      { ...executable, input_schema: { ...executable.input_schema, required: 'resource_ref' } },
+    ],
+  },
+  {
+    registry_version: 1,
+    tools: [{ ...executable, input_schema: { ...executable.input_schema, required: ['missing'] } }],
+  },
+  {
+    registry_version: 1,
+    tools: [
+      {
+        ...executable,
+        input_schema: { ...executable.input_schema, required: ['resource_ref', 'resource_ref'] },
+      },
+    ],
+  },
   {
     registry_version: 1,
     tools: [
@@ -242,12 +288,16 @@ await assert.rejects(
   brokerClientForResponse({ statusCode: 403, chunks: ['{"error":{"code":"policy_denied"}}'] })(
     '/api/v2/tools',
   ),
-  /403, policy_denied/,
+  (error) =>
+    error.code === 'policy_denied' &&
+    error.status === 403 &&
+    /403, policy_denied/.test(error.message),
 );
 await assert.rejects(
-  brokerClientForResponse({ statusCode: 409, chunks: ['{"error":"invalid_state","message":"not executable"}'] })(
-    '/api/v2/tasks/00000000-0000-4000-8000-000000000010/run', { method: 'POST', body: {} },
-  ),
+  brokerClientForResponse({
+    statusCode: 409,
+    chunks: ['{"error":"invalid_state","message":"not executable"}'],
+  })('/api/v2/tasks/00000000-0000-4000-8000-000000000010/run', { method: 'POST', body: {} }),
   /409, invalid_state/,
 );
 await assert.rejects(
@@ -295,15 +345,18 @@ createMcpHttpServer({
     return { listen() {} };
   },
 });
-async function httpRequest({
-  host = '127.0.0.1:3001',
-  origin,
-  authorization = `Bearer ${LISTENER_TOKEN}`,
-  body = '{}',
-  url = '/mcp',
-  method = 'POST',
-  contentType = 'application/json',
-} = {}) {
+async function invokeHttpRequest(
+  handler,
+  {
+    host = '127.0.0.1:3001',
+    origin,
+    authorization = `Bearer ${LISTENER_TOKEN}`,
+    body = '{}',
+    url = '/mcp',
+    method = 'POST',
+    contentType = 'application/json',
+  } = {},
+) {
   const request = new EventEmitter();
   request.method = method;
   request.url = url;
@@ -321,13 +374,16 @@ async function httpRequest({
       observed.body = value;
     },
   };
-  const pending = httpHandler(request, response);
+  const pending = handler(request, response);
   queueMicrotask(() => {
     request.emit('data', Buffer.from(body));
     request.emit('end');
   });
   await pending;
   return observed;
+}
+async function httpRequest(options = {}) {
+  return invokeHttpRequest(httpHandler, options);
 }
 assert.equal((await httpRequest({ origin: 'https://attacker.invalid' })).status, 403);
 assert.equal((await httpRequest({ host: 'attacker.invalid:3001' })).status, 403);
@@ -390,6 +446,36 @@ const rpcCall = await httpRequest({
   }),
 });
 assert.equal(JSON.parse(rpcCall.body).result.isError, false);
+let rawHttpHandler;
+createMcpHttpServer({
+  bridge: {
+    async listTools() {
+      return [{ name: 'raw', token: 'sk-proj-http-boundary-canary-1234567890' }];
+    },
+    async callTool() {
+      return { authorization: 'Bearer sk-proj-http-boundary-canary-1234567890' };
+    },
+  },
+  listenerToken: LISTENER_TOKEN,
+  port: 3001,
+  createServerImpl: (handler) => {
+    rawHttpHandler = handler;
+    return { listen() {} };
+  },
+});
+const rawList = await invokeHttpRequest(rawHttpHandler, {
+  body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list' }),
+});
+assert.doesNotMatch(rawList.body, /sk-proj-http-boundary-canary/);
+const rawCall = await invokeHttpRequest(rawHttpHandler, {
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 8,
+    method: 'tools/call',
+    params: { name: 'raw', arguments: {} },
+  }),
+});
+assert.doesNotMatch(rawCall.body, /sk-proj-http-boundary-canary/);
 const rpcCallFailure = await httpRequest({
   body: JSON.stringify({
     jsonrpc: '2.0',
@@ -410,22 +496,66 @@ for (const port of [0, 65_536, 1.5]) {
 const stdioInput = new PassThrough();
 const stdioOutput = new PassThrough();
 let stdioText = '';
-stdioOutput.on('data', (chunk) => { stdioText += chunk.toString('utf8'); });
+stdioOutput.on('data', (chunk) => {
+  stdioText += chunk.toString('utf8');
+});
 const stdioServer = createMcpStdioServer({ bridge, input: stdioInput, output: stdioOutput });
 stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'initialize' })}\n`);
 stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
 stdioInput.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/list' })}\n`);
 await stdioServer.pending;
-const stdioMessages = stdioText.trim().split('\n').map((line) => JSON.parse(line));
-assert.deepEqual(stdioMessages.map((message) => message.id), [11, 12]);
-assert.match(stdioMessages[0].result.instructions, /Never request, print, store or infer credentials/);
-assert.equal(stdioMessages[1].result.tools.some((tool) => tool.name === driveTool.name), true);
+const stdioMessages = stdioText
+  .trim()
+  .split('\n')
+  .map((line) => JSON.parse(line));
+assert.deepEqual(
+  stdioMessages.map((message) => message.id),
+  [11, 12],
+);
+assert.match(
+  stdioMessages[0].result.instructions,
+  /Never request, print, store or infer credentials/,
+);
+assert.equal(
+  stdioMessages[1].result.tools.some((tool) => tool.name === driveTool.name),
+  true,
+);
 stdioText = '';
 stdioInput.write('not-json\n');
 stdioInput.write('[]\n');
 await stdioServer.pending;
-const stdioErrors = stdioText.trim().split('\n').map((line) => JSON.parse(line));
-assert.deepEqual(stdioErrors.map((message) => message.error.code), [-32700, -32600]);
+const stdioErrors = stdioText
+  .trim()
+  .split('\n')
+  .map((line) => JSON.parse(line));
+assert.deepEqual(
+  stdioErrors.map((message) => message.error.code),
+  [-32700, -32600],
+);
+
+const failingMcpInput = new PassThrough();
+const failingMcpOutput = new PassThrough();
+let failingMcpText = '';
+failingMcpOutput.on('data', (chunk) => {
+  failingMcpText += chunk.toString('utf8');
+});
+const failingMcp = createMcpStdioServer({
+  bridge: {
+    async listTools() {
+      throw new Error('canary-secret /srv/private/key.pem');
+    },
+    async callTool() {
+      throw new Error('canary-secret /srv/private/key.pem');
+    },
+  },
+  input: failingMcpInput,
+  output: failingMcpOutput,
+});
+failingMcpInput.write('{"jsonrpc":"2.0","id":21,"method":"tools/list"}\n');
+failingMcpInput.write('{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"x"}}\n');
+await failingMcp.pending;
+assert.doesNotMatch(failingMcpText, /canary-secret|\/srv\/private/);
+assert.match(failingMcpText, /tool_list_failed|tool_execution_failed/);
 assert.throws(() => createMcpStdioServer({ input: stdioInput, output: stdioOutput }), /bridge/);
 assert.throws(() => createMcpStdioServer({ bridge, input: {}, output: stdioOutput }), /streams/);
 

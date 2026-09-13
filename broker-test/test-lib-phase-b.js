@@ -39,6 +39,8 @@ console.log('=== createRateLimiter ===');
   assert(check('k1', '2/hour') === true, 'second allow');
   assert(check('k1', '2/hour') === false, 'third deny');
   assert(check('k2', '2/hour') === true, 'other key independent');
+  assert(check('bad', 'not-a-rate') === false, 'malformed rate fails closed');
+  assert(check('open', 'unlimited') === true, 'explicit unlimited remains open');
 }
 
 console.log('=== zip CRC + buildZip ===');

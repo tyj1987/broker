@@ -1,6 +1,8 @@
 // broker-test/test-phase-e-ops.js
 import {
   validateBrokerConfig,
+  normalizeBrokerConfig,
+  validateClientMutationCandidate,
   requireValidBrokerConfig,
   formatValidationReport,
   preflightPaths,
@@ -48,6 +50,39 @@ console.log('=== validateBrokerConfig ===');
     },
   });
   assert(good.ok === true && good.errors.length === 0, 'good config');
+
+  const mappedKeys = {
+    api_keys: { first: { id: 'first', client: 'admin' }, second: { id: 'second', client: 'admin' } },
+  };
+  assert(normalizeBrokerConfig(mappedKeys) === mappedKeys, 'config normalization preserves object identity');
+  assert(Array.isArray(mappedKeys.api_keys) && mappedKeys.api_keys.length === 2, 'legacy API key map normalizes to array');
+
+  const validApiKey = validateBrokerConfig({
+    clients: { admin: { role: 'admin' } },
+    api_keys: [{
+      id: 'key-1', client: 'admin', scopes: ['services:proxy'],
+      allowed_services: ['github'], rate_limit: { hour: 10 },
+      expires_at: '2026-09-12T12:00:00.000Z',
+      fingerprint_sha256: 'a'.repeat(64),
+    }],
+  });
+  assert(validApiKey.ok === true, 'valid persisted API key');
+
+  const malformedApiKeys = [
+    { id: 'key-1', client: 'admin', rate_limit: {} },
+    { id: 'key-2', client: 'admin', allowed_services: [''] },
+    { id: 'key-3', client: 'admin', expires_at: 'not-a-timestamp' },
+    { id: 'key-4', client: 'admin', fingerprint_sha256: 'short' },
+  ];
+  for (const [index, key] of malformedApiKeys.entries()) {
+    const result = validateBrokerConfig({ clients: { admin: { role: 'admin' } }, api_keys: [key] });
+    assert(result.ok === false, `malformed persisted API key ${index + 1} fails closed`);
+  }
+
+  const malformedClientRate = validateBrokerConfig({
+    clients: { admin: { role: 'admin', rate_limit: {} } },
+  });
+  assert(malformedClientRate.ok === false, 'malformed client rate limit fails closed');
 
   const providerAccounts = validateBrokerConfig({
     clients: {},
@@ -177,6 +212,14 @@ console.log('=== validateBrokerConfig ===');
   const exampleBootstrap = validateBrokerConfig(example, { allowWebAuthnBootstrap: true });
   assert(exampleBootstrap.ok === true, 'strict example is valid only with non-production bootstrap');
   assert(validateBrokerConfig(example).ok === false, 'strict example fails closed in production before two hardware keys');
+
+  const mutationBase = { clients: { admin: { role: 'admin' } }, services: {} };
+  assert(validateClientMutationCandidate(mutationBase, 'developer', { role: 'developer' }).ok === true,
+    'valid client mutation is accepted');
+  assert(validateClientMutationCandidate(mutationBase, 'broken', {}).ok === false,
+    'client mutation without role fails closed');
+  assert(validateClientMutationCandidate(mutationBase, 'broken', null).ok === false,
+    'null client mutation fails closed');
 }
 
 console.log('=== preflightPaths ===');

@@ -70,11 +70,11 @@ async function assumeAliyun(oidcToken, opts, http) {
     body: params.toString(),
   });
   if (res.status !== 200) {
-    throw new Error(`aliyun sts ${res.status}: ${res.body.slice(0, 300)}`);
+    throw new Error(`aliyun sts ${res.status} request failed`);
   }
   const parsed = JSON.parse(res.body);
   if (!parsed.Credentials) {
-    throw new Error(`aliyun sts: no Credentials in response: ${res.body.slice(0, 200)}`);
+    throw new Error('aliyun sts: response missing Credentials');
   }
   const c = parsed.Credentials;
   return {
@@ -106,13 +106,13 @@ async function assumeAws(oidcToken, opts, http) {
     body: params.toString(),
   });
   if (res.status !== 200) {
-    throw new Error(`aws sts ${res.status}: ${res.body.slice(0, 300)}`);
+    throw new Error(`aws sts ${res.status} request failed`);
   }
   // AWS STS 200 也可能返回 XML 错误嵌套,需要先看 root
   const parsed = JSON.parse(res.body);
   const inner = parsed.AssumeRoleWithWebIdentityResult;
   if (!inner || !inner.Credentials) {
-    throw new Error(`aws sts: no Credentials: ${res.body.slice(0, 200)}`);
+    throw new Error('aws sts: response missing Credentials');
   }
   const c = inner.Credentials;
   return {
@@ -144,11 +144,11 @@ async function assumeGcp(oidcToken, opts, http) {
     body,
   });
   if (res.status !== 200) {
-    throw new Error(`gcp sts ${res.status}: ${res.body.slice(0, 300)}`);
+    throw new Error(`gcp sts ${res.status} request failed`);
   }
   const parsed = JSON.parse(res.body);
   if (!parsed.access_token) {
-    throw new Error(`gcp sts: no access_token: ${res.body.slice(0, 200)}`);
+    throw new Error('gcp sts: response missing access_token');
   }
   // Google token 响应给 expires_in (秒),换算为 ISO
   const expiresAtMs = Date.now() + (parsed.expires_in * 1000);
@@ -173,12 +173,32 @@ const PROVIDER_HANDLERS = {
  * Convert a V4 response to a normalized credentials object with expires_at_ms.
  */
 function normalizeExpiry(creds) {
-  if (creds.expires_at_ms) return creds;
-  if (creds.expiration) {
-    const t = new Date(creds.expiration).getTime();
-    return { ...creds, expires_at_ms: isNaN(t) ? Date.now() + 3600_000 : t };
+  if (!creds || typeof creds !== 'object') throw new Error('workload identity response missing credentials');
+  if (Object.prototype.hasOwnProperty.call(creds, 'expires_at_ms')) {
+    if (!Number.isSafeInteger(creds.expires_at_ms) || creds.expires_at_ms <= Date.now()) {
+      throw new Error('workload identity response has invalid expiration');
+    }
+    return creds;
   }
-  return { ...creds, expires_at_ms: Date.now() + 3600_000 };
+  if (typeof creds.expiration === 'string' && creds.expiration.length > 0) {
+    const t = new Date(creds.expiration).getTime();
+    if (!Number.isSafeInteger(t) || t <= Date.now()) throw new Error('workload identity response has invalid expiration');
+    return { ...creds, expires_at_ms: t };
+  }
+  throw new Error('workload identity response missing expiration');
+}
+
+function validateCredentialMaterial(creds, provider) {
+  if (typeof creds.access_key_id !== 'string' || creds.access_key_id.length === 0) {
+    throw new Error(`${provider} workload identity response missing access key id`);
+  }
+  if (provider !== 'gcp' && (typeof creds.access_key_secret !== 'string' || creds.access_key_secret.length === 0)) {
+    throw new Error(`${provider} workload identity response missing access key secret`);
+  }
+  if (typeof creds.security_token !== 'string' || creds.security_token.length === 0) {
+    throw new Error(`${provider} workload identity response missing security token`);
+  }
+  return creds;
 }
 
 function cacheKey(provider, opts) {
@@ -223,7 +243,7 @@ export async function getCredentials(provider, oidcToken, opts = {}, deps = {}) 
   const handler = PROVIDER_HANDLERS[provider];
   const promise = (async () => {
     const credsRaw = await handler(oidcToken, opts, http);
-    const creds = normalizeExpiry(credsRaw);
+    const creds = validateCredentialMaterial(normalizeExpiry(credsRaw), provider);
     TOKEN_CACHE.set(key, { creds, expires_at_ms: creds.expires_at_ms });
     return creds;
   })();

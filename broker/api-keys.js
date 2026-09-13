@@ -4,11 +4,11 @@
 // 设计：
 //   - 格式: mb_<env>_<random> (32 字符 base62)
 //     env: live / test
-//   - secret 只显示一次，存 SHA-256 hash
+//   - secret 只显示一次，存 SHA-256 fingerprint
 //   - 字段:
 //     id, name, client (归属), scopes, allowed_secrets, allowed_services,
 //     rate_limit, expires_at, created_at, created_by,
-//     fingerprint (SHA-256 of secret), revoked_at (可选)
+//     fingerprint (SHA-256 of a CSPRNG-generated secret), revoked_at (可选)
 //     ip_whitelist (可选 string[]): 精确 IP 或 CIDR；空 = 不限制
 //
 // API:
@@ -26,12 +26,21 @@ import { isIpAllowed, normalizeIp } from './lib/ip-allowlist.js';
 const ENV = process.env.NODE_ENV === 'production' ? 'live' : 'test';
 const KEY_PREFIX = 'mb';
 const KEY_RANDOM_LEN = 32;  // base62
+const KEY_SECRET_PATTERN = /^mb_(?:live|test)_[0-9A-Za-z]{32}$/;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;  // 24h
 // v3.0 M3.3: Master Key 用于 MCP Server auto-refresh child keys
 const DEFAULT_MASTER_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // 30d
 const DEFAULT_CHILD_TTL_SECONDS = 60 * 60;  // 1h
 const MASTER_KEY_SCOPES = ['keys:issue_child'];  // master key 只能创建子 key，不能直接调 service
 const DEFAULT_CHILD_SCOPES = ['secrets:resolve', 'services:proxy'];
+
+function normalizeStringList(value, field) {
+  const list = value === undefined ? [] : value;
+  if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item.length === 0)) {
+    throw new TypeError(`API key ${field} must be an array of non-empty strings`);
+  }
+  return [...list];
+}
 
 // V4.0 任务 6: 多维度限额
 // 历史 v3 rate_limit 字段是 "100/hour" 字符串;V4 支持每分钟/小时/天 三个维度
@@ -65,6 +74,19 @@ export function normalizeRateLimit(rl) {
   return null;
 }
 
+function isValidRateLimitInput(rl) {
+  if (rl == null || rl === 'unlimited') return true;
+  if (typeof rl === 'string') return Object.hasOwn(RATE_LIMIT_PRESETS, rl);
+  if (!rl || typeof rl !== 'object' || Array.isArray(rl)) return false;
+  const keys = Object.keys(rl);
+  if (keys.length === 0 || keys.some((name) => !['minute', 'hour', 'day'].includes(name))) return false;
+  return keys.every((name) => rl[name] == null || (Number.isSafeInteger(rl[name]) && rl[name] >= 0));
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0);
+}
+
 // ============================================================
 // helpers
 // ============================================================
@@ -82,6 +104,26 @@ function genRandomBase62(len) {
  * @returns {{ id, secret, fingerprint, key_obj }}
  */
 export function generateApiKey(name, client, opts = {}) {
+  const scopes = opts.scopes === undefined
+    ? (opts.is_master ? MASTER_KEY_SCOPES : DEFAULT_CHILD_SCOPES)
+    : opts.scopes;
+  const childScopes = opts.child_scopes === undefined ? DEFAULT_CHILD_SCOPES : opts.child_scopes;
+  if (!Array.isArray(scopes) || scopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
+    throw new TypeError('API key scopes must be an array of non-empty strings');
+  }
+  if (!Array.isArray(childScopes) || childScopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
+    throw new TypeError('API key child_scopes must be an array of non-empty strings');
+  }
+  const allowedSecrets = normalizeStringList(opts.allowed_secrets, 'allowed_secrets');
+  const allowedServices = normalizeStringList(opts.allowed_services, 'allowed_services');
+  const allowedOperations = normalizeStringList(opts.allowed_operations, 'allowed_operations');
+  const allowedAccounts = normalizeStringList(opts.allowed_accounts, 'allowed_accounts');
+  const allowedResources = normalizeStringList(opts.allowed_resources, 'allowed_resources');
+  const allowedEnvironments = normalizeStringList(opts.allowed_environments, 'allowed_environments');
+  const ipWhitelist = opts.ip_whitelist == null ? null : normalizeStringList(opts.ip_whitelist, 'ip_whitelist');
+  if (!isValidRateLimitInput(opts.rate_limit)) {
+    throw new TypeError('API key rate_limit is invalid');
+  }
   const random = genRandomBase62(KEY_RANDOM_LEN);
   const secret = `${KEY_PREFIX}_${ENV}_${random}`;
   const fingerprint = createHash('sha256').update(secret).digest('hex');
@@ -96,15 +138,15 @@ export function generateApiKey(name, client, opts = {}) {
     id,
     name: name || 'unnamed',
     client,  // 归属的 client name
-    scopes: opts.scopes || (opts.is_master ? MASTER_KEY_SCOPES : DEFAULT_CHILD_SCOPES),
-    allowed_secrets: opts.allowed_secrets || [],
-    allowed_services: opts.allowed_services || [],
-    allowed_operations: opts.allowed_operations || [],
-    allowed_accounts: opts.allowed_accounts || [],
-    allowed_resources: opts.allowed_resources || [],
-    allowed_environments: opts.allowed_environments || [],
+    scopes,
+    allowed_secrets: allowedSecrets,
+    allowed_services: allowedServices,
+    allowed_operations: allowedOperations,
+    allowed_accounts: allowedAccounts,
+    allowed_resources: allowedResources,
+    allowed_environments: allowedEnvironments,
     rate_limit: opts.rate_limit || '100/hour',
-    ip_whitelist: opts.ip_whitelist || null,
+    ip_whitelist: ipWhitelist,
     fingerprint_sha256: fingerprint,
     created_at: now.toISOString(),
     created_by: opts.created_by || client,
@@ -116,7 +158,7 @@ export function generateApiKey(name, client, opts = {}) {
     is_master: !!opts.is_master,
     can_create_child: !!opts.is_master,  // 只能 master 创建 child
     default_child_ttl_seconds: opts.default_child_ttl_seconds || DEFAULT_CHILD_TTL_SECONDS,
-    child_scopes: opts.child_scopes || DEFAULT_CHILD_SCOPES,
+    child_scopes: childScopes,
     parent_master_id: opts.parent_master_id || null,  // 子 key 记录归属 master
   };
   return { id, secret, fingerprint, key_obj };
@@ -130,7 +172,7 @@ export function generateMasterKey(name, client, opts = {}) {
     ...opts,
     is_master: true,
     ttl_ms: opts.ttl_ms || DEFAULT_MASTER_TTL_MS,
-    scopes: opts.scopes || MASTER_KEY_SCOPES,
+    scopes: MASTER_KEY_SCOPES,
   });
 }
 
@@ -172,6 +214,18 @@ export function isClientIpAllowed(k, remoteIp) {
 export function createChildKey(cfgKeys, master, name, opts = {}) {
   const check = canCreateChild(master);
   if (!check.ok) return { ok: false, reason: check.reason };
+
+  for (const field of ['allowed_secrets', 'allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_resources', 'allowed_environments', 'ip_whitelist']) {
+    if (opts[field] !== undefined && opts[field] !== null && !isStringArray(opts[field])) {
+      return { ok: false, reason: `invalid_${field}` };
+    }
+  }
+  if (opts.scopes !== undefined && !isStringArray(opts.scopes)) {
+    return { ok: false, reason: 'invalid_scopes' };
+  }
+  if (!isValidRateLimitInput(master.rate_limit) || !isValidRateLimitInput(opts.rate_limit)) {
+    return { ok: false, reason: 'invalid_rate_limit' };
+  }
 
   let childScopes = opts.scopes || master.child_scopes || DEFAULT_CHILD_SCOPES;
   if (Array.isArray(childScopes) && Array.isArray(master.child_scopes)) {
@@ -274,12 +328,18 @@ export function parseBearer(authHeader) {
  * @returns {object|null} key obj or null
  */
 export function findApiKey(cfgKeys, secret) {
-  if (!cfgKeys || !Array.isArray(cfgKeys) || !secret) return null;
+  if (!cfgKeys || !Array.isArray(cfgKeys) || typeof secret !== 'string'
+      || !KEY_SECRET_PATTERN.test(secret)) return null;
+
+  // This is a lookup fingerprint of a uniformly generated ~190-bit bearer token,
+  // not a user-selected password. A password KDF would add unauthenticated CPU cost
+  // without materially improving resistance to exhaustive search of this keyspace.
+  // codeql[js/insufficient-password-hash]
   const fp = createHash('sha256').update(secret).digest('hex');
   const k = cfgKeys.find(x => x.fingerprint_sha256 === fp);
   if (!k) return null;
   if (k.revoked_at) return null;
-  if (k.expires_at && new Date(k.expires_at) < new Date()) return null;
+  if (isExpired(k)) return null;
   return k;
 }
 
@@ -288,10 +348,10 @@ export function findApiKey(cfgKeys, secret) {
  */
 export function canResolveSecret(k, secretName) {
   if (!k || !k.scopes || !k.scopes.includes('secrets:resolve')) return false;
-  if (Array.isArray(k.allowed_secrets) && k.allowed_secrets.length > 0) {
-    if (!k.allowed_secrets.includes(secretName)) return false;
-  }
-  return true;
+  return Array.isArray(k.allowed_secrets)
+    && k.allowed_secrets.length > 0
+    && typeof secretName === 'string'
+    && k.allowed_secrets.includes(secretName);
 }
 
 /**
@@ -299,18 +359,19 @@ export function canResolveSecret(k, secretName) {
  */
 export function canProxyService(k, serviceName) {
   if (!k || !k.scopes || !k.scopes.includes('services:proxy')) return false;
-  if (Array.isArray(k.allowed_services) && k.allowed_services.length > 0) {
-    if (!k.allowed_services.includes(serviceName)) return false;
-  }
-  return true;
+  return Array.isArray(k.allowed_services)
+    && k.allowed_services.length > 0
+    && typeof serviceName === 'string'
+    && k.allowed_services.includes(serviceName);
 }
 
 /**
  * 检查 API Key 是否过期
  */
-export function isExpired(k) {
-  if (!k.expires_at) return false;
-  return new Date(k.expires_at) < new Date();
+export function isExpired(k, now = Date.now()) {
+  if (!k || typeof k.expires_at !== 'string' || k.expires_at.length === 0) return true;
+  const expiresAt = Date.parse(k.expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt <= now;
 }
 
 /**

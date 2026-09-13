@@ -1,12 +1,13 @@
 manifest_version: 1
 id: aliyun
 display_name: Alibaba Cloud
-checked_at: 2026-09-11
+checked_at: 2026-09-13
 status: contract_required
 official_docs:
   - https://www.alibabacloud.com/help/en/ram/use-cases/ensure-security-of-alibaba-cloud-resources
   - https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-assumerolewithoidc
   - https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature
+  - https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-getcalleridentity
   - https://www.alibabacloud.com/help/en/ecs/developer-reference/api-ecs-2014-05-26-describeinstances
 origins: [https://ecs.cn-hangzhou.aliyuncs.com, https://sts.aliyuncs.com]
 authentication:
@@ -26,7 +27,14 @@ operations:
     fixed_headers: { x-acs-action: DescribeInstances, x-acs-version: "2014-05-26" }
     maximum_response_bytes: 2097152
 redaction: [Authorization, AccessKeyId, AccessKeySecret, SecurityToken, Signature]
-contract_test: { account: isolated_ram_role, required: true, last_result: not_run }
+authority_probe:
+  id: sts.caller-identity.read
+  method: POST
+  path_template: /
+  mechanism: signature_v3
+  output: sha256_digests_only
+  maximum_response_bytes: 262144
+contract_test: { version: 2, account: isolated_ram_role, authority_attestation: required, required: true, last_result: not_run }
 implementation_evidence:
   signature_v3_official_vector: passed
   isolated_account_contract: not_run

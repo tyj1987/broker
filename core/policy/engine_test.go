@@ -61,6 +61,14 @@ func TestEvaluateFailsClosedForEveryDimension(t *testing.T) {
 	}
 }
 
+func TestEvaluateRequiresResourceWhenRuleBindsResource(t *testing.T) {
+	subject, request, rule := baseline()
+	request.Resource = ""
+	if decision := Evaluate(subject, request, rule); decision.Code != "resource_denied" {
+		t.Fatalf("expected empty resource denial, got %#v", decision)
+	}
+}
+
 func TestEvaluateRiskFloor(t *testing.T) {
 	subject, request, rule := baseline()
 	request.RiskLevel = "HIGH"
@@ -86,6 +94,27 @@ func TestEvaluateRiskFloor(t *testing.T) {
 	request.ApprovalCount = 2
 	if decision := Evaluate(subject, request, rule); !decision.Allow {
 		t.Fatalf("expected stepped-up human CRITICAL request, got %#v", decision)
+	}
+}
+
+func TestEvaluateRejectsMalformedApprovalBounds(t *testing.T) {
+	subject, request, rule := baseline()
+	rule.RequiredApprovals = -1
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_rule" {
+		t.Fatalf("expected malformed negative approval rule denial, got %#v", decision)
+	}
+	rule.RequiredApprovals = 11
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_rule" {
+		t.Fatalf("expected oversized approval rule denial, got %#v", decision)
+	}
+	rule.RequiredApprovals = 0
+	request.ApprovalCount = -1
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_request" {
+		t.Fatalf("expected malformed negative approval count denial, got %#v", decision)
+	}
+	request.ApprovalCount = 11
+	if decision := Evaluate(subject, request, rule); decision.Code != "invalid_request" {
+		t.Fatalf("expected oversized approval count denial, got %#v", decision)
 	}
 }
 
@@ -124,6 +153,18 @@ func TestDelegationCannotExpandParent(t *testing.T) {
 	child.Providers = []string{"github", "openai"}
 	if err := ValidateDelegation(parent, child); err == nil {
 		t.Fatal("expanded child delegation was allowed")
+	}
+	child = parent
+	child.ID = "api-key-child"
+	child.Role = "admin"
+	if err := ValidateDelegation(parent, child); err == nil {
+		t.Fatal("child role escalation was allowed")
+	}
+	child = parent
+	child.ID = "api-key-child"
+	child.SecurityProfile = "compatible"
+	if err := ValidateDelegation(parent, child); err == nil {
+		t.Fatal("child security profile downgrade was allowed")
 	}
 }
 

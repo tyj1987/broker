@@ -112,7 +112,7 @@ jobs:
           cache-dependency-path: sdk/python/requirements-test.txt
       - run: python -m pip install -r requirements-test.txt
       - run: python -m pip_audit --strict -r requirements-test.txt
-      - run: python -m pytest tests -q
+      - run: python -m pytest tests -q -p no:cacheprovider --basetemp=.pytest-tmp-sdk
 
   documentation:
     name: Documentation
@@ -162,21 +162,45 @@ jobs:
         with:
           go-version: '1.27.1'
           cache-dependency-path: core/go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - run: go test -race -coverprofile=coverage.out ./policy
-      - name: Enforce core line coverage
+      - name: Enforce core statement coverage
         run: |
           test "$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race -coverprofile=signer-coverage.out ./githubsigner
-      - name: Enforce signer protocol line coverage
+      - name: Enforce signer protocol statement coverage
         run: |
           test "$(go tool cover -func=signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=aliyun-signer-coverage.out ./aliyunsigner
+      - name: Enforce Alibaba signer protocol statement coverage
+        run: |
+          test "$(go tool cover -func=aliyun-signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - name: Test provider signer process boundaries
+        run: go test -race ./cmd/github-signer ./cmd/aliyun-signer ./internal/socketactivation ./internal/trustedconfig
       - run: go test -race -coverprofile=provider-credential-coverage.out ./providercredential
-      - name: Enforce provider credential protocol line coverage
+      - name: Enforce provider credential protocol statement coverage
         run: |
           test "$(go tool cover -func=provider-credential-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-anchor-coverage.out ./auditanchor
+      - name: Enforce audit anchor protocol statement coverage
+        run: |
+          test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-store-coverage.out ./auditstore
+      - name: Enforce audit store protocol statement coverage
+        run: |
+          test "$(go tool cover -func=audit-store-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-chain-coverage.out ./auditchain
+      - name: Enforce audit chain verifier statement coverage
+        run: |
+          test "$(go tool cover -func=audit-chain-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race ./cmd/audit-chain-check
+      - name: Verify Node and Go audit-chain compatibility
+        run: node ../broker-test/test-audit-chain-go-parity.js
       - run: go test -race ./server
       - run: go build ./...
 
@@ -423,10 +447,23 @@ jobs:
           > /tmp/broker-rendered.yaml
       - run: bash -n deploy/bin/secret-broker-deploy
       - run: node --check deploy/bin/secret-broker-production-preflight.mjs
+      - run: node broker-test/test-audit-systemd-units.js
       - run: node broker-test/test-production-preflight.js
+      - name: Test isolated provider signer release permissions
+        run: |
+          sudo bash broker-test/test-provider-signer-release-permissions.sh
+          if sudo env BROKER_TEST_OPEN_CROSS_ACCESS=1 bash broker-test/test-provider-signer-release-permissions.sh; then
+            echo 'release permission test accepted cross-signer access' >&2
+            exit 1
+          fi
       - name: Verify deployment helper fail-closed invariants
         run: |
           grep -Fq 'policy core is not active' deploy/bin/secret-broker-deploy
+          grep -Fq 'secret-broker-audit-signer.service' deploy/bin/secret-broker-deploy
+          grep -Fq 'secret-broker-audit-exporter.service' deploy/bin/secret-broker-deploy
+          grep -Fq 'secret-broker-audit-store.service' deploy/bin/secret-broker-deploy
+          grep -Fq 'secret-broker-audit-recovery.service' deploy/bin/secret-broker-deploy
+          grep -Fq 'audit service identity does not match the pinned contract' deploy/bin/secret-broker-deploy
           grep -Fq 'proxy_ssl_verify[[:space:]]+off' deploy/bin/secret-broker-deploy
           grep -Fq '/etc/secret-broker/pki/ca' deploy/bin/secret-broker-deploy
           grep -Fq '/etc/secret-broker/pki/clients' deploy/bin/secret-broker-deploy

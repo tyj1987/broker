@@ -32,16 +32,121 @@ continue.
 
 ## DQ-003: independent audit anchor
 
-- Status: open
+- Status: accepted; implementation and live evidence pending
+- Decision authority: the user approved the recommended design on 2026-09-12.
+  This approval selects the architecture but does not approve cloud resource
+  creation, production cutover, or deployment of an unverified release.
 - Needed before: production acceptance
-- Decision: select the independently administered immutable store and KMS or
-  HSM identity used to sign retained audit-chain heads. The signing identity
-  must not be available to the Broker application process.
+- Decision: use a non-exportable Alibaba Cloud KMS signing key behind an
+  independently owned signer workload, publish signed heads to an independently
+  administered Alibaba Cloud OSS bucket locked with BucketWorm for 365 days,
+  and mirror the same signed envelopes to a separate Tencent Cloud COS account
+  with per-object COMPLIANCE retention of at least 365 days. The mirror is an
+  explicit typed worker because neither cloud provides native continuous
+  cross-cloud replication. The signing identity must not be available to the
+  Broker application process.
 - Required evidence: signed-head verification, suffix and full-chain deletion
   detection, signer revocation, clock rollback, storage outage, retention-lock
   enforcement and disaster-recovery tests.
-- Current safe default: restart-safe local chain verification; no claim of
-  independent non-repudiation.
+- Current safe default: restart-safe local chain verification plus a
+  provider-neutral signed-head envelope, fail-closed verifier, fixed,
+  ownership-checked Unix-socket signer client, and provider-neutral export
+  coordinator. The coordinator verifies every signature before publication,
+  uses the previous anchor digest for compare-and-set, and makes same-chain
+  retries idempotent without sending audit content or private key material.
+  A fixed-head, bounded-page recovery verifier checks every retained anchor
+  from sequence one against its local historical chain proof.
+  Deterministic tests cover payload/signature tampering, signer trust and
+  revocation, predecessor/sequence continuity, clock and count rollback,
+  retained anchors on growing chains, publication conflicts, signer/store
+  outages, incomplete recovery and recovery bounds. The Go `auditanchor`
+  protocol core now validates the fixed purpose, algorithm, key, stream,
+  sequence, previous anchor digest, payload digest and version 2
+  domain-separated signing input before an injected independent authority or
+  KMS backend can be called. Its monotonic authorizer uses a linearizable
+  compare-and-swap state contract to reject forks, gaps, rewinds and corrupt
+  state while allowing an exact retry. It authenticates the local peer on Linux
+  and returns only stable error codes. Its Alibaba KMS adapter now binds the
+  approved `ECDSA_SHA_256` and `DIGEST` request to the exact configured key and
+  rejects malformed P-256 DER signatures and mismatched response metadata.
+  The Go immutable-writer contract now rejects arbitrary object keys and
+  headers, independently verifies the v2 ECDSA P-256 signature against the
+  configured stream and a bounded trusted-key sequence epoch, verifies Locked
+  365-day BucketWorm with versioning disabled before an OSS
+  create-without-overwrite request, requires COS Object Lock with versioning
+  enabled, applies per-object COMPLIANCE retention for at least 365 days, and
+  reads back identical canonical bytes and retention metadata from both clouds.
+  Sequence epochs preserve historical verification across safe key rotation
+  while refusing anchors outside a key's authorization window. Each sequence
+  uses one digest-independent immutable key, so a
+  conflicting same-sequence payload cannot evade create-without-overwrite by
+  choosing another digest. Sequence N additionally requires identical,
+  canonical and retained sequence N-1 copies in both clouds with the committed
+  predecessor digest. Tests cover exact creation, idempotent retries, content
+  conflicts, malformed envelopes, missing or divergent predecessors and every
+  storage-control failure boundary.
+  Official SDK transports now pin Alibaba OSS Go SDK v2 `v1.6.0` and Tencent
+  COS Go SDK v5 `v0.7.75`, bind each client to one exact bucket and region,
+  reject custom/insecure OSS routing and mismatched/non-HTTPS COS BucketURLs,
+  reduce provider errors to stable failures, enforce bounded read-back and
+  cancellation, and expose no delete or retention-policy mutation capability.
+  Transport tests
+  cover exact requests, immutable duplicate handling, object-lock headers,
+  response bounds, invalid provider responses and internal cancellation
+  boundaries. A separate, hermetically tested store protocol now binds a fixed
+  stream and purpose to `publish`, `read_head`, `read_page` and `health`, uses
+  exact non-root exporter/recovery UID roles, bounds pages and wire sizes, and
+  independently verifies returned envelopes. Its fixed-path Node client maps
+  only those operations to the existing exporter and recovery contracts. The
+  socket boundary does not by itself resolve restart-safe dual-cloud head
+  discovery or independently prove recovery freshness. This source checkpoint
+  adds bounded OSS/COS object-key pagination and a provider-backed repository
+  that derives the contiguous common sequence from both clouds without a
+  Broker-host head. It permits only one repairable primary-only tail and rejects
+  gaps, mirror leads, content divergence, invalid retention and pagination
+  exhaustion. A conflicting retry may be reported only after the existing
+  primary tail is mirrored and read back. Repository operations serialize
+  through a context-cancellable gate. The default and hard enumeration
+  capacities are 128,000 and 512,000 anchors respectively; capacity alerting,
+  stream rollover and lifecycle after retention expiry remain operational
+  design gaps. CI enforces Go statement coverage, while the 85 percent
+  branch-coverage release evidence remains open. Runnable signer/store services,
+  immutable buckets, mirror worker, credentials, retention locks and recovery
+  authority are not deployed yet, so there is no claim of independent
+  non-repudiation and RR-012 remains open.
+  The OSS bounded read contract accepts `206 Partial Content` only when the
+  response metadata proves the range is the complete object; this corrects the
+  prior source path that rejected normal OSS range reads. The 22-item production
+  preflight now combines store process liveness with an exact fresh health probe
+  executed as the recovery UID, so an active placeholder cannot assert verified
+  lock or mirror state.
+  A strict non-secret service configuration, injected cloud-client factory,
+  fixed Linux Unix-socket lifecycle and bounded health helper are now source
+  implemented. The configuration accepts no provider endpoint or credential
+  source and requires distinct OSS/COS provider profile identifiers plus
+  non-overlapping P-256 verification-key epochs. Its Linux loader pins a
+  root-managed path and verifies ownership, write protection, no-follow open and
+  file identity. The store socket rejects concurrent active instances and only
+  reclaims a same-owner stale endpoint. The checked-in default factory returns
+  `identity_unavailable`. The hermetic container build stage now compiles the
+  audit-store service and bounded health helper, but intentionally does not copy
+  them into the Node production image or ECS release payload. No live cloud
+  identity, bucket or retention lock has been created. Packaging remains blocked
+  until the independent service identities can execute only their own binaries,
+  deployment atomically restarts and verifies the exact audit processes, and
+  rollback proves the prior audit runtime is executable. The 22-item production
+  preflight now binds each audit service's `MainPID` executable to the exact
+  binary below the active release; an old, deleted or alternate-path process
+  cannot satisfy the existing active-service gates. Linux peer/socket E2E and
+  the existing provider-backed repository tests remain the current CI evidence
+  point. A bounded Go read-only audit-chain verifier and historical proof
+  reader now provide the local-chain dependency needed by a future Go exporter
+  and recovery authority. CI constructs the chain with Node and requires Go
+  compatibility across Unicode, number and historical-anchor cases. The Go
+  reader fails closed on non-I-JSON input and is not yet packaged or used by
+  the production deployment helper. A runtime switch remains blocked on real
+  retained-chain parity, a quiet filesystem snapshot, exact release packaging
+  and rollback evidence.
 
 ## DQ-004: provider signing and account-binding authority
 
@@ -106,6 +211,63 @@ continue.
   explicitly verified policy and an ownership-checked local signer socket, and
   fails startup when either is missing. The isolated TC3 signer service, CAM
   role authority and account contract test remain required before activation.
+  A source-only version 2 contract runner now validates one exact GitHub or
+  Alibaba Cloud read-only binding through the real `/api/v2/tasks` path. The
+  same execution-bound signer path first calls a fixed GitHub App installation
+  identity endpoint or Alibaba Cloud STS `GetCallerIdentity`; adapters release
+  only SHA-256 principal digests and a bounded principal type. The protected
+  plan supplies expected digests, and a mismatch fails before a receipt can be
+  issued. Alibaba signer protocol version 3 additionally binds the identity and
+  ECS signatures to one opaque credential lease; drift is rejected before the
+  business request leaves the Broker, and invalid business parameters cannot
+  trigger the identity probe. Its Go protocol core independently enforces the
+  fixed operation, account, environment, resource, region, execution and
+  request bindings before an injected backend can sign. The remaining checks
+  cover bounded secret-free
+  output plus wrong-account and wrong-resource denials. Credentials are accepted only from
+  operator-supplied files and the receipt contains no account, resource,
+  principal or digest. The 2026-09-12 production probe was denied before
+  provider execution because neither tool is deployed, so no real account contract has passed;
+  revocation and rotation remain separate required phases.
+  The source deployment contract now assigns GitHub and Alibaba Cloud signers
+  distinct fixed users, groups, runtime directories and socket paths. The
+  22-item production preflight no longer accepts an environment variable that
+  makes the GitHub signer optional: its single provider-signer gate requires
+  both services and root-owned socket units, exact identities, exact
+  `0750`/`0660` boundaries, unique numeric UID/GID values, Broker group-only
+  access, exact runtime supplementary-group allowlists, actual process
+  credentials, stable processes and executables bound to the active release.
+  The privileged deployment account is also included in numeric collision
+  checks. The collected production gate now invokes a release-bound verifier
+  for canonical, detached-Ed25519 signed evidence. The evidence binds the
+  exact release SHA, current provider configuration generation, exact protected
+  signer-authority configuration generations, both bounded read receipts,
+  their plan digests and provider-side audit reference digests;
+  unsafe, missing, stale or mismatched files fail closed without exposing
+  evidence contents. Evidence expires after at most 15 minutes and the verifier
+  double-samples the Broker generation through its independently owned mode
+  `0600` Unix socket. The verifier has only a root-owned public keyring, never an evidence-signing
+  private key. The Node clients use the same future paths.
+  Both signer protocol cores now require a loaded-authority generation and
+  expose it only through a peer-authorized, random-challenge probe on their
+  fixed Unix sockets. Production preflight double-samples those responses
+  inside the stable process/release window and requires them to match both the
+  protected configuration hashes and the signed evidence. A separate pre-start
+  marker remains unacceptable because it leaves an open-file race.
+  The release now builds both signer command shells. Each command accepts only
+  its fixed root-owned configuration path, computes the reported generation
+  from the exact bytes loaded through a no-symlink ownership boundary, accepts
+  exactly one named systemd socket, and authorizes the fixed non-root Broker
+  peer. Signer configuration files are non-secret but isolated as exact
+  `0640 root:provider-signer-group` files; the two groups must differ, and the
+  shared parent grants only explicit execute traversal. Release binaries use
+  per-signer POSIX ACLs so each workload can traverse to and execute only its
+  own binary without joining the Broker group or reading the release tree. The
+  shipped backend factory intentionally returns
+  `signing_identity_unavailable`; it has no file-key or environment-token
+  fallback. This prepares, but does not perform, DQ-009. No cloud signing
+  authority, protected configuration or signed isolated-account receipt exists
+  yet, so the gate intentionally fails in production and DQ-004 remains open.
 
 ## DQ-005: SSH target, host-key and certificate authority
 
@@ -192,8 +354,20 @@ continue.
   rejection of every old identity, successful read-only typed operation,
   secret-free audit output, and a timed rollback rehearsal.
 - Current safe default: keep the legacy service available for existing users,
-  deny protected CD, and continue source/staging work. Do not copy the old key
-  hierarchy into the hardened layout or use it to satisfy the preflight.
+  deny protected CD, and continue source/staging work. A strict source-only
+  plan validator now requires the maintenance window, distinct CA
+  fingerprints, offline/HSM authority, two independently verified management
+  paths, exact nginx trusted-proxy binding, enrolled client owners, immutable
+  rollback boundary, external evidence and separate authorization. Its safe
+  report omits fingerprints and evidence references. This is preparation only:
+  no production plan has been populated or approved and no identity has been
+  switched. Do not copy the old key hierarchy into the hardened layout or use
+  it to satisfy the preflight.
+  The candidate source now reserves separate GitHub and Alibaba Cloud signer
+  runtime paths and validates them in the production preflight. This path
+  preparation changes no live service, account, socket or trust root. Activating
+  either path remains part of the maintenance-window report and requires the
+  explicit pre-cutover approval described above.
 
 ## DQ-010: DeepSeek credential authority and usage controls
 

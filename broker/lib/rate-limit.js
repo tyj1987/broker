@@ -1,39 +1,77 @@
-// broker/lib/rate-limit.js — in-memory sliding-window rate limiters
-// Phase B extraction from server.js.
+const WINDOWS_MS = {
+  minute: 60_000,
+  hour: 3_600_000,
+  day: 86_400_000,
+};
 
-/**
- * Parse "100/hour" | "10/minute" | "1000/day" | "unlimited".
- * @param {string} limit
- * @returns {{ max: number, windowMs: number }|null} null = unlimited / invalid → allow
- */
+// Kept for the extracted helper's public compatibility surface.  Runtime
+// request paths use consumeRateLimit below, which distinguishes malformed
+// policies from unlimited and fails closed.
 export function parseRateLimit(limit) {
   if (!limit || limit === 'unlimited') return null;
-  const m = String(limit).match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return null;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
-  return { max, windowMs };
+  const match = String(limit).match(/^(\d+)\/(hour|minute|day)$/);
+  if (!match) return null;
+  const max = Number(match[1]);
+  if (!Number.isSafeInteger(max)) return null;
+  return { max, windowMs: WINDOWS_MS[match[2]] };
+}
+
+export function createRateLimiter() {
+  const buckets = new Map();
+  return (key, limit) => {
+    if (limit == null || limit === 'unlimited') return true;
+    const parsed = parseRateLimit(limit);
+    if (!parsed) return false;
+    return consumeRateLimit(limit, key, buckets);
+  };
+}
+
+function dimensions(limit) {
+  if (limit === 'unlimited' || limit == null) return [];
+  if (typeof limit === 'string') {
+    const match = /^(\d+)\/(hour|minute|day)$/.exec(limit);
+    if (!match) return null;
+    return [{ max: Number(match[1]), windowMs: WINDOWS_MS[match[2]] }];
+  }
+  if (limit === null || typeof limit !== 'object' || Array.isArray(limit)) return null;
+  const keys = Object.keys(limit);
+  // An explicit object must name at least one supported dimension.  Treating
+  // {} or an object containing only unknown fields as unlimited would turn a
+  // malformed persisted policy into a fail-open configuration.
+  if (keys.length === 0 || keys.some((name) => !Object.hasOwn(WINDOWS_MS, name))) return null;
+  const result = [];
+  for (const name of Object.keys(WINDOWS_MS)) {
+    const value = limit[name];
+    if (value == null) continue;
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    result.push({ max: value, windowMs: WINDOWS_MS[name] });
+  }
+  return result;
 }
 
 /**
- * Create a rate-limit checker with its own bucket map.
- * @returns {(key: string, limit: string) => boolean}
+ * Consume one request from a string or multi-dimensional rate limit.
+ * Invalid configuration fails closed; successful consumption is atomic for all dimensions.
  */
-export function createRateLimiter() {
-  const buckets = new Map();
-  return function check(key, limit) {
-    const parsed = parseRateLimit(limit);
-    if (!parsed) return true;
-    const { max, windowMs } = parsed;
-    const now = Date.now();
-    const bucket = buckets.get(key) || [];
-    const fresh = bucket.filter(t => now - t < windowMs);
-    if (fresh.length >= max) {
+export function consumeRateLimit(limit, key, buckets, now = Date.now()) {
+  if (!(buckets instanceof Map) || typeof key !== 'string' || key.length === 0
+    || !Number.isFinite(now)) return false;
+  const configured = dimensions(limit);
+  if (configured === null) return false;
+  if (configured.length === 0) return true;
+  const previous = buckets.get(key) || [];
+  const oldestWindow = Math.max(...configured.map((entry) => entry.windowMs));
+  const fresh = previous.filter((timestamp) => Number.isSafeInteger(timestamp) && now - timestamp < oldestWindow);
+  for (const entry of configured) {
+    const count = fresh.filter((timestamp) => now - timestamp < entry.windowMs).length;
+    if (count >= entry.max) {
       buckets.set(key, fresh);
       return false;
     }
-    fresh.push(now);
-    buckets.set(key, fresh);
-    return true;
-  };
+  }
+  fresh.push(now);
+  buckets.set(key, fresh);
+  return true;
 }
+
+export const _rateLimitDimensions = dimensions;

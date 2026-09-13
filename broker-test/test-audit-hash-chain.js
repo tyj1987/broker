@@ -24,6 +24,7 @@ import {
   verifyChain,
   verifyAuditDir,
   createChainWriter,
+  loadAuditChainProofSync,
   loadAuditChainStateSync,
   GENESIS_HASH,
 } from '../broker/lib/audit-hash-chain.js';
@@ -224,6 +225,29 @@ section('14. production chain resumes and rejects corruption');
   let tampered = false;
   try { loadAuditChainStateSync(WORK, { chainOnly: true }); } catch (error) { tampered = /verification failed/.test(error.message); }
   ok('tampered chained log fails closed', tampered);
+}
+
+section('15. retained anchors resolve inside a growing chain');
+
+{
+  const WORK = mkdtempSync(join(tmpdir(), 'broker-chain-proof-'));
+  process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
+  const e1 = sealEvent({ action: 'one' }, GENESIS_HASH);
+  const e2 = sealEvent({ action: 'two' }, e1.hash);
+  const e3 = sealEvent({ action: 'three' }, e2.hash);
+  writeFileSync(join(WORK, 'audit-chain-2026-09-09.jsonl'), `${JSON.stringify(e1)}\n${JSON.stringify(e2)}\n`);
+  writeFileSync(join(WORK, 'audit-chain-2026-09-10.jsonl'), `${JSON.stringify(e3)}\n`);
+  const proof = loadAuditChainProofSync(WORK, 2);
+  ok('proof verifies the complete current chain', proof.count === 3 && proof.lastHash === e3.hash);
+  ok('proof resolves the historical head', proof.hashAtAnchor === e2.hash);
+  ok('proof binds files present at capture', proof.filesAtAnchor === 1 && proof.files === 2);
+  const missing = loadAuditChainProofSync(WORK, 4);
+  ok('future anchor count has no local proof', missing.hashAtAnchor === null && missing.filesAtAnchor === null);
+  const genesis = loadAuditChainProofSync(WORK, 0);
+  ok('genesis proof is explicit', genesis.hashAtAnchor === GENESIS_HASH && genesis.filesAtAnchor === 0);
+  let invalidCount = false;
+  try { loadAuditChainProofSync(WORK, -1); } catch (error) { invalidCount = error instanceof TypeError; }
+  ok('invalid anchor count fails closed', invalidCount);
 }
 
 // ---------- summary ----------

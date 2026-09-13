@@ -1,16 +1,22 @@
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const DECISION_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 function listOr(value, fallback) {
   return Array.isArray(value) && value.length > 0 ? [...value] : [...fallback];
 }
 
-function approvalsFor(ctx, provider, operationId, accountRef, now) {
+function approvalsFor(ctx, actorName, provider, operationId, accountRef, environment, resource, now) {
   const approvers = new Set();
   for (const grant of ctx?.approvalGrants || []) {
-    if (grant?.provider !== provider || grant.operation_id !== operationId || grant.account_ref !== accountRef) continue;
-    if (Number(grant.expires_at_ms) <= now || !grant.approved_by || grant.approved_by === ctx.clientName) continue;
+    if (grant?.provider !== provider || grant.operation_id !== operationId || grant.account_ref !== accountRef
+      || grant.environment !== environment || grant.resource_ref !== resource) continue;
+    const expiresAt = grant.expires_at_ms;
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= now
+      || typeof grant.approved_by !== 'string' || grant.approved_by.length === 0
+      || grant.approved_by === actorName) continue;
     approvers.add(grant.approved_by);
   }
   return approvers.size;
@@ -27,6 +33,10 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
   const riskLevel = tool?.risk_level || '';
   const key = ctx.apiKey;
   const resource = typeof typedParameters.resource_ref === 'string' ? typedParameters.resource_ref : '';
+  if (policy.ttl_seconds !== undefined
+    && (!Number.isSafeInteger(policy.ttl_seconds) || policy.ttl_seconds < 0)) {
+    throw new Error('invalid ttl_seconds policy');
+  }
   const policyTTL = Math.min(Math.max(Number(policy.ttl_seconds || 300) * 1000, 10_000), 900_000);
   const operationValues = (key?.allowed_operations || []).map((value) => {
     const prefix = `${provider}:`;
@@ -36,7 +46,11 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
   const accountValues = listOr(key?.allowed_accounts, listOr(client.allowed_accounts, policy.accounts));
   const resourceValues = listOr(key?.allowed_resources, listOr(client.allowed_resources, policy.resources || []));
   const environmentValues = listOr(key?.allowed_environments, listOr(client.allowed_environments, policy.environments));
-  const configuredApprovals = Math.max(Number(policy.required_approvals || 0), policy.approval_required ? 1 : 0);
+  const configuredApprovalsInput = policy.required_approvals === undefined ? 0 : policy.required_approvals;
+  if (!Number.isSafeInteger(configuredApprovalsInput) || configuredApprovalsInput < 0 || configuredApprovalsInput > 10) {
+    throw new Error('invalid required_approvals policy');
+  }
+  const configuredApprovals = Math.max(configuredApprovalsInput, policy.approval_required ? 1 : 0);
   return {
     subject: {
       id: identity.name,
@@ -66,7 +80,7 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
       environment,
       requested_ttl_ms: Math.min(Number(preliminary.ttlMs || policyTTL), policyTTL),
       step_up: (ctx.authFactors || []).includes('webauthn'),
-      approval_count: approvalsFor(ctx, provider, operationId, accountRef, now),
+      approval_count: approvalsFor(ctx, identity.name, provider, operationId, accountRef, environment, resource, now),
       approval_phase: options.ignoreApproval === true,
       source_ip: ctx.sourceIp || '',
       at: new Date(now).toISOString(),
@@ -97,6 +111,7 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
 export function evaluateWithCore(socketPath, payload, timeoutMs = 2_000) {
   return new Promise((resolve) => {
     const encoded = Buffer.from(JSON.stringify(payload));
+    const requestBinding = createHash('sha256').update(encoded).digest('base64url');
     const request = http.request({
       socketPath,
       path: '/v1/evaluate',
@@ -119,8 +134,29 @@ export function evaluateWithCore(socketPath, payload, timeoutMs = 2_000) {
         try {
           if (response.statusCode !== 200) return resolve({ allow: false, reason: 'core_rejected' });
           const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          if (typeof value.allow !== 'boolean' || typeof value.code !== 'string') throw new Error('invalid policy response');
-          resolve({ allow: value.allow, reason: value.code, ttlMs: Number(value.ttl_ms) || undefined });
+          const keys = Object.keys(value || {}).sort().join(',');
+          const requestedTTL = payload?.request?.requested_ttl_ms;
+          if (
+            keys !== 'allow,code,request_binding,ttl_ms' ||
+            typeof value.allow !== 'boolean' ||
+            !DECISION_CODE_RE.test(value.code || '') ||
+            value.request_binding !== requestBinding ||
+            !Number.isSafeInteger(value.ttl_ms) ||
+            (value.allow && (
+              value.code !== 'allowed' ||
+              value.ttl_ms < 1 ||
+              !Number.isSafeInteger(requestedTTL) ||
+              value.ttl_ms > requestedTTL
+            )) ||
+            (!value.allow && (value.code === 'allowed' || value.ttl_ms !== 0))
+          ) {
+            throw new Error('invalid policy response');
+          }
+          resolve({
+            allow: value.allow,
+            reason: value.code,
+            ttlMs: value.allow ? value.ttl_ms : undefined,
+          });
         } catch {
           resolve({ allow: false, reason: 'core_invalid_response' });
         }
@@ -140,10 +176,13 @@ export function createOperationAuthorizer(configSource, options = {}) {
     if (!socketPath) return requireCore ? { allow: false, reason: 'core_required' } : preliminary;
     const config = typeof configSource === 'function' ? configSource() : configSource;
     if (!config) return { allow: false, reason: 'core_config_missing' };
-    const decision = await evaluateWithCore(
-      socketPath,
-      corePolicyPayload(config, operation, preliminary, Date.now(), evaluationOptions),
-    );
+    let payload;
+    try {
+      payload = corePolicyPayload(config, operation, preliminary, Date.now(), evaluationOptions);
+    } catch {
+      return { allow: false, reason: 'core_config_invalid' };
+    }
+    const decision = await evaluateWithCore(socketPath, payload);
     if (!decision.allow) return decision;
     return { ...preliminary, ttlMs: Math.min(Number(preliminary.ttlMs || 900_000), decision.ttlMs) };
   };

@@ -2,6 +2,46 @@
 
 This document records observed evidence separately from planned controls. Passing source tests does not approve a production release.
 
+## Current Goal checkpoint (2026-09-13)
+
+Draft PR [#30](https://github.com/tyj1987/broker/pull/30) now carries the active
+`codex/next-control-plane-clean` candidate. Its provider-signer deployment
+boundary reserves separate GitHub and Alibaba Cloud users, groups, runtime
+directories and root-owned systemd Unix sockets. The existing 22-item production
+preflight keeps one aggregate provider-signer gate, but that gate is no longer
+optional: both socket units and services must be active, and both services must
+have exact and numerically distinct configured and runtime identities, protected
+final socket metadata, exact supplementary-group allowlists, stable processes
+and executables bound to the current release. The deployment account is part of
+the numeric collision check. The collection path now requires a canonical,
+detached-Ed25519 signed evidence file that binds both isolated-account receipts
+to the exact release SHA, current provider configuration generation and both
+protected signer authority configurations. The evidence is valid for no more
+than 15 minutes and configuration is double-sampled over a Broker-owned Unix
+socket. Missing, expired, unsafe or mismatched evidence fails closed, so unit and process
+metadata alone cannot produce a green production result.
+
+The signer protocol cores now expose the generation of the configuration they
+actually loaded through a peer-authorized random-challenge probe. Preflight
+samples both signers before and after evidence verification and requires those
+values to remain stable and match both the protected configuration files and
+the signed receipt. This closes the source-level open-file race without a
+separate pre-start marker.
+
+This is source and automated-test preparation only. No runnable signer executable,
+cloud authority, protected signer configuration or isolated-account contract
+receipt has been deployed. The live preflight must therefore remain red until
+those dependencies are implemented and independently verified. No DQ-009 trust
+domain or socket cutover is authorized by this checkpoint.
+
+The deployment helper is prepared to validate candidate-SHA evidence before
+the symlink switch and to run the complete 22-item preflight after restarting
+all release-bound workloads. A post-switch failure restores the previous
+symlink and workloads, then verifies runtime readiness. The deployment still
+fails, and full production acceptance remains closed until fresh evidence for
+the restored release is available. This is source-only preparation; it does
+not authorize an actual production cutover.
+
 ## Current rollout checkpoint (2026-09-11)
 
 The current source and deployed release baseline is
@@ -27,10 +67,10 @@ suite at commit `df1d0f05b28257ee07d6d80dd5bb78128c598a1d`, which was squash
 merged into the baseline above.
 
 The next source candidate is
-`codex/goal-current-state@d57946ea600305819bcb8822dca14e8fb81ed16f`,
+`codex/goal-current-state@f4c0a68aee825bf1010cbcd2a3294baafb4c1820`,
 tracked in draft PR
-[#29](https://github.com/tyj1987/broker/pull/29). Its single PR CI run
-[`34540657300`](https://github.com/tyj1987/broker/actions/runs/34540657300)
+[#29](https://github.com/tyj1987/broker/pull/29). Its final PR CI run
+[`34544480711`](https://github.com/tyj1987/broker/actions/runs/34544480711)
 completed successfully. That run covered the Node and Go security boundaries,
 SDKs, desktop and mobile clients, CodeQL, secret-history and dependency scans,
 Terraform, the production container runtime policy, Trivy and SBOM generation.
@@ -111,15 +151,16 @@ environment files and credential values were not opened or printed.
 
 ## Production blockers observed
 
-| Severity | Evidence | Required remediation |
-|---|---|---|
-| P0 | Effective nginx configuration uses `proxy_ssl_verify off` for Broker upstream locations. | Enable CA and hostname verification, deploy the dedicated nginx workload certificate, and regression-test forged headers and direct backend access. |
-| P0 | CA private keys and multiple final-client private keys are stored together on the Broker host, including an old CA backup; the deployed config has no trusted-proxy fingerprint allowlist. | Replace the full CA hierarchy through an offline ceremony, re-enroll every client, revoke the old trust domain, remove all CA/client private keys from the host, and verify old identities are rejected. |
-| P0 | Production still runs the pre-upgrade `master@450c3ed` Node boundary while the Go policy service is inactive. Current branch security fixes and decision enforcement are not deployed. | Complete staging and credential-rotation gates, then deploy one digest-addressed release with the Go policy service required and verify fail-closed behavior. |
-| P1 | `secret-broker.service` runs as `root`. | Run under a dedicated locked system account with only the required writable paths. |
-| P1 | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present. | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment. |
-| P1 | nginx 1.20.1 is the active production version. | Move to a vendor-supported security-maintained release and record the package provenance. |
-| P2 | Broker listens only on `127.0.0.1:8443`, which prevents direct public access, but it has no separate observed `9080` health listener in the live configuration. | Deploy and verify the loopback-only health listener used by the hardened workflow. |
+| Severity | Evidence                                                                                                                                                                                                                                   | Required remediation                                                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0       | Effective nginx configuration uses `proxy_ssl_verify off` for Broker upstream locations.                                                                                                                                                   | Enable CA and hostname verification, deploy the dedicated nginx workload certificate, and regression-test forged headers and direct backend access.                                                              |
+| P0       | CA private keys and multiple final-client private keys are stored together on the Broker host, including an old CA backup; the deployed config has no trusted-proxy fingerprint allowlist.                                                 | Replace the full CA hierarchy through an offline ceremony, re-enroll every client, revoke the old trust domain, remove all CA/client private keys from the host, and verify old identities are rejected.         |
+| P0       | Production still runs the pre-upgrade `master@450c3ed` Node boundary while the Go policy service is inactive. Current branch security fixes and decision enforcement are not deployed.                                                     | Complete staging and credential-rotation gates, then deploy one digest-addressed release with the Go policy service required and verify fail-closed behavior.                                                    |
+| P1       | `secret-broker.service` runs as `root`.                                                                                                                                                                                                    | Run under a dedicated locked system account with only the required writable paths.                                                                                                                               |
+| P1       | `/opt/secret-broker/broker` is an unmanaged directory owned by `mysql:mysql`; it is not a release symlink and no `deployed-release` baseline is present.                                                                                   | Perform a reviewed one-time migration to root-managed versioned releases before enabling atomic CI deployment.                                                                                                   |
+| P1       | nginx 1.20.1 is the active production version.                                                                                                                                                                                             | Move to a vendor-supported security-maintained release and record the package provenance.                                                                                                                        |
+| P0       | The production preflight now requires independent audit signer, exporter, immutable-store/retention-lock, and recovery-authority services under exact, mutually distinct identities; no production evidence for these services exists yet. | Package, deploy and independently attest all four services, verify KMS signing, signed-head export, retention lock and recovery authority, then repeat the 22-gate preflight and retain pass/fail-only evidence. |
+| P2       | Broker listens only on `127.0.0.1:8443`, which prevents direct public access, but it has no separate observed `9080` health listener in the live configuration.                                                                            | Deploy and verify the loopback-only health listener used by the hardened workflow.                                                                                                                               |
 
 Production remains **not approved**. No deployment was attempted because P0/P1 gates, repository CI, credential rotation evidence, signed artifacts, provider contract tests, Android physical-device tests, and disaster-recovery rehearsal are incomplete.
 
@@ -136,15 +177,18 @@ workflow: dedicated Broker user and group, active Go policy core, managed
 release symlink, executable deployment helper, dedicated deployment account,
 enabled nginx upstream certificate verification with no disabled location,
 absence of co-located CA/final-client private keys, encrypted control-plane
-state and protected key, protected policy socket, and loopback port 9080 health.
+state and protected key, protected policy socket, and protected local health socket.
 No credential value, certificate body, private key, environment file or nginx
 configuration body was emitted by the preflight.
 
 Local regression at this checkpoint passed the complete Node verification and
-coverage gate: 97.58% lines, 91.62% branches and 98.41% functions. The preflight
-also has deterministic success, per-gate failure and output non-disclosure
-tests. This is source and read-only runtime evidence; it is not a migration or
-release approval.
+coverage gate. The current preflight has 22 deterministic gates, including the
+four independent audit services and their pinned, mutually distinct users and
+groups. The immutable-store gate also requires a fresh exact health response as
+the recovery identity; an active process alone cannot satisfy the lock/mirror
+gate. Its success,
+per-gate failure and output non-disclosure tests pass. This is source and
+read-only runtime evidence; it is not a migration or release approval.
 
 ### 2026-09-10 生产 CD 触发条件（当前执行规则）
 
@@ -206,6 +250,17 @@ release approval.
   production KMS/HSM backend, signer workload, account binding or
   isolated-account live contract has run, so the manifest remains
   `contract_required` and this is not production-available evidence.
+- DQ-004 live read-only probe on 2026-09-12 used the existing Windows
+  certificate-store identity without exporting its private key. The public
+  Broker authenticated the certificate and returned HTTP 200 for
+  `/api/v2/tools`, but exposed only `broker.tools.inspect`; neither
+  `github.repository.read` nor `aliyun.ecs.instances.list` was executable.
+  Policy-bound attempts to create registry-inspection tasks for those two
+  operations returned the stable `forbidden` result. No provider request was
+  sent, no API key or certificate material was read, and no account contract
+  was marked passed. The production signer/account bindings and an executable
+  read-only provider route remain prerequisites for the approved GitHub and
+  Alibaba isolated-account checks.
 - The Cloudflare zones-list adapter binds the execution, credential and API
   query to one exact account ID, accepts only bounded filters and pagination,
   and returns a minimal zone projection. The composed executor uses the pinned

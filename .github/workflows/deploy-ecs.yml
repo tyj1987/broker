@@ -53,24 +53,37 @@ jobs:
         run: npm prune --omit=dev --ignore-scripts
       - working-directory: broker
         run: rm -rf node_modules/.bin
-      - name: Build Go policy core
+      - name: Build Go production binaries
         working-directory: core
-        run: go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-policy ./cmd/policy-server
+        run: |
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-policy ./cmd/policy-server
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-github-signer ./cmd/github-signer
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-aliyun-signer ./cmd/aliyun-signer
       - name: Create immutable payload and checksum
         run: |
           cp -R tools broker/tools
+          cp deploy/bin/secret-broker-production-preflight.mjs broker/bin/
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            --exclude='docs/openapi.yaml' -czf broker-${RELEASE_SHA}.tgz -C broker .
+            --exclude='docs/openapi.yaml' -czf broker-${RELEASE_SHA}.tgz -C broker . -C .. providers
           sha256sum broker-${RELEASE_SHA}.tgz > broker-${RELEASE_SHA}.tgz.sha256
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: broker-${{ env.RELEASE_SHA }}.tgz
+      - name: Download signed provenance bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation download "broker-${RELEASE_SHA}.tgz" --repo "$GITHUB_REPOSITORY"
+          mapfile -t bundles < <(find . -maxdepth 1 -type f -name 'sha256:*.jsonl' -print)
+          test "${#bundles[@]}" -eq 1
+          mv -- "${bundles[0]}" "broker-${RELEASE_SHA}.attestation.jsonl"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: broker-release-${{ env.RELEASE_SHA }}
           path: |
             broker-${{ env.RELEASE_SHA }}.tgz
             broker-${{ env.RELEASE_SHA }}.tgz.sha256
+            broker-${{ env.RELEASE_SHA }}.attestation.jsonl
           if-no-files-found: error
           retention-days: 30
 
@@ -109,7 +122,7 @@ jobs:
           chmod 600 "$SSH_DIR/key"
           chmod 600 "$SSH_DIR/known_hosts"
           SSH_ARGS=(-i "$SSH_DIR/key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_DIR/known_hosts")
-          scp "${SSH_ARGS[@]}" "broker-${RELEASE_SHA}.tgz" "broker-${RELEASE_SHA}.tgz.sha256" "$ECS_SSH_USER@$ECS_HOST:/tmp/"
+          scp "${SSH_ARGS[@]}" "broker-${RELEASE_SHA}.tgz" "broker-${RELEASE_SHA}.tgz.sha256" "broker-${RELEASE_SHA}.attestation.jsonl" "$ECS_SSH_USER@$ECS_HOST:/tmp/"
           ssh "${SSH_ARGS[@]}" "$ECS_SSH_USER@$ECS_HOST" \
             "sudo -n /usr/local/sbin/secret-broker-deploy '$RELEASE_SHA'"
 

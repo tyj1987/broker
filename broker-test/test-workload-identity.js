@@ -138,12 +138,49 @@ section('aws provider');
 {
   _resetForTests();
   // AWS error path
-  const http = async () => ({ status: 403, body: '<ErrorResponse><Error><Code>AccessDenied</Code></Error></ErrorResponse>' });
+  const canary = 'synthetic-upstream-secret-response';
+  const http = async () => ({ status: 403, body: `<ErrorResponse>${canary}</ErrorResponse>` });
   let threw = false;
+  let message = '';
   try {
     await getCredentials('aws', 'tok', { roleArn: 'arn:aws:iam::1:role/x' }, { httpClient: http });
-  } catch (e) { threw = /aws sts 403/.test(e.message); }
+  } catch (e) { message = e.message; threw = /aws sts 403/.test(message); }
   ok('aws: 403 surfaces as error', threw);
+  ok('aws: upstream body is not exposed', !message.includes(canary));
+}
+{
+  _resetForTests();
+  const malformedResponses = [
+    { AssumeRoleWithWebIdentityResult: { Credentials: { AccessKeyId: 'AKID', SecretAccessKey: 'SECRET', SessionToken: 'TOKEN' } } },
+    { AssumeRoleWithWebIdentityResult: { Credentials: { AccessKeyId: 'AKID', SecretAccessKey: 'SECRET', SessionToken: 'TOKEN', Expiration: 'not-a-date' } } },
+  ];
+  for (const response of malformedResponses) {
+    let threw = false;
+    try {
+      await getCredentials('aws', 'tok', { roleArn: 'arn:aws:iam::1:role/x' }, {
+        httpClient: async () => ({ status: 200, body: JSON.stringify(response) }),
+      });
+    } catch (e) { threw = /invalid expiration|missing expiration/.test(e.message); }
+    ok('aws: malformed expiration fails closed', threw);
+    _resetForTests();
+  }
+  let missingMaterial = false;
+  try {
+    await getCredentials('aws', 'tok', { roleArn: 'arn:aws:iam::1:role/x' }, {
+      httpClient: async () => ({
+        status: 200,
+        body: JSON.stringify({
+          AssumeRoleWithWebIdentityResult: {
+            Credentials: {
+              SecretAccessKey: 'SECRET', SessionToken: 'TOKEN',
+              Expiration: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          },
+        }),
+      }),
+    });
+  } catch (e) { missingMaterial = /missing access key id/.test(e.message); }
+  ok('aws: incomplete credential material fails closed', missingMaterial);
 }
 
 // ============================================================
@@ -178,10 +215,13 @@ section('gcp provider');
 {
   _resetForTests();
   // GCP error path
-  const http = async () => ({ status: 400, body: JSON.stringify({ error: 'invalid_grant' }) });
+  const canary = 'synthetic-gcp-upstream-secret-response';
+  const http = async () => ({ status: 400, body: JSON.stringify({ error: canary }) });
   let threw = false;
-  try { await getCredentials('gcp', 'tok', { audience: 'x' }, { httpClient: http }); } catch (e) { threw = /gcp sts 400/.test(e.message); }
+  let message = '';
+  try { await getCredentials('gcp', 'tok', { audience: 'x' }, { httpClient: http }); } catch (e) { message = e.message; threw = /gcp sts 400/.test(message); }
   ok('gcp: 400 surfaces as error', threw);
+  ok('gcp: upstream body is not exposed', !message.includes(canary));
 }
 
 // ============================================================
@@ -320,8 +360,8 @@ section('listCache');
           AssumeRoleWithWebIdentityResult: {
             Credentials: {
               AccessKeyId: 'SHOULD-NOT-LEAK',
-              AccessKeySecret: 'SHOULD-NOT-LEAK',
-              SecurityToken: 'SHOULD-NOT-LEAK',
+              SecretAccessKey: 'SHOULD-NOT-LEAK',
+              SessionToken: 'SHOULD-NOT-LEAK',
               Expiration: new Date(Date.now() + 3600_000).toISOString(),
             },
           },

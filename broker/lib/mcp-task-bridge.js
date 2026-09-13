@@ -1,10 +1,18 @@
+import { redact, redactDeep } from './redact.js';
+
 const CONTROL_FIELDS = new Set(['account_ref', 'environment', 'idempotency_key']);
+const RISK_LEVELS = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
 const TASK_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SAFE_NAME_RE = /^[a-z][a-z0-9._-]{1,127}$/;
 const SAFE_VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
 
 function fail(message) {
   throw new Error(message);
+}
+
+function safeMcpResult(value) {
+  return redactDeep(value);
 }
 
 function taskId(args) {
@@ -31,15 +39,36 @@ function validateTool(tool) {
     typeof tool !== 'object' ||
     !SAFE_NAME_RE.test(tool.name || '') ||
     !SAFE_VERSION_RE.test(tool.version || '') ||
+    typeof tool.description !== 'string' ||
+    !RISK_LEVELS.has(tool.risk_level) ||
+    !Array.isArray(tool.environments) ||
+    tool.environments.length === 0 ||
+    new Set(tool.environments).size !== tool.environments.length ||
+    tool.environments.some((environment) => !ENVIRONMENTS.has(environment)) ||
     !tool.input_schema ||
     tool.input_schema.type !== 'object' ||
     tool.input_schema.additionalProperties !== false ||
     !tool.input_schema.properties ||
-    typeof tool.input_schema.properties !== 'object'
+    typeof tool.input_schema.properties !== 'object' ||
+    Array.isArray(tool.input_schema.properties)
   ) {
     fail('Broker returned an invalid executable tool');
   }
-  if (Object.keys(tool.input_schema.properties).some((key) => CONTROL_FIELDS.has(key))) {
+  const schema = tool.input_schema;
+  if (
+    schema.required !== undefined &&
+    (!Array.isArray(schema.required) ||
+      new Set(schema.required).size !== schema.required.length ||
+      schema.required.some(
+        (key) =>
+          typeof key !== 'string' ||
+          CONTROL_FIELDS.has(key) ||
+          !Object.prototype.hasOwnProperty.call(schema.properties, key),
+      ))
+  ) {
+    fail('Broker returned an invalid executable schema');
+  }
+  if (Object.keys(schema.properties).some((key) => CONTROL_FIELDS.has(key))) {
     fail('Broker tool conflicts with MCP control fields');
   }
   return tool;
@@ -56,7 +85,7 @@ function presentTool(tool) {
   ];
   return {
     name: mcpName(tool),
-    description: `${tool.description} Risk: ${tool.risk_level}.`,
+    description: `${redact(tool.description).slice(0, 240)} Risk: ${tool.risk_level}.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -65,7 +94,7 @@ function presentTool(tool) {
         account_ref: { type: 'string', minLength: 1, maxLength: 128 },
         environment: { type: 'string', enum: tool.environments },
         idempotency_key: { type: 'string', minLength: 16, maxLength: 128 },
-        ...structuredClone(tool.input_schema.properties),
+        ...redactDeep(structuredClone(tool.input_schema.properties)),
       },
     },
   };
@@ -159,7 +188,7 @@ export function createMcpTaskBridge({ callBroker } = {}) {
     return callBroker(`/api/v2/tasks/${task.id}/run`, { method: 'POST', body: {} });
   }
 
-  async function callTool(name, args) {
+  async function callToolRaw(name, args) {
     if (name === 'broker_task_get')
       return callBroker(`/api/v2/tasks/${taskId(args)}`, { method: 'GET' });
     if (name === 'broker_task_run')
@@ -171,6 +200,10 @@ export function createMcpTaskBridge({ callBroker } = {}) {
     const tool = (await executableTools()).find((candidate) => mcpName(candidate) === name);
     if (!tool) fail('Unknown or unavailable Broker tool');
     return executeTool(tool, args);
+  }
+
+  async function callTool(name, args) {
+    return safeMcpResult(await callToolRaw(name, args));
   }
 
   return { listTools, callTool };

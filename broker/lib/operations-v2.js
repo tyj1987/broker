@@ -34,7 +34,7 @@ const LEASE_KEYS = new Set([
   'id', 'receiptHash', 'deviceId', 'operationId', 'expiresAt', 'otpClaimed',
   'previousStatus', 'previousUpdatedAt',
 ]);
-const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|otp|verification.?code)/i;
+const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|api[_-]?key|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|otp|verification.?code)/i;
 
 export class V2Error extends Error {
   constructor(code, message, status = 400) {
@@ -61,6 +61,22 @@ function requireObject(value, field) {
     throw new V2Error('invalid_request', `${field} is too large`, 413);
   }
   return structuredClone(value);
+}
+
+export function assertSafeParameters(value, depth = 0) {
+  if (depth > 8) throw new V2Error('unsafe_parameters', 'operation parameters are too deeply nested');
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertSafeParameters(item, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') throw new V2Error('unsafe_parameters', 'operation parameters contain an unsupported value');
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_RESULT_KEY.test(key)) {
+      throw new V2Error('unsafe_parameters', 'operation parameters contain credential material');
+    }
+    assertSafeParameters(item, depth + 1);
+  }
 }
 
 function requireText(value, field, maxLength = 128) {
@@ -299,6 +315,17 @@ export class OperationBroker {
           || (source.otpTaskId !== null && !ID_RE.test(source.otpTaskId))
           || (source.error !== null && !ID_RE.test(source.error))) throw stateCorrupt();
         requireObject(source.typedParameters, 'typed_parameters');
+        assertSafeParameters(source.typedParameters);
+        if (source.result !== null) {
+          try {
+            assertSafeResult(source.result);
+            if (canonicalJson(redactDeep(source.result)) !== canonicalJson(source.result)) {
+              throw new Error('unsafe');
+            }
+          } catch {
+            throw stateCorrupt();
+          }
+        }
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.updatedAt, 'updated_at');
         requireTimestamp(source.expiresAt, 'expires_at');
@@ -650,6 +677,15 @@ export class OperationBroker {
     const environment = input?.environment;
     if (!ENVIRONMENTS.has(environment)) throw new V2Error('invalid_request', 'unsupported environment');
     const typedParameters = requireObject(input?.typed_parameters || {}, 'typed_parameters');
+    assertSafeParameters(typedParameters);
+    // Creation must enforce the same delegated capability boundary as reads.
+    // Otherwise a bearer key could create an out-of-scope browser/OTP
+    // operation and let a separately authenticated worker execute it.
+    if (!apiKeyAllowsOperation(identity, {
+      provider, operationId, accountRef, environment, typedParameters,
+    })) {
+      throw new V2Error('forbidden', 'API key is not authorized for this operation', 403);
+    }
     const decision = await this.authorize({ identity, provider, operationId, accountRef, environment, typedParameters });
     if (!decision?.allow) throw new V2Error('forbidden', 'operation is not allowed', 403);
     this.prune();
@@ -842,6 +878,13 @@ export class OperationBroker {
     }
     try {
       const result = await consumer(code);
+      // OTP consumers are an internal boundary, but their result is persisted
+      // and later exposed through getOperation. Fail closed before committing
+      // any result that contains a credential or other sensitive material.
+      assertSafeResult(result);
+      if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
+        throw new V2Error('unsafe_result', 'operation result contains credential material');
+      }
       if (task.status !== 'consuming' || operation?.status === 'revoked') {
         throw new V2Error('operation_revoked', 'OTP operation was revoked while consuming', 409);
       }

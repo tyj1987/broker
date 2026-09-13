@@ -86,8 +86,8 @@ export class ControlPlaneStateCoordinator {
 
   restoreState(snapshot) {
     validateSnapshot(snapshot);
-    if (snapshot.generation < this.generation) {
-      throw failure('state_rollback_detected', 'control-plane state generation is older than the active state');
+    if (snapshot.generation <= this.generation) {
+      throw failure('state_rollback_detected', 'control-plane state generation is not newer than the active state');
     }
     const previous = {
       approvals: this.approvals.exportState(),
@@ -100,6 +100,9 @@ export class ControlPlaneStateCoordinator {
       this.approvals.restoreState(structuredClone(snapshot.approvals));
       this.executionTokens.restoreState(structuredClone(snapshot.execution_tokens));
       this.tasks.restoreState(structuredClone(snapshot.tasks));
+      if (typeof this.tasks.validateRestoredState === 'function') {
+        this.tasks.validateRestoredState(structuredClone(snapshot.approvals));
+      }
       this.operations.restoreState(structuredClone(snapshot.version === 1 ? {
         version: 1, operations: [], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [],
       } : snapshot.operations));

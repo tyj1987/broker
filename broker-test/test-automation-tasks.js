@@ -3,9 +3,15 @@ import { resolve } from 'node:path';
 import { ApprovalBroker } from '../broker/lib/approvals-v2.js';
 import { AutomationTaskBroker } from '../broker/lib/automation-tasks.js';
 import { loadToolRegistry } from '../broker/lib/tool-registry.js';
-import { V2Error } from '../broker/lib/operations-v2.js';
+import { V2Error, assertSafeParameters } from '../broker/lib/operations-v2.js';
 
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
+
+assert.throws(
+  () => assertSafeParameters({ nested: { clientSecret: 'credential-canary' } }),
+  expectCode('unsafe_parameters'),
+  'automation parameter helper rejects nested credential fields',
+);
 const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'));
 let now = 1_900_000_000_000;
 const observed = [];
@@ -52,6 +58,35 @@ const lowInput = {
   environment: 'production', idempotency_key: 'inspect-task-0001',
   parameters: { resource_ref: 'tool-registry', tool_name: 'github.repository.read', tool_version: '1.0.0' },
 };
+
+const inspectTool = registry.findByName(lowInput.tool, lowInput.tool_version);
+const permissiveInspectTool = {
+  ...inspectTool,
+  input_schema: {
+    ...inspectTool.input_schema,
+    properties: {
+      ...inspectTool.input_schema.properties,
+      clientSecret: { type: 'string' },
+    },
+  },
+};
+const permissiveRegistry = {
+  findByName(name, version) {
+    return name === permissiveInspectTool.name && version === permissiveInspectTool.version
+      ? structuredClone(permissiveInspectTool) : registry.findByName(name, version);
+  },
+  listFor(identity) { return registry.listFor(identity); },
+};
+await assert.rejects(
+  new AutomationTaskBroker({ toolRegistry: permissiveRegistry, authorize, approvalBroker: approvals, executors })
+    .create(human, {
+      ...lowInput,
+      idempotency_key: 'unsafe-task-client-secret-0001',
+      parameters: { ...lowInput.parameters, clientSecret: 'credential-canary' },
+    }),
+  expectCode('unsafe_parameters'),
+  'task creation rejects credential-shaped fields even when the tool schema permits them',
+);
 
 await assert.rejects(
   new AutomationTaskBroker({ toolRegistry: registry, authorize, approvalBroker: approvals, executors })
@@ -294,6 +329,24 @@ const criticalInput = {
 const critical = await broker.create(human, criticalInput);
 assert.equal(critical.state, 'PENDING_APPROVAL');
 assert.equal(critical.risk_level, 'CRITICAL');
+const forgedCriticalState = broker.exportState();
+const forgedCriticalTask = forgedCriticalState.tasks.find((task) => task.id === critical.id);
+forgedCriticalTask.approval_id = null;
+assert.throws(
+  () => new AutomationTaskBroker({
+    toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+  }).restoreState(forgedCriticalState),
+  expectCode('state_corrupt'),
+  'a high-risk task cannot be restored without an approval binding',
+);
+broker.validateRestoredState(approvals.exportState());
+const orphanedApprovalState = approvals.exportState();
+orphanedApprovalState.records = orphanedApprovalState.records.filter((record) => record.id !== critical.approval_id);
+assert.throws(
+  () => broker.validateRestoredState(orphanedApprovalState),
+  expectCode('state_corrupt'),
+  'a task cannot be restored without its bound approval record',
+);
 const approver = (name) => ({ name, context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } } });
 approvals.decide(approver('admin-b'), critical.approval_id, 'approve');
 approvals.decide(approver('admin-c'), critical.approval_id, 'approve');
@@ -480,6 +533,17 @@ const failureAudit = failureObserved.find((event) => event.task_id === throwing.
 assert.equal(failureAudit.result, 'failed');
 assert.equal(failureAudit.error, 'executor_failed');
 
+const sensitiveCodeBroker = failureBroker(async () => {
+  throw new V2Error('canary-secret-token', 'canary must never escape', 502);
+});
+const sensitiveCodeTask = await sensitiveCodeBroker.create(human, {
+  ...lowInput, idempotency_key: 'task-case-sensitive1',
+});
+const sensitiveCodeResult = await sensitiveCodeBroker.run(human, sensitiveCodeTask.id);
+assert.deepEqual(sensitiveCodeResult.error, { code: 'operation_failed' });
+assert.ok(!JSON.stringify(sensitiveCodeResult).includes('canary'));
+assert.ok(!JSON.stringify(sensitiveCodeBroker.eventsFor(human, sensitiveCodeTask.id)).includes('canary'));
+
 const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });
 assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code, 'schema_mismatch');
@@ -602,6 +666,38 @@ const unsafeOutputResult = await unsafeOutputBroker.run(human, unsafeOutput.id);
 assert.equal(unsafeOutputResult.state, 'FAILED');
 assert.deepEqual(unsafeOutputResult.error, { code: 'unsafe_result' });
 assert.equal(unsafeOutputResult.result, undefined, 'credential-like executor output is never retained');
+
+const signingKeyTool = {
+  ...registry.findByName('broker.tools.inspect', '1.0.0'),
+  output_schema: {
+    ...registry.findByName('broker.tools.inspect', '1.0.0').output_schema,
+    properties: {
+      ...registry.findByName('broker.tools.inspect', '1.0.0').output_schema.properties,
+      signing_key: { type: 'string' },
+    },
+  },
+};
+const signingKeyOutputBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === signingKeyTool.name && version === signingKeyTool.version
+        ? structuredClone(signingKeyTool) : null;
+    },
+  },
+  authorize,
+  approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => ({
+    name: 'safe-looking-result', version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect',
+    risk_level: 'LOW', agent_execution: true, signing_key: 'credential-canary',
+  })]]),
+});
+const signingKeyOutputTask = await signingKeyOutputBroker.create(human, {
+  ...lowInput, idempotency_key: 'unsafe-signing-key-task1',
+});
+const signingKeyOutput = await signingKeyOutputBroker.run(human, signingKeyOutputTask.id);
+assert.equal(signingKeyOutput.state, 'FAILED');
+assert.deepEqual(signingKeyOutput.error, { code: 'unsafe_result' });
+assert.equal(signingKeyOutput.result, undefined, 'signing key output is never retained');
 
 let auditedExecutionCalls = 0;
 const mandatoryAuditEvents = [];
@@ -939,6 +1035,16 @@ const afterRestart = new AutomationTaskBroker({
 });
 afterRestart.restoreState(taskState);
 assert.equal(afterRestart.get(human, persistedSuccess.id).state, 'SUCCEEDED');
+assert.throws(
+  () => afterRestart.get(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),
+  expectCode('forbidden'),
+  'restored tasks remain bounded by the current bearer capability',
+);
+await assert.rejects(
+  afterRestart.run(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),
+  expectCode('forbidden'),
+  'restored task execution cannot bypass a revoked or narrowed bearer capability',
+);
 assert.equal(
   (await afterRestart.create(human, { ...lowInput, idempotency_key: 'persisted-success-0001' })).id,
   persistedSuccess.id,

@@ -17,6 +17,8 @@ const INSTANCE_ID_RE = /^i-[a-zA-Z0-9]{6,64}$/;
 const SAFE_TEXT_RE = /^[^\u0000-\u001f\u007f]{0,256}$/;
 const STATUS_RE = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
 const NEXT_TOKEN_RE = /^[A-Za-z0-9._~-]{1,2048}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const SIGNED_HEADERS_RE =
   /^ACS3-HMAC-SHA256 Credential=[^,\s]+,SignedHeaders=host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-security-token;x-acs-signature-nonce;x-acs-version,Signature=[0-9a-f]{64}$/;
 
@@ -32,7 +34,7 @@ function pageValue(value, fallback, maximum) {
   return normalized;
 }
 
-function validateParameters(parameters) {
+export function validateAliyunEcsInstancesListParameters(parameters) {
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
     fail('aliyun_invalid_request', 'Alibaba Cloud ECS request is invalid');
   }
@@ -77,7 +79,9 @@ function validateSignedHeaders(result, expected, now) {
     result.account_ref !== expected.account_ref ||
     result.environment !== expected.environment ||
     result.resource_ref !== expected.resource_ref ||
-    result.region_id !== expected.region_id
+    result.region_id !== expected.region_id ||
+    result.execution_id !== expected.execution_id ||
+    result.request_binding !== expected.request_binding
   ) {
     fail('aliyun_signer_scope_mismatch', 'Alibaba Cloud signing scope does not match', 503);
   }
@@ -115,7 +119,10 @@ function validateSignedHeaders(result, expected, now) {
   ) {
     fail('aliyun_signer_response_invalid', 'Alibaba Cloud signer returned invalid headers', 503);
   }
-  return headers;
+  if (!/^[A-Za-z0-9_-]{43}$/.test(result.credential_binding || '')) {
+    fail('aliyun_signer_response_invalid', 'Alibaba Cloud signer returned invalid headers', 503);
+  }
+  return { headers, credentialBinding: result.credential_binding };
 }
 
 function projectResponse(body, expected) {
@@ -167,11 +174,13 @@ export function createAliyunEcsInstancesListAdapter({ request, signRequest, now 
   if (typeof now !== 'function') throw new TypeError('Alibaba Cloud adapter requires a clock');
 
   return async function aliyunEcsInstancesList(parameters, context = {}) {
-    const validated = validateParameters(parameters);
+    const validated = validateAliyunEcsInstancesListParameters(parameters);
     if (
       context.execution?.tool !== TOOL ||
       context.execution?.target !== validated.resourceRef ||
-      context.execution?.environment !== context.environment
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
     ) {
       fail(
         'aliyun_execution_binding_mismatch',
@@ -193,6 +202,8 @@ export function createAliyunEcsInstancesListAdapter({ request, signRequest, now 
       environment: context.environment,
       resource_ref: validated.resourceRef,
       region_id: validated.regionId,
+      execution_id: context.execution.execution_id,
+      request_binding: context.execution.request_binding,
       method: METHOD,
       path: PATH,
       query,
@@ -206,9 +217,19 @@ export function createAliyunEcsInstancesListAdapter({ request, signRequest, now 
       fail('aliyun_signer_unavailable', 'Alibaba Cloud signer is unavailable', 503);
     }
 
+    if (
+      context.providerCredentialBinding !== undefined &&
+      context.providerCredentialBinding !== signed.credentialBinding
+    ) {
+      fail(
+        'aliyun_credential_binding_mismatch',
+        'Alibaba Cloud credential changed during the bound operation',
+        503,
+      );
+    }
     let response;
     try {
-      const outboundHeaders = { ...signed };
+      const outboundHeaders = { ...signed.headers };
       delete outboundHeaders.host;
       response = await request({
         origin: `https://ecs.${validated.regionId}.aliyuncs.com`,

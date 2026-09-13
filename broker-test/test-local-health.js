@@ -68,6 +68,7 @@ console.log('=== local TCP health listener ===');
         config: { services: { github: {} } },
         requireSops: true,
         surface: 'local',
+        providerBindingGeneration: () => 'a'.repeat(64),
       });
       if (!handled) send(res, 404, { error: 'not found', status: 404 });
     },
@@ -82,11 +83,68 @@ console.log('=== local TCP health listener ===');
     assert(r.status === 200 && r.json.status === 'ready', 'local /ready');
     const l = await get(port, '/live');
     assert(l.status === 200 && l.json.status === 'live', 'local /live');
+    const b = await get(port, '/provider-binding-generation');
+    assert(b.status === 200 && b.json.binding_generation_sha256 === 'a'.repeat(64), 'local provider binding generation');
     const n = await get(port, '/nope');
     assert(n.status === 404, 'local unknown 404');
   } finally {
     server.close();
   }
+}
+
+console.log('=== provider binding generation boundary ===');
+{
+  const response = () => ({
+    status: 0, body: null,
+    writeHead(status) { this.status = status; },
+    end(body) { this.body = JSON.parse(body); },
+  });
+  const publicResponse = response();
+  const publicHandled = await handleHealth(
+    {},
+    publicResponse,
+    { method: 'GET', pathname: '/provider-binding-generation' },
+    { send, surface: 'public', providerBindingGeneration: () => 'a'.repeat(64) },
+  );
+  assert(publicHandled === false, 'provider binding generation is not public');
+
+  const failedResponse = response();
+  await handleHealth(
+    {},
+    failedResponse,
+    { method: 'GET', pathname: '/provider-binding-generation' },
+    {
+      send,
+      surface: 'local',
+      providerBindingGeneration: () => { throw new Error('provider-binding-canary'); },
+    },
+  );
+  assert(
+    failedResponse.status === 503
+      && failedResponse.body.status === 'not_ready'
+      && !JSON.stringify(failedResponse.body).includes('canary'),
+    'provider binding failure is fail closed and redacted',
+  );
+}
+
+console.log('=== probe error redaction ===');
+{
+  const res = {
+    status: 0, body: null,
+    writeHead(s) { this.status = s; },
+    end(b) { this.body = JSON.parse(b); },
+  };
+  await handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
+    send,
+    surface: 'local',
+    config: {},
+    secretCache: new Map([['X', {}]]),
+    runReadyProbes: async () => { throw new Error('synthetic-probe-path-canary'); },
+  });
+  assert(res.status === 503, 'probe failure makes readiness fail');
+  assert(Array.isArray(res.body.probes) && res.body.probes.length === 0
+    && !JSON.stringify(res.body).includes('synthetic-probe-path-canary'),
+    `probe exception text is not exposed: ${JSON.stringify(res.body)}`);
 }
 
 console.log('=== handleStatic missing file is 500 not fall-through ===');

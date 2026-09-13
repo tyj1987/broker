@@ -3,9 +3,16 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import {
   OperationBroker,
   V2Error,
+  assertSafeParameters,
   canonicalDeviceMessage,
   canonicalJson,
 } from '../broker/lib/operations-v2.js';
+
+assert.throws(
+  () => assertSafeParameters({ nested: { master_key: 'credential-canary' } }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'operation parameters reject key-material field variants',
+);
 
 const indeterminateCheckpoint = () => {
   throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
@@ -102,6 +109,45 @@ await assert.rejects(
     typed_parameters: {},
   }),
   (error) => error instanceof V2Error && error.code === 'forbidden',
+);
+
+await assert.rejects(
+  broker.createOperation({
+    name: 'owner-1',
+    context: {
+      via: 'api_key',
+      apiKey: {
+        scopes: ['operations:execute'],
+        allowed_services: ['aliyun'],
+        allowed_operations: ['aliyun:other.operation'],
+        allowed_accounts: ['primary'],
+        allowed_environments: ['production'],
+        allowed_resources: ['account.aliyun.com'],
+      },
+    },
+  }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { resource_ref: 'account.aliyun.com' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'forbidden',
+  'a delegated key cannot create an operation outside its allowlist',
+);
+
+await assert.rejects(
+  broker.createOperation({ name: 'owner-1' }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { password: 'credential-canary' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'operation parameters cannot contain credential fields',
+);
+await assert.rejects(
+  broker.createOperation({ name: 'owner-1' }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { clientSecret: 'credential-canary' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'camelCase credential fields are rejected',
 );
 
 const rollbackOperation = await broker.createOperation({ name: 'owner-1' }, {
@@ -213,6 +259,26 @@ await assert.rejects(
   broker.consumeOtp(operation.otp_task_id, async () => ({})),
   (error) => error instanceof V2Error && error.code === 'invalid_state',
 );
+
+const unsafeResultOperation = await broker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun',
+  operation_id: 'console.login',
+  account_ref: 'secondary',
+  environment: 'production',
+  typed_parameters: { requested_action: 'unsafe-result-test' },
+});
+const unsafeResultTask = broker.listDeviceOtpTasks(device.id)
+  .find((task) => task.id === unsafeResultOperation.otp_task_id);
+broker.submitOtp(device.id, unsafeResultTask.id, {
+  code: '731904', sim_binding: 'sim-primary', challenge: unsafeResultTask.challenge,
+});
+await assert.rejects(
+  broker.consumeOtp(unsafeResultTask.id, async () => ({ access_token: 'credential-canary' })),
+  (error) => error instanceof V2Error && error.code === 'upstream_failed',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, unsafeResultOperation.id).status, 'failed');
+assert.equal(JSON.stringify(broker.exportState()).includes('credential-canary'), false,
+  'unsafe OTP result is never persisted');
 
 const revokedInFlightOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
@@ -813,6 +879,29 @@ assert.throws(
   (error) => error instanceof V2Error && error.code === 'state_corrupt',
 );
 assert.deepEqual(replayRestored.exportState(), beforeCorruptRestore, 'invalid state cannot partially replace live state');
+
+const completedResultState = workerBroker.exportState();
+completedResultState.operations.find((operation) => operation.status === 'completed').result = {
+  nested: { access_token: 'credential-canary' },
+};
+const beforeUnsafeResultRestore = workerBroker.exportState();
+assert.throws(
+  () => workerBroker.restoreState(completedResultState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'restored operation results cannot reintroduce credential-shaped fields',
+);
+assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'unsafe result restore is atomic');
+
+const valueLeakResultState = workerBroker.exportState();
+valueLeakResultState.operations.find((operation) => operation.status === 'completed').result = {
+  status: `gh${'p_'}${'C'.repeat(24)}`,
+};
+assert.throws(
+  () => workerBroker.restoreState(valueLeakResultState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'restored operation results cannot hide credential values in ordinary fields',
+);
+assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'value-leak restore is atomic');
 
 let failoverDeviceId;
 const failoverBroker = new OperationBroker({

@@ -273,8 +273,12 @@ are exercised as an end-to-end test; non-Linux service startup fails closed.
 The commands are not yet packaged and no production identity factory is
 selected.
 
-The OSS and COS SDK boundaries now
-expose one fixed-bucket, fixed-prefix, lexicographically ordered object-key page
+The Alibaba OSS and Tencent COS SDK transports now live in separate
+`core/auditoss` and `core/auditcos` packages. Shared immutable-store types and
+stable errors remain provider-neutral in `core/auditanchor`. Dependency-graph
+tests prove that each adapter links only its own provider SDK and that the
+source-only audit-store and mirror-worker commands link neither SDK. Both SDK
+boundaries expose one fixed-bucket, fixed-prefix, lexicographically ordered object-key page
 with a maximum of 1,000 entries. They reject arbitrary delimiter, endpoint,
 header and continuation inputs, malformed ordering, unexpected prefixes,
 oversized anchor objects and non-progressing pagination.

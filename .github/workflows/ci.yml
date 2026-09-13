@@ -190,6 +190,28 @@ jobs:
       - name: Enforce audit anchor protocol statement coverage
         run: |
           test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-oss-coverage.out ./auditoss
+      - name: Enforce Alibaba immutable adapter statement coverage
+        run: |
+          test "$(go tool cover -func=audit-oss-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=audit-cos-coverage.out ./auditcos
+      - name: Enforce Tencent immutable adapter statement coverage
+        run: |
+          test "$(go tool cover -func=audit-cos-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - name: Enforce immutable provider SDK dependency isolation
+        run: |
+          if go list -deps ./cmd/audit-store ./cmd/audit-mirror-worker | grep -Eq 'github.com/(aliyun|tencentyun)/'; then
+            echo 'source-only audit commands must not link provider SDKs' >&2
+            exit 1
+          fi
+          if go list -deps ./auditoss | grep -Eq 'github.com/tencentyun/'; then
+            echo 'Alibaba adapter must not link Tencent SDKs' >&2
+            exit 1
+          fi
+          if go list -deps ./auditcos | grep -Eq 'github.com/aliyun/'; then
+            echo 'Tencent adapter must not link Alibaba SDKs' >&2
+            exit 1
+          fi
       - run: go test -race -coverprofile=audit-mirror-coverage.out ./auditmirror
       - name: Enforce audit mirror contract statement coverage
         run: |

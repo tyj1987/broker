@@ -178,6 +178,10 @@ continue.
   The concrete adapter must still reject ambiguous histories. Tencent workload
   identity, race-tested concurrent-create semantics, COS resource and
   independent recovery evidence do not exist yet.
+  Alibaba OSS and Tencent COS SDK transports are now isolated in distinct Go
+  packages, with dependency-graph tests proving that the source-only store and
+  worker commands link neither provider SDK and that each adapter links only
+  its own SDK. The concrete identity factories remain intentionally absent.
 
 ## DQ-004: provider signing and account-binding authority
 

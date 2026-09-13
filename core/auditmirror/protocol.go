@@ -312,7 +312,10 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 		return protocolFail("server_invalid")
 	}
 	now := server.Clock().UTC()
-	if !validUTC(now) || connection.SetDeadline(now.Add(server.Deadline)) != nil {
+	// The policy clock may be fixed by a trusted verifier. Socket deadlines
+	// must retain the process clock's monotonic component and must not inherit a
+	// historical policy timestamp.
+	if !validUTC(now) || connection.SetDeadline(time.Now().Add(server.Deadline)) != nil {
 		return protocolFail("connection_invalid")
 	}
 	requestContext, cancel := context.WithTimeout(ctx, server.Deadline)

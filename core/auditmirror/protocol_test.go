@@ -406,6 +406,22 @@ func TestServerServeAcceptsConnectionsAndStopsOnCancellation(t *testing.T) {
 	}
 }
 
+func TestServerTransportDeadlineDoesNotUsePolicyClock(t *testing.T) {
+	binding := testBinding(t)
+	server := protocolServer(t, binding, newProtocolBackend(binding))
+	server.Clock = func() time.Time {
+		return time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	client := protocolClient(t, server)
+	request, err := NewInspectRequest(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Inspect(context.Background(), request); err != nil {
+		t.Fatalf("historical policy clock changed transport deadline: %v", err)
+	}
+}
+
 func TestServerReportsStableErrors(t *testing.T) {
 	binding := testBinding(t)
 	backend := newProtocolBackend(binding)

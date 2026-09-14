@@ -1455,6 +1455,7 @@ assert.equal(indeterminateExpiryApprovals.list(human)[0].status, 'CANCELLED');
 assert.equal(indeterminateExpiryBroker.exportState().tasks[0].state, 'EXPIRED');
 
 let checkpointExecutorCalls = 0;
+let failPreExecutionCheckpoint = true;
 const unavailableCheckpointBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals,
   executors: new Map([['broker.tools.inspect@1.0.0', async () => {
@@ -1466,7 +1467,10 @@ const unavailableCheckpointBroker = new AutomationTaskBroker({
   }]]),
   now: () => now,
   onCheckpoint: (event) => {
-    if (event.phase === 'pre_execute') throw new Error('durable state unavailable');
+    if (event.phase === 'pre_execute' && failPreExecutionCheckpoint) {
+      failPreExecutionCheckpoint = false;
+      throw new Error('durable state unavailable');
+    }
   },
 });
 const unavailableCheckpointTask = await unavailableCheckpointBroker.create(human, {
@@ -1477,8 +1481,11 @@ await assert.rejects(
   /durable state unavailable/,
 );
 assert.equal(checkpointExecutorCalls, 0, 'executor cannot run before the durable EXECUTING checkpoint');
-assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).state, 'EXECUTING');
-assert.equal(unavailableCheckpointBroker.exportState().tasks[0].state, 'EXECUTING');
+assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).state, 'READY');
+assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).execution_id, null);
+assert.equal(unavailableCheckpointBroker.exportState().tasks[0].state, 'READY');
+assert.equal((await unavailableCheckpointBroker.run(human, unavailableCheckpointTask.id)).state, 'SUCCEEDED');
+assert.equal(checkpointExecutorCalls, 1, 'a definite checkpoint failure can be retried after rollback');
 
 let executingExpiryNow = now;
 let failExecutingPreCheckpoint = true;
@@ -1493,7 +1500,9 @@ const executingExpiryBroker = new AutomationTaskBroker({
   onCheckpoint(event) {
     if (event.phase === 'pre_execute' && failExecutingPreCheckpoint) {
       failExecutingPreCheckpoint = false;
-      throw new Error('pre-execution checkpoint unavailable');
+      throw new V2Error(
+        'state_commit_indeterminate', 'pre-execution checkpoint requires reconciliation', 503,
+      );
     }
     if (event.phase === 'expired' && failExecutingExpiryCheckpoint) {
       failExecutingExpiryCheckpoint = false;
@@ -1508,7 +1517,7 @@ executingExpiryApprovals.decide(approver('admin-f'), executingExpiryTask.approva
 executingExpiryApprovals.decide(approver('admin-g'), executingExpiryTask.approval_id, 'approve');
 await assert.rejects(
   executingExpiryBroker.run(human, executingExpiryTask.id),
-  /pre-execution checkpoint unavailable/,
+  expectCode('state_commit_indeterminate'),
 );
 assert.equal(executingExpiryBroker.tasks.get(executingExpiryTask.id).state, 'EXECUTING');
 assert.equal(executingExpiryApprovals.list(human)[0].status, 'EXECUTING');

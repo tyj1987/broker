@@ -618,6 +618,7 @@ export class AutomationTaskBroker {
       if (!this.consumeExecutionRateLimit(task)) {
         return this.completePreExecutionFailure(task, approvalClaim, 'tool_rate_limited');
       }
+      const preExecutionTask = structuredClone(task);
       const executionBinding = {
         actor: identity.name,
         tool: `${task.tool.name}@${task.tool.version}`,
@@ -647,7 +648,20 @@ export class AutomationTaskBroker {
         this.releaseExecutionRateLimit(task);
         throw error;
       }
-      this.checkpoint(task, 'pre_execute');
+      try {
+        this.checkpoint(task, 'pre_execute');
+      } catch (error) {
+        if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+        for (const key of Object.keys(task)) delete task[key];
+        Object.assign(task, preExecutionTask);
+        this.releaseExecutionRateLimit(task);
+        try {
+          if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+        } catch {
+          throw new V2Error('state_rollback_failed', 'pre-execution checkpoint rollback failed', 503);
+        }
+        throw error;
+      }
       const startedAt = this.now();
       let result;
       try {

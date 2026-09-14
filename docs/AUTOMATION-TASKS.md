@@ -247,12 +247,20 @@ transition. A terminal policy denial, unavailable executor, exhausted rate
 limit, execution-token failure or pre-execution expiry is also checkpointed
 before it is returned. A definite write failure restores the prior task,
 approval claim and unused rate-limit slot; an indeterminate atomic replacement
-retains the terminal state for reconciliation. If a creation or cancellation checkpoint fails before file
-replacement, the corresponding task, idempotency binding and approval mutation
-are rolled back before an API success can be returned. A failure after atomic
+retains the terminal state for reconciliation. If a creation or cancellation
+checkpoint fails before file replacement, the corresponding task, idempotency
+binding and approval mutation are rolled back before an API success can be
+returned. A failure after atomic
 replacement is reported as `state_commit_indeterminate`; the matching in-memory
 mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
+
+A definite failure of the pre-side-effect `EXECUTING` checkpoint restores the
+task to `READY`, clears its unused execution binding, releases the approval
+claim and restores the execution-rate slot. The consumed capability remains an
+unusable tombstone. An indeterminate atomic replacement instead retains
+`EXECUTING`, its approval claim and quota consumption so no caller can replay a
+possibly committed execution boundary.
 
 Expiry discovered by a task or event read is also committed synchronously before
 the response is returned. A pre-replacement checkpoint failure restores both the

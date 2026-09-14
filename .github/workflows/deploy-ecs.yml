@@ -55,10 +55,15 @@ jobs:
         run: rm -rf node_modules/.bin
       - name: Build Go production binaries
         working-directory: core
+        env:
+          CGO_ENABLED: '0'
         run: |
           go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-policy ./cmd/policy-server
           go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-github-signer ./cmd/github-signer
           go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-aliyun-signer ./cmd/aliyun-signer
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-store ./cmd/audit-store
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-store-health ./cmd/audit-store-health
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-mirror-worker ./cmd/audit-mirror-worker
       - name: Create immutable payload and checksum
         run: |
           cp -R tools broker/tools

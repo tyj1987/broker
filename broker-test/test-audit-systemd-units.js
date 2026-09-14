@@ -130,8 +130,23 @@ for (const binary of ['secret-broker-audit-store', 'secret-broker-audit-store-he
     new RegExp(`COPY --from=core-build /out/${binary} /app/bin/${binary}`),
   );
 }
-assert.doesNotMatch(dockerfile, /secret-broker-audit-mirror-worker/);
-assert.doesNotMatch(deployHelper, /secret-broker-audit-mirror-worker/);
+assert.match(
+  dockerfile,
+  /-o \/out\/secret-broker-audit-mirror-worker \.\/cmd\/audit-mirror-worker/,
+);
+assert.doesNotMatch(
+  dockerfile,
+  /COPY --from=core-build \/out\/secret-broker-audit-mirror-worker \/app\/bin\/secret-broker-audit-mirror-worker/,
+);
+for (const [binary, identity] of [
+  ['secret-broker-audit-store', 'broker-audit-store'],
+  ['secret-broker-audit-store-health', 'broker-audit-recovery'],
+  ['secret-broker-audit-mirror-worker', 'broker-audit-mirror'],
+]) {
+  assert.match(deployHelper, new RegExp(`chmod 0500 .*${binary}`));
+  assert.match(deployHelper, new RegExp(`u:${identity}:r-x[^\\n]*${binary}`));
+}
+assert.doesNotMatch(deployHelper, /secret-broker-audit-mirror-worker\.service/);
 assert.doesNotMatch(productionPreflight, /secret-broker-audit-mirror-worker/);
 
 console.log('audit systemd contracts: isolated services and fail-closed mirror worker socket passed');

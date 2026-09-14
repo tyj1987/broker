@@ -201,6 +201,14 @@ continue.
   clock rollback, late success and refresh failure cannot return stale
   authority. The production COS factory remains unavailable; no metadata call,
   cloud resource or credential was used by this source checkpoint.
+  The current release preparation now compiles the immutable store, its bounded
+  health helper and the strict CVM-role COS mirror worker into the attested ECS
+  payload. The deploy helper rejects a payload missing any of them and grants
+  execute access only to the exact store, recovery and mirror identities. The
+  worker remains unstarted with deny-all network policy, and the audit signer,
+  exporter and recovery commands, isolated cloud accounts, single-writer CAM
+  policy, address-constrained egress, locked resources and live race evidence
+  are still required before DQ-003 can close.
 
 ## DQ-004: provider signing and account-binding authority
 

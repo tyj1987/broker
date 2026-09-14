@@ -66,6 +66,11 @@ function validResourceRef(provider, value) {
   return SAFE_ID_RE.test(value || '');
 }
 
+function sameResourceRef(provider, left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  return provider === 'github' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
 function validateParameters(provider, parameters) {
   const definition = PROVIDERS[provider];
   if (!exactObject(parameters, definition.parameterKeys)) fail('contract_plan_invalid');
@@ -103,7 +108,7 @@ export function validateProviderContractPlan(input) {
     input.account_ref === input.wrong_account_ref ||
     !['staging', 'production'].includes(input.environment) ||
     !validResourceRef(input.provider, input.wrong_resource_ref) ||
-    input.wrong_resource_ref === input.parameters?.resource_ref ||
+    sameResourceRef(input.provider, input.wrong_resource_ref, input.parameters?.resource_ref) ||
     !IDEMPOTENCY_RE.test(input.idempotency_prefix || '')
   ) {
     fail('contract_plan_invalid');

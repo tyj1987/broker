@@ -226,6 +226,9 @@ for (const mutate of [
     value.wrong_resource_ref = value.parameters.resource_ref;
   },
   (value) => {
+    value.wrong_resource_ref = value.parameters.resource_ref.toUpperCase();
+  },
+  (value) => {
     value.idempotency_prefix = 'short';
   },
   (value) => {

@@ -7,6 +7,7 @@ import {
   safeProviderContractErrorCode,
 } from '../broker/bin/provider-contract-check.js';
 import { ProviderContractError } from '../broker/lib/provider-contract-runner.js';
+import { readProtectedInputFile } from '../broker/lib/protected-input-file.js';
 
 const apiKey = `${['mb', 'test'].join('_')}_0123456789abcdefghijklmnopqrstuv`;
 const taskId = '00000000-0000-4000-8000-000000000201';
@@ -115,7 +116,7 @@ const files = new Map([
   [clientKeyPath, Buffer.from('private key')],
   [caPath, Buffer.from('ca certificate')],
 ]);
-const readFileImpl = (path) => {
+const readProtectedFileImpl = (path) => {
   if (!files.has(path)) throw new Error('missing');
   return files.get(path);
 };
@@ -137,7 +138,7 @@ const argv = [
 ];
 const output = [];
 const receipt = await runProviderContractCheck(argv, {
-  readFileImpl,
+  readProtectedFileImpl,
   requestImpl,
   writeOutput: (value) => output.push(value),
 });
@@ -162,7 +163,7 @@ process.stdout.write = (value) => {
 };
 try {
   assert.equal(
-    (await runProviderContractCheck(withoutTls, { readFileImpl, requestImpl })).status,
+    (await runProviderContractCheck(withoutTls, { readProtectedFileImpl, requestImpl })).status,
     'passed',
   );
 } finally {
@@ -183,7 +184,11 @@ for (const invalidArgv of [
   ['node', 'check', '--plan-file', contractPath, '--api-key-file', 'relative.key'],
 ]) {
   await assert.rejects(
-    runProviderContractCheck(invalidArgv, { readFileImpl, requestImpl, writeOutput: () => {} }),
+    runProviderContractCheck(invalidArgv, {
+      readProtectedFileImpl,
+      requestImpl,
+      writeOutput: () => {},
+    }),
   );
 }
 
@@ -196,7 +201,7 @@ for (const [path, contents, pattern] of [
   invalidFiles.set(path, contents);
   await assert.rejects(
     runProviderContractCheck(argv, {
-      readFileImpl: (filePath) => invalidFiles.get(filePath),
+      readProtectedFileImpl: (filePath) => invalidFiles.get(filePath),
       requestImpl,
       writeOutput: () => {},
     }),
@@ -208,7 +213,7 @@ const oversizedFiles = new Map(files);
 oversizedFiles.set(contractPath, Buffer.alloc(32 * 1024 + 1));
 await assert.rejects(
   runProviderContractCheck(argv, {
-    readFileImpl: (path) => oversizedFiles.get(path),
+    readProtectedFileImpl: (path) => oversizedFiles.get(path),
     requestImpl,
     writeOutput: () => {},
   }),
@@ -226,6 +231,102 @@ assert.equal(
 assert.equal(
   safeProviderContractErrorCode(Object.assign(new Error('private detail'), { code: 'forbidden' })),
   'provider_contract_check_failed',
+);
+
+function fakeStat({
+  file = true,
+  directory = false,
+  symbolicLink = false,
+  size = file ? 4 : 0,
+  mode = directory ? 0o40700 : 0o100600,
+  uid = 1000,
+  gid = 1000,
+  ino = file ? 20 : 10,
+  mtimeMs = 1,
+} = {}) {
+  return {
+    dev: 1,
+    ino,
+    size,
+    mtimeMs,
+    mode,
+    uid,
+    gid,
+    isFile: () => file,
+    isDirectory: () => directory,
+    isSymbolicLink: () => symbolicLink,
+  };
+}
+
+const securePath = resolve('protected-test-inputs', 'secure.key');
+const secureParent = resolve('protected-test-inputs');
+const parentStat = fakeStat({ file: false, directory: true, ino: 10 });
+const fileStat = fakeStat({ ino: 20 });
+const secureReadDeps = {
+  sensitive: true,
+  platform: 'linux',
+  effectiveUid: 1000,
+  lstatImpl: (path) => (path === secureParent ? parentStat : fileStat),
+  realpathImpl: (path) => path,
+  openImpl: () => 7,
+  fstatImpl: () => fileStat,
+  readFileImpl: () => Buffer.from('safe'),
+  closeImpl: () => {},
+};
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Protected input', 16, secureReadDeps),
+  Buffer.from('safe'),
+);
+
+for (const overrides of [
+  {
+    lstatImpl: (path) =>
+      path === secureParent ? fakeStat({ file: false, directory: false, ino: 10 }) : fileStat,
+  },
+  { lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ symbolicLink: true })) },
+  {
+    lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ mode: 0o100640 })),
+  },
+  {
+    lstatImpl: (path) =>
+      path === secureParent
+        ? fakeStat({ file: false, directory: true, mode: 0o40722, ino: 10 })
+        : fileStat,
+  },
+  { effectiveUid: null },
+  { lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ size: 0 })) },
+  { lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ size: 17 })) },
+  { realpathImpl: (path) => (path === securePath ? `${path}.redirected` : path) },
+  { fstatImpl: () => fakeStat({ file: false }) },
+  { fstatImpl: () => fakeStat({ ino: 21 }) },
+  { readFileImpl: () => 'safe' },
+  { readFileImpl: () => Buffer.from('drift') },
+]) {
+  assert.throws(() =>
+    readProtectedInputFile(securePath, 'Protected input', 16, {
+      ...secureReadDeps,
+      ...overrides,
+    }),
+  );
+}
+
+assert.throws(() => readProtectedInputFile('relative.key', 'Protected input', 16, secureReadDeps));
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Public input', 16, {
+    ...secureReadDeps,
+    sensitive: false,
+    lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ mode: 0o100644 })),
+    fstatImpl: () => fakeStat({ mode: 0o100644 }),
+  }),
+  Buffer.from('safe'),
+);
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Windows input', 16, {
+    ...secureReadDeps,
+    platform: 'win32',
+    effectiveUid: null,
+  }),
+  Buffer.from('safe'),
 );
 
 console.log('provider contract CLI: file-only inputs and safe receipt passed');

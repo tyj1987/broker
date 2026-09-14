@@ -296,6 +296,12 @@ continue.
   principal or digest. The 2026-09-12 production probe was denied before
   provider execution because neither tool is deployed, so no real account contract has passed;
   revocation and rotation remain separate required phases.
+  The operator CLI now opens those files through a bounded, stable-file input
+  boundary: links and redirected parents are rejected, POSIX credential files
+  are owner-only, public inputs are never group/other writable, and metadata
+  drift fails before the Broker client is created. Windows retains the same
+  reparse/stability checks and requires an owner-only NTFS ACL as an external
+  precondition.
   The source deployment contract now assigns GitHub and Alibaba Cloud signers
   distinct fixed users, groups, runtime directories and socket paths. The
   22-item production preflight no longer accepts an environment variable that

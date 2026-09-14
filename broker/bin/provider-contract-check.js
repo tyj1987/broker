@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createBrokerClient, parseArgs } from '../mcp-server.js';
@@ -9,6 +7,7 @@ import {
   ProviderContractError,
   createProviderContractRunner,
 } from '../lib/provider-contract-runner.js';
+import { readProtectedInputFile } from '../lib/protected-input-file.js';
 
 const ALLOWED_ARGUMENTS = new Set([
   'broker',
@@ -21,23 +20,6 @@ const ALLOWED_ARGUMENTS = new Set([
 const MAX_PLAN_BYTES = 32 * 1024;
 const MAX_API_KEY_BYTES = 256;
 const MAX_TLS_FILE_BYTES = 1024 * 1024;
-
-function readBoundedFile(path, label, maxBytes, readFileImpl) {
-  if (typeof path !== 'string' || !isAbsolute(path)) {
-    throw new Error(`${label} path must be absolute`);
-  }
-  let value;
-  try {
-    value = readFileImpl(path);
-  } catch {
-    throw new Error(`${label} file could not be read`);
-  }
-  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > maxBytes) {
-    throw new Error(`${label} file size is invalid`);
-  }
-  return bytes;
-}
 
 function parsePlan(bytes) {
   try {
@@ -61,7 +43,7 @@ export function safeProviderContractErrorCode(error) {
 export async function runProviderContractCheck(
   argv = process.argv,
   {
-    readFileImpl = readFileSync,
+    readProtectedFileImpl = readProtectedInputFile,
     requestImpl,
     writeOutput = (value) => process.stdout.write(`${value}\n`),
   } = {},
@@ -77,19 +59,24 @@ export async function runProviderContractCheck(
     throw new Error('Broker client certificate and key must be configured together');
   }
 
-  const plan = parsePlan(
-    readBoundedFile(args['plan-file'], 'Provider contract plan', MAX_PLAN_BYTES, readFileImpl),
-  );
-  const apiKey = readBoundedFile(
-    args['api-key-file'],
-    'Broker API key',
-    MAX_API_KEY_BYTES,
-    readFileImpl,
-  )
+  const readInput = (name, label, maxBytes, options) => {
+    const bytes = readProtectedFileImpl(args[name], label, maxBytes, options);
+    if (!Buffer.isBuffer(bytes) || bytes.byteLength < 1 || bytes.byteLength > maxBytes) {
+      throw new Error(`${label} file size is invalid`);
+    }
+    return bytes;
+  };
+
+  const plan = parsePlan(readInput('plan-file', 'Provider contract plan', MAX_PLAN_BYTES));
+  const apiKey = readInput('api-key-file', 'Broker API key', MAX_API_KEY_BYTES, { sensitive: true })
     .toString('utf8')
     .trim();
   const optionalFile = (name, label) =>
-    args[name] ? readBoundedFile(args[name], label, MAX_TLS_FILE_BYTES, readFileImpl) : undefined;
+    args[name]
+      ? readInput(name, label, MAX_TLS_FILE_BYTES, {
+          sensitive: name === 'client-key-file',
+        })
+      : undefined;
   const callBroker = createBrokerClient({
     origin: args.broker || 'https://127.0.0.1:18443',
     apiKey,

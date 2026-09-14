@@ -91,6 +91,13 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm run lint
       - run: npm run test:coverage
+      - name: Enforce protected provider input coverage
+        working-directory: .
+        run: >-
+          node broker/node_modules/c8/bin/c8.js --check-coverage --clean --all
+          --include=broker/lib/protected-input-file.js --reporter=text
+          --lines=90 --branches=85 --functions=90
+          node broker-test/test-provider-contract-check-cli.js
       - name: Verify generated OpenAPI is current
         run: npm run openapi:generate
       - name: Check generated contract diff

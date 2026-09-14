@@ -45,6 +45,15 @@ npm run provider:contract -- \
   --ca-file /protected/broker-ca.crt
 ```
 
+The CLI opens each input with a no-follow descriptor on POSIX, rejects symbolic
+links and redirected parent paths, and verifies that the file metadata remains
+stable through the read. POSIX input directories and files cannot be writable
+by group or other users; API keys and client private keys must be owner-only.
+On Windows, the same reparse-point and stable-file checks apply, while the
+operator must provision an owner-only NTFS ACL because POSIX mode bits are not
+authoritative there. An unsafe or changing input fails before any Broker
+request is created.
+
 The plan is an external evidence input and must not be committed. It contains
 only account and resource references plus expected authority digests, never
 raw provider identifiers or credentials. A version 2 plan must contain the

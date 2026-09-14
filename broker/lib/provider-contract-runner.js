@@ -136,11 +136,12 @@ function validateExpectedAuthority(provider, authority) {
     fail('contract_plan_invalid');
 }
 
-function validTaskBinding(task, plan, state) {
+function validTaskBinding(task, plan, state, expectedTaskId) {
   return (
     task &&
     typeof task === 'object' &&
     TASK_ID_RE.test(task.id || '') &&
+    (expectedTaskId === undefined || task.id === expectedTaskId) &&
     task.tool === plan.tool_name &&
     task.tool_version === plan.tool_version &&
     task.account_ref === plan.account_ref &&
@@ -309,7 +310,9 @@ export function createProviderContractRunner({ callBroker } = {}) {
     } catch {
       fail('contract_positive_run_failed');
     }
-    if (!validTaskBinding(completed, plan, 'SUCCEEDED')) fail('contract_positive_task_invalid');
+    if (!validTaskBinding(completed, plan, 'SUCCEEDED', created.id)) {
+      fail('contract_positive_task_invalid');
+    }
     validateSafeResult(completed.result, plan);
 
     await requireDenied(

@@ -326,6 +326,22 @@ for (const [response, code] of [
   );
 }
 
+{
+  const plan = githubPlan();
+  const broker = successfulBroker(plan);
+  await expectRunCode(
+    plan,
+    async (path, options) => {
+      const result = await broker.callBroker(path, options);
+      if (path.endsWith('/run')) {
+        return { ...result, id: '00000000-0000-4000-8000-000000000102' };
+      }
+      return result;
+    },
+    'contract_positive_task_invalid',
+  );
+}
+
 for (const [result, code] of [
   [
     {

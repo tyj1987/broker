@@ -92,6 +92,42 @@ func TestAlibabaKMSHTTPClientBuildsExactAsymmetricSignRequest(t *testing.T) {
 	}
 }
 
+func TestAlibabaKMSHTTPTransportAndPinnedSignerEndToEnd(t *testing.T) {
+	now := time.Date(2026, time.September, 15, 1, 2, 3, 0, time.UTC)
+	key := testKMSKey(t)
+	config := Config{Algorithm: "ecdsa-p256-sha256", KeyID: "kms-audit-key-1", StreamID: "production-audit"}
+	request := kmsRequest(config)
+	credential := aliyunsigner.TemporaryCredential{
+		AccessKeyID: "temporary-access-id", AccessKeySecret: "temporary-access-secret",
+		SecurityToken: "temporary-security-token", Expiration: now.Add(time.Hour), RoleName: "broker-audit-kms",
+	}
+	transport := newTestAlibabaKMSHTTPClient(
+		"kst-example.cryptoservice.kms.aliyuncs.com", credential.RoleName,
+		kmsCredentialProviderFunc(func(context.Context) (aliyunsigner.TemporaryCredential, error) { return credential, nil }),
+		kmsHTTPDoerFunc(func(httpRequest *http.Request) (*http.Response, error) {
+			digest, err := base64.StdEncoding.DecodeString(httpRequest.URL.Query().Get("Digest"))
+			if err != nil || len(digest) != sha256.Size {
+				t.Fatal("transport did not encode the exact digest")
+			}
+			signature, err := ecdsa.SignASN1(rand.Reader, key, digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := `{"KeyId":"` + config.KeyID + `","KeyVersionId":"` + testKMSKeyVersionID +
+				`","Value":"` + base64.StdEncoding.EncodeToString(signature) + `","RequestId":"request-123"}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json;charset=UTF-8"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		}), func() time.Time { return now }, func() (string, error) { return "fixed-nonce", nil },
+	)
+	signer, err := NewAlibabaKMSSigner(config, testKMSKeyVersionID, &key.PublicKey, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := signer.Sign(context.Background(), request)
+	if err != nil || !ecdsa.VerifyASN1(&key.PublicKey, request.Digest[:], signature) {
+		t.Fatalf("end-to-end KMS signature failed: %v", err)
+	}
+}
+
 func TestNewAlibabaKMSHTTPClientPinsPrivateGatewayAndCA(t *testing.T) {
 	caPEM, caDigest := testKMSCAPEM(t)
 	config, err := ParseSignerServiceConfig(strings.NewReader(validSignerServiceConfigJSON(t)))

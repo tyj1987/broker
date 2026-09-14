@@ -115,7 +115,7 @@ COPY --from=core-build /out/secret-broker-policy /app/bin/secret-broker-policy
 COPY broker/ ./
 COPY tools/ ./tools/
 COPY providers/ ./providers/
-RUN rm -f package-lock.json
+RUN rm -f package-lock.json bin/secret-broker-audit-exporter
 
 ENV NODE_ENV=production \
     PKI_DIR=/run/secrets/broker/pki \

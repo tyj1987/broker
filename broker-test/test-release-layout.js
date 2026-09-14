@@ -26,6 +26,9 @@ for (const binary of [
 }
 assert.match(deployScript, /-d "\$PAYLOAD\/providers"/);
 assert.match(deployScript, /-name '\*\.yaml'/);
+assert.match(deployScript, /PAYLOAD\/bin\/secret-broker-audit-exporter/);
+assert.match(deployScript, /broker-audit-exporter:r-x/);
+assert.match(dockerfile, /rm -f package-lock\.json bin\/secret-broker-audit-exporter/);
 assert.match(deployScript, /provider-contract-evidence-check\.js/);
 const manifests = readdirSync(resolve(root, 'providers')).filter((name) => name.endsWith('.yaml'));
 assert.ok(manifests.length > 0, 'provider manifests must be present in source');

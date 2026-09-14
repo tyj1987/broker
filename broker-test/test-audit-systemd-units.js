@@ -144,6 +144,9 @@ for (const binary of ['secret-broker-audit-store', 'secret-broker-audit-store-he
     new RegExp(`COPY --from=core-build /out/${binary} /app/bin/${binary}`),
   );
 }
+assert.match(deployHelper, /chmod 0550 .*secret-broker-audit-exporter/);
+assert.match(deployHelper, /u:broker-audit-exporter:r-x[^\n]*secret-broker-audit-exporter/);
+assert.match(dockerfile, /rm -f package-lock\.json bin\/secret-broker-audit-exporter/);
 assert.match(
   dockerfile,
   /-o \/out\/secret-broker-audit-signer \.\/cmd\/audit-signer/,

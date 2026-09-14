@@ -52,6 +52,7 @@ build/
 out/
 site/
 coverage/
+**/.c8-*/
 coverage.txt
 coverage.out
 *-coverage.out

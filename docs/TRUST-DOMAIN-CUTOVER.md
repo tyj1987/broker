@@ -34,6 +34,19 @@ the maintenance window, exact release SHA, impact, client and management-path
 counts, rollback boundary, readiness result and missing control names. It does
 not print fingerprints or evidence references.
 
+Store the plan outside the repository in an owner-only directory, then render
+the safe approval report with an absolute path:
+
+```bash
+npm --prefix broker run trust-domain:check -- --plan-file /protected/path/dq009-plan.json
+```
+
+The command rejects links, reparse points, mutable files, oversized input and
+unsafe POSIX ownership or permissions through the shared protected-input
+boundary. It never prints the plan path, fingerprints, owners or evidence
+references. A successful report is readiness evidence only and does not carry
+out the cutover.
+
 ## Preparation phases
 
 1. Generate the replacement CA through the selected offline/HSM ceremony.

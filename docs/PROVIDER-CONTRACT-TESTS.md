@@ -16,6 +16,12 @@ wrong-resource denial. GitHub uses the authenticated App installation endpoint;
 Alibaba Cloud uses STS `GetCallerIdentity`. The adapter hashes every returned
 principal identifier before it can enter a task result. The runner accepts and
 compares only lowercase SHA-256 digests plus the bounded principal type.
+The created and completed task responses must retain one exact task UUID and
+the requested provider, operation, account, environment and resource target.
+The runner rejects a substituted task even when its result otherwise matches.
+If a negative check unexpectedly returns a task, cleanup is attempted only when
+that task has the exact attempted binding and remains in a cancellable state;
+an unrelated task identifier is never cancelled.
 For Alibaba Cloud, signer protocol version 3 also returns an opaque,
 non-credential lease binding. The ECS request must use the same binding as the
 identity probe and the consumed task execution. The Node client, adapters and

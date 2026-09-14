@@ -880,6 +880,102 @@ assert.throws(
 );
 assert.deepEqual(replayRestored.exportState(), beforeCorruptRestore, 'invalid state cannot partially replace live state');
 
+const completedOperationState = workerBroker.exportState();
+const expectCorruptOperationMarker = (mutate) => {
+  const candidate = structuredClone(completedOperationState);
+  const operation = candidate.operations.find((item) => item.status === 'completed');
+  mutate(operation);
+  assert.throws(
+    () => replayRestored.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+};
+for (const mutate of [
+  (operation) => { operation.status = 'waiting'; },
+  (operation) => { operation.error = 'forged_error'; },
+  (operation) => { operation.status = 'failed'; operation.result = null; },
+  (operation) => { operation.updatedAt = new Date(Date.parse(operation.createdAt) - 1).toISOString(); },
+  (operation) => { operation.expiresAt = new Date(Date.parse(operation.createdAt) + 9_999).toISOString(); },
+  (operation) => { operation.expiresAt = new Date(Date.parse(operation.createdAt) + 900_001).toISOString(); },
+]) expectCorruptOperationMarker(mutate);
+
+for (const mutate of [
+  (task) => { task.code = '123456'; },
+  (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 14_999).toISOString(); },
+  (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 120_001).toISOString(); },
+]) {
+  const candidate = structuredClone(durableOperationState);
+  mutate(candidate.otp_tasks.find((task) => task.status === 'consuming'));
+  assert.throws(
+    () => replayRestored.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+}
+assert.deepEqual(
+  replayRestored.exportState(),
+  beforeCorruptRestore,
+  'invalid operation markers and lifetimes cannot partially replace live state',
+);
+
+const claimValidationBroker = new OperationBroker({ now: () => now });
+claimValidationBroker.hydrateDevices(otpWorkerBroker.deviceRecords());
+claimValidationBroker.restoreState(claimState);
+const beforeInvalidClaimRestore = claimValidationBroker.exportState();
+for (const mutate of [
+  (state) => { state.browser_claims[0].previousOperationStatus = 'completed'; },
+  (state) => {
+    const claim = state.browser_claims[0];
+    const task = state.otp_tasks.find((item) => item.id === claim.taskId);
+    claim.expiresAt = Date.parse(task.expiresAt) + 1;
+  },
+  (state) => { state.browser_claims[0].previousOperationUpdatedAt = '2000-01-01T00:00:00.000Z'; },
+]) {
+  const candidate = structuredClone(claimState);
+  mutate(candidate);
+  assert.throws(
+    () => claimValidationBroker.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+}
+assert.deepEqual(
+  claimValidationBroker.exportState(),
+  beforeInvalidClaimRestore,
+  'invalid browser OTP claim bindings cannot partially replace live state',
+);
+
+const leaseValidationBroker = new OperationBroker({ now: () => now });
+leaseValidationBroker.hydrateDevices(otpWorkerBroker.deviceRecords());
+leaseValidationBroker.restoreState(durableOperationState);
+const beforeInvalidLeaseRestore = leaseValidationBroker.exportState();
+for (const mutate of [
+  (state) => { state.browser_leases[0].previousStatus = 'completed'; },
+  (state) => {
+    const lease = state.browser_leases[0];
+    const operation = state.operations.find((item) => item.id === lease.operationId);
+    lease.expiresAt = Date.parse(operation.expiresAt) + 1;
+  },
+  (state) => { state.browser_leases[0].previousUpdatedAt = '2000-01-01T00:00:00.000Z'; },
+  (state) => {
+    const lease = state.browser_leases[0];
+    const operation = state.operations.find((item) => item.id === lease.operationId);
+    const task = state.otp_tasks.find((item) => item.id === operation.otpTaskId);
+    task.status = 'received';
+    task.code = '123456';
+  },
+]) {
+  const candidate = structuredClone(durableOperationState);
+  mutate(candidate);
+  assert.throws(
+    () => leaseValidationBroker.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+}
+assert.deepEqual(
+  leaseValidationBroker.exportState(),
+  beforeInvalidLeaseRestore,
+  'invalid browser operation lease bindings cannot partially replace live state',
+);
+
 const completedResultState = workerBroker.exportState();
 completedResultState.operations.find((operation) => operation.status === 'completed').result = {
   nested: { access_token: 'credential-canary' },

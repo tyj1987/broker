@@ -329,6 +329,14 @@ export class OperationBroker {
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.updatedAt, 'updated_at');
         requireTimestamp(source.expiresAt, 'expires_at');
+        const createdAt = Date.parse(source.createdAt);
+        const updatedAt = Date.parse(source.updatedAt);
+        const expiresAt = Date.parse(source.expiresAt);
+        const requiresError = ['failed', 'revoked'].includes(source.status);
+        if (updatedAt < createdAt || expiresAt - createdAt < 10_000
+          || expiresAt - createdAt > 900_000
+          || (source.status !== 'completed' && source.result !== null)
+          || requiresError !== (source.error !== null)) throw stateCorrupt();
         if (operations.has(source.id)) throw stateCorrupt();
         operations.set(source.id, cloneStateRecord(source));
       }
@@ -352,6 +360,9 @@ export class OperationBroker {
         for (const sender of source.senderAllowlist) requireText(sender, 'sender_allowlist', 64);
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.expiresAt, 'expires_at');
+        const otpLifetime = Date.parse(source.expiresAt) - Date.parse(source.createdAt);
+        if (otpLifetime < 15_000 || otpLifetime > DEFAULT_OTP_TTL_MS
+          || (source.status === 'received') !== (source.code !== null)) throw stateCorrupt();
         if (otpTasks.has(source.id)) throw stateCorrupt();
         const operation = operations.get(source.operationId);
         const device = this.devices.get(source.deviceId);
@@ -386,7 +397,7 @@ export class OperationBroker {
           || !Number.isSafeInteger(source.tabId) || source.tabId < 0 || source.frameId !== 0
           || typeof source.documentId !== 'string' || source.documentId.length < 1 || source.documentId.length > 256
           || !finiteExpiry(source.expiresAt) || typeof source.code !== 'string' || !OTP_RE.test(source.code)
-          || source.previousTaskStatus !== 'received' || !OPERATION_STATUSES.has(source.previousOperationStatus)) {
+          || source.previousTaskStatus !== 'received' || source.previousOperationStatus !== 'received') {
           throw stateCorrupt();
         }
         requireTimestamp(source.previousOperationUpdatedAt, 'previous_operation_updated_at');
@@ -395,7 +406,10 @@ export class OperationBroker {
         if (!task || task.status !== 'consuming' || !operation || operation.status !== 'consuming'
           || operation.owner !== source.owner || operation.provider !== source.provider
           || operation.accountRef !== source.accountRef || browserClaims.has(source.key)
-          || claimedTaskIds.has(source.taskId)) throw stateCorrupt();
+          || claimedTaskIds.has(source.taskId)
+          || source.expiresAt > Date.parse(task.expiresAt)
+          || Date.parse(source.previousOperationUpdatedAt) < Date.parse(operation.createdAt)
+          || Date.parse(source.previousOperationUpdatedAt) > Date.parse(operation.updatedAt)) throw stateCorrupt();
         const claim = cloneStateRecord(source);
         delete claim.key;
         browserClaims.set(source.key, claim);
@@ -410,12 +424,18 @@ export class OperationBroker {
           || typeof source.receiptHash !== 'string' || !BASE64URL_RE.test(source.receiptHash)
           || source.receiptHash.length !== 43 || !ID_RE.test(source.deviceId) || !ID_RE.test(source.operationId)
           || !finiteExpiry(source.expiresAt) || typeof source.otpClaimed !== 'boolean'
-          || !OPERATION_STATUSES.has(source.previousStatus)) throw stateCorrupt();
+          || !['waiting', 'received'].includes(source.previousStatus)) throw stateCorrupt();
         requireTimestamp(source.previousUpdatedAt, 'previous_updated_at');
         const operation = operations.get(source.operationId);
         const device = this.devices.get(source.deviceId);
         if (!operation || operation.status !== 'consuming' || !device || device.platform !== 'browser-worker'
-          || browserLeases.has(source.id) || leasedOperationIds.has(source.operationId)) throw stateCorrupt();
+          || browserLeases.has(source.id) || leasedOperationIds.has(source.operationId)
+          || source.expiresAt > Date.parse(operation.expiresAt)
+          || Date.parse(source.previousUpdatedAt) < Date.parse(operation.createdAt)
+          || Date.parse(source.previousUpdatedAt) > Date.parse(operation.updatedAt)) throw stateCorrupt();
+        const otpTask = operation.otpTaskId ? otpTasks.get(operation.otpTaskId) : null;
+        if (source.otpClaimed
+          && (!otpTask || otpTask.status !== 'consuming' || otpTask.code !== null)) throw stateCorrupt();
         browserLeases.set(source.id, cloneStateRecord(source));
         leasedOperationIds.add(source.operationId);
         if (source.otpClaimed && operation.otpTaskId) leasedOtpTaskIds.add(operation.otpTaskId);

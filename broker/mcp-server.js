@@ -1,11 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { stdin as processStdin, stdout as processStdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createMcpTaskBridge } from './lib/mcp-task-bridge.js';
+import { readProtectedInputFile } from './lib/protected-input-file.js';
 import { redact, redactDeep } from './lib/redact.js';
 
 const MAX_HTTP_BODY_BYTES = 1024 * 1024;
@@ -61,7 +61,8 @@ export function normalizeBrokerOrigin(value) {
   if (!ALLOWED_BROKER_ORIGINS.has(url.origin)) {
     throw new Error('Broker URL is not an approved origin');
   }
-  return url.origin;
+  if (url.origin === 'https://127.0.0.1:18443') return 'https://127.0.0.1:18443';
+  return 'https://broker.52trz.com';
 }
 
 function safeBrokerError(status, body) {
@@ -125,6 +126,11 @@ export function createBrokerClient({
         finish(reject, new Error('Broker request timed out'));
       }, timeoutMs);
       try {
+        // Credential files are intentionally consumed only as TLS material and
+        // the scoped Authorization value for one of the two literal origins
+        // selected by normalizeBrokerOrigin. Callers cannot supply a host,
+        // scheme, port, authentication header or arbitrary path here.
+        // codeql[js/file-access-to-http]
         request = requestImpl(
           {
             protocol: 'https:',
@@ -423,10 +429,10 @@ export function createMcpHttpServer({
   });
 }
 
-function readCredential(path, label, readFileImpl = readFileSync) {
+function readCredential(path, label, maxBytes, sensitive, readProtectedFileImpl) {
   if (typeof path !== 'string' || !path) throw new Error(`${label} file is required`);
   try {
-    return readFileImpl(path);
+    return readProtectedFileImpl(path, label, maxBytes, { sensitive });
   } catch {
     throw new Error(`${label} file could not be read`);
   }
@@ -436,7 +442,7 @@ export async function boot(
   argv = process.argv,
   environment = process.env,
   {
-    readFileImpl = readFileSync,
+    readProtectedFileImpl = readProtectedInputFile,
     requestImpl = httpsRequest,
     createServerImpl = createHttpServer,
     input = processStdin,
@@ -447,7 +453,9 @@ export async function boot(
   if (args['master-key'] || args['master-key-file'] || environment.MCP_MASTER_KEY) {
     throw new Error('MCP master keys are not supported');
   }
-  const apiKey = readCredential(args['api-key-file'], 'Broker API key', readFileImpl)
+  const apiKey = readCredential(
+    args['api-key-file'], 'Broker API key', 256, true, readProtectedFileImpl,
+  )
     .toString('utf8')
     .trim();
   if (!API_KEY_RE.test(apiKey)) throw new Error('Broker API key file is invalid');
@@ -456,13 +464,19 @@ export async function boot(
   const origin = normalizeBrokerOrigin(args.broker || 'https://127.0.0.1:18443');
 
   const cert = args['client-cert-file']
-    ? readCredential(args['client-cert-file'], 'Broker client certificate', readFileImpl)
+    ? readCredential(
+        args['client-cert-file'], 'Broker client certificate', 64 * 1024, false,
+        readProtectedFileImpl,
+      )
     : undefined;
   const key = args['client-key-file']
-    ? readCredential(args['client-key-file'], 'Broker client key', readFileImpl)
+    ? readCredential(
+        args['client-key-file'], 'Broker client key', 64 * 1024, true,
+        readProtectedFileImpl,
+      )
     : undefined;
   const ca = args['ca-file']
-    ? readCredential(args['ca-file'], 'Broker CA', readFileImpl)
+    ? readCredential(args['ca-file'], 'Broker CA', 256 * 1024, false, readProtectedFileImpl)
     : undefined;
   const callBroker = createBrokerClient({ origin, apiKey, cert, key, ca, requestImpl });
   const bridge = createMcpTaskBridge({ callBroker });
@@ -478,7 +492,9 @@ export async function boot(
   const listenerToken = readCredential(
     args['listener-token-file'],
     'MCP listener token',
-    readFileImpl,
+    256,
+    true,
+    readProtectedFileImpl,
   )
     .toString('utf8')
     .trim();

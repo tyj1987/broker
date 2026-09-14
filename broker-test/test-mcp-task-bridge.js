@@ -560,6 +560,7 @@ assert.throws(() => createMcpStdioServer({ input: stdioInput, output: stdioOutpu
 assert.throws(() => createMcpStdioServer({ bridge, input: {}, output: stdioOutput }), /streams/);
 
 let bootListen;
+const protectedReads = [];
 const bootFiles = new Map([
   ['api-key', API_KEY],
   ['listener-token', LISTENER_TOKEN],
@@ -590,8 +591,9 @@ const bootServer = await boot(
   ],
   {},
   {
-    readFileImpl: (path) => {
+    readProtectedFileImpl: (path, label, maxBytes, options) => {
       if (!bootFiles.has(path)) throw new Error('missing');
+      protectedReads.push({ path, label, maxBytes, sensitive: options?.sensitive });
       return Buffer.from(bootFiles.get(path));
     },
     requestImpl,
@@ -605,13 +607,22 @@ const bootServer = await boot(
 );
 assert.equal(typeof bootServer.listen, 'function');
 assert.deepEqual(bootListen, { port: 3002, host: '::1' });
+assert.deepEqual(protectedReads, [
+  { path: 'api-key', label: 'Broker API key', maxBytes: 256, sensitive: true },
+  {
+    path: 'cert', label: 'Broker client certificate', maxBytes: 64 * 1024, sensitive: false,
+  },
+  { path: 'key', label: 'Broker client key', maxBytes: 64 * 1024, sensitive: true },
+  { path: 'ca', label: 'Broker CA', maxBytes: 256 * 1024, sensitive: false },
+  { path: 'listener-token', label: 'MCP listener token', maxBytes: 256, sensitive: true },
+]);
 const bootStdioInput = new PassThrough();
 const bootStdioOutput = new PassThrough();
 const bootStdio = await boot(
   ['node', 'mcp', '--api-key-file', 'api-key', '--transport', 'stdio'],
   {},
   {
-    readFileImpl: (path) => Buffer.from(bootFiles.get(path)),
+    readProtectedFileImpl: (path) => Buffer.from(bootFiles.get(path)),
     requestImpl,
     input: bootStdioInput,
     output: bootStdioOutput,
@@ -622,7 +633,7 @@ await assert.rejects(
   boot(
     ['node', 'mcp', '--api-key-file', 'api-key', '--transport', 'stdio', '--port', '3001'],
     {},
-    { readFileImpl: (path) => Buffer.from(bootFiles.get(path)), requestImpl },
+    { readProtectedFileImpl: (path) => Buffer.from(bootFiles.get(path)), requestImpl },
   ),
   /not allowed with stdio/,
 );
@@ -630,18 +641,22 @@ await assert.rejects(
   boot(
     ['node', 'mcp', '--api-key-file', 'api-key', '--transport', 'invalid'],
     {},
-    { readFileImpl: (path) => Buffer.from(bootFiles.get(path)), requestImpl },
+    { readProtectedFileImpl: (path) => Buffer.from(bootFiles.get(path)), requestImpl },
   ),
   /transport is invalid/,
 );
 await assert.rejects(boot(['node', 'mcp', '--master-key', 'value'], {}), /not supported/);
 await assert.rejects(boot(['node', 'mcp'], { MCP_MASTER_KEY: 'value' }), /not supported/);
 await assert.rejects(
+  boot(['node', 'mcp', '--api-key-file', 'package.json'], {}),
+  /could not be read/,
+);
+await assert.rejects(
   boot(
     ['node', 'mcp', '--api-key-file', 'missing'],
     {},
     {
-      readFileImpl: () => {
+      readProtectedFileImpl: () => {
         throw new Error('missing');
       },
     },
@@ -652,7 +667,7 @@ await assert.rejects(
   boot(
     ['node', 'mcp', '--api-key-file', 'api'],
     {},
-    { readFileImpl: () => Buffer.from('invalid') },
+    { readProtectedFileImpl: () => Buffer.from('invalid') },
   ),
   /API key file is invalid/,
 );
@@ -660,7 +675,7 @@ await assert.rejects(
   boot(
     ['node', 'mcp', '--api-key-file', 'api', '--listener-token-file', 'listener'],
     {},
-    { readFileImpl: (path) => Buffer.from(path === 'api' ? API_KEY : 'invalid') },
+    { readProtectedFileImpl: (path) => Buffer.from(path === 'api' ? API_KEY : 'invalid') },
   ),
   /listener token file is invalid/,
 );
@@ -677,7 +692,7 @@ await assert.rejects(
       '0.0.0.0',
     ],
     {},
-    { readFileImpl: (path) => Buffer.from(path === 'api' ? API_KEY : LISTENER_TOKEN) },
+    { readProtectedFileImpl: (path) => Buffer.from(path === 'api' ? API_KEY : LISTENER_TOKEN) },
   ),
   /loopback/,
 );

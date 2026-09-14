@@ -10,7 +10,11 @@ automatic child-key issuance are rejected. The key should be limited to the
 exact operations, accounts, resources and environments required by that MCP
 workload, have a short absolute lifetime and be rotated outside the Agent
 process. Optional client certificate, private-key and CA files enable mTLS to
-the Broker without placing their values in arguments or logs.
+the Broker without placing their values in arguments or logs. Every credential
+path must be absolute and is opened before its file metadata is validated. The
+bridge rejects redirected paths, non-regular files, oversized or changing
+contents and, on POSIX, untrusted ownership or writable permissions. API keys,
+private keys and listener tokens must be owner-only.
 
 `tools/list` is derived from the running Broker's executable-tool view. For an
 API-key identity, that view is intersected with the key's scopes, services,

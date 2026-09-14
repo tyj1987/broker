@@ -243,7 +243,11 @@ an OTP when the process stopped is restored as `execution_state_indeterminate`
 and is never retried automatically. Task creation is returned only after a `created` checkpoint;
 cancellation is returned only after a `cancelled` checkpoint. Execution is
 checkpointed before the adapter side effect and again after its terminal
-transition. If a creation or cancellation checkpoint fails before file
+transition. A terminal policy denial, unavailable executor, exhausted rate
+limit, execution-token failure or pre-execution expiry is also checkpointed
+before it is returned. A definite write failure restores the prior task,
+approval claim and unused rate-limit slot; an indeterminate atomic replacement
+retains the terminal state for reconciliation. If a creation or cancellation checkpoint fails before file
 replacement, the corresponding task, idempotency binding and approval mutation
 are rolled back before an API success can be returned. A failure after atomic
 replacement is reported as `state_commit_indeterminate`; the matching in-memory

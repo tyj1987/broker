@@ -765,15 +765,31 @@ export class AutomationTaskBroker {
   }
 
   completePreExecutionFailure(task, approvalClaim, code, { state = 'FAILED', rateLimitConsumed = false } = {}) {
+    const previousTask = structuredClone(task);
+    let approvalFailed = false;
     try {
       if (state === 'EXPIRED') this.transition(task, 'EXPIRED', code);
       else this.fail(task, code);
+      if (approvalClaim) {
+        this.approvalBroker.markFailed(approvalClaim.id);
+        approvalFailed = true;
+      }
+      this.checkpoint(task, 'terminal');
     } catch (error) {
-      if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+      for (const key of Object.keys(task)) delete task[key];
+      Object.assign(task, previousTask);
       if (rateLimitConsumed) this.releaseExecutionRateLimit(task);
+      try {
+        if (approvalClaim) {
+          if (approvalFailed) this.approvalBroker.rollbackFailed(approvalClaim.id);
+          this.approvalBroker.releaseClaim(approvalClaim.id);
+        }
+      } catch {
+        throw new V2Error('state_rollback_failed', 'pre-execution task rollback failed', 503);
+      }
       throw error;
     }
-    if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
     return publicTask(task);
   }
 

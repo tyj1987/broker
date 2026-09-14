@@ -523,6 +523,67 @@ assert.equal(
   'executor_unavailable',
 );
 
+let failPreExecutionTerminalCheckpoint = true;
+const terminalCheckpointApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const terminalCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: terminalCheckpointApprovals,
+  executors: new Map([['broker.device.state@1.0.0', executors.get('broker.device.state@1.0.0')]]),
+  now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'terminal' && failPreExecutionTerminalCheckpoint) {
+      failPreExecutionTerminalCheckpoint = false;
+      throw new Error('pre-execution terminal checkpoint unavailable');
+    }
+  },
+});
+const terminalCheckpointTask = await terminalCheckpointBroker.create(human, {
+  ...criticalInput, idempotency_key: 'terminal-checkpoint-retry1',
+});
+terminalCheckpointApprovals.decide(approver('admin-f'), terminalCheckpointTask.approval_id, 'approve');
+terminalCheckpointApprovals.decide(approver('admin-g'), terminalCheckpointTask.approval_id, 'approve');
+terminalCheckpointBroker.executors.clear();
+await assert.rejects(
+  terminalCheckpointBroker.run(human, terminalCheckpointTask.id),
+  /pre-execution terminal checkpoint unavailable/,
+);
+assert.equal(terminalCheckpointBroker.get(human, terminalCheckpointTask.id).state, 'READY');
+assert.equal(
+  terminalCheckpointApprovals.list(human).find((item) => item.id === terminalCheckpointTask.approval_id).status,
+  'APPROVED',
+  'failed terminal persistence releases an unused approval claim',
+);
+terminalCheckpointBroker.executors.set(
+  'broker.device.state@1.0.0', executors.get('broker.device.state@1.0.0'),
+);
+assert.equal((await terminalCheckpointBroker.run(human, terminalCheckpointTask.id)).state, 'SUCCEEDED');
+
+const indeterminateTerminalBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', executors.get('broker.tools.inspect@1.0.0')]]),
+  now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'terminal') {
+      throw new V2Error('state_commit_indeterminate', 'terminal state requires reconciliation', 503);
+    }
+  },
+});
+const indeterminateTerminalTask = await indeterminateTerminalBroker.create(human, {
+  ...lowInput, idempotency_key: 'terminal-checkpoint-unknown1',
+});
+indeterminateTerminalBroker.executors.clear();
+await assert.rejects(
+  indeterminateTerminalBroker.run(human, indeterminateTerminalTask.id),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(
+  indeterminateTerminalBroker.get(human, indeterminateTerminalTask.id).state,
+  'FAILED',
+  'an indeterminate terminal commit cannot be made retryable',
+);
+
 const throwingBroker = failureBroker(async () => { throw new Error('canary must never escape'); });
 const throwing = await throwingBroker.create(human, { ...lowInput, idempotency_key: 'task-case-throws01' });
 const thrownResult = await throwingBroker.run(human, throwing.id);
@@ -550,6 +611,7 @@ assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code
 
 let rateNow = 2_000_000_000_000;
 let rateExecutorCalls = 0;
+const rateCheckpoints = [];
 const rateTool = {
   ...registry.findByName('broker.tools.inspect', '1.0.0'),
   input_schema: {
@@ -568,6 +630,7 @@ const rateBroker = new AutomationTaskBroker({
     },
   },
   authorize, approvalBroker: approvals, now: () => rateNow,
+  onCheckpoint: (event) => rateCheckpoints.push(event),
   executors: new Map([['broker.tools.inspect@1.0.0', async () => {
     rateExecutorCalls += 1;
     return {
@@ -585,6 +648,11 @@ const rateTwo = await rateBroker.create(human, {
 const limitedResult = await rateBroker.run(human, rateTwo.id);
 assert.equal(limitedResult.state, 'FAILED');
 assert.deepEqual(limitedResult.error, { code: 'tool_rate_limited' });
+assert.deepEqual(
+  rateCheckpoints.filter((event) => event.task_id === rateTwo.id).map((event) => event.phase),
+  ['created', 'terminal'],
+  'a pre-execution terminal result is persisted before it is returned',
+);
 assert.equal(rateExecutorCalls, 1, 'changing target cannot bypass the per-tool execution limit');
 rateNow += 60_000;
 const rateThree = await rateBroker.create(human, { ...lowInput, idempotency_key: 'rate-task-000000003' });

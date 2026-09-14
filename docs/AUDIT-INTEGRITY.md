@@ -297,7 +297,7 @@ ACL. The signer shell accepts only its fixed root-owned non-secret authority
 configuration and root-owned systemd socket, verifies its exact UID and the
 exporter peer UID, and has unavailable KMS/state factories by default. Packaging
 does not activate a signing authority or the mirror worker, or relax either
-default-deny network boundary. The concrete signer transport and external
+default-deny network boundary. Signer transport activation and external
 monotonic state, exporter and recovery commands, plus live cloud policy and
 retention evidence remain production blockers.
 
@@ -306,10 +306,25 @@ The Alibaba OSS and Tencent COS SDK transports now live in separate
 stable errors remain provider-neutral in `core/auditanchor`. Dependency-graph
 tests prove that each adapter links only its own provider SDK and that the
 source-only audit-store and mirror-worker commands link neither SDK. Both SDK
-boundaries expose one fixed-bucket, fixed-prefix, lexicographically ordered object-key page
-with a maximum of 1,000 entries. They reject arbitrary delimiter, endpoint,
-header and continuation inputs, malformed ordering, unexpected prefixes,
-oversized anchor objects and non-progressing pagination.
+boundaries expose one fixed-bucket, fixed-prefix, lexicographically ordered
+object-key page with a maximum of 1,000 entries. They reject arbitrary
+delimiter, endpoint, header and continuation inputs, malformed ordering,
+unexpected prefixes, oversized anchor objects and non-progressing pagination.
+
+The source-only Alibaba KMS transport follows the current
+[AsymmetricSign](https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/api-kms-2016-01-20-asymmetricsign)
+OpenAPI contract, checked 2026-09-15 (`POST /`, API `2016-01-20`, query-bound `KeyId`,
+`KeyVersionId`, `Algorithm=ECDSA_SHA_256`, and Base64 `Digest`). It signs the
+request using [Signature V3](https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature)
+and only short-lived credentials from the exact ECS
+RAM role. The client accepts only the configured dedicated gateway, resolves it
+to private addresses entirely contained by the configured narrow CIDRs,
+disables proxies, redirects and compression, and verifies TLS against one
+root-owned instance CA whose DER SHA-256 is pinned in the non-secret config.
+Responses are size-bounded and exact-schema decoded before the independently
+pinned public key verifies the returned DER signature. This transport is not
+activated until the external monotonic-state authority and reviewed KMS egress
+drop-in are both present.
 
 The COS package also implements the mirror worker's version-aware contract.
 It accepts a key only when a bounded version listing proves exactly one current,

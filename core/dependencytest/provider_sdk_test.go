@@ -32,14 +32,16 @@ func rejectDependency(t *testing.T, graph string, forbidden ...string) {
 
 func TestImmutableProviderSDKDependencyIsolation(t *testing.T) {
 	const (
-		alibabaSDK = "github.com/aliyun/alibabacloud-oss-go-sdk-v2/"
-		tencentSDK = "github.com/tencentyun/cos-go-sdk-v5"
+		alibabaSDK        = "github.com/aliyun/alibabacloud-oss-go-sdk-v2/"
+		alibabaKMSSDK     = "github.com/alibabacloud-go/kms-20160120/"
+		alibabaCredential = "github.com/aliyun/credentials-go/"
+		tencentSDK        = "github.com/tencentyun/cos-go-sdk-v5"
 	)
 
 	storeCommand := dependencies(t, "./cmd/audit-store")
 	rejectDependency(t, storeCommand, alibabaSDK, tencentSDK)
 	signerCommand := dependencies(t, "./cmd/audit-signer")
-	rejectDependency(t, signerCommand, alibabaSDK, tencentSDK)
+	rejectDependency(t, signerCommand, alibabaSDK, alibabaKMSSDK, alibabaCredential, tencentSDK)
 
 	mirrorCommand := dependencies(t, "./cmd/audit-mirror-worker")
 	if !strings.Contains(mirrorCommand, tencentSDK) {

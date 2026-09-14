@@ -45,12 +45,13 @@ type SignerServiceConfig struct {
 	StateProfileID    string
 	ECSRAMRoleName    string
 	KMSEndpoint       string
-	KMSCASHA256       string
-	KMSAllowedCIDRs   []netip.Prefix
-	Anchor            Config
-	KeyVersionID      string
-	PublicKey         *ecdsa.PublicKey
-	PublicKeySHA256   string
+	// KMSCASHA256 is the lowercase SHA-256 of the single instance CA's DER bytes.
+	KMSCASHA256     string
+	KMSAllowedCIDRs []netip.Prefix
+	Anchor          Config
+	KeyVersionID    string
+	PublicKey       *ecdsa.PublicKey
+	PublicKeySHA256 string
 }
 
 type signerServiceConfigWire struct {

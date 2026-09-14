@@ -211,8 +211,12 @@ continue.
   the exporter UID over a root-owned systemd socket, and refuses to activate
   because its default KMS and external monotonic-state factories are unavailable.
   The release packages that command with execute access only for the signer
-  identity. The mirror worker remains unstarted with deny-all network policy,
-  and the concrete signer transport/state authority, exporter and recovery
+  identity. A source-only dedicated-gateway KMS transport now implements the
+  exact AsymmetricSign query contract with Signature V3, an exact ECS RAM role,
+  private-CIDR DNS pinning, a pinned instance CA and bounded exact-schema
+  responses. It remains disconnected from the command's default factory. The
+  mirror worker remains unstarted with deny-all network policy,
+  and the external signer state authority, exporter and recovery
   commands, isolated cloud accounts, single-writer CAM policy,
   address-constrained egress, locked resources and live race evidence are still
   required before DQ-003 can close.

@@ -37,7 +37,7 @@ const context = {
   clientName: 'automation-1',
   client: { role: 'operator', security_profile: 'strict', allowed_services: ['aliyun'] },
   apiKey,
-  approvalGrants: [{ provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', approved_by: 'reviewer-2', expires_at_ms: 2_000 }],
+  approvalGrants: [{ provider: 'aliyun', operation_id: 'billing.read', account_ref: 'primary', environment: 'production', resource_ref: 'billing-summary', approved_by: 'reviewer-2', expires_at_ms: 2_000 }],
 };
 const base = {
   identity: { name: 'automation-1', context }, provider: 'aliyun', operationId: 'billing.read',
@@ -45,10 +45,40 @@ const base = {
 };
 
 assert.equal(evaluateOperationPolicy(config, base, 1_000).allow, true);
+const dualPolicy = { ...policy, required_approvals: 2 };
+const dualConfig = { operation_policies: { aliyun: { 'billing.read': dualPolicy } } };
+const dualContext = {
+  ...context,
+  approvalGrants: [
+    ...context.approvalGrants,
+    { ...context.approvalGrants[0], approved_by: 'reviewer-3' },
+  ],
+};
+assert.equal(evaluateOperationPolicy(dualConfig, {
+  ...base, identity: { ...base.identity, context: dualContext },
+}, 1_000).allow, true, 'all required independent approvals are required');
+assert.equal(evaluateOperationPolicy(dualConfig, base, 1_000).reason, 'approval_required');
+assert.equal(evaluateOperationPolicy(dualConfig, {
+  ...base,
+  identity: { ...base.identity, context: { ...context, approvalGrants: [
+    ...context.approvalGrants,
+    { ...context.approvalGrants[0] },
+  ] } },
+}, 1_000).reason, 'approval_required', 'duplicate approvers do not satisfy dual control');
 assert.equal(evaluateOperationPolicy(config, base, 1_000).executionMode, 'adapter');
 assert.equal(evaluateOperationPolicy({
   operation_policies: { aliyun: { 'billing.read': { ...policy, execution_mode: 'browser' } } },
 }, base, 1_000).executionMode, 'browser');
+for (const ttl of [Infinity, NaN, '60', -1]) {
+  assert.equal(evaluateOperationPolicy({
+    operation_policies: { aliyun: { 'billing.read': { ...policy, ttl_seconds: ttl } } },
+  }, base, 1_000).reason, 'policy_ttl_invalid', `malformed policy ttl: ${String(ttl)}`);
+}
+for (const ttl of [Infinity, NaN, '60', -1]) {
+  assert.equal(evaluateOperationPolicy({
+    operation_policies: { aliyun: { 'billing.read': { ...policy, otp: { required: true, ttl_seconds: ttl } } } },
+  }, base, 1_000).reason, 'otp_policy_ttl_invalid', `malformed OTP ttl: ${String(ttl)}`);
+}
 const denied = [
   ['role', { client: { ...context.client, role: 'admin' } }],
   ['profile', { client: { ...context.client, security_profile: 'compatibility' } }],
@@ -61,12 +91,24 @@ const denied = [
   ['resource', { apiKey: { ...apiKey, allowed_resources: ['other'] } }],
   ['secret', { apiKey: { ...apiKey, allowed_secrets: [] } }],
   ['approval', { approvalGrants: [] }],
+  ['malformed approval expiry', { approvalGrants: [{ ...context.approvalGrants[0], expires_at_ms: Infinity }] }],
 ];
 for (const [name, change] of denied) {
   const request = { ...base, identity: { ...base.identity, context: { ...context, ...change } } };
   assert.equal(evaluateOperationPolicy(config, request, 1_000).allow, false, name);
 }
 assert.equal(evaluateOperationPolicy(config, base, 2_001).allow, false, 'expired approval');
+assert.equal(evaluateOperationPolicy(config, {
+  ...base,
+  identity: {
+    ...base.identity,
+    context: {
+      ...context,
+      clientName: undefined,
+      approvalGrants: [{ ...context.approvalGrants[0], approved_by: 'automation-1' }],
+    },
+  },
+}, 1_000).reason, 'approval_required', 'approval cannot be self-approved when clientName metadata is absent');
 assert.equal(evaluateOperationPolicy(config, {
   ...base, identity: { ...base.identity, context: { ...context, approvalGrants: [] } },
 }, 1_000, { ignoreApproval: true }).allow, true, 'approval preflight skips only the approval grant');
@@ -108,6 +150,7 @@ assert.equal(validateTypedParameters({ count: 2, ratio: 1.5, nested: { label: 'o
 
 const requestDenials = [
   [{ ...base, identity: null }, 'identity_missing'],
+  [{ ...base, identity: { ...base.identity, context: { ...context, apiKey: null } } }, 'api_key_context_missing'],
   [{ ...base, operationId: 'missing' }, 'policy_missing'],
   [{ ...base, environment: 'staging' }, 'environment_denied'],
   [{ ...base, accountRef: 'secondary' }, 'account_denied'],
@@ -128,6 +171,7 @@ const stagingBase = {
     ...base.identity,
     context: {
       ...context,
+      approvalGrants: context.approvalGrants.map((grant) => ({ ...grant, environment: 'staging' })),
       apiKey: { ...apiKey, allowed_environments: ['staging'] },
     },
   },

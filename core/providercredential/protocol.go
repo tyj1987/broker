@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -33,6 +34,10 @@ var (
 	dockerComponentPattern   = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 	executionIDPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	requestBindingPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	wireRequestKeys          = []string{
+		"version", "provider", "operation_id", "account_ref", "environment",
+		"resource_ref", "execution_id", "request_binding",
+	}
 )
 
 type wireRequest struct {
@@ -133,7 +138,7 @@ func NewServer(issuer LeaseIssuer, bindings BindingAuthorizer, peers PeerAuthori
 }
 
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
-	if server == nil || listener == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
+	if server == nil || listener == nil || ctx == nil || server.MaxConcurrent < 1 || server.MaxConcurrent > 256 {
 		return fail("server_invalid")
 	}
 	done := make(chan struct{})
@@ -175,22 +180,30 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 }
 
 func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error {
-	if server == nil || server.Issuer == nil || server.Bindings == nil || server.Peers == nil || connection == nil {
+	if server == nil || server.Issuer == nil || server.Bindings == nil || server.Peers == nil || connection == nil || ctx == nil {
 		return fail("server_invalid")
 	}
 	if server.Deadline <= 0 || server.Deadline > 10*time.Second || server.Clock == nil {
 		return fail("server_invalid")
 	}
 	now := server.Clock().UTC()
+	requestContext, cancel := context.WithTimeout(ctx, server.Deadline)
+	defer cancel()
 	if err := connection.SetDeadline(now.Add(server.Deadline)); err != nil {
 		return fail("connection_invalid")
 	}
-	if err := server.Peers.AuthorizePeer(ctx, connection); err != nil {
+	if err := server.Peers.AuthorizePeer(requestContext, connection); err != nil {
 		return fail("peer_denied")
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	request, err := readRequest(connection)
 	if err != nil {
 		return err
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	leaseRequest := LeaseRequest{
 		Provider: request.Provider, OperationID: request.OperationID,
@@ -198,12 +211,18 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 		ResourceRef: request.ResourceRef,
 		ExecutionID: request.ExecutionID, RequestBinding: request.RequestBinding,
 	}
-	if err := server.Bindings.AuthorizeBinding(ctx, leaseRequest); err != nil {
+	if err := server.Bindings.AuthorizeBinding(requestContext, leaseRequest); err != nil {
 		return fail("binding_denied")
 	}
-	lease, err := server.Issuer.IssueLease(ctx, leaseRequest)
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
+	}
+	lease, err := server.Issuer.IssueLease(requestContext, leaseRequest)
 	if err != nil {
 		return fail("lease_failed")
+	}
+	if requestContext.Err() != nil {
+		return fail("deadline_exceeded")
 	}
 	if err := validateLease(lease, now); err != nil {
 		return err
@@ -227,16 +246,17 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 
 func readRequest(reader io.Reader) (wireRequest, error) {
 	buffered := bufio.NewReaderSize(reader, MaxRequestBytes+1)
-	line, err := buffered.ReadString('\n')
-	if err != nil || len(line) > MaxRequestBytes || buffered.Buffered() > 0 {
+	lineBytes, err := buffered.ReadSlice('\n')
+	if err != nil || len(lineBytes) > MaxRequestBytes || buffered.Buffered() > 0 {
 		return wireRequest{}, fail("request_invalid")
 	}
+	line := string(lineBytes)
 	line = strings.TrimSuffix(line, "\n")
 	if line == "" || strings.HasSuffix(line, "\r") {
 		return wireRequest{}, fail("request_invalid")
 	}
 	var request wireRequest
-	if err := decodeStrict([]byte(line), &request); err != nil ||
+	if err := decodeExactObject([]byte(line), &request, wireRequestKeys); err != nil ||
 		request.Version != ProtocolVersion || !validRequest(request) {
 		return wireRequest{}, fail("request_invalid")
 	}
@@ -285,6 +305,9 @@ func validateLease(lease Lease, now time.Time) error {
 }
 
 func decodeStrict(value []byte, target any) error {
+	if !utf8.Valid(value) || rejectDuplicateKeys(value) != nil {
+		return errors.New("invalid json")
+	}
 	decoder := json.NewDecoder(strings.NewReader(string(value)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -293,6 +316,85 @@ func decodeStrict(value []byte, target any) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return errors.New("trailing json")
+	}
+	return nil
+}
+
+func decodeExactObject(value []byte, target any, required []string) error {
+	if err := decodeStrict(value, target); err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(value, &object) != nil || object == nil || len(object) != len(required) {
+		return errors.New("invalid object")
+	}
+	for _, key := range required {
+		if raw, present := object[key]; !present || string(raw) == "null" {
+			return errors.New("invalid object")
+		}
+	}
+	return nil
+}
+
+func rejectDuplicateKeys(value []byte) error {
+	decoder := json.NewDecoder(strings.NewReader(string(value)))
+	if err := walkJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing json")
+	}
+	return nil
+}
+
+func walkJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, structured := token.(json.Delim)
+	if !structured {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		keys := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("invalid object key")
+			}
+			if _, duplicate := keys[key]; duplicate {
+				return errors.New("duplicate object key")
+			}
+			keys[key] = struct{}{}
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("invalid json delimiter")
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	expected := json.Delim('}')
+	if delimiter == '[' {
+		expected = ']'
+	}
+	if closing != expected {
+		return errors.New("invalid json delimiter")
 	}
 	return nil
 }

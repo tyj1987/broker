@@ -64,6 +64,12 @@ HEALTHCHECK_BUS.setMaxListeners(0);
 // ============================================================
 let state = { last_run_at: null, last_status: 'unknown', checks: {} };
 
+function internalErrorCode(error) {
+  return typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code)
+    ? error.code
+    : 'UNKNOWN';
+}
+
 function loadState() {
   const p = resolveStatePath();
   if (existsSync(p)) {
@@ -76,7 +82,7 @@ function saveState() {
   try {
     writeFileSync(resolveStatePath(), JSON.stringify(state, null, 2));
   } catch (e) {
-    console.error('[healthcheck] state save failed:', e.message);
+    console.error('[healthcheck] state save failed:', internalErrorCode(e));
   }
 }
 
@@ -107,7 +113,7 @@ function loadAlertHistory() {
         }
       }
     } catch (e) {
-      console.error('[healthcheck] alert_history load failed:', e.message);
+      console.error('[healthcheck] alert_history load failed:', internalErrorCode(e));
     }
   }
   return alertHistory;
@@ -122,7 +128,7 @@ function saveAlertHistory() {
     const lines = alertHistory.map(e => JSON.stringify(e)).join('\n') + '\n';
     writeFileSync(resolveAlertHistoryPath(), lines);
   } catch (e) {
-    console.error('[healthcheck] alert_history save failed:', e.message);
+    console.error('[healthcheck] alert_history save failed:', internalErrorCode(e));
   }
 }
 
@@ -156,11 +162,11 @@ export function clearLastChecks() {
     const p = resolveAlertHistoryPath();
     if (existsSync(p)) {
       try { unlinkSync(p); } catch (e) {
-        console.error('[healthcheck] clearLastChecks unlink failed:', e.message, 'path=', p);
+        console.error('[healthcheck] clearLastChecks unlink failed:', internalErrorCode(e));
       }
     }
   } catch (e) {
-    console.error('[healthcheck] clearLastChecks resolvePath failed:', e.message);
+    console.error('[healthcheck] clearLastChecks resolvePath failed:', internalErrorCode(e));
   }
 }
 
@@ -241,13 +247,14 @@ function pickCredential(type, fields) {
 export function classifyError(e) {
   const code = e?.code || '';
   const msg = String(e?.message || '');
+  const safeCode = /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : 'UNKNOWN';
 
   // unreachable: 基础设施层
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_FAIL') {
-    return { status: 'unreachable', detail: `DNS fail (${code}): ${msg.slice(0, 80)}` };
+    return { status: 'unreachable', detail: `DNS fail (${safeCode})` };
   }
   if (/DoH resolve failed/i.test(msg)) {
-    return { status: 'unreachable', detail: `DNS fail (DoH): ${msg.slice(0, 80)}` };
+    return { status: 'unreachable', detail: 'DNS fail (DoH)' };
   }
   if (code === 'ECONNRESET') {
     return { status: 'unreachable', detail: `connection reset by peer (${code}) — service may block this IP range` };
@@ -256,22 +263,22 @@ export function classifyError(e) {
     return { status: 'unreachable', detail: `network unreachable (${code})` };
   }
   if (/SSL_connect.*Connection reset/i.test(msg) || /read ECONNRESET/i.test(msg)) {
-    return { status: 'unreachable', detail: msg.slice(0, 100) };
+    return { status: 'unreachable', detail: 'SSL connection reset by peer' };
   }
 
   // misconfigured: 配置错 / 空闲超时 (不是 DNS)
   if (code === 'ECONNREFUSED') {
-    return { status: 'misconfigured', detail: `connection refused (port may be closed or target wrong): ${msg.slice(0, 80)}` };
+    return { status: 'misconfigured', detail: 'connection refused (port may be closed or target wrong)' };
   }
   if (code === 'ETIMEDOUT') {
-    return { status: 'misconfigured', detail: `connect timeout — target may be unreachable or behind firewall: ${msg.slice(0, 80)}` };
+    return { status: 'misconfigured', detail: 'connect timeout — target may be unreachable or behind firewall' };
   }
   if (/timeout after \d+ms/i.test(msg) || /Upstream timeout/i.test(msg) || /^timeout$/i.test(msg) || /DoH timeout/i.test(msg)) {
-    return { status: 'misconfigured', detail: `upstream timeout (TCP/TLS idle — not a DNS failure): ${msg.slice(0, 80)}` };
+    return { status: 'misconfigured', detail: 'upstream timeout (TCP/TLS idle — not a DNS failure)' };
   }
 
   // 兜底
-  return { status: 'fail', detail: msg.slice(0, 200) || `unknown error (code=${code || 'none'})` };
+  return { status: 'fail', detail: `upstream check failed (code=${safeCode})` };
 }
 
 // ============================================================
@@ -825,15 +832,15 @@ export async function runAllViaMcp(mcpServerUrl) {
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => {
         if (res.statusCode !== 200) {
-          return reject(new Error(`mcp-server HTTP ${res.statusCode}: ${d.slice(0, 200)}`));
+          return reject(new Error(`mcp-server HTTP ${res.statusCode}`));
         }
         try {
           const json = JSON.parse(d);
-          if (json.error) return reject(new Error(`mcp-server RPC error: ${json.error.message}`));
+          if (json.error) return reject(new Error('mcp-server RPC error'));
           const text = json.result?.content?.[0]?.text;
           if (!text) return reject(new Error('mcp-server 返空 result'));
           resolve(JSON.parse(text));
-        } catch (e) { reject(new Error(`mcp-server 返非 JSON: ${e.message}`)); }
+        } catch { reject(new Error('mcp-server returned invalid JSON')); }
       });
     });
     r.on('timeout', () => r.destroy(new Error('mcp-server timeout 60s')));

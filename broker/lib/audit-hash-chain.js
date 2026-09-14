@@ -116,6 +116,36 @@ export function loadAuditChainStateSync(auditDir, { chainOnly = false } = {}) {
   };
 }
 
+export function loadAuditChainProofSync(auditDir, anchoredEventCount) {
+  if (!Number.isSafeInteger(anchoredEventCount) || anchoredEventCount < 0) {
+    throw new TypeError('anchored audit event count is invalid');
+  }
+  const files = chainFiles(auditDir, true);
+  const events = [];
+  let filesAtAnchor = anchoredEventCount === 0 ? 0 : null;
+  for (const [index, file] of files.entries()) {
+    events.push(...parseLines(readFileSync(join(auditDir, file), 'utf8'), file));
+    if (filesAtAnchor === null && events.length >= anchoredEventCount) {
+      filesAtAnchor = index + 1;
+    }
+  }
+  const result = verifyChain(events);
+  if (!result.ok) throw new Error(`audit chain verification failed: ${result.reason}`);
+  return {
+    files: files.length,
+    count: events.length,
+    lastHash: events.length > 0 ? events.at(-1).hash : GENESIS_HASH,
+    anchoredEventCount,
+    hashAtAnchor:
+      anchoredEventCount > 0 && anchoredEventCount <= events.length
+        ? events[anchoredEventCount - 1].hash
+        : anchoredEventCount === 0
+          ? GENESIS_HASH
+          : null,
+    filesAtAnchor,
+  };
+}
+
 /**
  * Read all audit files in a directory and verify the chain.
  * @param {string} auditDir

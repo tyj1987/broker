@@ -170,11 +170,11 @@ export async function tryRotate(secret, brokerConfig, opts = {}) {
     return false;
   }
   if (!result?.ok) {
-    log.error?.(`[rotate] ${secret.name} failed: ${result?.error || 'unknown'}`);
+    log.error?.(`[rotate] ${secret.name} failed: rotation_failed`);
     await alert(brokerConfig, {
       severity: 'critical',
       title: 'secret.rotate_failed',
-      detail: `Secret ${secret.name} 自动 rotate 失败: ${result?.error || 'unknown'}`,
+      detail: `Secret ${secret.name} 自动 rotate 失败: rotation_failed`,
     });
     return false;
   }
@@ -183,7 +183,7 @@ export async function tryRotate(secret, brokerConfig, opts = {}) {
     await persistRotatedSecret(secret.name, result.value, brokerConfig, opts);
   } catch (e) {
     // 测试场景: 没有 secrets 文件 → 不算失败,仍视为 rotate 成功
-    log.warn?.(`[rotate] ${secret.name} rotate 完成但 persist 跳过: ${e.message}`);
+    log.warn?.(`[rotate] ${secret.name} rotate 完成但 persist 跳过: rotation_persist_skipped`);
   }
   await alert(brokerConfig, {
     severity: 'info',
@@ -208,10 +208,10 @@ async function runRotateCommand(cmd, secret) {
           resolve({ ok: true, value: out });
         }
       } else {
-        resolve({ ok: false, error: `command exit ${code}: ${err.slice(0, 200)}` });
+        resolve({ ok: false, error: 'rotation_command_failed' });
       }
     });
-    child.on('error', e => resolve({ ok: false, error: e.message }));
+    child.on('error', e => resolve({ ok: false, error: 'rotation_command_failed' }));
   });
 }
 
@@ -223,15 +223,15 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
   const secretsPath = opts.secretsPath || process.env.SECRETS_DETAIL_PATH
     || join(process.cwd(), 'secrets', 'secrets-detail.json');
   if (!existsSync(secretsPath)) {
-    throw new Error(`secrets file not found: ${secretsPath}`);
+    throw new Error('secrets_file_unavailable');
   }
   let data;
   try { data = JSON.parse(readFileSync(secretsPath, 'utf8')); }
-  catch (e) { throw new Error(`parse secrets file: ${e.message}`); }
+  catch (e) { throw Object.assign(new Error('secrets_file_invalid'), { cause: e }); }
   // 找到对应 secret, 替换 value
   const all = Array.isArray(data) ? data : (data.secrets || []);
   const target = all.find(s => s.name === name);
-  if (!target) throw new Error(`secret ${name} not found in ${secretsPath}`);
+  if (!target) throw new Error('secret_not_found');
   target.value = typeof newValue === 'string' ? newValue : JSON.stringify(newValue);
   target.last_rotated_at = new Date().toISOString();
   // Re-encrypt with SOPS in place (atomic). Never persist plaintext.
@@ -241,7 +241,7 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
       ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
     });
   } catch (e) {
-    throw new Error(`refusing to persist rotated secret without SOPS encryption: ${e.message}`);
+    throw Object.assign(new Error('rotation_persist_failed'), { cause: e });
   }
 }
 
@@ -264,17 +264,18 @@ export async function rollbackRotation(name, ref, opts = {}) {
     child.stdout.on('data', d => out += d);
     child.stderr.on('data', d => err += d);
     child.on('close', code => {
-      if (code !== 0) return reject(new Error(`git show failed: ${err}`));
+      if (code !== 0) return reject(new Error('rotation_rollback_failed'));
       try {
         const old = JSON.parse(out);
         const target = (Array.isArray(old) ? old : old.secrets || []).find(s => s.name === name);
         if (!target) return reject(new Error(`secret ${name} not in ${ref}`));
-        resolve({ ok: true, secret: target });
+        // Never return the historical secret material to callers.
+        resolve({ ok: true, name, ref });
       } catch (e) {
-        reject(e);
+        reject(new Error('rotation_rollback_invalid_snapshot'));
       }
     });
-    child.on('error', reject);
+    child.on('error', () => reject(new Error('rotation_rollback_failed')));
   });
 }
 

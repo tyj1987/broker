@@ -3,6 +3,9 @@
 package server
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,9 +84,10 @@ type evaluation struct {
 }
 
 type response struct {
-	Allow bool   `json:"allow"`
-	TTLMS int64  `json:"ttl_ms,omitempty"`
-	Code  string `json:"code"`
+	Allow          bool   `json:"allow"`
+	TTLMS          int64  `json:"ttl_ms"`
+	Code           string `json:"code"`
+	RequestBinding string `json:"request_binding"`
 }
 
 func Handler() http.Handler {
@@ -93,7 +97,14 @@ func Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/evaluate", func(writer http.ResponseWriter, request *http.Request) {
 		request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBytes)
-		decoder := json.NewDecoder(request.Body)
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, response{Code: "invalid_json"})
+			return
+		}
+		digest := sha256.Sum256(body)
+		requestBinding := base64.RawURLEncoding.EncodeToString(digest[:])
+		decoder := json.NewDecoder(bytes.NewReader(body))
 		decoder.DisallowUnknownFields()
 		var input evaluation
 		if err := decoder.Decode(&input); err != nil {
@@ -150,7 +161,10 @@ func Handler() http.Handler {
 				NotBefore: notBefore, NotAfter: notAfter,
 			},
 		)
-		writeJSON(writer, http.StatusOK, response{Allow: decision.Allow, TTLMS: decision.TTL.Milliseconds(), Code: decision.Code})
+		writeJSON(writer, http.StatusOK, response{
+			Allow: decision.Allow, TTLMS: decision.TTL.Milliseconds(), Code: decision.Code,
+			RequestBinding: requestBinding,
+		})
 	})
 	return mux
 }

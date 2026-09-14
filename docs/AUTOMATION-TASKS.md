@@ -15,6 +15,24 @@ catalog is intentionally smaller than the source registry: a registered
 manifest is not visible until a runtime executor and reviewed policy are both
 available.
 
+Execution-token expiry is materialized before consume, revoke, snapshot export
+and restored-state publication. Revocation cannot overwrite `EXPIRED`, and a
+restored terminal timestamp must be canonical and chronologically consistent
+with issuance and expiry. Invalid clocks and corrupt snapshots fail before
+replacing live state.
+
+An identity marked `via=api_key` is denied if its authenticated API-key context
+is absent. Both the operation policy and Tool Registry independently re-check
+the key's scope, provider, operation, account, resource and environment bounds;
+a successful upstream identity lookup cannot bypass those child constraints.
+
+The Node-to-Go policy decision is bound to the exact serialized evaluation
+request. The Go core independently hashes the received body and echoes the
+base64url SHA-256 binding; Node accepts only the exact response schema, matching
+binding, consistent allow/deny code, and a positive allow TTL no greater than
+the requested TTL. A stale, crossed, oversized or malformed response fails
+closed instead of being merged into the preliminary decision.
+
 The current safe acceptance operation is
 `broker.tools.inspect@1.0.0`. The next rollout checkpoint is a seven-day,
 file-delivered MCP key constrained to that one operation, the `control-plane`
@@ -225,17 +243,45 @@ an OTP when the process stopped is restored as `execution_state_indeterminate`
 and is never retried automatically. Task creation is returned only after a `created` checkpoint;
 cancellation is returned only after a `cancelled` checkpoint. Execution is
 checkpointed before the adapter side effect and again after its terminal
-transition. If a creation or cancellation checkpoint fails before file
-replacement, the corresponding task, idempotency binding and approval mutation
-are rolled back before an API success can be returned. A failure after atomic
+transition. A terminal policy denial, unavailable executor, exhausted rate
+limit, execution-token failure or pre-execution expiry is also checkpointed
+before it is returned. A definite write failure restores the prior task,
+approval claim and unused rate-limit slot; an indeterminate atomic replacement
+retains the terminal state for reconciliation. If a creation or cancellation
+checkpoint fails before file replacement, the corresponding task, idempotency
+binding and approval mutation are rolled back before an API success can be
+returned. A failure after atomic
 replacement is reported as `state_commit_indeterminate`; the matching in-memory
 mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
+
+Task snapshot restore accepts only states reachable at a durable checkpoint.
+`REQUESTED` is an in-memory creation transition and is never restorable;
+approval identifiers are required exactly for `HIGH` and `CRITICAL` tools.
+Transition timestamps must be nondecreasing, and execution identifiers plus
+terminal latency markers must agree with an observed `EXECUTING` transition.
+These checks reject a structurally valid but forged snapshot before it can
+reopen an approval or execution path.
+
+A definite failure of the pre-side-effect `EXECUTING` checkpoint restores the
+task to `READY`, clears its unused execution binding, releases the approval
+claim and restores the execution-rate slot. The consumed capability remains an
+unusable tombstone. An indeterminate atomic replacement instead retains
+`EXECUTING`, its approval claim and quota consumption so no caller can replay a
+possibly committed execution boundary.
 
 Expiry discovered by a task or event read is also committed synchronously before
 the response is returned. A pre-replacement checkpoint failure restores both the
 task and its approval state; an indeterminate replacement keeps the expired
 state so a restart cannot reopen an execution window.
+
+Approval expiry discovered while an approver decides or an executor claims a
+grant follows the same rule. The Broker writes a mandatory `v2_approval_expired`
+event and a synchronous control-plane checkpoint before returning
+`approval_expired`. A definite audit or checkpoint failure restores the prior
+approval state for retry; an indeterminate atomic replacement retains
+`EXPIRED` in memory and requires reconciliation. Listing approvals materializes
+the same durable terminal state, and cancellation cannot overwrite it.
 
 The operation component is included in every global checkpoint and shutdown
 checkpoint. Operation creation, device replay-nonce consumption, OTP receipt,

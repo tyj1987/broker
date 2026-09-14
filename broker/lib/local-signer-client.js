@@ -1,8 +1,8 @@
 import { lstat } from 'node:fs/promises';
 import net from 'node:net';
 
-const SOCKET_PATH = '/run/secret-broker-signer/github.sock';
-const SOCKET_DIRECTORY = '/run/secret-broker-signer';
+const SOCKET_DIRECTORY = '/run/secret-broker-github-signer';
+const SOCKET_PATH = `${SOCKET_DIRECTORY}/signer.sock`;
 const MAX_REQUEST_BYTES = 8 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;

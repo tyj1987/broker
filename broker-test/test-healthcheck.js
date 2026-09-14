@@ -518,8 +518,10 @@ let lastHttpReq = null;
     ok('classifyError 缺 e → fail 兜底 (不崩)',
        hc.classifyError(undefined).status === 'fail' || hc.classifyError(null).status === 'fail');
     // 10) 缺 message 也不崩
-    ok('classifyError 缺 message → fail (含 code)',
-       hc.classifyError({ code: 'NOPE' }).status === 'fail' && hc.classifyError({ code: 'NOPE' }).detail.includes('NOPE'));
+     ok('classifyError 缺 message → fail (含 code)',
+        hc.classifyError({ code: 'NOPE' }).status === 'fail' && hc.classifyError({ code: 'NOPE' }).detail.includes('NOPE'));
+    const canary = hc.classifyError({ code: 'WEIRD', message: 'canary-secret /etc/production/key.pem' });
+    ok('classifyError 不回显异常原文', !JSON.stringify(canary).includes('canary-secret') && !JSON.stringify(canary).includes('/etc/production'));
   }
 
   section('v3.1 M5.3: 缺字段 misconfigured (ssh / cloud 凭据)');

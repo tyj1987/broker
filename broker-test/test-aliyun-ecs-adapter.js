@@ -13,6 +13,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 const NOW = Date.parse('2026-09-11T01:02:03Z');
 const REGION = 'cn-hangzhou';
 const RESOURCE = 'primary-ecs-inventory';
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const parameters = { resource_ref: RESOURCE, region_id: REGION, max_results: 20 };
 const context = {
   accountRef: 'aliyun-primary',
@@ -21,10 +23,13 @@ const context = {
     tool: 'aliyun.ecs.instances.list@1.0.0',
     target: RESOURCE,
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
   signal: new AbortController().signal,
 };
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
+const CREDENTIAL_BINDING = 'b'.repeat(43);
 
 function signedResult(change = {}) {
   return {
@@ -32,6 +37,9 @@ function signedResult(change = {}) {
     environment: context.environment,
     resource_ref: RESOURCE,
     region_id: REGION,
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+    credential_binding: CREDENTIAL_BINDING,
     headers: {
       Authorization:
         'ACS3-HMAC-SHA256 Credential=STS.TEST,' +
@@ -107,6 +115,8 @@ assert.deepEqual(signerInput, {
   environment: 'production',
   resource_ref: RESOURCE,
   region_id: REGION,
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   method: 'POST',
   path: '/',
   query: { MaxResults: 20, RegionId: REGION },
@@ -152,6 +162,8 @@ for (const execution of [
   { ...context.execution, tool: 'aliyun.ecs.instance.delete@1.0.0' },
   { ...context.execution, target: 'other-inventory' },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ]) {
   await assert.rejects(
     adapter(parameters, { ...context, execution }),
@@ -175,6 +187,8 @@ for (const invalid of [
   signedResult({ environment: 'staging' }),
   signedResult({ resource_ref: 'other' }),
   signedResult({ region_id: 'cn-shanghai' }),
+  signedResult({ execution_id: '87654321-1234-4123-8123-123456789abc' }),
+  signedResult({ request_binding: 'c'.repeat(43) }),
   signedResult({ headers: { ...signedResult().headers, host: 'ecs.cn-shanghai.aliyuncs.com' } }),
   signedResult({ headers: { ...signedResult().headers, 'x-acs-date': '2026-09-11T00:00:00Z' } }),
   signedResult({ headers: { ...signedResult().headers, unexpected: 'canary-secret' } }),
@@ -261,13 +275,25 @@ const taskBroker = new AutomationTaskBroker({
   executors: new Map([
     [
       'aliyun.ecs.instances.list@1.0.0',
-      createAliyunEcsInstancesListAdapter({
-        signRequest: async () => signedResult(),
-        request: async () => {
-          calls += 1;
-          return { status: 200, body: responseBody({ NextToken: undefined }) };
+      async (...arguments_) => ({
+        ...(await createAliyunEcsInstancesListAdapter({
+          signRequest: async (input) =>
+            signedResult({
+              execution_id: input.execution_id,
+              request_binding: input.request_binding,
+            }),
+          request: async () => {
+            calls += 1;
+            return { status: 200, body: responseBody({ NextToken: undefined }) };
+          },
+          now: () => NOW,
+        })(...arguments_)),
+        authority: {
+          identity_type: 'AssumedRoleUser',
+          account_id_sha256: '1'.repeat(64),
+          principal_id_sha256: '2'.repeat(64),
+          arn_sha256: '3'.repeat(64),
         },
-        now: () => NOW,
       }),
     ],
   ]),

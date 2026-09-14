@@ -34,7 +34,7 @@ const LEASE_KEYS = new Set([
   'id', 'receiptHash', 'deviceId', 'operationId', 'expiresAt', 'otpClaimed',
   'previousStatus', 'previousUpdatedAt',
 ]);
-const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|otp|verification.?code)/i;
+const SENSITIVE_RESULT_KEY = /(?:secret|token|password|authorization|cookie|session|credential|private.?key|api[_-]?key|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|otp|verification.?code)/i;
 
 export class V2Error extends Error {
   constructor(code, message, status = 400) {
@@ -61,6 +61,22 @@ function requireObject(value, field) {
     throw new V2Error('invalid_request', `${field} is too large`, 413);
   }
   return structuredClone(value);
+}
+
+export function assertSafeParameters(value, depth = 0) {
+  if (depth > 8) throw new V2Error('unsafe_parameters', 'operation parameters are too deeply nested');
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertSafeParameters(item, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') throw new V2Error('unsafe_parameters', 'operation parameters contain an unsupported value');
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_RESULT_KEY.test(key)) {
+      throw new V2Error('unsafe_parameters', 'operation parameters contain credential material');
+    }
+    assertSafeParameters(item, depth + 1);
+  }
 }
 
 function requireText(value, field, maxLength = 128) {
@@ -299,9 +315,28 @@ export class OperationBroker {
           || (source.otpTaskId !== null && !ID_RE.test(source.otpTaskId))
           || (source.error !== null && !ID_RE.test(source.error))) throw stateCorrupt();
         requireObject(source.typedParameters, 'typed_parameters');
+        assertSafeParameters(source.typedParameters);
+        if (source.result !== null) {
+          try {
+            assertSafeResult(source.result);
+            if (canonicalJson(redactDeep(source.result)) !== canonicalJson(source.result)) {
+              throw new Error('unsafe');
+            }
+          } catch {
+            throw stateCorrupt();
+          }
+        }
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.updatedAt, 'updated_at');
         requireTimestamp(source.expiresAt, 'expires_at');
+        const createdAt = Date.parse(source.createdAt);
+        const updatedAt = Date.parse(source.updatedAt);
+        const expiresAt = Date.parse(source.expiresAt);
+        const requiresError = ['failed', 'revoked'].includes(source.status);
+        if (updatedAt < createdAt || expiresAt - createdAt < 10_000
+          || expiresAt - createdAt > 900_000
+          || (source.status !== 'completed' && source.result !== null)
+          || requiresError !== (source.error !== null)) throw stateCorrupt();
         if (operations.has(source.id)) throw stateCorrupt();
         operations.set(source.id, cloneStateRecord(source));
       }
@@ -325,6 +360,9 @@ export class OperationBroker {
         for (const sender of source.senderAllowlist) requireText(sender, 'sender_allowlist', 64);
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.expiresAt, 'expires_at');
+        const otpLifetime = Date.parse(source.expiresAt) - Date.parse(source.createdAt);
+        if (otpLifetime < 10_000 || otpLifetime > DEFAULT_OTP_TTL_MS
+          || (source.status === 'received') !== (source.code !== null)) throw stateCorrupt();
         if (otpTasks.has(source.id)) throw stateCorrupt();
         const operation = operations.get(source.operationId);
         const device = this.devices.get(source.deviceId);
@@ -341,6 +379,13 @@ export class OperationBroker {
       }
       for (const operation of operations.values()) {
         if (operation.otpTaskId && !otpTasks.has(operation.otpTaskId)) throw stateCorrupt();
+        const task = operation.otpTaskId ? otpTasks.get(operation.otpTaskId) : null;
+        if ((!task && operation.status === 'received')
+          || (task && (Date.parse(task.createdAt) < Date.parse(operation.createdAt)
+            || Date.parse(task.expiresAt) > Date.parse(operation.expiresAt)))
+          || (task && operation.status !== 'consuming' && operation.status !== task.status)
+          || (task && operation.status === 'consuming'
+            && !['waiting', 'received', 'consuming'].includes(task.status))) throw stateCorrupt();
       }
 
       const usedNonces = new Map();
@@ -359,7 +404,7 @@ export class OperationBroker {
           || !Number.isSafeInteger(source.tabId) || source.tabId < 0 || source.frameId !== 0
           || typeof source.documentId !== 'string' || source.documentId.length < 1 || source.documentId.length > 256
           || !finiteExpiry(source.expiresAt) || typeof source.code !== 'string' || !OTP_RE.test(source.code)
-          || source.previousTaskStatus !== 'received' || !OPERATION_STATUSES.has(source.previousOperationStatus)) {
+          || source.previousTaskStatus !== 'received' || source.previousOperationStatus !== 'received') {
           throw stateCorrupt();
         }
         requireTimestamp(source.previousOperationUpdatedAt, 'previous_operation_updated_at');
@@ -368,7 +413,10 @@ export class OperationBroker {
         if (!task || task.status !== 'consuming' || !operation || operation.status !== 'consuming'
           || operation.owner !== source.owner || operation.provider !== source.provider
           || operation.accountRef !== source.accountRef || browserClaims.has(source.key)
-          || claimedTaskIds.has(source.taskId)) throw stateCorrupt();
+          || claimedTaskIds.has(source.taskId)
+          || source.expiresAt > Date.parse(task.expiresAt)
+          || Date.parse(source.previousOperationUpdatedAt) < Date.parse(operation.createdAt)
+          || Date.parse(source.previousOperationUpdatedAt) > Date.parse(operation.updatedAt)) throw stateCorrupt();
         const claim = cloneStateRecord(source);
         delete claim.key;
         browserClaims.set(source.key, claim);
@@ -383,12 +431,18 @@ export class OperationBroker {
           || typeof source.receiptHash !== 'string' || !BASE64URL_RE.test(source.receiptHash)
           || source.receiptHash.length !== 43 || !ID_RE.test(source.deviceId) || !ID_RE.test(source.operationId)
           || !finiteExpiry(source.expiresAt) || typeof source.otpClaimed !== 'boolean'
-          || !OPERATION_STATUSES.has(source.previousStatus)) throw stateCorrupt();
+          || !['waiting', 'received'].includes(source.previousStatus)) throw stateCorrupt();
         requireTimestamp(source.previousUpdatedAt, 'previous_updated_at');
         const operation = operations.get(source.operationId);
         const device = this.devices.get(source.deviceId);
         if (!operation || operation.status !== 'consuming' || !device || device.platform !== 'browser-worker'
-          || browserLeases.has(source.id) || leasedOperationIds.has(source.operationId)) throw stateCorrupt();
+          || browserLeases.has(source.id) || leasedOperationIds.has(source.operationId)
+          || source.expiresAt > Date.parse(operation.expiresAt)
+          || Date.parse(source.previousUpdatedAt) < Date.parse(operation.createdAt)
+          || Date.parse(source.previousUpdatedAt) > Date.parse(operation.updatedAt)) throw stateCorrupt();
+        const otpTask = operation.otpTaskId ? otpTasks.get(operation.otpTaskId) : null;
+        if (source.otpClaimed
+          && (!otpTask || otpTask.status !== 'consuming' || otpTask.code !== null)) throw stateCorrupt();
         browserLeases.set(source.id, cloneStateRecord(source));
         leasedOperationIds.add(source.operationId);
         if (source.otpClaimed && operation.otpTaskId) leasedOtpTaskIds.add(operation.otpTaskId);
@@ -650,6 +704,15 @@ export class OperationBroker {
     const environment = input?.environment;
     if (!ENVIRONMENTS.has(environment)) throw new V2Error('invalid_request', 'unsupported environment');
     const typedParameters = requireObject(input?.typed_parameters || {}, 'typed_parameters');
+    assertSafeParameters(typedParameters);
+    // Creation must enforce the same delegated capability boundary as reads.
+    // Otherwise a bearer key could create an out-of-scope browser/OTP
+    // operation and let a separately authenticated worker execute it.
+    if (!apiKeyAllowsOperation(identity, {
+      provider, operationId, accountRef, environment, typedParameters,
+    })) {
+      throw new V2Error('forbidden', 'API key is not authorized for this operation', 403);
+    }
     const decision = await this.authorize({ identity, provider, operationId, accountRef, environment, typedParameters });
     if (!decision?.allow) throw new V2Error('forbidden', 'operation is not allowed', 403);
     this.prune();
@@ -741,6 +804,7 @@ export class OperationBroker {
     }
     const now = this.now();
     const ttlMs = Math.min(Math.max(Number(otp.ttlMs || DEFAULT_OTP_TTL_MS), 15_000), DEFAULT_OTP_TTL_MS);
+    const expiresAt = Math.min(now + ttlMs, Date.parse(operation.expiresAt));
     const task = {
       id: randomUUID(),
       operationId: operation.id,
@@ -756,7 +820,7 @@ export class OperationBroker {
       status: 'waiting',
       code: null,
       createdAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + ttlMs).toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
     };
     task.challengeHash = sha256Base64Url(task.challenge);
     this.otpTasks.set(task.id, task);
@@ -767,8 +831,13 @@ export class OperationBroker {
   submitOtp(deviceId, taskId, input) {
     const task = this.otpTasks.get(taskId);
     if (!task || task.deviceId !== deviceId) throw new V2Error('not_found', 'OTP task not found', 404);
+    const operation = this.operations.get(task.operationId);
+    if (!operation) throw new V2Error('invalid_state', 'OTP operation is unavailable', 409);
+    this.expireOperation(operation);
     this.expireOtpTask(task);
-    if (task.status !== 'waiting') throw new V2Error('invalid_state', 'OTP task is not waiting', 409);
+    if (task.status !== 'waiting' || !['waiting', 'consuming'].includes(operation.status)) {
+      throw new V2Error('invalid_state', 'OTP task is not waiting', 409);
+    }
     if (input.sim_binding !== task.simBinding) throw new V2Error('otp_mismatch', 'SIM binding mismatch', 409);
     if (sha256Base64Url(String(input.challenge || '')) !== task.challengeHash) {
       throw new V2Error('otp_mismatch', 'challenge mismatch', 409);
@@ -778,11 +847,8 @@ export class OperationBroker {
     }
     task.code = input.code;
     task.status = 'received';
-    const operation = this.operations.get(task.operationId);
-    if (operation) {
-      if (operation.status !== 'consuming') operation.status = 'received';
-      operation.updatedAt = new Date(this.now()).toISOString();
-    }
+    if (operation.status !== 'consuming') operation.status = 'received';
+    operation.updatedAt = new Date(this.now()).toISOString();
     return publicOtpTask(task);
   }
 
@@ -842,6 +908,13 @@ export class OperationBroker {
     }
     try {
       const result = await consumer(code);
+      // OTP consumers are an internal boundary, but their result is persisted
+      // and later exposed through getOperation. Fail closed before committing
+      // any result that contains a credential or other sensitive material.
+      assertSafeResult(result);
+      if (canonicalJson(redactDeep(result)) !== canonicalJson(result)) {
+        throw new V2Error('unsafe_result', 'operation result contains credential material');
+      }
       if (task.status !== 'consuming' || operation?.status === 'revoked') {
         throw new V2Error('operation_revoked', 'OTP operation was revoked while consuming', 409);
       }
@@ -1270,22 +1343,35 @@ export class OperationBroker {
   }
 
   expireOtpTask(task) {
-    if (new Date(task.expiresAt).getTime() <= this.now() && !['completed', 'revoked'].includes(task.status)) {
+    const now = this.now();
+    if (new Date(task.expiresAt).getTime() <= now
+      && ['waiting', 'received', 'consuming'].includes(task.status)) {
+      const expiredAt = new Date(now).toISOString();
       task.code = null;
       task.status = 'expired';
       this.activeOtpLocks.delete(task.lockKey);
       const operation = this.operations.get(task.operationId);
-      if (operation && !['completed', 'revoked'].includes(operation.status)) operation.status = 'expired';
+      if (operation && ['waiting', 'received', 'consuming'].includes(operation.status)) {
+        operation.status = 'expired';
+        operation.updatedAt = expiredAt;
+      }
     }
   }
 
   expireOperation(operation) {
-    if (new Date(operation.expiresAt).getTime() <= this.now() && !['completed', 'failed', 'revoked'].includes(operation.status)) {
+    const now = this.now();
+    if (new Date(operation.expiresAt).getTime() <= now
+      && ['waiting', 'received', 'consuming'].includes(operation.status)) {
+      const expiredAt = new Date(now).toISOString();
       operation.status = 'expired';
-      operation.updatedAt = new Date(this.now()).toISOString();
+      operation.updatedAt = expiredAt;
       if (operation.otpTaskId) {
         const task = this.otpTasks.get(operation.otpTaskId);
-        if (task) this.expireOtpTask(task);
+        if (task && ['waiting', 'received', 'consuming'].includes(task.status)) {
+          task.code = null;
+          task.status = 'expired';
+          this.activeOtpLocks.delete(task.lockKey);
+        }
       }
     }
   }

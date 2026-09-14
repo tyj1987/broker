@@ -137,8 +137,8 @@ Content-Type: application/json
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
     } catch (e) {
-      console.warn('home fetch failed', url, e.message);
-      return { error: e.message };
+      console.warn('home fetch failed', { route: url });
+      return { error: 'request_failed' };
     }
   }
 

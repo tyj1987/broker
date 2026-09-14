@@ -1,0 +1,363 @@
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { resolve } from 'node:path';
+
+import {
+  runProviderContractCheck,
+  safeProviderContractErrorCode,
+} from '../broker/bin/provider-contract-check.js';
+import { ProviderContractError } from '../broker/lib/provider-contract-runner.js';
+import { readProtectedInputFile } from '../broker/lib/protected-input-file.js';
+
+const apiKey = `${['mb', 'test'].join('_')}_0123456789abcdefghijklmnopqrstuv`;
+const taskId = '00000000-0000-4000-8000-000000000201';
+const contractPath = resolve('protected-test-inputs', 'contract.json');
+const apiKeyPath = resolve('protected-test-inputs', 'broker.key');
+const clientCertPath = resolve('protected-test-inputs', 'client.crt');
+const clientKeyPath = resolve('protected-test-inputs', 'client.key');
+const caPath = resolve('protected-test-inputs', 'ca.crt');
+const missingPlanPath = resolve('protected-test-inputs', 'missing.json');
+const plan = {
+  version: 2,
+  provider: 'github',
+  tool_name: 'github.repository.read',
+  tool_version: '1.0.0',
+  account_ref: 'github-isolated',
+  wrong_account_ref: 'github-other',
+  environment: 'staging',
+  parameters: {
+    resource_ref: 'contract-owner/private-contract-repo',
+    owner: 'contract-owner',
+    repo: 'private-contract-repo',
+  },
+  wrong_resource_ref: 'contract-owner/other-private-repo',
+  idempotency_prefix: 'dq004-github-cli-20260912',
+  expected_authority: {
+    installation_id_sha256: '1'.repeat(64),
+    account_id_sha256: '2'.repeat(64),
+    account_login_sha256: '3'.repeat(64),
+    target_type: 'Organization',
+  },
+};
+
+function requestImpl(options, callback) {
+  const request = new EventEmitter();
+  const chunks = [];
+  request.write = (chunk) => chunks.push(Buffer.from(chunk));
+  request.end = (finalChunk) => {
+    if (finalChunk) chunks.push(Buffer.from(finalChunk));
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+    let statusCode = 200;
+    let responseBody;
+    if (options.path === '/api/v2/tools') {
+      responseBody = {
+        registry_version: 1,
+        tools: [
+          {
+            name: plan.tool_name,
+            version: plan.tool_version,
+            provider: plan.provider,
+            operation_id: 'repo.read',
+            agent_execution: true,
+            environments: ['staging'],
+          },
+        ],
+      };
+    } else if (options.path.endsWith('/run')) {
+      responseBody = {
+        id: taskId,
+        tool: plan.tool_name,
+        tool_version: plan.tool_version,
+        provider: plan.provider,
+        operation_id: 'repo.read',
+        account_ref: plan.account_ref,
+        environment: plan.environment,
+        target: plan.parameters.resource_ref,
+        state: 'SUCCEEDED',
+        result: {
+          id: 123,
+          full_name: plan.parameters.resource_ref,
+          visibility: 'private',
+          archived: false,
+          authority: structuredClone(plan.expected_authority),
+        },
+      };
+    } else if (
+      body.account_ref === plan.wrong_account_ref ||
+      body.parameters.resource_ref === plan.wrong_resource_ref
+    ) {
+      statusCode = 403;
+      responseBody = { error: { code: 'forbidden', detail: 'must not escape' } };
+    } else {
+      responseBody = {
+        id: taskId,
+        tool: plan.tool_name,
+        tool_version: plan.tool_version,
+        provider: plan.provider,
+        operation_id: 'repo.read',
+        account_ref: plan.account_ref,
+        environment: plan.environment,
+        target: body.parameters.resource_ref,
+        state: 'READY',
+      };
+    }
+    const response = new EventEmitter();
+    response.statusCode = statusCode;
+    response.setEncoding = () => {};
+    callback(response);
+    queueMicrotask(() => {
+      response.emit('data', JSON.stringify(responseBody));
+      response.emit('end');
+    });
+  };
+  request.destroy = () => {};
+  request.setTimeout = () => {};
+  return request;
+}
+
+const files = new Map([
+  [contractPath, Buffer.from(JSON.stringify(plan))],
+  [apiKeyPath, Buffer.from(`${apiKey}\n`)],
+  [clientCertPath, Buffer.from('certificate')],
+  [clientKeyPath, Buffer.from('private key')],
+  [caPath, Buffer.from('ca certificate')],
+]);
+const readProtectedFileImpl = (path) => {
+  if (!files.has(path)) throw new Error('missing');
+  return files.get(path);
+};
+const argv = [
+  'node',
+  'provider-contract-check',
+  '--broker',
+  'https://broker.52trz.com',
+  '--plan-file',
+  contractPath,
+  '--api-key-file',
+  apiKeyPath,
+  '--client-cert-file',
+  clientCertPath,
+  '--client-key-file',
+  clientKeyPath,
+  '--ca-file',
+  caPath,
+];
+const output = [];
+const receipt = await runProviderContractCheck(argv, {
+  readProtectedFileImpl,
+  requestImpl,
+  writeOutput: (value) => output.push(value),
+});
+assert.equal(receipt.status, 'passed');
+assert.deepEqual(JSON.parse(output[0]), receipt);
+assert.equal(output[0].includes(plan.account_ref), false);
+assert.equal(output[0].includes(plan.parameters.resource_ref), false);
+
+const withoutTls = [
+  'node',
+  'provider-contract-check',
+  '--plan-file',
+  contractPath,
+  '--api-key-file',
+  apiKeyPath,
+];
+const originalStdoutWrite = process.stdout.write;
+let defaultOutput = '';
+process.stdout.write = (value) => {
+  defaultOutput += String(value);
+  return true;
+};
+try {
+  assert.equal(
+    (await runProviderContractCheck(withoutTls, { readProtectedFileImpl, requestImpl })).status,
+    'passed',
+  );
+} finally {
+  process.stdout.write = originalStdoutWrite;
+}
+assert.equal(JSON.parse(defaultOutput).status, 'passed');
+
+const clientKeyArgument = argv.indexOf('--client-key-file');
+const withoutClientKey = [
+  ...argv.slice(0, clientKeyArgument),
+  ...argv.slice(clientKeyArgument + 2),
+];
+for (const invalidArgv of [
+  [...argv, '--api-key', apiKey],
+  withoutClientKey,
+  ['node', 'check', '--plan-file', 'relative.json', '--api-key-file', apiKeyPath],
+  ['node', 'check', '--plan-file', missingPlanPath, '--api-key-file', apiKeyPath],
+  ['node', 'check', '--plan-file', contractPath, '--api-key-file', 'relative.key'],
+]) {
+  await assert.rejects(
+    runProviderContractCheck(invalidArgv, {
+      readProtectedFileImpl,
+      requestImpl,
+      writeOutput: () => {},
+    }),
+  );
+}
+
+for (const [path, contents, pattern] of [
+  [contractPath, Buffer.from('{'), /invalid JSON/],
+  [contractPath, Buffer.alloc(0), /file size is invalid/],
+  [apiKeyPath, Buffer.from('invalid'), /valid scoped Broker API key/],
+]) {
+  const invalidFiles = new Map(files);
+  invalidFiles.set(path, contents);
+  await assert.rejects(
+    runProviderContractCheck(argv, {
+      readProtectedFileImpl: (filePath) => invalidFiles.get(filePath),
+      requestImpl,
+      writeOutput: () => {},
+    }),
+    pattern,
+  );
+}
+
+const oversizedFiles = new Map(files);
+oversizedFiles.set(contractPath, Buffer.alloc(32 * 1024 + 1));
+await assert.rejects(
+  runProviderContractCheck(argv, {
+    readProtectedFileImpl: (path) => oversizedFiles.get(path),
+    requestImpl,
+    writeOutput: () => {},
+  }),
+  /file size is invalid/,
+);
+
+assert.equal(
+  safeProviderContractErrorCode(new ProviderContractError('contract_plan_invalid')),
+  'contract_plan_invalid',
+);
+assert.equal(
+  safeProviderContractErrorCode(new ProviderContractError('contract_secret_exposed')),
+  'provider_contract_check_failed',
+);
+assert.equal(
+  safeProviderContractErrorCode(Object.assign(new Error('private detail'), { code: 'forbidden' })),
+  'provider_contract_check_failed',
+);
+
+function fakeStat({
+  file = true,
+  directory = false,
+  symbolicLink = false,
+  size = file ? 4 : 0,
+  mode = directory ? 0o40700 : 0o100600,
+  uid = 1000,
+  gid = 1000,
+  ino = file ? 20 : 10,
+  mtimeMs = 1,
+} = {}) {
+  return {
+    dev: 1,
+    ino,
+    size,
+    mtimeMs,
+    mode,
+    uid,
+    gid,
+    isFile: () => file,
+    isDirectory: () => directory,
+    isSymbolicLink: () => symbolicLink,
+  };
+}
+
+const securePath = resolve('protected-test-inputs', 'secure.key');
+const secureParent = resolve('protected-test-inputs');
+const parentStat = fakeStat({ file: false, directory: true, ino: 10 });
+const fileStat = fakeStat({ ino: 20 });
+const secureReadDeps = {
+  sensitive: true,
+  platform: 'linux',
+  effectiveUid: 1000,
+  lstatImpl: (path) => (path === secureParent ? parentStat : fileStat),
+  realpathImpl: (path) => path,
+  openImpl: () => 7,
+  fstatImpl: () => fileStat,
+  readImpl: (_descriptor, buffer, offset, length, position) => {
+    const contents = Buffer.from('safe');
+    if (position >= contents.length) return 0;
+    const count = Math.min(length, contents.length - position);
+    contents.copy(buffer, offset, position, position + count);
+    return count;
+  },
+  closeImpl: () => {},
+};
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Protected input', 16, secureReadDeps),
+  Buffer.from('safe'),
+);
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Protected input', 16, {
+    ...secureReadDeps,
+    lstatImpl: (path) => {
+      if (path !== secureParent) throw new Error('file path must not be checked before open');
+      return parentStat;
+    },
+  }),
+  Buffer.from('safe'),
+);
+
+for (const overrides of [
+  {
+    lstatImpl: (path) =>
+      path === secureParent ? fakeStat({ file: false, directory: false, ino: 10 }) : fileStat,
+  },
+  { fstatImpl: () => fakeStat({ mode: 0o100640 }) },
+  {
+    lstatImpl: (path) =>
+      path === secureParent
+        ? fakeStat({ file: false, directory: true, mode: 0o40722, ino: 10 })
+        : fileStat,
+  },
+  { effectiveUid: null },
+  { fstatImpl: () => fakeStat({ size: 0 }) },
+  { fstatImpl: () => fakeStat({ size: 17 }) },
+  { realpathImpl: (path) => (path === securePath ? `${path}.redirected` : path) },
+  { fstatImpl: () => fakeStat({ file: false }) },
+  {
+    fstatImpl: (() => {
+      let calls = 0;
+      return () => fakeStat({ ino: ++calls === 1 ? 20 : 21 });
+    })(),
+  },
+  { readImpl: () => -1 },
+  {
+    readImpl: (_descriptor, buffer, offset, length, position) => {
+      const contents = Buffer.from('drift');
+      if (position >= contents.length) return 0;
+      const count = Math.min(length, contents.length - position);
+      contents.copy(buffer, offset, position, position + count);
+      return count;
+    },
+  },
+]) {
+  assert.throws(() =>
+    readProtectedInputFile(securePath, 'Protected input', 16, {
+      ...secureReadDeps,
+      ...overrides,
+    }),
+  );
+}
+
+assert.throws(() => readProtectedInputFile('relative.key', 'Protected input', 16, secureReadDeps));
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Public input', 16, {
+    ...secureReadDeps,
+    sensitive: false,
+    fstatImpl: () => fakeStat({ mode: 0o100644 }),
+  }),
+  Buffer.from('safe'),
+);
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Windows input', 16, {
+    ...secureReadDeps,
+    platform: 'win32',
+    effectiveUid: null,
+  }),
+  Buffer.from('safe'),
+);
+
+console.log('provider contract CLI: file-only inputs and safe receipt passed');

@@ -182,6 +182,19 @@ section('15. Realistic config — multi-service developer');
   ok('unknown service denied', !canProxy(c, 'aws', '/anything'));
 }
 
+section('16. Security: API-key capability cannot be widened by owner role');
+
+{
+  const key = {
+    scopes: ['services:proxy'],
+    allowed_services: ['github'],
+  };
+  ok('API key allows explicitly listed service', canProxy({ via: 'api_key', apiKey: key, client: { role: 'admin', allowed_proxy: ['*'] } }, 'github', '/user'));
+  ok('API key denies service outside allowed_services', !canProxy({ via: 'api_key', apiKey: key, client: { role: 'admin', allowed_proxy: ['*'] } }, 'gitlab', '/user'));
+  ok('API key without capability object fails closed', !canProxy({ via: 'api_key', client: { role: 'admin', allowed_proxy: ['*'] } }, 'github', '/user'));
+  ok('service badge also respects API-key boundary', !isServiceAllowed({ via: 'api_key', apiKey: key, client: { role: 'admin', allowed_proxy: ['*'] } }, 'gitlab'));
+}
+
 // ---------- summary ----------
 
 console.log(`\n=== ${pass} pass / ${fail} fail ===`);

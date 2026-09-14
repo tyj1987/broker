@@ -7,8 +7,8 @@ import {
   LocalSignerError,
 } from '../broker/lib/local-signer-client.js';
 
-const SOCKET = '/run/secret-broker-signer/github.sock';
-const SOCKET_DIRECTORY = '/run/secret-broker-signer';
+const SOCKET_DIRECTORY = '/run/secret-broker-github-signer';
+const SOCKET = `${SOCKET_DIRECTORY}/signer.sock`;
 const signature = Buffer.alloc(256, 7);
 const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
 const REQUEST_BINDING = 'a'.repeat(43);

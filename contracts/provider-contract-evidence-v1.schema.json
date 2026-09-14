@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://broker.52trz.com/contracts/provider-contract-evidence-v1.schema.json",
+  "title": "Provider contract evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "evidence_id",
+    "key_id",
+    "release_sha",
+    "binding_generation_sha256",
+    "signer_authority_generation_sha256",
+    "issued_at",
+    "expires_at",
+    "receipts"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "evidence_id": { "type": "string", "format": "uuid" },
+    "key_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{2,63}$" },
+    "release_sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "binding_generation_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "signer_authority_generation_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github", "aliyun"],
+      "properties": {
+        "github": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "aliyun": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "issued_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$" },
+    "expires_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$" },
+    "receipts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/receipt" },
+            { "properties": { "provider": { "const": "github" }, "operation_id": { "const": "repo.read" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/receipt" },
+            { "properties": { "provider": { "const": "aliyun" }, "operation_id": { "const": "ecs.instances.list" } } }
+          ]
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "provider",
+        "operation_id",
+        "environment",
+        "status",
+        "checks",
+        "plan_sha256",
+        "provider_audit_sha256"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "provider": { "const": "github" },
+            "operation_id": { "const": "repo.read" }
+          }
+        },
+        {
+          "properties": {
+            "provider": { "const": "aliyun" },
+            "operation_id": { "const": "ecs.instances.list" }
+          }
+        }
+      ],
+      "properties": {
+        "version": { "const": 2 },
+        "provider": { "enum": ["github", "aliyun"] },
+        "operation_id": { "enum": ["repo.read", "ecs.instances.list"] },
+        "environment": { "const": "production" },
+        "status": { "const": "passed" },
+        "checks": {
+          "const": [
+            "tool_discovery",
+            "authority_identity",
+            "authority_match",
+            "bounded_read",
+            "safe_output",
+            "wrong_account_denied",
+            "wrong_resource_denied"
+          ]
+        },
+        "plan_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "provider_audit_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

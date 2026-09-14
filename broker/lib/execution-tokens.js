@@ -6,6 +6,7 @@ const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
 const MAX_TTL_MS = 60_000;
 const DEFAULT_TTL_MS = 30_000;
 const MAX_RECORDS = 10_000;
+const MAX_TIME_MS = 8.64e15 - MAX_TTL_MS;
 const STATE_VERSION = 1;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -50,7 +51,38 @@ function stateCorrupt(message) {
 }
 
 function validTimestamp(value) {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+  if (typeof value !== 'string') return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function currentTime(now) {
+  let value;
+  try {
+    value = now();
+  } catch {
+    throw new V2Error('clock_invalid', 'execution token clock is invalid', 500);
+  }
+  if (!Number.isSafeInteger(value) || Math.abs(value) > MAX_TIME_MS) {
+    throw new V2Error('clock_invalid', 'execution token clock is invalid', 500);
+  }
+  return value;
+}
+
+function materializeAndPrune(records, byId, now) {
+  const cutoff = now - MAX_TTL_MS;
+  for (const [tokenHash, record] of records) {
+    const terminalAt = record.consumedAt || record.revokedAt;
+    if (Date.parse(record.issuedAt) > now || (terminalAt && Date.parse(terminalAt) > now)) {
+      throw stateCorrupt('timestamp is in the future');
+    }
+    if (record.status === 'ACTIVE' && Date.parse(record.expiresAt) <= now) {
+      record.status = 'EXPIRED';
+    }
+    if (Date.parse(record.expiresAt) >= cutoff) continue;
+    records.delete(tokenHash);
+    byId.delete(record.id);
+  }
 }
 
 function validateStateRecord(value) {
@@ -71,8 +103,16 @@ function validateStateRecord(value) {
   if (lifetime < 1_000 || lifetime > MAX_TTL_MS) throw stateCorrupt('lifetime is invalid');
   if (value.status === 'CONSUMED') {
     if (!validTimestamp(value.consumedAt) || Object.hasOwn(value, 'revokedAt')) throw stateCorrupt('consumption marker is invalid');
+    if (Date.parse(value.consumedAt) < Date.parse(value.issuedAt)
+      || Date.parse(value.consumedAt) >= Date.parse(value.expiresAt)) {
+      throw stateCorrupt('consumption time is invalid');
+    }
   } else if (value.status === 'REVOKED') {
     if (!validTimestamp(value.revokedAt) || Object.hasOwn(value, 'consumedAt')) throw stateCorrupt('revocation marker is invalid');
+    if (Date.parse(value.revokedAt) < Date.parse(value.issuedAt)
+      || Date.parse(value.revokedAt) >= Date.parse(value.expiresAt)) {
+      throw stateCorrupt('revocation time is invalid');
+    }
   } else if (Object.hasOwn(value, 'consumedAt') || Object.hasOwn(value, 'revokedAt')) {
     throw stateCorrupt('terminal marker conflicts with status');
   }
@@ -81,6 +121,10 @@ function validateStateRecord(value) {
 
 export class ExecutionTokenBroker {
   constructor({ now = () => Date.now(), maxRecords = MAX_RECORDS } = {}) {
+    if (typeof now !== 'function' || !Number.isSafeInteger(maxRecords)
+      || maxRecords < 0 || maxRecords > 1_000_000) {
+      throw new TypeError('Execution token broker configuration is invalid');
+    }
     this.now = now;
     this.maxRecords = maxRecords;
     this.records = new Map();
@@ -99,7 +143,7 @@ export class ExecutionTokenBroker {
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000) throw new V2Error('invalid_request', 'execution token ttl is invalid');
     const token = `et1.${randomBytes(32).toString('base64url')}`;
     const nonce = randomBytes(16).toString('base64url');
-    const now = this.now();
+    const now = currentTime(this.now);
     const record = {
       id: randomUUID(), actor, tool, target, environment, requestBinding,
       tokenHash: digest(token), nonceHash: digest(nonce), status: 'ACTIVE',
@@ -114,7 +158,8 @@ export class ExecutionTokenBroker {
     if (!TOKEN_RE.test(token || '') || !NONCE_RE.test(nonce || '')) throw new V2Error('invalid_execution_token', 'execution token is invalid', 403);
     const record = this.records.get(digest(token));
     if (!record || record.status !== 'ACTIVE') throw new V2Error('execution_token_replay', 'execution token is unavailable', 409);
-    if (Date.parse(record.expiresAt) <= this.now()) {
+    const now = currentTime(this.now);
+    if (Date.parse(record.expiresAt) <= now) {
       record.status = 'EXPIRED';
       throw new V2Error('execution_token_expired', 'execution token expired', 409);
     }
@@ -126,7 +171,7 @@ export class ExecutionTokenBroker {
       && same(record.requestBinding, expected?.request_binding);
     if (!matches) throw new V2Error('execution_token_mismatch', 'execution token binding mismatch', 403);
     record.status = 'CONSUMED';
-    record.consumedAt = new Date(this.now()).toISOString();
+    record.consumedAt = new Date(now).toISOString();
     return publicGrant(record);
   }
 
@@ -134,9 +179,13 @@ export class ExecutionTokenBroker {
     const tokenHash = this.byId.get(executionId);
     const record = tokenHash ? this.records.get(tokenHash) : null;
     if (!record) throw new V2Error('not_found', 'execution token not found', 404);
+    const now = currentTime(this.now);
+    if (record.status === 'ACTIVE' && Date.parse(record.expiresAt) <= now) {
+      record.status = 'EXPIRED';
+    }
     if (record.status !== 'ACTIVE') throw new V2Error('invalid_state', 'execution token cannot be revoked', 409);
     record.status = 'REVOKED';
-    record.revokedAt = new Date(this.now()).toISOString();
+    record.revokedAt = new Date(now).toISOString();
     return publicGrant(record);
   }
 
@@ -163,17 +212,12 @@ export class ExecutionTokenBroker {
       records.set(record.tokenHash, record);
       byId.set(record.id, record.tokenHash);
     }
+    materializeAndPrune(records, byId, currentTime(this.now));
     this.records = records;
     this.byId = byId;
-    this.prune();
   }
 
   prune() {
-    const cutoff = this.now() - MAX_TTL_MS;
-    for (const [tokenHash, record] of this.records) {
-      if (Date.parse(record.expiresAt) >= cutoff) continue;
-      this.records.delete(tokenHash);
-      this.byId.delete(record.id);
-    }
+    materializeAndPrune(this.records, this.byId, currentTime(this.now));
   }
 }

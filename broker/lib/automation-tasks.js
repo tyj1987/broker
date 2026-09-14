@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { V2Error, canonicalJson } from './operations-v2.js';
+import { V2Error, assertSafeParameters, canonicalJson } from './operations-v2.js';
 import { ExecutionTokenBroker } from './execution-tokens.js';
 import { redactDeep } from './redact.js';
 
@@ -21,6 +21,8 @@ const VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{16,128}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
+const TASK_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
+const SENSITIVE_TASK_CODE_RE = /(secret|password|private|canary|pem|material)/i;
 const MAX_TASKS = 10_000;
 const MAX_EVENTS = 64;
 const STATE_VERSION = 2;
@@ -47,6 +49,15 @@ function hash(value) {
 
 function stateCorrupt(message) {
   return new V2Error('state_corrupt', `automation task state is invalid: ${message}`, 500);
+}
+
+// Failure codes are public task data. Never expose adapter exception text or
+// credential-shaped values through a task error or event reason.
+function safeTaskCode(value, fallback = 'operation_failed') {
+  return typeof value === 'string' && TASK_CODE_RE.test(value)
+    && !SENSITIVE_TASK_CODE_RE.test(value)
+    ? value
+    : fallback;
 }
 
 function hasExactKeys(value, keys) {
@@ -122,7 +133,7 @@ function exportedTask(task) {
     approval_id: task.approvalId || null,
     execution_id: task.executionId || null,
     result: task.state === 'SUCCEEDED' ? structuredClone(task.result) : null,
-    error: task.state === 'FAILED' ? task.error : null,
+    error: task.state === 'FAILED' ? safeTaskCode(task.error) : null,
     latency_ms: Number.isFinite(task.latencyMs) ? task.latencyMs : null,
   };
 }
@@ -150,6 +161,7 @@ function restoreTaskRecord(value, toolRegistry) {
   try {
     parameters = structuredClone(value.parameters);
     assertSchema(parameters, tool.input_schema, 'parameters');
+    assertSafeParameters(parameters);
   } catch {
     throw stateCorrupt('task parameters are invalid');
   }
@@ -173,16 +185,19 @@ function restoreTaskRecord(value, toolRegistry) {
   }
   let priorState = null;
   let priorSequence = 0;
+  let priorEventAtMs = createdAtMs;
   for (const event of value.events) {
+    const eventAtMs = Date.parse(event?.at);
     if (!event || typeof event !== 'object' || Array.isArray(event) || !hasExactKeys(event, EVENT_STATE_KEYS)
       || !Number.isSafeInteger(event.sequence) || event.sequence !== priorSequence + 1
       || !STATES.has(event.state) || !TRANSITIONS.get(priorState)?.has(event.state)
       || !validBoundedString(event.reason, 128) || !validTimestamp(event.at)
-      || Date.parse(event.at) < createdAtMs || Date.parse(event.at) > updatedAtMs) {
+      || eventAtMs < priorEventAtMs || eventAtMs > updatedAtMs) {
       throw stateCorrupt('task event is invalid');
     }
     priorSequence = event.sequence;
     priorState = event.state;
+    priorEventAtMs = eventAtMs;
   }
   if (priorSequence + 1 !== value.next_sequence || priorState !== value.state
     || value.events.at(-1).at !== value.updated_at) {
@@ -190,10 +205,16 @@ function restoreTaskRecord(value, toolRegistry) {
   }
   const approvalId = value.approval_id;
   const executionId = value.execution_id;
+  const executionStarted = value.events.some((event) => event.state === 'EXECUTING');
+  const approvalRequiredByRisk = ['HIGH', 'CRITICAL'].includes(tool.risk_level);
   if ((approvalId !== null && !UUID_RE.test(approvalId || ''))
     || (executionId !== null && !UUID_RE.test(executionId || ''))
+    || (approvalRequiredByRisk && approvalId === null)
+    || (!approvalRequiredByRisk && approvalId !== null)
+    || value.state === 'REQUESTED'
     || (value.state === 'PENDING_APPROVAL' && approvalId === null)
-    || (value.state === 'EXECUTING' && executionId === null)) {
+    || ((executionId !== null) !== executionStarted)
+    || (value.policy_decision === 'deny' && (value.state !== 'FAILED' || executionStarted))) {
     throw stateCorrupt('task execution binding is invalid');
   }
   let result;
@@ -217,6 +238,10 @@ function restoreTaskRecord(value, toolRegistry) {
     && (!Number.isSafeInteger(value.latency_ms) || value.latency_ms < 0)) {
     throw stateCorrupt('task latency is invalid');
   }
+  if ((value.latency_ms !== null && !executionStarted)
+    || (executionStarted && TERMINAL.has(value.state) && value.latency_ms === null)) {
+    throw stateCorrupt('task latency marker is invalid');
+  }
   return {
     id: value.id, owner: value.owner, tool, accountRef: value.account_ref,
     environment: value.environment, parameters, requestFingerprint: value.request_fingerprint,
@@ -225,7 +250,7 @@ function restoreTaskRecord(value, toolRegistry) {
     createdAt: value.created_at, updatedAt: value.updated_at, expiresAt: value.expires_at,
     ...(approvalId ? { approvalId } : {}), ...(executionId ? { executionId } : {}),
     ...(value.state === 'SUCCEEDED' ? { result } : {}),
-    ...(value.state === 'FAILED' ? { error: value.error } : {}),
+    ...(value.state === 'FAILED' ? { error: safeTaskCode(value.error) } : {}),
     ...(value.latency_ms !== null ? { latencyMs: value.latency_ms } : {}),
     running: false,
   };
@@ -302,7 +327,7 @@ function publicTask(task) {
     approval_id: task.approvalId || null,
     execution_id: task.executionId || null,
     result: task.state === 'SUCCEEDED' ? structuredClone(task.result) : undefined,
-    error: task.error ? { code: task.error } : undefined,
+    error: task.error ? { code: safeTaskCode(task.error) } : undefined,
     latency_ms: Number.isFinite(task.latencyMs) ? task.latencyMs : undefined,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
@@ -435,6 +460,7 @@ export class AutomationTaskBroker {
     if (!tool) throw new V2Error('tool_unregistered', 'tool and version are not registered', 404);
     const parameters = structuredClone(input.parameters);
     assertSchema(parameters, tool.input_schema, 'parameters');
+    assertSafeParameters(parameters);
     if (!this.apiKeyAllowsTask(identity, {
       tool, accountRef: input.account_ref, environment: input.environment, parameters,
     })) {
@@ -528,7 +554,10 @@ export class AutomationTaskBroker {
   eventsFor(identity, id) {
     const task = this.getOwned(identity, id);
     this.expire(task);
-    return task.events.map((event) => structuredClone(event));
+    return task.events.map((event) => ({
+      ...structuredClone(event),
+      reason: safeTaskCode(event.reason),
+    }));
   }
 
   async run(identity, id) {
@@ -571,8 +600,14 @@ export class AutomationTaskBroker {
         throw error;
       }
       if (!decision?.allow) {
+        const previousPolicyDecision = task.policyDecision;
         task.policyDecision = 'deny';
-        return this.completePreExecutionFailure(task, approvalClaim, decision?.reason || 'policy_denied');
+        try {
+          return this.completePreExecutionFailure(task, approvalClaim, decision?.reason || 'policy_denied');
+        } catch (error) {
+          task.policyDecision = previousPolicyDecision;
+          throw error;
+        }
       }
       try {
         this.assertExecutionEnabled();
@@ -592,6 +627,7 @@ export class AutomationTaskBroker {
       if (!this.consumeExecutionRateLimit(task)) {
         return this.completePreExecutionFailure(task, approvalClaim, 'tool_rate_limited');
       }
+      const preExecutionTask = structuredClone(task);
       const executionBinding = {
         actor: identity.name,
         tool: `${task.tool.name}@${task.tool.version}`,
@@ -616,11 +652,25 @@ export class AutomationTaskBroker {
       try {
         this.transition(task, 'EXECUTING', 'executor_started');
       } catch (error) {
+        task.executionId = undefined;
         if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
         this.releaseExecutionRateLimit(task);
         throw error;
       }
-      this.checkpoint(task, 'pre_execute');
+      try {
+        this.checkpoint(task, 'pre_execute');
+      } catch (error) {
+        if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+        for (const key of Object.keys(task)) delete task[key];
+        Object.assign(task, preExecutionTask);
+        this.releaseExecutionRateLimit(task);
+        try {
+          if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+        } catch {
+          throw new V2Error('state_rollback_failed', 'pre-execution checkpoint rollback failed', 503);
+        }
+        throw error;
+      }
       const startedAt = this.now();
       let result;
       try {
@@ -732,20 +782,37 @@ export class AutomationTaskBroker {
   }
 
   fail(task, code) {
-    this.transition(task, 'FAILED', code);
-    task.error = code;
+    const safeCode = safeTaskCode(code);
+    this.transition(task, 'FAILED', safeCode);
+    task.error = safeCode;
   }
 
   completePreExecutionFailure(task, approvalClaim, code, { state = 'FAILED', rateLimitConsumed = false } = {}) {
+    const previousTask = structuredClone(task);
+    let approvalFailed = false;
     try {
       if (state === 'EXPIRED') this.transition(task, 'EXPIRED', code);
       else this.fail(task, code);
+      if (approvalClaim) {
+        this.approvalBroker.markFailed(approvalClaim.id);
+        approvalFailed = true;
+      }
+      this.checkpoint(task, 'terminal');
     } catch (error) {
-      if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
+      if (error instanceof V2Error && error.code === 'state_commit_indeterminate') throw error;
+      for (const key of Object.keys(task)) delete task[key];
+      Object.assign(task, previousTask);
       if (rateLimitConsumed) this.releaseExecutionRateLimit(task);
+      try {
+        if (approvalClaim) {
+          if (approvalFailed) this.approvalBroker.rollbackFailed(approvalClaim.id);
+          this.approvalBroker.releaseClaim(approvalClaim.id);
+        }
+      } catch {
+        throw new V2Error('state_rollback_failed', 'pre-execution task rollback failed', 503);
+      }
       throw error;
     }
-    if (approvalClaim) this.approvalBroker.markFailed(approvalClaim.id);
     return publicTask(task);
   }
 
@@ -773,14 +840,15 @@ export class AutomationTaskBroker {
     if (!STATES.has(state)) throw new V2Error('invalid_state', 'unknown task state', 500);
     if (!TRANSITIONS.get(task.state)?.has(state)) throw new V2Error('invalid_state', `task cannot transition from ${task.state || 'NEW'} to ${state}`, 409);
     const timestamp = new Date(this.now()).toISOString();
-    const event = { sequence: task.nextSequence, state, reason, at: timestamp };
+    const safeReason = safeTaskCode(reason);
+    const event = { sequence: task.nextSequence, state, reason: safeReason, at: timestamp };
     this.onEvent({
       task_id: task.id, execution_id: task.executionId || null, actor: task.owner,
       identity: task.identityMethod, role: task.role, policy_decision: task.policyDecision,
       tool: task.tool.name, target: redactDeep(task.parameters.resource_ref), environment: task.environment,
       risk_level: task.tool.risk_level, approval_id: task.approvalId || null,
       result: TERMINAL.has(state) ? state.toLowerCase() : undefined,
-      error: state === 'FAILED' ? reason : undefined,
+      error: state === 'FAILED' ? safeReason : undefined,
       latency_ms: task.latencyMs, ...event,
     });
     // State is committed only after the mandatory audit sink accepts the
@@ -914,6 +982,79 @@ export class AutomationTaskBroker {
       ? initialEmergencyStop()
       : restoreEmergencyStop(snapshot.emergency_stop);
     this.prune();
+  }
+
+  validateRestoredState(approvalSnapshot, executionTokenSnapshot) {
+    if (!approvalSnapshot || typeof approvalSnapshot !== 'object' || Array.isArray(approvalSnapshot)
+      || !Array.isArray(approvalSnapshot.records)) {
+      throw stateCorrupt('approval state is unavailable for task binding validation');
+    }
+    if (!executionTokenSnapshot || typeof executionTokenSnapshot !== 'object'
+      || Array.isArray(executionTokenSnapshot) || !Array.isArray(executionTokenSnapshot.records)) {
+      throw stateCorrupt('execution token state is unavailable for task binding validation');
+    }
+    const approvals = new Map();
+    for (const record of approvalSnapshot.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record) || !record.id
+        || approvals.has(record.id)) {
+        throw stateCorrupt('approval state contains duplicate or invalid records');
+      }
+      approvals.set(record.id, record);
+    }
+    const executions = new Map();
+    for (const record of executionTokenSnapshot.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)
+        || !UUID_RE.test(record.id || '') || executions.has(record.id)) {
+        throw stateCorrupt('execution token state contains duplicate or invalid records');
+      }
+      executions.set(record.id, record);
+    }
+    const expectedStatuses = new Map([
+      ['PENDING_APPROVAL', new Set(['REQUESTED'])],
+      ['READY', new Set(['APPROVED', 'EXECUTING'])],
+      ['EXECUTING', new Set(['EXECUTING'])],
+      ['SUCCEEDED', new Set(['SUCCEEDED'])],
+      ['FAILED', new Set(['FAILED'])],
+      ['EXPIRED', new Set(['EXPIRED', 'FAILED', 'CANCELLED'])],
+      ['CANCELLED', new Set(['CANCELLED'])],
+    ]);
+    for (const task of this.tasks.values()) {
+      if (!task.approvalId) continue;
+      const approval = approvals.get(task.approvalId);
+      const request = {
+        provider: task.tool.provider,
+        operation_id: task.tool.operation_id,
+        account_ref: task.accountRef,
+        environment: task.environment,
+        typed_parameters: structuredClone(task.parameters),
+      };
+      const requestHash = hash(request);
+      if (!approval || approval.requester !== task.owner
+        || approval.provider !== request.provider
+        || approval.operationId !== request.operation_id
+        || approval.accountRef !== request.account_ref
+        || approval.environment !== request.environment
+        || approval.resourceRef !== task.parameters.resource_ref
+        || approval.requestHash !== requestHash
+        || !expectedStatuses.get(task.state)?.has(approval.status)) {
+        throw stateCorrupt('task approval binding is invalid');
+      }
+    }
+    for (const task of this.tasks.values()) {
+      if (!task.executionId) continue;
+      // Consumed-token tombstones have a shorter retention period than task
+      // history. Absence is therefore valid, but any retained record must bind
+      // exactly to the task that names it.
+      const execution = executions.get(task.executionId);
+      if (!execution) continue;
+      if (execution.status !== 'CONSUMED' || execution.actor !== task.owner
+        || execution.tool !== `${task.tool.name}@${task.tool.version}`
+        || execution.target !== task.parameters.resource_ref
+        || execution.environment !== task.environment
+        || execution.requestBinding !== task.requestFingerprint) {
+        throw stateCorrupt('task execution token binding is invalid');
+      }
+    }
   }
 
   prune() {

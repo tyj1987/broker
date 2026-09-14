@@ -152,7 +152,8 @@ function handleConnection(ws, ctx, opts) {
     ws.isAlive = true;
     let msg;
     try { msg = JSON.parse(raw.toString('utf8')); } catch (e) {
-      sendError(ws, 'invalid_json', e.message);
+      // Parser details can echo attacker-controlled payload fragments.
+      sendError(ws, 'invalid_json', 'invalid_json');
       return;
     }
     handleClientMessage(ws, clientId, msg, opts);
@@ -201,7 +202,8 @@ function handleClientMessage(ws, clientId, msg, opts) {
     sendAck(ws, 'events', { events: ['audit', 'healthcheck', 'alerts', 'secret_rotated', 'mfa_enrolled', 'config_reloaded', '*'] });
     return;
   }
-  sendError(ws, 'unknown_action', `action must be one of subscribe|unsubscribe|ping|list_events, got: ${msg.action}`);
+  // Do not reflect arbitrary action text; it may contain credential material.
+  sendError(ws, 'unknown_action', 'unsupported_action');
 }
 
 function startHeartbeat(wss) {

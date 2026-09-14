@@ -220,6 +220,13 @@ section('broadcastEvent validation');
   ok('missing type throws', threw);
 }
 
+section('WebSocket error messages do not reflect input');
+{
+  const source = readFileSync(join(process.cwd(), 'lib', 'ws.js'), 'utf8');
+  ok('invalid JSON error is stable', source.includes("sendError(ws, 'invalid_json', 'invalid_json')"));
+  ok('unknown action is not reflected', source.includes("sendError(ws, 'unknown_action', 'unsupported_action')"));
+}
+
 // ============================================================
 // 真实 WebSocket 端到端 (本地 ws, 无 mTLS)
 // ============================================================

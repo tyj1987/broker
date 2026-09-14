@@ -20,7 +20,7 @@ const (
 )
 
 type memoryConn struct {
-	input    *bytes.Reader
+	input    io.Reader
 	output   bytes.Buffer
 	deadline time.Time
 }
@@ -44,6 +44,17 @@ type testAddr string
 
 func (address testAddr) Network() string { return "test" }
 func (address testAddr) String() string  { return string(address) }
+
+type countingReader struct {
+	reader io.Reader
+	read   int
+}
+
+func (reader *countingReader) Read(value []byte) (int, error) {
+	count, err := reader.reader.Read(value)
+	reader.read += count
+	return count, err
+}
 
 func requestLine(t *testing.T, mutate func(map[string]any)) string {
 	t.Helper()
@@ -144,6 +155,11 @@ func TestRequestValidationFailsClosed(t *testing.T) {
 		"crlf":                    strings.TrimSuffix(requestLine(t, nil), "\n") + "\r\n",
 		"trailing":                requestLine(t, nil) + "{}\n",
 		"oversized":               strings.Repeat("x", MaxRequestBytes+1) + "\n",
+		"invalid utf8":            string([]byte{'{', 0xff, '}', '\n'}),
+		"duplicate field":         strings.Replace(requestLine(t, nil), `"version":2`, `"version":2,"version":2`, 1),
+		"wrong field case":        strings.Replace(requestLine(t, nil), `"account_ref":`, `"ACCOUNT_REF":`, 1),
+		"case alias":              strings.Replace(requestLine(t, nil), `"account_ref":`, `"ACCOUNT_REF":"other","account_ref":`, 1),
+		"null field":              strings.Replace(requestLine(t, nil), `"account_ref":"deepseek-primary"`, `"account_ref":null`, 1),
 		"unknown field":           requestLine(t, func(value map[string]any) { value["credential"] = "canary" }),
 		"wrong version":           requestLine(t, func(value map[string]any) { value["version"] = 1 }),
 		"unknown provider":        requestLine(t, func(value map[string]any) { value["provider"] = "github" }),
@@ -168,6 +184,53 @@ func TestRequestValidationFailsClosed(t *testing.T) {
 	}
 	if issuerCalls != 0 {
 		t.Fatal("issuer was called for invalid request")
+	}
+}
+
+func TestRequestReadAndIssuerTimeAreBounded(t *testing.T) {
+	reader := &countingReader{reader: strings.NewReader(strings.Repeat("x", MaxRequestBytes*4))}
+	dependencyCalls := 0
+	server := testServer(t,
+		LeaseIssuerFunc(func(context.Context, LeaseRequest) (Lease, error) {
+			dependencyCalls++
+			return Lease{Token: "ephemeral-token", ExpiresAt: protocolTestNow.Add(time.Minute)}, nil
+		}),
+		BindingAuthorizerFunc(func(context.Context, LeaseRequest) error {
+			dependencyCalls++
+			return nil
+		}),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	if err := server.ServeConn(context.Background(), &memoryConn{input: reader}); errorCode(err) != "request_invalid" {
+		t.Fatalf("unexpected oversized request error %v", err)
+	}
+	if reader.read > MaxRequestBytes+1 || dependencyCalls != 0 {
+		t.Fatalf("unbounded read or dependency call: bytes=%d calls=%d", reader.read, dependencyCalls)
+	}
+
+	server = testServer(t,
+		LeaseIssuerFunc(func(ctx context.Context, _ LeaseRequest) (Lease, error) {
+			<-ctx.Done()
+			return Lease{Token: "ephemeral-token", ExpiresAt: protocolTestNow.Add(time.Minute)}, nil
+		}),
+		BindingAuthorizerFunc(func(context.Context, LeaseRequest) error { return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	server.Deadline = 20 * time.Millisecond
+	started := time.Now()
+	connection := newMemoryConn(requestLine(t, nil))
+	if err := server.ServeConn(context.Background(), connection); errorCode(err) != "deadline_exceeded" || time.Since(started) > time.Second || connection.output.Len() != 0 {
+		t.Fatalf("issuer deadline was not enforced: %v", err)
+	}
+	issuerCalled := false
+	server = testServer(t,
+		LeaseIssuerFunc(func(context.Context, LeaseRequest) (Lease, error) { issuerCalled = true; return Lease{}, nil }),
+		BindingAuthorizerFunc(func(ctx context.Context, _ LeaseRequest) error { <-ctx.Done(); return nil }),
+		PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }),
+	)
+	server.Deadline = 20 * time.Millisecond
+	if err := server.ServeConn(context.Background(), newMemoryConn(requestLine(t, nil))); errorCode(err) != "deadline_exceeded" || issuerCalled {
+		t.Fatalf("expired binding advanced to issuer: %v", err)
 	}
 }
 
@@ -321,10 +384,16 @@ func TestServeLifecycleAndConfigurationFailures(t *testing.T) {
 	if errorCode(server.Serve(context.Background(), listener)) != "server_invalid" {
 		t.Fatal("invalid concurrency accepted")
 	}
-	_ = listener.Close()
 	server.MaxConcurrent = DefaultConcurrency
+	if errorCode(server.Serve(nil, listener)) != "server_invalid" {
+		t.Fatal("nil serve context accepted")
+	}
+	_ = listener.Close()
 	if errorCode(server.ServeConn(context.Background(), nil)) != "server_invalid" {
 		t.Fatal("nil connection accepted")
+	}
+	if errorCode(server.ServeConn(nil, newMemoryConn(requestLine(t, nil)))) != "server_invalid" {
+		t.Fatal("nil context accepted")
 	}
 	server.Deadline = 11 * time.Second
 	if errorCode(server.ServeConn(context.Background(), newMemoryConn(requestLine(t, nil)))) != "server_invalid" {
@@ -377,4 +446,12 @@ func TestHelpersFailClosed(t *testing.T) {
 	server := &Server{OnError: func(string) { panic("canary-callback") }}
 	server.report("safe_code")
 	(&Server{}).report("ignored")
+	for _, value := range [][]byte{
+		[]byte(`{"outer":[{"key":1,"key":2}]}`),
+		[]byte(`{"outer":[1,true,null,{"ok":2}]} {}`),
+	} {
+		if err := rejectDuplicateKeys(value); err == nil {
+			t.Fatalf("ambiguous JSON accepted: %q", value)
+		}
+	}
 }

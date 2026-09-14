@@ -117,7 +117,9 @@ export async function dispatchAlert(route, sinks = {}) {
     }
     return { ok: false, error: `unknown channel type: ${route.type}` };
   } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
+    // Sink exceptions may include URLs, response bodies, or credential
+    // material. Keep the alert result stable and non-sensitive.
+    return { ok: false, error: 'alert_dispatch_failed' };
   }
 }
 

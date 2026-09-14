@@ -83,6 +83,12 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 		request.Provider == "" || request.Operation == "" || request.Account == "" || request.Environment == "" {
 		return deny("invalid_request")
 	}
+	if request.ApprovalCount < 0 || request.ApprovalCount > 10 {
+		return deny("invalid_request")
+	}
+	if rule.RequiredApprovals < 0 || rule.RequiredApprovals > 10 {
+		return deny("invalid_rule")
+	}
 	if !rule.Enabled {
 		return deny("rule_disabled")
 	}
@@ -118,7 +124,11 @@ func Evaluate(subject Subject, request Request, rule Rule) Decision {
 			return deny("step_up_required")
 		}
 	}
-	if request.Resource != "" && (!contains(subject.Resources, request.Resource) || !contains(rule.Resources, request.Resource)) {
+	if len(rule.Resources) > 0 {
+		if request.Resource == "" || !contains(rule.Resources, request.Resource) || !contains(subject.Resources, request.Resource) {
+			return deny("resource_denied")
+		}
+	} else if request.Resource != "" && !contains(subject.Resources, request.Resource) {
 		return deny("resource_denied")
 	}
 	if (subject.RequiresApproval || rule.RequireStepUp) && !request.StepUp {
@@ -236,6 +246,12 @@ func ValidateDelegation(parent, child Subject) error {
 	}
 	if parent.PrincipalType != "human" && child.PrincipalType != parent.PrincipalType {
 		return errors.New("child changed principal type")
+	}
+	if child.Role != parent.Role {
+		return errors.New("child changed role")
+	}
+	if child.SecurityProfile != parent.SecurityProfile {
+		return errors.New("child changed security profile")
 	}
 	if child.MaximumTTL <= 0 || parent.MaximumTTL <= 0 || child.MaximumTTL > parent.MaximumTTL {
 		return errors.New("child ttl exceeds parent")

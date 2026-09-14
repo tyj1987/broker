@@ -91,11 +91,14 @@ export function createAuditAsync(opts) {
       consecutiveFailures = 0;
       lastWriteError = null;
     } catch (err) {
-      writeError = new AsyncAuditWriteError(`audit write failed (mandatory=${mandatory}): ${err.message}`, err);
+      // Keep the original exception only as an internal cause. Storage paths,
+      // provider responses, and other exception text must not cross the audit
+      // API, event bus, or health endpoint.
+      writeError = new AsyncAuditWriteError(`audit_write_failed (mandatory=${mandatory})`, err);
       consecutiveFailures++;
       lastWriteError = err;
       lastWriteErrorAt = Date.now();
-      bus.emit('write_error', { ts: e.ts, error: err.message, mandatory, consecutive: consecutiveFailures });
+      bus.emit('write_error', { ts: e.ts, error_code: 'audit_storage_unavailable', mandatory, consecutive: consecutiveFailures });
       if (typeof onWriteError === 'function') {
         try { onWriteError(err, e); } catch { /* ignore */ }
       }
@@ -161,7 +164,7 @@ export function createAuditAsync(opts) {
   function health() {
     return {
       ok: lastWriteError === null,
-      last_write_error: lastWriteError ? lastWriteError.message : null,
+      last_write_error: lastWriteError ? 'audit_storage_unavailable' : null,
       last_write_error_at: lastWriteErrorAt || null,
       consecutive_failures: consecutiveFailures,
       ring_buffer_size: ring.length,

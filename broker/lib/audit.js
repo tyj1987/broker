@@ -72,15 +72,18 @@ export function createAudit(auditDir, opts = {}) {
       consecutiveFailures = 0;
       lastWriteError = null;
     } catch (err) {
+      // Keep the original exception only as an internal cause. Storage paths,
+      // provider responses, and other exception text must not cross the audit
+      // API, event bus, or health endpoint.
       writeError = new AuditWriteError(
-        `audit write failed (mandatory=${mandatory}): ${err.message}`,
+        `audit_write_failed (mandatory=${mandatory})`,
         err,
       );
       consecutiveFailures++;
       lastWriteError = err;
       lastWriteErrorAt = Date.now();
       // Notify subscribers (dashboard) that audit is unhealthy
-      bus.emit('write_error', { ts: e.ts, error: err.message, mandatory, consecutive: consecutiveFailures });
+      bus.emit('write_error', { ts: e.ts, error_code: 'audit_storage_unavailable', mandatory, consecutive: consecutiveFailures });
       // Optional callback for operator alerting
       if (typeof opts.onWriteError === 'function') {
         try { opts.onWriteError(err, e); } catch { /* don't let alerting kill the audit */ }
@@ -167,7 +170,7 @@ export function createAudit(auditDir, opts = {}) {
     const inBackoff = lastWriteError && (Date.now() - lastWriteErrorAt) < WRITE_FAILURE_BACKOFF_MS;
     return {
       ok: lastWriteError === null,
-      last_write_error: lastWriteError ? lastWriteError.message : null,
+      last_write_error: lastWriteError ? 'audit_storage_unavailable' : null,
       last_write_error_at: lastWriteErrorAt || null,
       consecutive_failures: consecutiveFailures,
       in_backoff: !!inBackoff,

@@ -17,6 +17,8 @@ only approved business results; they do not receive long-lived credentials.
 - [MCP typed-task bridge](MCP-TASK-BRIDGE.md) — executable-tool discovery and task execution without secret or arbitrary-proxy access.
 - [Execution tokens](EXECUTION-TOKENS.md) — short-lived, bound, single-use adapter capabilities.
 - [Audit integrity](AUDIT-INTEGRITY.md) — restart-safe hash chaining, migration boundary and external-anchor gate.
+- [Trust-domain cutover](TRUST-DOMAIN-CUTOVER.md) — DQ-009 plan validation, irreversible boundary and approval evidence.
+- [Provider contract tests](PROVIDER-CONTRACT-TESTS.md) — protected, bounded DQ-004 read-path validation and evidence limits.
 - [GitHub adapter](GITHUB-ADAPTER.md) — fixed-origin repository metadata operation and credential lease boundary.
 - [Cloudflare adapter](CLOUDFLARE-ADAPTER.md) — account-bound zone inventory with a scoped token capability.
 - [SSH capability](SSH-PROXY.md) — typed target inspection and the isolated-runner production boundary.

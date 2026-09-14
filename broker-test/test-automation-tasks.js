@@ -3,9 +3,15 @@ import { resolve } from 'node:path';
 import { ApprovalBroker } from '../broker/lib/approvals-v2.js';
 import { AutomationTaskBroker } from '../broker/lib/automation-tasks.js';
 import { loadToolRegistry } from '../broker/lib/tool-registry.js';
-import { V2Error } from '../broker/lib/operations-v2.js';
+import { V2Error, assertSafeParameters } from '../broker/lib/operations-v2.js';
 
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
+
+assert.throws(
+  () => assertSafeParameters({ nested: { clientSecret: 'credential-canary' } }),
+  expectCode('unsafe_parameters'),
+  'automation parameter helper rejects nested credential fields',
+);
 const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'));
 let now = 1_900_000_000_000;
 const observed = [];
@@ -52,6 +58,35 @@ const lowInput = {
   environment: 'production', idempotency_key: 'inspect-task-0001',
   parameters: { resource_ref: 'tool-registry', tool_name: 'github.repository.read', tool_version: '1.0.0' },
 };
+
+const inspectTool = registry.findByName(lowInput.tool, lowInput.tool_version);
+const permissiveInspectTool = {
+  ...inspectTool,
+  input_schema: {
+    ...inspectTool.input_schema,
+    properties: {
+      ...inspectTool.input_schema.properties,
+      clientSecret: { type: 'string' },
+    },
+  },
+};
+const permissiveRegistry = {
+  findByName(name, version) {
+    return name === permissiveInspectTool.name && version === permissiveInspectTool.version
+      ? structuredClone(permissiveInspectTool) : registry.findByName(name, version);
+  },
+  listFor(identity) { return registry.listFor(identity); },
+};
+await assert.rejects(
+  new AutomationTaskBroker({ toolRegistry: permissiveRegistry, authorize, approvalBroker: approvals, executors })
+    .create(human, {
+      ...lowInput,
+      idempotency_key: 'unsafe-task-client-secret-0001',
+      parameters: { ...lowInput.parameters, clientSecret: 'credential-canary' },
+    }),
+  expectCode('unsafe_parameters'),
+  'task creation rejects credential-shaped fields even when the tool schema permits them',
+);
 
 await assert.rejects(
   new AutomationTaskBroker({ toolRegistry: registry, authorize, approvalBroker: approvals, executors })
@@ -294,6 +329,24 @@ const criticalInput = {
 const critical = await broker.create(human, criticalInput);
 assert.equal(critical.state, 'PENDING_APPROVAL');
 assert.equal(critical.risk_level, 'CRITICAL');
+const forgedCriticalState = broker.exportState();
+const forgedCriticalTask = forgedCriticalState.tasks.find((task) => task.id === critical.id);
+forgedCriticalTask.approval_id = null;
+assert.throws(
+  () => new AutomationTaskBroker({
+    toolRegistry: registry, authorize, approvalBroker: approvals, executors, now: () => now,
+  }).restoreState(forgedCriticalState),
+  expectCode('state_corrupt'),
+  'a high-risk task cannot be restored without an approval binding',
+);
+broker.validateRestoredState(approvals.exportState(), broker.executionTokens.exportState());
+const orphanedApprovalState = approvals.exportState();
+orphanedApprovalState.records = orphanedApprovalState.records.filter((record) => record.id !== critical.approval_id);
+assert.throws(
+  () => broker.validateRestoredState(orphanedApprovalState, broker.executionTokens.exportState()),
+  expectCode('state_corrupt'),
+  'a task cannot be restored without its bound approval record',
+);
 const approver = (name) => ({ name, context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' } } });
 approvals.decide(approver('admin-b'), critical.approval_id, 'approve');
 approvals.decide(approver('admin-c'), critical.approval_id, 'approve');
@@ -470,6 +523,67 @@ assert.equal(
   'executor_unavailable',
 );
 
+let failPreExecutionTerminalCheckpoint = true;
+const terminalCheckpointApprovals = new ApprovalBroker({
+  now: () => now,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const terminalCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: terminalCheckpointApprovals,
+  executors: new Map([['broker.device.state@1.0.0', executors.get('broker.device.state@1.0.0')]]),
+  now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'terminal' && failPreExecutionTerminalCheckpoint) {
+      failPreExecutionTerminalCheckpoint = false;
+      throw new Error('pre-execution terminal checkpoint unavailable');
+    }
+  },
+});
+const terminalCheckpointTask = await terminalCheckpointBroker.create(human, {
+  ...criticalInput, idempotency_key: 'terminal-checkpoint-retry1',
+});
+terminalCheckpointApprovals.decide(approver('admin-f'), terminalCheckpointTask.approval_id, 'approve');
+terminalCheckpointApprovals.decide(approver('admin-g'), terminalCheckpointTask.approval_id, 'approve');
+terminalCheckpointBroker.executors.clear();
+await assert.rejects(
+  terminalCheckpointBroker.run(human, terminalCheckpointTask.id),
+  /pre-execution terminal checkpoint unavailable/,
+);
+assert.equal(terminalCheckpointBroker.get(human, terminalCheckpointTask.id).state, 'READY');
+assert.equal(
+  terminalCheckpointApprovals.list(human).find((item) => item.id === terminalCheckpointTask.approval_id).status,
+  'APPROVED',
+  'failed terminal persistence releases an unused approval claim',
+);
+terminalCheckpointBroker.executors.set(
+  'broker.device.state@1.0.0', executors.get('broker.device.state@1.0.0'),
+);
+assert.equal((await terminalCheckpointBroker.run(human, terminalCheckpointTask.id)).state, 'SUCCEEDED');
+
+const indeterminateTerminalBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', executors.get('broker.tools.inspect@1.0.0')]]),
+  now: () => now,
+  onCheckpoint(event) {
+    if (event.phase === 'terminal') {
+      throw new V2Error('state_commit_indeterminate', 'terminal state requires reconciliation', 503);
+    }
+  },
+});
+const indeterminateTerminalTask = await indeterminateTerminalBroker.create(human, {
+  ...lowInput, idempotency_key: 'terminal-checkpoint-unknown1',
+});
+indeterminateTerminalBroker.executors.clear();
+await assert.rejects(
+  indeterminateTerminalBroker.run(human, indeterminateTerminalTask.id),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(
+  indeterminateTerminalBroker.get(human, indeterminateTerminalTask.id).state,
+  'FAILED',
+  'an indeterminate terminal commit cannot be made retryable',
+);
+
 const throwingBroker = failureBroker(async () => { throw new Error('canary must never escape'); });
 const throwing = await throwingBroker.create(human, { ...lowInput, idempotency_key: 'task-case-throws01' });
 const thrownResult = await throwingBroker.run(human, throwing.id);
@@ -480,12 +594,24 @@ const failureAudit = failureObserved.find((event) => event.task_id === throwing.
 assert.equal(failureAudit.result, 'failed');
 assert.equal(failureAudit.error, 'executor_failed');
 
+const sensitiveCodeBroker = failureBroker(async () => {
+  throw new V2Error('canary-secret-token', 'canary must never escape', 502);
+});
+const sensitiveCodeTask = await sensitiveCodeBroker.create(human, {
+  ...lowInput, idempotency_key: 'task-case-sensitive1',
+});
+const sensitiveCodeResult = await sensitiveCodeBroker.run(human, sensitiveCodeTask.id);
+assert.deepEqual(sensitiveCodeResult.error, { code: 'operation_failed' });
+assert.ok(!JSON.stringify(sensitiveCodeResult).includes('canary'));
+assert.ok(!JSON.stringify(sensitiveCodeBroker.eventsFor(human, sensitiveCodeTask.id)).includes('canary'));
+
 const invalidOutputBroker = failureBroker(async () => ({ name: 'incomplete' }));
 const invalidOutput = await invalidOutputBroker.create(human, { ...lowInput, idempotency_key: 'bad-output-task-01' });
 assert.equal((await invalidOutputBroker.run(human, invalidOutput.id)).error.code, 'schema_mismatch');
 
 let rateNow = 2_000_000_000_000;
 let rateExecutorCalls = 0;
+const rateCheckpoints = [];
 const rateTool = {
   ...registry.findByName('broker.tools.inspect', '1.0.0'),
   input_schema: {
@@ -504,6 +630,7 @@ const rateBroker = new AutomationTaskBroker({
     },
   },
   authorize, approvalBroker: approvals, now: () => rateNow,
+  onCheckpoint: (event) => rateCheckpoints.push(event),
   executors: new Map([['broker.tools.inspect@1.0.0', async () => {
     rateExecutorCalls += 1;
     return {
@@ -521,6 +648,11 @@ const rateTwo = await rateBroker.create(human, {
 const limitedResult = await rateBroker.run(human, rateTwo.id);
 assert.equal(limitedResult.state, 'FAILED');
 assert.deepEqual(limitedResult.error, { code: 'tool_rate_limited' });
+assert.deepEqual(
+  rateCheckpoints.filter((event) => event.task_id === rateTwo.id).map((event) => event.phase),
+  ['created', 'terminal'],
+  'a pre-execution terminal result is persisted before it is returned',
+);
 assert.equal(rateExecutorCalls, 1, 'changing target cannot bypass the per-tool execution limit');
 rateNow += 60_000;
 const rateThree = await rateBroker.create(human, { ...lowInput, idempotency_key: 'rate-task-000000003' });
@@ -603,6 +735,38 @@ assert.equal(unsafeOutputResult.state, 'FAILED');
 assert.deepEqual(unsafeOutputResult.error, { code: 'unsafe_result' });
 assert.equal(unsafeOutputResult.result, undefined, 'credential-like executor output is never retained');
 
+const signingKeyTool = {
+  ...registry.findByName('broker.tools.inspect', '1.0.0'),
+  output_schema: {
+    ...registry.findByName('broker.tools.inspect', '1.0.0').output_schema,
+    properties: {
+      ...registry.findByName('broker.tools.inspect', '1.0.0').output_schema.properties,
+      signing_key: { type: 'string' },
+    },
+  },
+};
+const signingKeyOutputBroker = new AutomationTaskBroker({
+  toolRegistry: {
+    findByName(name, version) {
+      return name === signingKeyTool.name && version === signingKeyTool.version
+        ? structuredClone(signingKeyTool) : null;
+    },
+  },
+  authorize,
+  approvalBroker: approvals,
+  executors: new Map([['broker.tools.inspect@1.0.0', async () => ({
+    name: 'safe-looking-result', version: '1.0.0', provider: 'broker', operation_id: 'tools.inspect',
+    risk_level: 'LOW', agent_execution: true, signing_key: 'credential-canary',
+  })]]),
+});
+const signingKeyOutputTask = await signingKeyOutputBroker.create(human, {
+  ...lowInput, idempotency_key: 'unsafe-signing-key-task1',
+});
+const signingKeyOutput = await signingKeyOutputBroker.run(human, signingKeyOutputTask.id);
+assert.equal(signingKeyOutput.state, 'FAILED');
+assert.deepEqual(signingKeyOutput.error, { code: 'unsafe_result' });
+assert.equal(signingKeyOutput.result, undefined, 'signing key output is never retained');
+
 let auditedExecutionCalls = 0;
 const mandatoryAuditEvents = [];
 const auditFailureBroker = new AutomationTaskBroker({
@@ -624,6 +788,16 @@ const auditProtected = await auditFailureBroker.create(human, {
 await assert.rejects(auditFailureBroker.run(human, auditProtected.id), /mandatory audit unavailable/);
 assert.equal(auditedExecutionCalls, 0, 'executor must not run when its EXECUTING audit cannot be stored');
 assert.equal(auditFailureBroker.get(human, auditProtected.id).state, 'READY', 'failed audit leaves prior task state intact');
+assert.equal(
+  auditFailureBroker.get(human, auditProtected.id).execution_id,
+  null,
+  'failed pre-execution audit clears the unused execution binding',
+);
+assert.equal(
+  auditFailureBroker.exportState().tasks[0].execution_id,
+  null,
+  'a later checkpoint cannot persist a READY task with a consumed execution id',
+);
 assert.equal(
   mandatoryAuditEvents.filter((event) => event.state === 'EXECUTING').length,
   1,
@@ -755,6 +929,11 @@ denialAuditApprovals.decide(approver('admin-n'), denialAuditTask.approval_id, 'a
 denialAuditApprovals.decide(approver('admin-o'), denialAuditTask.approval_id, 'approve');
 await assert.rejects(denialAuditBroker.run(human, denialAuditTask.id), /denial audit unavailable/);
 assert.equal(denialAuditBroker.get(human, denialAuditTask.id).state, 'READY');
+assert.equal(
+  denialAuditBroker.exportState().tasks[0].policy_decision,
+  'allow',
+  'failed denial audit restores the last committed policy decision',
+);
 assert.equal(denialAuditApprovals.list(human)[0].status, 'APPROVED');
 assert.equal((await denialAuditBroker.run(human, denialAuditTask.id)).state, 'FAILED');
 assert.equal(denialAuditApprovals.list(human)[0].status, 'FAILED');
@@ -938,7 +1117,39 @@ const afterRestart = new AutomationTaskBroker({
   executors: persistenceExecutors, now: () => now,
 });
 afterRestart.restoreState(taskState);
+const persistedExecutionState = beforeRestart.executionTokens.exportState();
+afterRestart.validateRestoredState(approvals.exportState(), persistedExecutionState);
+for (const mutate of [
+  (record) => { record.status = 'ACTIVE'; },
+  (record) => { record.actor = 'another-owner'; },
+  (record) => { record.tool = 'broker.tools.inspect@9.9.9'; },
+  (record) => { record.target = 'another-target'; },
+  (record) => { record.environment = 'staging'; },
+  (record) => { record.requestBinding = 'A'.repeat(43); },
+]) {
+  const forgedExecutionState = structuredClone(persistedExecutionState);
+  mutate(forgedExecutionState.records[0]);
+  assert.throws(
+    () => afterRestart.validateRestoredState(approvals.exportState(), forgedExecutionState),
+    expectCode('state_corrupt'),
+  );
+}
+afterRestart.validateRestoredState(approvals.exportState(), { version: 1, records: [] });
+assert.throws(
+  () => afterRestart.validateRestoredState(approvals.exportState(), null),
+  expectCode('state_corrupt'),
+);
 assert.equal(afterRestart.get(human, persistedSuccess.id).state, 'SUCCEEDED');
+assert.throws(
+  () => afterRestart.get(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),
+  expectCode('forbidden'),
+  'restored tasks remain bounded by the current bearer capability',
+);
+await assert.rejects(
+  afterRestart.run(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),
+  expectCode('forbidden'),
+  'restored task execution cannot bypass a revoked or narrowed bearer capability',
+);
 assert.equal(
   (await afterRestart.create(human, { ...lowInput, idempotency_key: 'persisted-success-0001' })).id,
   persistedSuccess.id,
@@ -974,6 +1185,23 @@ assert.throws(() => restoreGuard.restoreState(taskState), expectCode('state_busy
 restoreGuard.tasks.get(guardTask.id).running = false;
 const validTaskState = taskState.tasks[0];
 const readyTaskState = taskState.tasks[1];
+const replacePersistedTask = (record) => ({
+  ...taskState,
+  tasks: taskState.tasks.map((task) => task.id === record.id ? record : task),
+});
+const requestedTaskState = {
+  ...readyTaskState,
+  state: 'REQUESTED',
+  events: [readyTaskState.events[0]],
+  next_sequence: 2,
+  updated_at: readyTaskState.events[0].at,
+};
+const nonMonotonicTaskState = structuredClone(validTaskState);
+const eventHeadMs = Date.parse(validTaskState.updated_at);
+nonMonotonicTaskState.created_at = new Date(eventHeadMs - 3).toISOString();
+nonMonotonicTaskState.events[0].at = new Date(eventHeadMs - 3).toISOString();
+nonMonotonicTaskState.events[1].at = new Date(eventHeadMs - 1).toISOString();
+nonMonotonicTaskState.events[2].at = new Date(eventHeadMs - 2).toISOString();
 for (const corrupt of [
   null,
   { version: 2, tasks: [], idempotency: [], rate_limits: [] },
@@ -1008,8 +1236,13 @@ for (const corrupt of [
   }] },
   { ...taskState, tasks: [{ ...readyTaskState, next_sequence: readyTaskState.next_sequence + 1 }] },
   { ...taskState, tasks: [{ ...readyTaskState, updated_at: new Date(now + 1).toISOString() }] },
+  replacePersistedTask({ ...readyTaskState, approval_id: validTaskState.execution_id }),
+  replacePersistedTask(requestedTaskState),
+  replacePersistedTask(nonMonotonicTaskState),
   { ...taskState, tasks: [{ ...validTaskState, approval_id: 'not-a-uuid' }] },
   { ...taskState, tasks: [{ ...validTaskState, execution_id: null }] },
+  { ...taskState, tasks: [{ ...readyTaskState, execution_id: validTaskState.execution_id }] },
+  { ...taskState, tasks: [{ ...validTaskState, policy_decision: 'deny' }] },
   { ...taskState, tasks: [{ ...validTaskState, result: null }] },
   { ...taskState, tasks: [{
     ...validTaskState,
@@ -1018,6 +1251,8 @@ for (const corrupt of [
   { ...taskState, tasks: [{ ...validTaskState, error: 'unexpected' }] },
   { ...taskState, tasks: [{ ...readyTaskState, result: validTaskState.result }] },
   { ...taskState, tasks: [{ ...validTaskState, latency_ms: -1 }] },
+  replacePersistedTask({ ...readyTaskState, latency_ms: 0 }),
+  replacePersistedTask({ ...validTaskState, latency_ms: null }),
   { ...taskState, tasks: [validTaskState, validTaskState] },
   { ...taskState, idempotency: [null] },
   { ...taskState, idempotency: [{ ...taskState.idempotency[0], key: '' }] },
@@ -1242,6 +1477,7 @@ assert.equal(indeterminateExpiryApprovals.list(human)[0].status, 'CANCELLED');
 assert.equal(indeterminateExpiryBroker.exportState().tasks[0].state, 'EXPIRED');
 
 let checkpointExecutorCalls = 0;
+let failPreExecutionCheckpoint = true;
 const unavailableCheckpointBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals,
   executors: new Map([['broker.tools.inspect@1.0.0', async () => {
@@ -1253,7 +1489,10 @@ const unavailableCheckpointBroker = new AutomationTaskBroker({
   }]]),
   now: () => now,
   onCheckpoint: (event) => {
-    if (event.phase === 'pre_execute') throw new Error('durable state unavailable');
+    if (event.phase === 'pre_execute' && failPreExecutionCheckpoint) {
+      failPreExecutionCheckpoint = false;
+      throw new Error('durable state unavailable');
+    }
   },
 });
 const unavailableCheckpointTask = await unavailableCheckpointBroker.create(human, {
@@ -1264,8 +1503,11 @@ await assert.rejects(
   /durable state unavailable/,
 );
 assert.equal(checkpointExecutorCalls, 0, 'executor cannot run before the durable EXECUTING checkpoint');
-assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).state, 'EXECUTING');
-assert.equal(unavailableCheckpointBroker.exportState().tasks[0].state, 'EXECUTING');
+assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).state, 'READY');
+assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).execution_id, null);
+assert.equal(unavailableCheckpointBroker.exportState().tasks[0].state, 'READY');
+assert.equal((await unavailableCheckpointBroker.run(human, unavailableCheckpointTask.id)).state, 'SUCCEEDED');
+assert.equal(checkpointExecutorCalls, 1, 'a definite checkpoint failure can be retried after rollback');
 
 let executingExpiryNow = now;
 let failExecutingPreCheckpoint = true;
@@ -1280,7 +1522,9 @@ const executingExpiryBroker = new AutomationTaskBroker({
   onCheckpoint(event) {
     if (event.phase === 'pre_execute' && failExecutingPreCheckpoint) {
       failExecutingPreCheckpoint = false;
-      throw new Error('pre-execution checkpoint unavailable');
+      throw new V2Error(
+        'state_commit_indeterminate', 'pre-execution checkpoint requires reconciliation', 503,
+      );
     }
     if (event.phase === 'expired' && failExecutingExpiryCheckpoint) {
       failExecutingExpiryCheckpoint = false;
@@ -1295,7 +1539,7 @@ executingExpiryApprovals.decide(approver('admin-f'), executingExpiryTask.approva
 executingExpiryApprovals.decide(approver('admin-g'), executingExpiryTask.approval_id, 'approve');
 await assert.rejects(
   executingExpiryBroker.run(human, executingExpiryTask.id),
-  /pre-execution checkpoint unavailable/,
+  expectCode('state_commit_indeterminate'),
 );
 assert.equal(executingExpiryBroker.tasks.get(executingExpiryTask.id).state, 'EXECUTING');
 assert.equal(executingExpiryApprovals.list(human)[0].status, 'EXECUTING');

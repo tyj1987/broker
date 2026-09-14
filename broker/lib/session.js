@@ -18,6 +18,20 @@ export function createSessionStore(opts = {}) {
   const lockoutMs = opts.lockoutMs ?? LOGIN_LOCKOUT_MS;
   const now = opts.now ?? Date.now;
 
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 24 * 60 * 60 * 1000) {
+    throw new TypeError('session ttlMs must be a positive bounded integer');
+  }
+  if (typeof header !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/i.test(header)) {
+    throw new TypeError('session header is invalid');
+  }
+  if (!Number.isSafeInteger(maxFails) || maxFails < 1 || maxFails > 1000) {
+    throw new TypeError('session maxFails must be a positive bounded integer');
+  }
+  if (!Number.isSafeInteger(lockoutMs) || lockoutMs < 1 || lockoutMs > 24 * 60 * 60 * 1000) {
+    throw new TypeError('session lockoutMs must be a positive bounded integer');
+  }
+  if (typeof now !== 'function') throw new TypeError('session clock must be a function');
+
   const sessions = new Map();
   const loginAttempts = new Map();
 

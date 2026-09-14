@@ -66,26 +66,29 @@ const requestImpl = (options, callback) => {
   request.end = (body) => {
     requests.push({ options, body: body?.toString() });
     const tokenRequest = options.path.includes('/access_tokens');
+    const authorityRequest = options.path === '/app/installations/12345';
     const pullRequestCreate = options.method === 'POST' && options.path.endsWith('/pulls');
     const permission = options.path.includes('/issues') ? 'issues' : 'metadata';
-    const responseBody = tokenRequest
-      ? {
-          token: 'runtime-installation-token',
-          expires_at: new Date(NOW + 60 * 60_000).toISOString(),
-          permissions: JSON.parse(body).permissions,
-          repositories: [{ full_name: 'tyj1987/broker' }],
-        }
-      : pullRequestCreate
+    const responseBody = authorityRequest
+      ? { id: 12345, account: { id: 98765, login: 'tyj1987' }, target_type: 'Organization' }
+      : tokenRequest
         ? {
-            number: 73,
-            state: 'open',
-            draft: true,
-            head: { ref: 'codex/runtime-test' },
-            base: { ref: 'master' },
+            token: 'runtime-installation-token',
+            expires_at: new Date(NOW + 60 * 60_000).toISOString(),
+            permissions: JSON.parse(body).permissions,
+            repositories: [{ full_name: 'tyj1987/broker' }],
           }
-        : permission === 'issues'
-          ? []
-          : { id: 123, full_name: 'tyj1987/broker', visibility: 'public', archived: false };
+        : pullRequestCreate
+          ? {
+              number: 73,
+              state: 'open',
+              draft: true,
+              head: { ref: 'codex/runtime-test' },
+              base: { ref: 'master' },
+            }
+          : permission === 'issues'
+            ? []
+            : { id: 123, full_name: 'tyj1987/broker', visibility: 'public', archived: false };
     const response = Readable.from([JSON.stringify(responseBody)]);
     response.statusCode = tokenRequest || pullRequestCreate ? 201 : 200;
     response.headers = { 'content-type': 'application/json' };
@@ -149,15 +152,22 @@ assert.deepEqual(repository, {
   full_name: 'tyj1987/broker',
   visibility: 'public',
   archived: false,
+  authority: {
+    installation_id_sha256: '5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5',
+    account_id_sha256: '79737ac46dad121166483e084a0727e5d6769fb47fa9b0b627eba4107e696078',
+    account_login_sha256: 'ed2cd5ee1e90bfec92e3cbe6abe094ef593e11ad10c3f41eeb2d829323988928',
+    target_type: 'Organization',
+  },
 });
-assert.equal(signerInputs.length, 1);
+assert.equal(signerInputs.length, 2);
 assert.equal(signerInputs[0].account_ref, 'github-primary');
 assert.equal(signerInputs[0].environment, 'production');
 assert.equal(signerInputs[0].algorithm, 'RS256');
 assert.equal(signerInputs[0].execution_id, EXECUTION_ID);
 assert.equal(signerInputs[0].request_binding, REQUEST_BINDING);
-assert.equal(JSON.parse(requests[0].body).permissions.metadata, 'read');
-assert.equal(requests[1].options.headers.authorization, 'Bearer runtime-installation-token');
+assert.equal(requests[0].options.path, '/app/installations/12345');
+assert.equal(JSON.parse(requests[1].body).permissions.metadata, 'read');
+assert.equal(requests[2].options.headers.authorization, 'Bearer runtime-installation-token');
 
 const pullRequest = await executors.get('github.pull-request.create@1.0.0')(
   {
@@ -188,9 +198,9 @@ assert.deepEqual(pullRequest, {
   base: 'master',
   url: 'https://github.com/tyj1987/broker/pull/73',
 });
-assert.deepEqual(JSON.parse(requests[2].body).permissions, { pull_requests: 'write' });
-assert.equal(requests[3].options.path, '/repos/tyj1987/broker/pulls');
-assert.equal(requests[3].options.headers.authorization, 'Bearer runtime-installation-token');
+assert.deepEqual(JSON.parse(requests[3].body).permissions, { pull_requests: 'write' });
+assert.equal(requests[4].options.path, '/repos/tyj1987/broker/pulls');
+assert.equal(requests[4].options.headers.authorization, 'Bearer runtime-installation-token');
 
 await assert.rejects(
   executors.get('github.repository.read@1.0.0')(
@@ -207,7 +217,7 @@ await assert.rejects(
       },
     },
   ),
-  (error) => error instanceof V2Error && error.code === 'github_credential_unavailable',
+  (error) => error instanceof V2Error && error.code === 'github_authority_binding_unavailable',
 );
 
 for (const mutate of [

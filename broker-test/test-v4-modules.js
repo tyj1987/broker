@@ -8,6 +8,11 @@ import { TYPE_SCHEMAS, getTypeSchema, validateFields } from '../broker/type-sche
 import { SERVICE_TEMPLATES, publicTemplateList } from '../broker/service-templates.js';
 import { configureWebAuthn, beginRegistration, beginAuthentication, finishRegistration, finishAuthentication, ensureWebAuthnFactors, listCredentials, parseAuthenticatorData, noopVerifier } from '../broker/webauthn.js';
 import { parseOpenAPI, extractAuthFromDocs, extractUpstreamFromDocs } from '../broker/lib/template-parser.js';
+import { safeUpstreamPreview } from '../broker/lib/safe-preview.js';
+import { sopsDecrypt } from '../broker/lib/sops.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import assert from 'node:assert/strict';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -16,10 +21,30 @@ function ok(name, cond) {
 }
 function section(t) { console.log(`\n[${t}]`); }
 
+section('sops error boundary');
+{
+  await assert.rejects(
+    sopsDecrypt(join(process.cwd(), 'definitely-missing-sops-file.yaml')),
+    (error) => error?.message === 'sops_file_unavailable' && !error.message.includes('definitely-missing'),
+  );
+  const source = readFileSync(join(process.cwd(), 'lib', 'sops.js'), 'utf8');
+  ok('sops failures use stable codes', source.includes("sopsFailure('sops_decrypt_failed'")
+    && source.includes("sopsFailure('sops_encrypt_failed'")
+    && !source.includes('stderr}: ${err}'));
+}
+
 // ============================================================
 // auto-rotate
 // ============================================================
 section('auto-rotate');
+{
+  const source = readFileSync(join(process.cwd(), 'lib', 'auto-rotate.js'), 'utf8');
+  ok('rotation errors are stable', source.includes("error: 'rotation_command_failed'")
+    && source.includes('rotation_persist_skipped') && !source.includes('error: e.message')
+    && !source.includes('parse secrets file: ${e.message}')
+    && !source.includes('without SOPS encryption: ${e.message}'));
+  ok('rollback never returns secret material', !source.includes('resolve({ ok: true, secret: target })'));
+}
 {
   const fresh = checkRotationState({ name: 's1', type: 'github_pat', created_at: new Date().toISOString() }, {});
   ok('fresh secret has state=fresh', fresh.state === 'fresh' && fresh.days_until_rotation > 0);
@@ -160,6 +185,13 @@ section('alerting');
     payload: { severity: 'critical', title: 'leak test', detail: 'token=ghp_xxxxABCDEFGHIJabcdefghij', text: 't' },
   }, sink);
   ok('detail got redacted', r7.ok === true);
+}
+{
+  const canary = 'synthetic-alert-sink-secret';
+  const r8 = await dispatchAlert({ type: 'slack_webhook', target: 'https://x', payload: {} }, {
+    fetchImpl: async () => { throw new Error(canary); },
+  });
+  ok('sink exception is generic', r8.ok === false && r8.error === 'alert_dispatch_failed' && !r8.error.includes(canary));
 }
 
 // ============================================================
@@ -388,6 +420,23 @@ section('webauthn');
 }
 
 // ============================================================
+// safe upstream preview
+// ============================================================
+section('safe-upstream-preview');
+{
+  const json = safeUpstreamPreview(JSON.stringify({
+    ok: true,
+    token: 'canary-secret-token-1234567890',
+    nested: { authorization: 'Bearer canary-secret-token-1234567890' },
+  }));
+  ok('JSON preview redacts sensitive fields', !json.includes('canary-secret-token'));
+  ok('JSON preview preserves safe fields', json.includes('"ok":true'));
+  const text = safeUpstreamPreview('Authorization: Bearer canary-secret-token-1234567890');
+  ok('text preview redacts credential patterns', !text.includes('canary-secret-token'));
+  ok('preview is bounded', safeUpstreamPreview('x'.repeat(1000), 40).length === 40);
+}
+
+// ============================================================
 // template-parser
 // ============================================================
 section('template-parser');
@@ -442,7 +491,11 @@ paths:
 {
   // Invalid input
   let threw = false;
-  try { parseOpenAPI('not json or yaml at all: {{'); } catch (_e) { threw = true; }
+  try { parseOpenAPI('canary-secret-token: ['); } catch (e) {
+    threw = true;
+    ok('invalid spec uses stable error', e.message === 'openapi_spec_invalid');
+    ok('invalid spec does not reflect input', !String(e.message).includes('canary-secret-token'));
+  }
   ok('invalid spec throws', threw);
 }
 {
@@ -461,13 +514,16 @@ curl -H "x-api-key: sk-abc" \\
 `;
   const r1 = extractAuthFromDocs(docs);
   ok('extracts Bearer from docs', r1.auth_type === 'bearer');
-  ok('Bearer sample present', r1.sample && r1.sample.includes('Bearer'));
+  ok('Bearer sample is a safe format', r1.sample === 'Authorization: Bearer <redacted>');
+  ok('Bearer sample omits source value', !r1.sample.includes('ghp_xxxx'));
   const r2 = extractAuthFromDocs('# nothing here');
   ok('default bearer when no match', r2.auth_type === 'bearer');
   const r3 = extractAuthFromDocs('Authorization: Basic dXNlcjpwYXNz');
   ok('extracts Basic', r3.auth_type === 'basic');
+  ok('Basic sample is redacted', r3.sample === 'Authorization: Basic <redacted>');
   const r4 = extractAuthFromDocs('x-api-key: sk-abc123');
   ok('extracts header auth', r4.auth_type === 'header');
+  ok('header sample is redacted', r4.sample === 'x-api-key: <redacted>');
 }
 {
   // extract upstream

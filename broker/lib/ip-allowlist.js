@@ -58,7 +58,9 @@ export function matchIpRule(ip, rule) {
  * @param {string} remoteIp
  */
 export function isIpAllowed(whitelist, remoteIp) {
-  if (!whitelist || !Array.isArray(whitelist) || whitelist.length === 0) return true;
+  if (whitelist == null) return true;
+  if (!Array.isArray(whitelist)) return false;
+  if (whitelist.length === 0) return true;
   const addr = normalizeIp(remoteIp);
   if (!addr) return false; // have whitelist but no usable IP -> deny
   return whitelist.some(rule => matchIpRule(addr, rule));

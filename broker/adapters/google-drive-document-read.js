@@ -99,6 +99,13 @@ function validateFiltered(result, accountRef, environment, fileId) {
   ) {
     fail('google_drive_content_denied', 'Google Drive content was not approved for release', 403);
   }
+  if (Buffer.byteLength(result.content, 'utf8') > MAX_RESPONSE_BYTES) {
+    fail(
+      'google_drive_filtered_response_too_large',
+      'Filtered Google Drive content is too large',
+      502,
+    );
+  }
   const content = redact(result.content);
   if (Buffer.byteLength(content, 'utf8') > MAX_RESPONSE_BYTES) {
     fail(

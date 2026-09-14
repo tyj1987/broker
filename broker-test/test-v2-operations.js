@@ -3,9 +3,16 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import {
   OperationBroker,
   V2Error,
+  assertSafeParameters,
   canonicalDeviceMessage,
   canonicalJson,
 } from '../broker/lib/operations-v2.js';
+
+assert.throws(
+  () => assertSafeParameters({ nested: { master_key: 'credential-canary' } }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'operation parameters reject key-material field variants',
+);
 
 const indeterminateCheckpoint = () => {
   throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
@@ -93,6 +100,102 @@ assert.equal(broker.listDevices({
   context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' }, apiKey: {} },
 }).length, 0, 'a bearer delegation narrows interactive device inventory access');
 
+let expiryBoundaryNow = now;
+const expiryBoundaryBroker = new OperationBroker({
+  now: () => expiryBoundaryNow,
+  authorize: () => ({
+    allow: true,
+    otpRequired: true,
+    ttlMs: 10_000,
+    otp: {
+      deviceId: currentDeviceId,
+      simBinding: 'sim-expiry-boundary',
+      templateGroup: 'expiry-boundary',
+      senderAllowlist: ['CloudLogin'],
+      ttlMs: 120_000,
+    },
+  }),
+});
+expiryBoundaryBroker.hydrateDevices(broker.deviceRecords());
+const expiryBoundaryOperation = await expiryBoundaryBroker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'console' },
+});
+const expiryBoundaryTask = expiryBoundaryBroker.listDeviceOtpTasks(currentDeviceId)[0];
+assert.equal(
+  expiryBoundaryTask.expires_at,
+  expiryBoundaryOperation.expires_at,
+  'an OTP task cannot outlive its parent operation authorization',
+);
+const activeExpiryBoundaryState = expiryBoundaryBroker.exportState();
+expiryBoundaryNow += 10_000;
+assert.equal(
+  expiryBoundaryBroker.getOperation({ name: 'owner-1' }, expiryBoundaryOperation.id).status,
+  'expired',
+);
+assert.throws(
+  () => expiryBoundaryBroker.submitOtp(currentDeviceId, expiryBoundaryTask.id, {
+    code: '123456', sim_binding: 'sim-expiry-boundary', challenge: expiryBoundaryTask.challenge,
+  }),
+  (error) => error instanceof V2Error && error.code === 'invalid_state',
+  'an OTP submission cannot resurrect an expired operation',
+);
+assert.equal(expiryBoundaryBroker.listDeviceOtpTasks(currentDeviceId).length, 0);
+const expiredPairState = expiryBoundaryBroker.exportState();
+const expiredPairValidationBroker = new OperationBroker({ now: () => expiryBoundaryNow });
+expiredPairValidationBroker.hydrateDevices(broker.deviceRecords());
+expiredPairValidationBroker.restoreState(expiredPairState);
+const beforeInvalidExpiredPair = expiredPairValidationBroker.exportState();
+const invalidExpiredPair = structuredClone(expiredPairState);
+invalidExpiredPair.otp_tasks[0].status = 'waiting';
+assert.throws(
+  () => expiredPairValidationBroker.restoreState(invalidExpiredPair),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'an expired operation cannot restore with a live OTP task',
+);
+assert.deepEqual(expiredPairValidationBroker.exportState(), beforeInvalidExpiredPair);
+const invalidChildExpiry = structuredClone(activeExpiryBoundaryState);
+invalidChildExpiry.otp_tasks[0].expiresAt = new Date(
+  Date.parse(invalidChildExpiry.operations[0].expiresAt) + 1,
+).toISOString();
+assert.throws(
+  () => expiredPairValidationBroker.restoreState(invalidChildExpiry),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'a restored OTP task cannot outlive its parent operation authorization',
+);
+assert.deepEqual(expiredPairValidationBroker.exportState(), beforeInvalidExpiredPair);
+const invalidChildCreation = structuredClone(activeExpiryBoundaryState);
+invalidChildCreation.otp_tasks[0].createdAt = new Date(
+  Date.parse(invalidChildCreation.operations[0].createdAt) - 1,
+).toISOString();
+assert.throws(
+  () => expiredPairValidationBroker.restoreState(invalidChildCreation),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'a restored OTP task cannot predate its parent operation',
+);
+assert.deepEqual(expiredPairValidationBroker.exportState(), beforeInvalidExpiredPair);
+
+const noOtpBroker = new OperationBroker({
+  now: () => expiryBoundaryNow,
+  authorize: () => ({ allow: true, ttlMs: 60_000 }),
+});
+await noOtpBroker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun', operation_id: 'account.summary', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'summary' },
+});
+const noOtpState = noOtpBroker.exportState();
+const noOtpValidationBroker = new OperationBroker({ now: () => expiryBoundaryNow });
+noOtpValidationBroker.restoreState(noOtpState);
+const beforeInvalidNoOtpRestore = noOtpValidationBroker.exportState();
+const invalidNoOtpState = structuredClone(noOtpState);
+invalidNoOtpState.operations[0].status = 'received';
+assert.throws(
+  () => noOtpValidationBroker.restoreState(invalidNoOtpState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'an operation without an OTP task cannot restore in the received state',
+);
+assert.deepEqual(noOtpValidationBroker.exportState(), beforeInvalidNoOtpRestore);
+
 await assert.rejects(
   broker.createOperation({ name: 'owner-1' }, {
     provider: 'unknown',
@@ -102,6 +205,45 @@ await assert.rejects(
     typed_parameters: {},
   }),
   (error) => error instanceof V2Error && error.code === 'forbidden',
+);
+
+await assert.rejects(
+  broker.createOperation({
+    name: 'owner-1',
+    context: {
+      via: 'api_key',
+      apiKey: {
+        scopes: ['operations:execute'],
+        allowed_services: ['aliyun'],
+        allowed_operations: ['aliyun:other.operation'],
+        allowed_accounts: ['primary'],
+        allowed_environments: ['production'],
+        allowed_resources: ['account.aliyun.com'],
+      },
+    },
+  }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { resource_ref: 'account.aliyun.com' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'forbidden',
+  'a delegated key cannot create an operation outside its allowlist',
+);
+
+await assert.rejects(
+  broker.createOperation({ name: 'owner-1' }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { password: 'credential-canary' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'operation parameters cannot contain credential fields',
+);
+await assert.rejects(
+  broker.createOperation({ name: 'owner-1' }, {
+    provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary',
+    environment: 'production', typed_parameters: { clientSecret: 'credential-canary' },
+  }),
+  (error) => error instanceof V2Error && error.code === 'unsafe_parameters',
+  'camelCase credential fields are rejected',
 );
 
 const rollbackOperation = await broker.createOperation({ name: 'owner-1' }, {
@@ -213,6 +355,26 @@ await assert.rejects(
   broker.consumeOtp(operation.otp_task_id, async () => ({})),
   (error) => error instanceof V2Error && error.code === 'invalid_state',
 );
+
+const unsafeResultOperation = await broker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun',
+  operation_id: 'console.login',
+  account_ref: 'secondary',
+  environment: 'production',
+  typed_parameters: { requested_action: 'unsafe-result-test' },
+});
+const unsafeResultTask = broker.listDeviceOtpTasks(device.id)
+  .find((task) => task.id === unsafeResultOperation.otp_task_id);
+broker.submitOtp(device.id, unsafeResultTask.id, {
+  code: '731904', sim_binding: 'sim-primary', challenge: unsafeResultTask.challenge,
+});
+await assert.rejects(
+  broker.consumeOtp(unsafeResultTask.id, async () => ({ access_token: 'credential-canary' })),
+  (error) => error instanceof V2Error && error.code === 'upstream_failed',
+);
+assert.equal(broker.getOperation({ name: 'owner-1' }, unsafeResultOperation.id).status, 'failed');
+assert.equal(JSON.stringify(broker.exportState()).includes('credential-canary'), false,
+  'unsafe OTP result is never persisted');
 
 const revokedInFlightOperation = await broker.createOperation({ name: 'owner-1' }, {
   provider: 'aliyun',
@@ -813,6 +975,134 @@ assert.throws(
   (error) => error instanceof V2Error && error.code === 'state_corrupt',
 );
 assert.deepEqual(replayRestored.exportState(), beforeCorruptRestore, 'invalid state cannot partially replace live state');
+
+const completedOperationState = workerBroker.exportState();
+const expectCorruptOperationMarker = (mutate) => {
+  const candidate = structuredClone(completedOperationState);
+  const operation = candidate.operations.find((item) => item.status === 'completed');
+  mutate(operation);
+  assert.throws(
+    () => replayRestored.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+};
+for (const mutate of [
+  (operation) => { operation.status = 'waiting'; },
+  (operation) => { operation.error = 'forged_error'; },
+  (operation) => { operation.status = 'failed'; operation.result = null; },
+  (operation) => { operation.updatedAt = new Date(Date.parse(operation.createdAt) - 1).toISOString(); },
+  (operation) => { operation.expiresAt = new Date(Date.parse(operation.createdAt) + 9_999).toISOString(); },
+  (operation) => { operation.expiresAt = new Date(Date.parse(operation.createdAt) + 900_001).toISOString(); },
+]) expectCorruptOperationMarker(mutate);
+
+for (const mutate of [
+  (task) => { task.code = '123456'; },
+  (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 9_999).toISOString(); },
+  (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 120_001).toISOString(); },
+]) {
+  const candidate = structuredClone(durableOperationState);
+  mutate(candidate.otp_tasks.find((task) => task.status === 'consuming'));
+  assert.throws(
+    () => replayRestored.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+}
+assert.deepEqual(
+  replayRestored.exportState(),
+  beforeCorruptRestore,
+  'invalid operation markers and lifetimes cannot partially replace live state',
+);
+
+const claimValidationBroker = new OperationBroker({ now: () => now });
+claimValidationBroker.hydrateDevices(otpWorkerBroker.deviceRecords());
+claimValidationBroker.restoreState(claimState);
+const beforeInvalidClaimRestore = claimValidationBroker.exportState();
+for (const mutate of [
+  (state) => { state.browser_claims[0].previousOperationStatus = 'completed'; },
+  (state) => {
+    const claim = state.browser_claims[0];
+    const task = state.otp_tasks.find((item) => item.id === claim.taskId);
+    claim.expiresAt = Date.parse(task.expiresAt) + 1;
+  },
+  (state) => { state.browser_claims[0].previousOperationUpdatedAt = '2000-01-01T00:00:00.000Z'; },
+]) {
+  const candidate = structuredClone(claimState);
+  mutate(candidate);
+  assert.throws(
+    () => claimValidationBroker.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+}
+assert.deepEqual(
+  claimValidationBroker.exportState(),
+  beforeInvalidClaimRestore,
+  'invalid browser OTP claim bindings cannot partially replace live state',
+);
+
+const leaseValidationBroker = new OperationBroker({ now: () => now });
+leaseValidationBroker.hydrateDevices(otpWorkerBroker.deviceRecords());
+leaseValidationBroker.restoreState(durableOperationState);
+const beforeInvalidLeaseRestore = leaseValidationBroker.exportState();
+for (const mutate of [
+  (state) => { state.browser_leases[0].previousStatus = 'completed'; },
+  (state) => {
+    const lease = state.browser_leases[0];
+    const operation = state.operations.find((item) => item.id === lease.operationId);
+    lease.expiresAt = Date.parse(operation.expiresAt) + 1;
+  },
+  (state) => { state.browser_leases[0].previousUpdatedAt = '2000-01-01T00:00:00.000Z'; },
+  (state) => {
+    const lease = state.browser_leases[0];
+    const operation = state.operations.find((item) => item.id === lease.operationId);
+    const task = state.otp_tasks.find((item) => item.id === operation.otpTaskId);
+    task.status = 'received';
+    task.code = '123456';
+  },
+]) {
+  const candidate = structuredClone(durableOperationState);
+  mutate(candidate);
+  assert.throws(
+    () => leaseValidationBroker.restoreState(candidate),
+    (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  );
+}
+assert.deepEqual(
+  leaseValidationBroker.exportState(),
+  beforeInvalidLeaseRestore,
+  'invalid browser operation lease bindings cannot partially replace live state',
+);
+const invalidConsumingPair = structuredClone(durableOperationState);
+invalidConsumingPair.browser_leases = [];
+invalidConsumingPair.otp_tasks.find((task) => task.status === 'consuming').status = 'completed';
+assert.throws(
+  () => leaseValidationBroker.restoreState(invalidConsumingPair),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'a consuming operation cannot restore with a terminal OTP task',
+);
+assert.deepEqual(leaseValidationBroker.exportState(), beforeInvalidLeaseRestore);
+
+const completedResultState = workerBroker.exportState();
+completedResultState.operations.find((operation) => operation.status === 'completed').result = {
+  nested: { access_token: 'credential-canary' },
+};
+const beforeUnsafeResultRestore = workerBroker.exportState();
+assert.throws(
+  () => workerBroker.restoreState(completedResultState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'restored operation results cannot reintroduce credential-shaped fields',
+);
+assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'unsafe result restore is atomic');
+
+const valueLeakResultState = workerBroker.exportState();
+valueLeakResultState.operations.find((operation) => operation.status === 'completed').result = {
+  status: `gh${'p_'}${'C'.repeat(24)}`,
+};
+assert.throws(
+  () => workerBroker.restoreState(valueLeakResultState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'restored operation results cannot hide credential values in ordinary fields',
+);
+assert.deepEqual(workerBroker.exportState(), beforeUnsafeResultRestore, 'value-leak restore is atomic');
 
 let failoverDeviceId;
 const failoverBroker = new OperationBroker({

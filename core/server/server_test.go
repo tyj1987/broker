@@ -2,6 +2,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -60,6 +62,10 @@ func TestEvaluate(t *testing.T) {
 	}
 	if !value.Allow || value.Code != "allowed" || value.TTLMS != 60000 {
 		t.Fatalf("unexpected decision %#v", value)
+	}
+	digest := sha256.Sum256(body)
+	if value.RequestBinding != base64.RawURLEncoding.EncodeToString(digest[:]) {
+		t.Fatalf("response is not bound to request: %#v", value)
 	}
 }
 

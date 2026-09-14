@@ -11,6 +11,8 @@
 // canProxy / isServiceAllowed / clientNamesAllowedFor 都用统一 matchProxyRule,
 // 累加语义: 任一 rule 命中即可 (之前是首个不匹配就 return false, 已修)
 
+import { canProxyService } from './api-keys.js';
+
 export function isSafeRegexPattern(pattern) {
   if (typeof pattern !== 'string' || pattern.length > 256) return false;
   if (/\([^)]*[*+][^)]*\)[*+{]/.test(pattern)) return false;
@@ -57,6 +59,12 @@ export function matchProxyRule(rule, serviceName, path) {
 export function canProxy(ctx, serviceName, path) {
   if (!ctx || !ctx.client) return false;
   if (ctx.client.security_profile === 'strict') return false;
+  // Bearer/API-key identities must satisfy the key's own capability boundary
+  // in addition to the legacy client rule.  The client role is an owner
+  // context, not a privilege escalation path for a narrower child key.
+  if (ctx.via === 'api_key' || ctx.apiKey) {
+    if (!canProxyService(ctx.apiKey, serviceName)) return false;
+  }
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
   for (const rule of allow) {
@@ -69,6 +77,9 @@ export function canProxy(ctx, serviceName, path) {
 export function isServiceAllowed(ctx, serviceName) {
   if (!ctx || !ctx.client) return false;
   if (ctx.client.security_profile === 'strict') return false;
+  if (ctx.via === 'api_key' || ctx.apiKey) {
+    if (!canProxyService(ctx.apiKey, serviceName)) return false;
+  }
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
   return allow.some(rule => matchProxyRule(rule, serviceName, '*'));

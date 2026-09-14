@@ -36,6 +36,19 @@ const expired = broker.issue({ ...binding, ttl_ms: 1_000 });
 now += 1_001;
 assert.throws(() => broker.consume(expired.token, expired.nonce, binding), expectCode('execution_token_expired'));
 
+const expiresBeforeRevoke = broker.issue({ ...binding, ttl_ms: 1_000 });
+now += 1_001;
+assert.throws(
+  () => broker.revoke(expiresBeforeRevoke.execution_id),
+  expectCode('invalid_state'),
+  'revocation cannot overwrite an expired capability state',
+);
+assert.equal(
+  broker.exportState().records.find((record) => record.id === expiresBeforeRevoke.execution_id).status,
+  'EXPIRED',
+  'durable snapshots materialize token expiry',
+);
+
 const revoked = broker.issue(binding);
 assert.equal(broker.revoke(revoked.execution_id).execution_id, revoked.execution_id);
 assert.throws(() => broker.consume(revoked.token, revoked.nonce, binding), expectCode('execution_token_replay'));
@@ -94,6 +107,11 @@ for (const corrupt of [
   { version: 1, records: [{ ...validDurableRecord, tokenHash: 'not-a-digest' }] },
   { version: 1, records: [{ ...validDurableRecord, status: 'UNKNOWN' }] },
   { version: 1, records: [{ ...validDurableRecord, status: 'ACTIVE', consumedAt: restartNow }] },
+  { version: 1, records: [{ ...validDurableRecord, issuedAt: '2026-01-01T00:00:00Z' }] },
+  { version: 1, records: [{ ...validDurableRecord, consumedAt: new Date(restartNow - 1).toISOString() }] },
+  { version: 1, records: [{ ...durableState.records[1], revokedAt: new Date(restartNow - 1).toISOString() }] },
+  { version: 1, records: [{ ...durableState.records[1], revokedAt: durableState.records[1].expiresAt }] },
+  { version: 1, records: [{ ...validDurableRecord, consumedAt: new Date(restartNow + 1).toISOString() }] },
   { version: 1, records: [validDurableRecord, validDurableRecord] },
   { ...durableState, unexpected: true },
 ]) {
@@ -103,6 +121,32 @@ assert.equal(
   restoreGuard.consume(guardCapability.token, guardCapability.nonce, binding).execution_id,
   guardCapability.execution_id,
   'a rejected restore must not replace the last valid in-memory state',
+);
+
+const expiredSnapshotBroker = new ExecutionTokenBroker({ now: () => restartNow });
+const expiresForSnapshot = expiredSnapshotBroker.issue({ ...binding, ttl_ms: 1_000 });
+const activeSnapshot = expiredSnapshotBroker.exportState();
+const afterSnapshotExpiry = new ExecutionTokenBroker({ now: () => restartNow + 1_001 });
+afterSnapshotExpiry.restoreState(activeSnapshot);
+assert.equal(
+  afterSnapshotExpiry.records.get(activeSnapshot.records[0].tokenHash).status,
+  'EXPIRED',
+  'restore materializes an ACTIVE record whose deadline has passed',
+);
+assert.throws(
+  () => afterSnapshotExpiry.consume(expiresForSnapshot.token, expiresForSnapshot.nonce, binding),
+  expectCode('execution_token_replay'),
+);
+
+assert.throws(() => new ExecutionTokenBroker({ now: null }), TypeError);
+assert.throws(() => new ExecutionTokenBroker({ maxRecords: -1 }), TypeError);
+assert.throws(
+  () => new ExecutionTokenBroker({ now: () => Number.NaN }).issue(binding),
+  expectCode('clock_invalid'),
+);
+assert.throws(
+  () => new ExecutionTokenBroker({ now: () => { throw new Error('detail'); } }).issue(binding),
+  expectCode('clock_invalid'),
 );
 
 now += 60_001;

@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
-import { ToolRegistry, loadToolRegistry } from '../broker/lib/tool-registry.js';
+import { ToolRegistry, loadProviderGates, loadToolRegistry } from '../broker/lib/tool-registry.js';
 
 const registry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'));
+const gatedRegistry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'), {
+  providerGates: new Map([
+    ['github', { status: 'contract_required', contract_test: { required: true, last_result: 'not_run' } }],
+    ['broker', {
+      status: 'production',
+      contract_test: { account: 'isolated-broker', required: true, last_result: 'passed', verified_at: '2026-09-12T00:00:00Z' },
+      implementation_evidence: { tests: 'unit' },
+    }],
+  ]),
+});
 const github = registry.find('github', 'repo.read');
 assert.equal(github.name, 'github.repository.read');
 assert.equal(github.risk_level, 'LOW');
@@ -66,16 +76,64 @@ const workloadAgent = {
 assert.ok(registry.listFor(workloadAgent).every((tool) => tool.agent_execution === true));
 
 const allowed = { allow: true, reason: 'allowed' };
+assert.deepEqual(gatedRegistry.listFor(githubAgent), [], 'contract-gated providers are hidden');
+assert.equal(gatedRegistry.evaluate({
+  identity: githubAgent, provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+}, allowed).reason, 'provider_contract_required');
+assert.equal(gatedRegistry.evaluate({
+  identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
+}, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).allow, true);
+const incompleteProductionGate = new Map([
+  ['github', {
+    status: 'production',
+    contract_test: { account: 'isolated-github', required: true, last_result: 'passed' },
+    implementation_evidence: { tests: 'unit' },
+  }],
+]);
+const incompleteRegistry = loadToolRegistry(resolve(import.meta.dirname, '../tools/registry.json'), {
+  providerGates: incompleteProductionGate,
+});
+assert.equal(incompleteRegistry.evaluate({
+  identity: githubAgent, provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+}, allowed).reason, 'provider_contract_required', 'production gate requires verified_at');
+assert.equal(gatedRegistry.evaluate({
+  identity: githubAgent, provider: 'cloudflare', operationId: 'zones.list', environment: 'production',
+  accountRef: 'cloudflare-main', typedParameters: { resource_ref: 'cloudflare-main' },
+}, allowed).reason, 'provider_contract_required', 'unregistered providers fail closed');
 assert.equal(registry.evaluate({
   identity: { name: 'developer-a', context: { via: 'api_key', client: { role: 'developer' } } },
   provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+}, allowed).reason, 'tool_api_key_denied');
+assert.equal(registry.evaluate({
+  identity: githubAgent,
+  provider: 'github', operationId: 'repo.read', environment: 'production',
+  accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
 }, allowed).allow, true);
+for (const [field, value] of [
+  ['scopes', []],
+  ['allowed_services', []],
+  ['allowed_operations', []],
+  ['allowed_accounts', []],
+  ['allowed_resources', []],
+  ['allowed_environments', []],
+]) {
+  const restricted = structuredClone(githubAgent);
+  restricted.context.apiKey[field] = value;
+  assert.equal(registry.evaluate({
+    identity: restricted,
+    provider: 'github', operationId: 'repo.read', environment: 'production',
+    accountRef: 'repository-main', typedParameters: { resource_ref: 'repository-main' },
+  }, allowed).reason, 'tool_api_key_denied', `${field} is enforced during execution`);
+}
 assert.equal(registry.evaluate({
   identity: admin, provider: 'unknown', operationId: 'anything', environment: 'production',
 }, allowed).reason, 'tool_unregistered');
 assert.equal(registry.evaluate({
   identity: agent, provider: 'broker', operationId: 'device.state', environment: 'production',
-}, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).reason, 'critical_agent_denied');
+}, allowed, { operationPolicy: { approval_required: true, required_approvals: 2 } }).reason, 'tool_api_key_denied');
 assert.equal(registry.evaluate({
   identity: { ...admin, context: { ...admin.context, authFactors: [] } },
   provider: 'broker', operationId: 'device.state', environment: 'production',
@@ -86,6 +144,9 @@ assert.equal(registry.evaluate({
 assert.equal(registry.evaluate({
   identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
 }, allowed, { operationPolicy: { approval_required: true, required_approvals: 1 } }).reason, 'tool_approval_policy_mismatch');
+assert.equal(registry.evaluate({
+  identity: admin, provider: 'broker', operationId: 'device.state', environment: 'production',
+}, allowed, { operationPolicy: { approval_required: true, required_approvals: 'not-a-number' } }).reason, 'tool_approval_policy_mismatch');
 
 assert.equal(registry.validateConfiguration({ operation_policies: {
   github: { 'repo.read': {
@@ -102,6 +163,12 @@ assert.throws(() => registry.validateConfiguration({ operation_policies: {
 assert.throws(() => registry.validateConfiguration({ operation_policies: {
   broker: { 'device.state': {
     enabled: true, environments: ['production'], approval_required: false,
+    parameter_schema: { properties: { resource_ref: {}, device_id: {}, state: {} } },
+  } },
+} }), /weakens tool approval/);
+assert.throws(() => registry.validateConfiguration({ operation_policies: {
+  broker: { 'device.state': {
+    enabled: true, environments: ['production'], approval_required: true, required_approvals: 'not-a-number',
     parameter_schema: { properties: { resource_ref: {}, device_id: {}, state: {} } },
   } },
 } }), /weakens tool approval/);
@@ -219,6 +286,9 @@ assert.throws(() => registry.validateConfiguration({ operation_policies: {
   } },
 } }), /environment exceeds/);
 
-assert.throws(() => loadToolRegistry(resolve(import.meta.dirname, 'missing-registry.json')), /could not be loaded/);
+assert.throws(() => loadToolRegistry(resolve(import.meta.dirname, 'missing-registry.json')), /tool_registry_load_failed/);
+const providerGates = loadProviderGates(resolve(import.meta.dirname, '../providers'));
+assert.equal(providerGates.get('github').contract_test.last_result, 'not_run');
+assert.equal(providerGates.get('github').status, 'contract_required');
 
 console.log('tool registry: schema, risk, role and agent-execution gates passed');

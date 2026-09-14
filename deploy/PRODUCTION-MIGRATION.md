@@ -29,6 +29,7 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/opt/secret-broker/runtime/node` | root-managed symlink | Pinned Node 24 runtime verified against the vendor checksum |
 | `/opt/secret-broker/broker` | root-managed symlink | Active release |
 | `/var/lib/secret-broker` | `broker:broker`, `0700` | Encrypted secret data and audit output |
+| `/var/lib/secret-broker/audit` | `broker:broker`, `0700`; explicit read/traverse ACL for `broker-audit-exporter` only | Local hash-chain input; the exporter is not added to the broad `broker` group |
 | `/etc/secret-broker/pki/ca/ca.crt` | `root:broker`, `0440` | CA public certificate only |
 | `/etc/secret-broker/pki/server/server.crt` | `root:broker`, `0440` | Broker server certificate |
 | `/etc/secret-broker/pki/server/server.key` | `root:broker`, `0440` | Broker server private key |
@@ -37,9 +38,47 @@ Do not copy credential values into tickets, shell history, CI variables, or this
 | `/usr/local/sbin/secret-broker-deploy` | `root:root`, `0755` | Validated atomic deployment helper |
 | `/usr/local/sbin/secret-broker-production-preflight.mjs` | `root:root`, `0755` | Read-only production CD readiness check |
 | `/run/secret-broker/core.sock` | `broker-core:broker`, `0660` | Local-only Go policy decision channel |
-| `/run/secret-broker-signer/github.sock` | `broker-signer:broker`, `0660` | Signature-only GitHub App capability; private key remains in KMS/HSM |
+| `/run/secret-broker-github-signer/signer.sock` | `root:broker-github-signer`, `0660`; parent `0750` | systemd-owned, signature-only GitHub App capability; private key remains in KMS/HSM |
+| `/run/secret-broker-aliyun-signer/signer.sock` | `root:broker-aliyun-signer`, `0660`; parent `0750` | systemd-owned, execution-bound Alibaba Cloud Signature V3 capability; long-term credentials remain outside Broker |
+| `/etc/secret-broker/providers/github-signer.json` | `root:broker-github-signer`, `0640` | Strict non-secret binding configuration; parent grants the signer execute-only traversal |
+| `/etc/secret-broker/providers/github-kms-ca.pem` | `root:broker-github-signer`, `0640` | Dedicated KMS instance CA; exact file SHA-256 is bound in signer configuration |
+| `/etc/secret-broker/providers/aliyun-signer.json` | `root:broker-aliyun-signer`, `0640` | Strict non-secret binding configuration; parent grants the signer execute-only traversal |
+| `secret-broker-audit-signer.service` | `broker-audit-signer:broker-audit-signer` | Uses only the pinned Alibaba KMS key and external monotonic state |
+| `secret-broker-audit-exporter.service` | `broker-audit-exporter:broker-audit-exporter` | Exports audit-chain heads without holding a cloud signing or storage identity |
+| `/etc/secret-broker/audit/exporter.json` | `root:broker-audit-exporter`, `0440` | Exact non-secret stream, public-key trust and timeout configuration |
+| `secret-broker-audit-store.service` | `broker-audit-store:broker-audit-store` | Publishes signed heads to locked OSS and COS stores |
+| `secret-broker-audit-recovery.service` | `broker-audit-recovery:broker-audit-recovery` | Uses read-only cross-cloud identities to verify recovery evidence |
 
 Install [secret-broker.service](systemd/secret-broker.service), [secret-broker-policy.service](systemd/secret-broker-policy.service), the deployment helper, and the sudoers fragment only after reviewing their exact contents. Validate the sudoers fragment with `visudo -cf` before enabling it. The service uses systemd credentials, so verify that the host supports `LoadCredential=` and the `%d` credential-directory specifier before the maintenance window.
+
+The release builds the GitHub and Alibaba Cloud signer commands, and the
+deployment helper grants each signer identity execute-only traversal to its own
+binary with a POSIX ACL. Neither identity joins the `broker` group or gains
+directory listing access. The Alibaba command uses only its configured ECS RAM
+Role through IMDSv2 and has no static-key or IMDSv1 fallback. The GitHub command
+uses the same IMDSv2-only identity to call only a configured dedicated KMS
+gateway over TLS, with an exact CA digest and private-CIDR DNS guard. Its base
+unit denies all IP traffic except IMDS and the two documented Alibaba VPC DNS
+addresses `100.100.2.136` and `100.100.2.138`. The process resolver is hard-coded
+to those addresses and still rejects every KMS answer outside the configured
+private CIDRs. A reviewed root-owned systemd drop-in
+must add only the exact KMS private CIDRs recorded in the configuration; do not
+add a public or broad private range or disable the deny rule. Prefer `/32` or
+`/128` when gateway addressing is stable. Do not install or enable either unit until the non-secret
+binding configurations, dedicated workload/network boundaries, independently
+managed cloud authorities and isolated-account receipts have passed review.
+The production preflight intentionally remains red until that evidence exists.
+
+The audit exporter is an interpreted Node command, so its release ACL is
+read/execute rather than execute-only. Its exact JSON grammar accepts only the
+fixed audit directory and config path, one stream, `ecdsa-p256-sha256`, an active
+key ID, one to eight pinned P-256 SPKI public keys and their SHA-256 digests,
+revoked key IDs, and bounded signer/store/deadline/interval values. It rejects
+credentials, private keys, provider endpoints, unknown fields and duplicate JSON
+keys. The config file and every parent directory are verified as root-owned and
+non-writable before use. Grant `broker-audit-exporter` read/traverse ACLs only on
+the audit-chain directory and its chain files, including a reviewed default ACL
+for future chain files; do not add that identity to the `broker` group.
 
 Before the first hardened start, create `/etc/secret-broker/control-plane-state.key` from 32 cryptographically random bytes, owned by `root:root` with mode `0600`. Never pass this key on a command line or store it in Git, a unit file, a deployment log, or Helm values. With the Broker stopped, initialize the state exactly once using the same protected credential and the persistent state path:
 
@@ -59,14 +98,15 @@ The initializer refuses to overwrite an existing state file. Back up the encrypt
 
 1. Create the locked `broker` and `broker-core` service accounts, put `broker-core` in the `broker` group, and create the separate `broker-deploy` login account.
 2. Create the target directories with the ownership and modes above.
-3. Copy—not move—the currently deployed application to a versioned rollback directory named by its verified commit. Refuse to invent a commit when provenance is unknown; use a quarantine label and do not enable CI deployment. Separately extract the verified candidate artifact into its own versioned release directory, validate its manifest and compiled policy binary, then make that candidate the managed release symlink. Release directories are owned by `root:broker`; directories are `0550`, ordinary files are `0440`, and only reviewed executables are `0550`.
+3. Copy—not move—the currently deployed application to a versioned rollback directory named by its verified commit. Refuse to invent a commit when provenance is unknown; use a quarantine label and do not enable CI deployment. Separately extract the verified candidate artifact into its own versioned release directory, validate its manifest and compiled policy binary, then make that candidate the managed release symlink. Release directories are owned by `root:broker`; directories are `0550` and ordinary files are `0440`. Broker executables are `0550`; isolated compiled audit executables are `0500` plus an execute ACL for only their matching workload identity. The interpreted audit exporter is `0550` with a read/execute ACL only for `broker-audit-exporter`.
 4. Copy encrypted data and only the runtime PKI files listed above to the target paths without printing them. The CA private key and all client private keys must remain offline and must not exist on the Broker host. Verify ownership and permissions with metadata-only commands.
 5. Install the checksum-pinned Node 24 runtime below `/opt/secret-broker/runtime`, then replace `/opt/secret-broker/broker` with a relative symlink to the verified candidate release.
-6. Install and start both hardened systemd units. This one-time bootstrap is manual because the normal deploy helper intentionally requires an already-active policy core and managed symlink. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify `127.0.0.1:9080/health`, the nginx mTLS path, and a read-only typed operation. If a GitHub operation is enabled, provision the independently reviewed signer workload under `/run/secret-broker-signer`; the Broker user must not own or be able to replace that directory or socket. A missing policy core, signer, or unavailable control-plane state must make the affected production operations fail closed.
-7. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
-8. Install the deploy helper, production preflight, and sudoers fragment. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command. Run the preflight locally as root and retain its pass/fail-only output with the release evidence.
-9. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.
-10. Disable root SSH login only after a second verified management path is working.
+6. Install and start both hardened Broker systemd units. This one-time bootstrap is manual because the normal deploy helper intentionally requires an already-active policy core and managed symlink. Verify that the policy socket is owned by `broker-core:broker`, confirm the encrypted control-plane state was restored at generation 1 or later, then verify the independently owned `/run/secret-broker-health/health.sock`, the nginx mTLS path, and a read-only typed operation. Before starting either provider socket, install `deploy/tmpfiles.d/secret-broker-provider-signers.conf` as `root:root` mode `0644`, run `systemd-tmpfiles --create` against that exact file, and verify both parent directories are `root:<provider-signer-group>` mode `0750`. Provision the independently reviewed GitHub and Alibaba Cloud signer workloads under those separate runtime directories. Each root-owned systemd socket unit creates and retains its listener, while the matching service runs under a distinct non-root user and group. The Broker user may connect through group access but neither Broker nor a signer process may replace either directory or socket. A missing tmpfiles rule, policy core, socket unit, signer service, contract receipt, or unavailable control-plane state must make production acceptance fail closed.
+7. Create the fixed audit users and groups, then install the reviewed audit signer, exporter, immutable-store, mirror-worker and recovery-authority units listed above. The attested release now contains the fail-closed audit signer with a pinned Alibaba KMS transport, immutable store, bounded health helper, strict CVM-role COS mirror worker and the local exporter closure. The external monotonic-state authority, recovery command, isolated cloud accounts, configured egress and verified 365-day retention locks are still unavailable. These units therefore remain source-complete components rather than an approved production audit plane. Do not enable the exporter until its root-owned non-secret config, audit-chain ACL, signer socket and store socket all pass review. Do not substitute placeholder commands, static AccessKeys, shared credential files or a shared `nobody` identity. The preflight intentionally remains not ready until all required services are active under their exact, mutually distinct identities and the immutable store returns a fresh `ready`/`verified`/`in_sync` health response when queried as `broker-audit-recovery`; process liveness alone is insufficient. A local JSONL chain is not production audit evidence.
+8. Install the dedicated nginx workload certificate and [nginx configuration](nginx/broker.52trz.com.conf); run `nginx -t` before reload.
+9. Install the deploy helper, production preflight, and sudoers fragment. Install a root-owned, non-writable GitHub CLI at `/usr/bin/gh` and an independently obtained, root-owned trusted root at `/etc/secret-broker/github-attestation-trusted-root.jsonl`. The helper must verify the uploaded offline attestation bundle before archive extraction, binding it to `tyj1987/broker`, the fixed Deploy ECS workflow, `refs/heads/master`, the requested source SHA and a GitHub-hosted runner. Confirm the deployment account cannot obtain an interactive root shell or run any other sudo command. Run the preflight locally as root and retain its pass/fail-only output with the release evidence.
+10. Record `deployed-release`, artifact SHA-256, service unit hash, nginx hash, and rollback release.
+11. Disable root SSH login only after a second verified management path is working.
 
 ## Rollback
 

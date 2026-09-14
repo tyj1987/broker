@@ -82,20 +82,25 @@ section('3. Mandatory audit throws on FS failure');
   // We'll use an override that throws.
   let threw = false;
   let errorName = '';
+  let errorMessage = '';
+  let failedAudit;
   try {
     // Manually trigger write error by writing to a path inside a read-only mount.
     // Use the trick: write to a path that's a regular file (not a directory).
     const sub = join(BLOCKED_DIR, 'audit-dir-as-file');
     writeFileSync(sub, '');
     // Now point audit there — appendFile will fail because the path is a file.
-    const a2 = createAuditAsync({ auditDir: sub });
-    await a2.write({ action: 'critical' }, { mandatory: true });
+    failedAudit = createAuditAsync({ auditDir: sub });
+    await failedAudit.write({ action: 'critical' }, { mandatory: true });
   } catch (e) {
     threw = true;
     errorName = e.name;
+    errorMessage = e.message;
   }
   ok('mandatory write threw', threw, `errorName=${errorName}`);
   ok('threw AsyncAuditWriteError', errorName === 'AsyncAuditWriteError', `got ${errorName}`);
+  ok('mandatory error is generic', errorMessage === 'audit_write_failed (mandatory=true)', `got ${errorMessage}`);
+  ok('health uses generic storage error', failedAudit.health().last_write_error === 'audit_storage_unavailable');
 }
 
 section('4. Non-mandatory audit does NOT throw on FS failure');

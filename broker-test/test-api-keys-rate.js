@@ -4,6 +4,10 @@ import {
   generateApiKey,
   generateMasterKey,
   createChildKey,
+  findApiKey,
+  isExpired,
+  canResolveSecret,
+  canProxyService,
   normalizeRateLimit,
   RATE_LIMIT_PRESETS,
 } from '../broker/api-keys.js';
@@ -42,6 +46,65 @@ section('presets');
 ok('preset 100/hour present', !!RATE_LIMIT_PRESETS['100/hour']);
 ok('preset 1000/hour present', !!RATE_LIMIT_PRESETS['1000/hour']);
 ok('preset unlimited present', !!RATE_LIMIT_PRESETS['unlimited']);
+
+section('expiry fail-closed');
+const expiryKey = generateApiKey('expiry-check', 'client-1', { ttl_ms: 60_000 });
+ok('generated key has the documented 32-character base62 random component',
+  /^mb_(?:live|test)_[0-9A-Za-z]{32}$/.test(expiryKey.secret));
+ok('generated key random component provides more than 190 bits of entropy',
+  32 * Math.log2(62) > 190);
+const generatedSecrets = new Set(Array.from({ length: 256 }, () => (
+  generateApiKey('collision-check', 'client-1', { ttl_ms: 60_000 }).secret
+)));
+ok('independently generated key sample has no collisions', generatedSecrets.size === 256);
+ok('valid key is accepted', findApiKey([expiryKey.key_obj], expiryKey.secret)?.id === expiryKey.id);
+const replacement = expiryKey.secret.endsWith('0') ? '1' : '0';
+ok('wrong key is rejected', findApiKey([expiryKey.key_obj], `${expiryKey.secret.slice(0, -1)}${replacement}`) === null);
+ok('wrong prefix is rejected before authentication', findApiKey([expiryKey.key_obj], `xx${expiryKey.secret.slice(2)}`) === null);
+ok('truncated key is rejected before authentication', findApiKey([expiryKey.key_obj], expiryKey.secret.slice(0, -1)) === null);
+ok('non-string key is rejected before authentication', findApiKey([expiryKey.key_obj], Buffer.from(expiryKey.secret)) === null);
+ok('valid key is not expired', isExpired(expiryKey.key_obj) === false);
+ok('missing expiry is expired', isExpired({}) === true);
+ok('malformed expiry is expired', isExpired({ expires_at: 'not-a-date' }) === true);
+ok('malformed expiry cannot authenticate', findApiKey([
+  { ...expiryKey.key_obj, expires_at: 'not-a-date' },
+], expiryKey.secret) === null);
+
+section('scope and allowlist fail-closed');
+ok('secret scope needs explicit secret allowlist', canResolveSecret({ scopes: ['secrets:resolve'], allowed_secrets: [] }, 'token') === false);
+ok('secret allowlist grants exact secret', canResolveSecret({ scopes: ['secrets:resolve'], allowed_secrets: ['token'] }, 'token') === true);
+ok('service scope needs explicit service allowlist', canProxyService({ scopes: ['services:proxy'], allowed_services: [] }, 'github') === false);
+ok('service allowlist grants exact service', canProxyService({ scopes: ['services:proxy'], allowed_services: ['github'] }, 'github') === true);
+let rejectedStringScopes = false;
+try { generateApiKey('bad-scopes', 'client-1', { scopes: 'secrets:resolve' }); } catch (error) {
+  rejectedStringScopes = /scopes must be an array/.test(error.message);
+}
+ok('string scopes cannot use substring matching', rejectedStringScopes);
+let rejectedStringChildScopes = false;
+try { generateApiKey('bad-child-scopes', 'client-1', { child_scopes: 'services:proxy' }); } catch (error) {
+  rejectedStringChildScopes = /child_scopes must be an array/.test(error.message);
+}
+ok('string child scopes are rejected', rejectedStringChildScopes);
+let rejectedStringAllowlist = false;
+try { generateApiKey('bad-allowlist', 'client-1', { allowed_services: 'github' }); } catch (error) {
+  rejectedStringAllowlist = /allowed_services must be an array/.test(error.message);
+}
+ok('string service allowlist is rejected', rejectedStringAllowlist);
+let rejectedMixedAllowlist = false;
+try { generateApiKey('bad-mixed-allowlist', 'client-1', { allowed_resources: ['repo', 1] }); } catch (error) {
+  rejectedMixedAllowlist = /allowed_resources must be an array/.test(error.message);
+}
+ok('mixed-type resource allowlist is rejected', rejectedMixedAllowlist);
+let rejectedStringIpWhitelist = false;
+try { generateApiKey('bad-ip-whitelist', 'client-1', { ip_whitelist: '203.0.113.0/24' }); } catch (error) {
+  rejectedStringIpWhitelist = /ip_whitelist must be an array/.test(error.message);
+}
+ok('string IP whitelist is rejected at creation', rejectedStringIpWhitelist);
+let rejectedMalformedRate = false;
+try { generateApiKey('bad-rate', 'client-1', { rate_limit: {} }); } catch (error) {
+  rejectedMalformedRate = /rate_limit is invalid/.test(error.message);
+}
+ok('empty rate object is rejected at creation', rejectedMalformedRate);
 
 // === generateApiKey with new rate_limit shapes ===
 section('generateApiKey with new fields');
@@ -84,6 +147,7 @@ section('IP whitelist');
   ok('cidr 10/8 hit', isClientIpAllowed(key_obj, '10.99.99.99'));
   ok('cidr 192.168.1/24 hit', isClientIpAllowed(key_obj, '192.168.1.50'));
   ok('cidr miss', !isClientIpAllowed(key_obj, '172.16.0.1'));
+  ok('malformed non-array whitelist fails closed', !isClientIpAllowed({ ip_whitelist: '10.0.0.0/8' }, '10.1.2.3'));
 }
 
 // === master key still works ===
@@ -99,6 +163,8 @@ section('master key');
   });
   ok('master is_master=true', key_obj.is_master === true);
   ok('master can_create_child=true', key_obj.can_create_child === true);
+  const forgedMaster = generateMasterKey('forged-scope-master', 'client', { scopes: ['secrets:resolve'] });
+  ok('master scope cannot be overridden', JSON.stringify(forgedMaster.key_obj.scopes) === JSON.stringify(['keys:issue_child']));
   const keys = [key_obj];
   const child = createChildKey(keys, key_obj, 'child', {
     scopes: ['operations:execute'], allowed_services: ['aliyun', 'github'],
@@ -138,6 +204,13 @@ section('child constraints fail closed');
   const { key_obj } = generateMasterKey('unconstrained', 'client', { child_scopes: ['services:proxy'] });
   const denied = createChildKey([], key_obj, 'unsafe-child', { scopes: ['services:proxy'] });
   ok('unconstrained proxy child denied', denied.ok === false && denied.reason === 'service_constraints_required');
+}
+{
+  const { key_obj: master } = generateMasterKey('malformed-parent', 'client', { child_scopes: ['services:proxy'], allowed_services: ['github'] });
+  const denied = createChildKey([], { ...master, rate_limit: {} }, 'unsafe-child', { scopes: ['services:proxy'], allowed_services: ['github'] });
+  ok('malformed parent rate is rejected', denied.ok === false && denied.reason === 'invalid_rate_limit');
+  const deniedInput = createChildKey([], master, 'unsafe-child', { scopes: ['services:proxy'], allowed_services: 'github' });
+  ok('malformed child allowlist is rejected', deniedInput.ok === false && deniedInput.reason === 'invalid_allowed_services');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

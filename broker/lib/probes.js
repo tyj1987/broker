@@ -25,7 +25,7 @@ export function probeTcp(host, port, timeoutMs = 2000) {
       resolve({ ok: false, ms: Date.now() - t0, error: 'timeout' });
     });
     socket.on('error', (e) => {
-      resolve({ ok: false, ms: Date.now() - t0, error: e.message });
+      resolve({ ok: false, ms: Date.now() - t0, error: 'probe_failed' });
     });
   });
 }
@@ -72,7 +72,7 @@ export function probeHttp(url, opts = {}) {
       resolve({ ok: false, ms: Date.now() - t0, error: 'timeout' });
     });
     req.on('error', (e) => {
-      resolve({ ok: false, ms: Date.now() - t0, error: e.message });
+      resolve({ ok: false, ms: Date.now() - t0, error: 'probe_failed' });
     });
     req.end();
   });

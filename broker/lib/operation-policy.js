@@ -121,13 +121,23 @@ export function validateTypedParameters(value, schema) {
   return { ok: true };
 }
 
-function hasApproval(ctx, provider, operationId, accountRef, now) {
-  return (ctx?.approvalGrants || []).some((grant) => grant
+function hasApproval(ctx, actorName, provider, operationId, accountRef, environment, resource, requiredApprovals, now) {
+  const approvers = new Set();
+  for (const grant of ctx?.approvalGrants || []) {
+    if (grant
     && grant.provider === provider
     && grant.operation_id === operationId
     && grant.account_ref === accountRef
-    && grant.approved_by !== ctx.clientName
-    && Number(grant.expires_at_ms) > now);
+    && grant.environment === environment
+    && grant.resource_ref === resource
+    && grant.approved_by !== actorName
+    && Number.isSafeInteger(grant.expires_at_ms)
+    && grant.expires_at_ms > now
+    && typeof grant.approved_by === 'string') {
+      approvers.add(grant.approved_by);
+    }
+  }
+  return approvers.size >= requiredApprovals;
 }
 
 export function evaluateOperationPolicy(config, request, now = Date.now(), options = {}) {
@@ -147,6 +157,14 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   if (environment === 'production' && policy.contract_verified !== true) {
     return deny('contract_unverified');
   }
+  if (policy.ttl_seconds !== undefined
+    && (!Number.isSafeInteger(policy.ttl_seconds) || policy.ttl_seconds < 0)) {
+    return deny('policy_ttl_invalid');
+  }
+  if (policy.otp?.ttl_seconds !== undefined
+    && (!Number.isSafeInteger(policy.otp.ttl_seconds) || policy.otp.ttl_seconds < 0)) {
+    return deny('otp_policy_ttl_invalid');
+  }
 
   const conditions = evaluatePolicyConditions(policy, ctx.sourceIp, now);
   if (!conditions.ok) return deny(conditions.reason);
@@ -162,12 +180,17 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   if (Array.isArray(policy.resources) && policy.resources.length > 0 && !includes(policy.resources, resource)) {
     return deny('resource_denied');
   }
+  const requiredApprovals = policy.required_approvals === undefined ? 1 : policy.required_approvals;
+  if (!Number.isSafeInteger(requiredApprovals) || requiredApprovals < 1 || requiredApprovals > 10) {
+    return deny('approval_policy_invalid');
+  }
   if (policy.approval_required === true && options.ignoreApproval !== true
-    && !hasApproval(ctx, provider, operationId, accountRef, now)) {
+    && !hasApproval(ctx, identity.name, provider, operationId, accountRef, environment, resource, requiredApprovals, now)) {
     return deny('approval_required');
   }
 
   const apiKey = ctx.apiKey;
+  if (ctx.via === 'api_key' && !apiKey) return deny('api_key_context_missing');
   if (apiKey) {
     const operationScope = `operations:${provider}:${operationId}`;
     if (!includes(apiKey.scopes, 'operations:execute') && !includes(apiKey.scopes, operationScope)) return deny('scope_denied');

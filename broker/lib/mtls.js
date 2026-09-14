@@ -180,11 +180,30 @@ export function createIdentityResolver(deps) {
     if (!primary) {
       const session = getSession(req);
       if (session) {
+        const config = effectiveConfig();
+        const sessionClientName = session.clientName;
+        const currentClient = config?.clients?.[sessionClientName];
+        // Sessions are short-lived, but their embedded client snapshot must
+        // never outlive a client revoke or role/policy reload. Rebind to the
+        // current config on every request and fail closed if the client is
+        // gone. Certificate-backed sessions also remain tied to the current
+        // certificate fingerprint after a rotation.
+        if (!currentClient || typeof sessionClientName !== 'string' || sessionClientName.length === 0) {
+          audit({ action: 'connect', status: 'denied', reason: 'session_client_unavailable' });
+          return null;
+        }
+        const certBound = typeof session.cn === 'string'
+          && (session.cn === sessionClientName || session.cn.endsWith('@mtls'));
+        if (certBound && session.fp && currentClient.cert_fingerprint_sha256
+          && String(session.fp).toUpperCase() !== String(currentClient.cert_fingerprint_sha256).toUpperCase()) {
+          audit({ action: 'connect', status: 'denied', reason: 'session_certificate_revoked', client: sessionClientName });
+          return null;
+        }
         primary = {
           cn: session.cn,
           fp: session.fp,
-          client: session.client,
-          clientName: session.clientName,
+          client: currentClient,
+          clientName: sessionClientName,
           certSubject: session.cert?.subject || { CN: session.cn },
           via: 'session',
           authFactors: Array.isArray(session.authFactors) ? [...session.authFactors] : [],

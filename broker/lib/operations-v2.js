@@ -361,7 +361,7 @@ export class OperationBroker {
         requireTimestamp(source.createdAt, 'created_at');
         requireTimestamp(source.expiresAt, 'expires_at');
         const otpLifetime = Date.parse(source.expiresAt) - Date.parse(source.createdAt);
-        if (otpLifetime < 15_000 || otpLifetime > DEFAULT_OTP_TTL_MS
+        if (otpLifetime < 10_000 || otpLifetime > DEFAULT_OTP_TTL_MS
           || (source.status === 'received') !== (source.code !== null)) throw stateCorrupt();
         if (otpTasks.has(source.id)) throw stateCorrupt();
         const operation = operations.get(source.operationId);
@@ -379,6 +379,13 @@ export class OperationBroker {
       }
       for (const operation of operations.values()) {
         if (operation.otpTaskId && !otpTasks.has(operation.otpTaskId)) throw stateCorrupt();
+        const task = operation.otpTaskId ? otpTasks.get(operation.otpTaskId) : null;
+        if ((!task && operation.status === 'received')
+          || (task && (Date.parse(task.createdAt) < Date.parse(operation.createdAt)
+            || Date.parse(task.expiresAt) > Date.parse(operation.expiresAt)))
+          || (task && operation.status !== 'consuming' && operation.status !== task.status)
+          || (task && operation.status === 'consuming'
+            && !['waiting', 'received', 'consuming'].includes(task.status))) throw stateCorrupt();
       }
 
       const usedNonces = new Map();
@@ -797,6 +804,7 @@ export class OperationBroker {
     }
     const now = this.now();
     const ttlMs = Math.min(Math.max(Number(otp.ttlMs || DEFAULT_OTP_TTL_MS), 15_000), DEFAULT_OTP_TTL_MS);
+    const expiresAt = Math.min(now + ttlMs, Date.parse(operation.expiresAt));
     const task = {
       id: randomUUID(),
       operationId: operation.id,
@@ -812,7 +820,7 @@ export class OperationBroker {
       status: 'waiting',
       code: null,
       createdAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + ttlMs).toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
     };
     task.challengeHash = sha256Base64Url(task.challenge);
     this.otpTasks.set(task.id, task);
@@ -823,8 +831,13 @@ export class OperationBroker {
   submitOtp(deviceId, taskId, input) {
     const task = this.otpTasks.get(taskId);
     if (!task || task.deviceId !== deviceId) throw new V2Error('not_found', 'OTP task not found', 404);
+    const operation = this.operations.get(task.operationId);
+    if (!operation) throw new V2Error('invalid_state', 'OTP operation is unavailable', 409);
+    this.expireOperation(operation);
     this.expireOtpTask(task);
-    if (task.status !== 'waiting') throw new V2Error('invalid_state', 'OTP task is not waiting', 409);
+    if (task.status !== 'waiting' || !['waiting', 'consuming'].includes(operation.status)) {
+      throw new V2Error('invalid_state', 'OTP task is not waiting', 409);
+    }
     if (input.sim_binding !== task.simBinding) throw new V2Error('otp_mismatch', 'SIM binding mismatch', 409);
     if (sha256Base64Url(String(input.challenge || '')) !== task.challengeHash) {
       throw new V2Error('otp_mismatch', 'challenge mismatch', 409);
@@ -834,11 +847,8 @@ export class OperationBroker {
     }
     task.code = input.code;
     task.status = 'received';
-    const operation = this.operations.get(task.operationId);
-    if (operation) {
-      if (operation.status !== 'consuming') operation.status = 'received';
-      operation.updatedAt = new Date(this.now()).toISOString();
-    }
+    if (operation.status !== 'consuming') operation.status = 'received';
+    operation.updatedAt = new Date(this.now()).toISOString();
     return publicOtpTask(task);
   }
 
@@ -1333,22 +1343,35 @@ export class OperationBroker {
   }
 
   expireOtpTask(task) {
-    if (new Date(task.expiresAt).getTime() <= this.now() && !['completed', 'revoked'].includes(task.status)) {
+    const now = this.now();
+    if (new Date(task.expiresAt).getTime() <= now
+      && ['waiting', 'received', 'consuming'].includes(task.status)) {
+      const expiredAt = new Date(now).toISOString();
       task.code = null;
       task.status = 'expired';
       this.activeOtpLocks.delete(task.lockKey);
       const operation = this.operations.get(task.operationId);
-      if (operation && !['completed', 'revoked'].includes(operation.status)) operation.status = 'expired';
+      if (operation && ['waiting', 'received', 'consuming'].includes(operation.status)) {
+        operation.status = 'expired';
+        operation.updatedAt = expiredAt;
+      }
     }
   }
 
   expireOperation(operation) {
-    if (new Date(operation.expiresAt).getTime() <= this.now() && !['completed', 'failed', 'revoked'].includes(operation.status)) {
+    const now = this.now();
+    if (new Date(operation.expiresAt).getTime() <= now
+      && ['waiting', 'received', 'consuming'].includes(operation.status)) {
+      const expiredAt = new Date(now).toISOString();
       operation.status = 'expired';
-      operation.updatedAt = new Date(this.now()).toISOString();
+      operation.updatedAt = expiredAt;
       if (operation.otpTaskId) {
         const task = this.otpTasks.get(operation.otpTaskId);
-        if (task) this.expireOtpTask(task);
+        if (task && ['waiting', 'received', 'consuming'].includes(task.status)) {
+          task.code = null;
+          task.status = 'expired';
+          this.activeOtpLocks.delete(task.lockKey);
+        }
       }
     }
   }

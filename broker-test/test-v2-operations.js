@@ -100,6 +100,102 @@ assert.equal(broker.listDevices({
   context: { via: 'session', authFactors: ['webauthn'], client: { role: 'admin' }, apiKey: {} },
 }).length, 0, 'a bearer delegation narrows interactive device inventory access');
 
+let expiryBoundaryNow = now;
+const expiryBoundaryBroker = new OperationBroker({
+  now: () => expiryBoundaryNow,
+  authorize: () => ({
+    allow: true,
+    otpRequired: true,
+    ttlMs: 10_000,
+    otp: {
+      deviceId: currentDeviceId,
+      simBinding: 'sim-expiry-boundary',
+      templateGroup: 'expiry-boundary',
+      senderAllowlist: ['CloudLogin'],
+      ttlMs: 120_000,
+    },
+  }),
+});
+expiryBoundaryBroker.hydrateDevices(broker.deviceRecords());
+const expiryBoundaryOperation = await expiryBoundaryBroker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun', operation_id: 'console.login', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'console' },
+});
+const expiryBoundaryTask = expiryBoundaryBroker.listDeviceOtpTasks(currentDeviceId)[0];
+assert.equal(
+  expiryBoundaryTask.expires_at,
+  expiryBoundaryOperation.expires_at,
+  'an OTP task cannot outlive its parent operation authorization',
+);
+const activeExpiryBoundaryState = expiryBoundaryBroker.exportState();
+expiryBoundaryNow += 10_000;
+assert.equal(
+  expiryBoundaryBroker.getOperation({ name: 'owner-1' }, expiryBoundaryOperation.id).status,
+  'expired',
+);
+assert.throws(
+  () => expiryBoundaryBroker.submitOtp(currentDeviceId, expiryBoundaryTask.id, {
+    code: '123456', sim_binding: 'sim-expiry-boundary', challenge: expiryBoundaryTask.challenge,
+  }),
+  (error) => error instanceof V2Error && error.code === 'invalid_state',
+  'an OTP submission cannot resurrect an expired operation',
+);
+assert.equal(expiryBoundaryBroker.listDeviceOtpTasks(currentDeviceId).length, 0);
+const expiredPairState = expiryBoundaryBroker.exportState();
+const expiredPairValidationBroker = new OperationBroker({ now: () => expiryBoundaryNow });
+expiredPairValidationBroker.hydrateDevices(broker.deviceRecords());
+expiredPairValidationBroker.restoreState(expiredPairState);
+const beforeInvalidExpiredPair = expiredPairValidationBroker.exportState();
+const invalidExpiredPair = structuredClone(expiredPairState);
+invalidExpiredPair.otp_tasks[0].status = 'waiting';
+assert.throws(
+  () => expiredPairValidationBroker.restoreState(invalidExpiredPair),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'an expired operation cannot restore with a live OTP task',
+);
+assert.deepEqual(expiredPairValidationBroker.exportState(), beforeInvalidExpiredPair);
+const invalidChildExpiry = structuredClone(activeExpiryBoundaryState);
+invalidChildExpiry.otp_tasks[0].expiresAt = new Date(
+  Date.parse(invalidChildExpiry.operations[0].expiresAt) + 1,
+).toISOString();
+assert.throws(
+  () => expiredPairValidationBroker.restoreState(invalidChildExpiry),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'a restored OTP task cannot outlive its parent operation authorization',
+);
+assert.deepEqual(expiredPairValidationBroker.exportState(), beforeInvalidExpiredPair);
+const invalidChildCreation = structuredClone(activeExpiryBoundaryState);
+invalidChildCreation.otp_tasks[0].createdAt = new Date(
+  Date.parse(invalidChildCreation.operations[0].createdAt) - 1,
+).toISOString();
+assert.throws(
+  () => expiredPairValidationBroker.restoreState(invalidChildCreation),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'a restored OTP task cannot predate its parent operation',
+);
+assert.deepEqual(expiredPairValidationBroker.exportState(), beforeInvalidExpiredPair);
+
+const noOtpBroker = new OperationBroker({
+  now: () => expiryBoundaryNow,
+  authorize: () => ({ allow: true, ttlMs: 60_000 }),
+});
+await noOtpBroker.createOperation({ name: 'owner-1' }, {
+  provider: 'aliyun', operation_id: 'account.summary', account_ref: 'primary', environment: 'staging',
+  typed_parameters: { resource_ref: 'summary' },
+});
+const noOtpState = noOtpBroker.exportState();
+const noOtpValidationBroker = new OperationBroker({ now: () => expiryBoundaryNow });
+noOtpValidationBroker.restoreState(noOtpState);
+const beforeInvalidNoOtpRestore = noOtpValidationBroker.exportState();
+const invalidNoOtpState = structuredClone(noOtpState);
+invalidNoOtpState.operations[0].status = 'received';
+assert.throws(
+  () => noOtpValidationBroker.restoreState(invalidNoOtpState),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'an operation without an OTP task cannot restore in the received state',
+);
+assert.deepEqual(noOtpValidationBroker.exportState(), beforeInvalidNoOtpRestore);
+
 await assert.rejects(
   broker.createOperation({ name: 'owner-1' }, {
     provider: 'unknown',
@@ -901,7 +997,7 @@ for (const mutate of [
 
 for (const mutate of [
   (task) => { task.code = '123456'; },
-  (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 14_999).toISOString(); },
+  (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 9_999).toISOString(); },
   (task) => { task.expiresAt = new Date(Date.parse(task.createdAt) + 120_001).toISOString(); },
 ]) {
   const candidate = structuredClone(durableOperationState);
@@ -975,6 +1071,15 @@ assert.deepEqual(
   beforeInvalidLeaseRestore,
   'invalid browser operation lease bindings cannot partially replace live state',
 );
+const invalidConsumingPair = structuredClone(durableOperationState);
+invalidConsumingPair.browser_leases = [];
+invalidConsumingPair.otp_tasks.find((task) => task.status === 'consuming').status = 'completed';
+assert.throws(
+  () => leaseValidationBroker.restoreState(invalidConsumingPair),
+  (error) => error instanceof V2Error && error.code === 'state_corrupt',
+  'a consuming operation cannot restore with a terminal OTP task',
+);
+assert.deepEqual(leaseValidationBroker.exportState(), beforeInvalidLeaseRestore);
 
 const completedResultState = workerBroker.exportState();
 completedResultState.operations.find((operation) => operation.status === 'completed').result = {

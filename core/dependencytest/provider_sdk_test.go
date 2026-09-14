@@ -38,6 +38,8 @@ func TestImmutableProviderSDKDependencyIsolation(t *testing.T) {
 
 	storeCommand := dependencies(t, "./cmd/audit-store")
 	rejectDependency(t, storeCommand, alibabaSDK, tencentSDK)
+	signerCommand := dependencies(t, "./cmd/audit-signer")
+	rejectDependency(t, signerCommand, alibabaSDK, tencentSDK)
 
 	mirrorCommand := dependencies(t, "./cmd/audit-mirror-worker")
 	if !strings.Contains(mirrorCommand, tencentSDK) {

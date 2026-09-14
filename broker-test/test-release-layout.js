@@ -13,9 +13,11 @@ assert.match(deployWorkflow, /cp deploy\/bin\/secret-broker-production-preflight
 assert.match(deployWorkflow, /broker\/bin\/secret-broker-github-signer \.\/cmd\/github-signer/);
 assert.match(deployWorkflow, /broker\/bin\/secret-broker-aliyun-signer \.\/cmd\/aliyun-signer/);
 assert.match(deployWorkflow, /broker\/bin\/secret-broker-audit-store \.\/cmd\/audit-store/);
+assert.match(deployWorkflow, /broker\/bin\/secret-broker-audit-signer \.\/cmd\/audit-signer/);
 assert.match(deployWorkflow, /broker\/bin\/secret-broker-audit-store-health \.\/cmd\/audit-store-health/);
 assert.match(deployWorkflow, /broker\/bin\/secret-broker-audit-mirror-worker \.\/cmd\/audit-mirror-worker/);
 for (const binary of [
+  'secret-broker-audit-signer',
   'secret-broker-audit-store',
   'secret-broker-audit-store-health',
   'secret-broker-audit-mirror-worker',

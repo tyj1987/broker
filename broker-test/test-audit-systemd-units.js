@@ -8,6 +8,8 @@ const dockerfile = read('../Dockerfile');
 const mirrorWorker = read('../deploy/systemd/secret-broker-audit-mirror-worker.service');
 const mirrorSocket = read('../deploy/systemd/secret-broker-audit-mirror-worker.socket');
 const mirrorTmpfiles = read('../deploy/tmpfiles.d/secret-broker-audit-mirror.conf');
+const signerSocket = read('../deploy/systemd/secret-broker-audit-signer.socket');
+const signerTmpfiles = read('../deploy/tmpfiles.d/secret-broker-audit-signer.conf');
 
 const services = Object.freeze({
   signer: {
@@ -69,6 +71,18 @@ assert.match(
   exporter,
   /^Requires=secret-broker-audit-signer\.service secret-broker-audit-store\.service$/m,
 );
+const signer = read('../deploy/systemd/secret-broker-audit-signer.service');
+assert.match(signer, /^Requires=secret-broker-audit-signer\.socket$/m);
+assert.match(signer, /^IPAddressDeny=any$/m);
+for (const address of ['100.100.100.200/32', '100.100.2.136/32', '100.100.2.138/32']) {
+  assert.match(signer, new RegExp(`^IPAddressAllow=${address.replaceAll('.', '\\.')}$`, 'm'));
+}
+assert.match(signerSocket, /^ListenStream=\/run\/secret-broker-audit-anchor\/signer\.sock$/m);
+assert.match(signerSocket, /^FileDescriptorName=audit-signer$/m);
+assert.match(signerSocket, /^SocketUser=root$/m);
+assert.match(signerSocket, /^SocketGroup=broker-audit-signer$/m);
+assert.match(signerSocket, /^SocketMode=0660$/m);
+assert.equal(signerTmpfiles.trim(), 'd /run/secret-broker-audit-anchor 0750 root broker-audit-signer -');
 const recovery = read('../deploy/systemd/secret-broker-audit-recovery.service');
 assert.match(recovery, /^SupplementaryGroups=broker-audit-store$/m);
 assert.doesNotMatch(read('../deploy/systemd/secret-broker-audit-store.service'), /^SupplementaryGroups=broker-audit-mirror$/m);
@@ -132,6 +146,10 @@ for (const binary of ['secret-broker-audit-store', 'secret-broker-audit-store-he
 }
 assert.match(
   dockerfile,
+  /-o \/out\/secret-broker-audit-signer \.\/cmd\/audit-signer/,
+);
+assert.match(
+  dockerfile,
   /-o \/out\/secret-broker-audit-mirror-worker \.\/cmd\/audit-mirror-worker/,
 );
 assert.doesNotMatch(
@@ -139,6 +157,7 @@ assert.doesNotMatch(
   /COPY --from=core-build \/out\/secret-broker-audit-mirror-worker \/app\/bin\/secret-broker-audit-mirror-worker/,
 );
 for (const [binary, identity] of [
+  ['secret-broker-audit-signer', 'broker-audit-signer'],
   ['secret-broker-audit-store', 'broker-audit-store'],
   ['secret-broker-audit-store-health', 'broker-audit-recovery'],
   ['secret-broker-audit-mirror-worker', 'broker-audit-mirror'],
@@ -146,6 +165,7 @@ for (const [binary, identity] of [
   assert.match(deployHelper, new RegExp(`chmod 0500 .*${binary}`));
   assert.match(deployHelper, new RegExp(`u:${identity}:r-x[^\\n]*${binary}`));
 }
+assert.doesNotMatch(dockerfile, /COPY --from=core-build \/out\/secret-broker-audit-signer \/app\/bin\/secret-broker-audit-signer/);
 assert.doesNotMatch(deployHelper, /secret-broker-audit-mirror-worker\.service/);
 assert.doesNotMatch(productionPreflight, /secret-broker-audit-mirror-worker/);
 

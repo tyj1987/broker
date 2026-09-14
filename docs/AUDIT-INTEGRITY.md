@@ -289,12 +289,16 @@ A separate bounded health helper reads the same fixed
 non-secret configuration and returns only the typed health object consumed by
 the 22-item preflight. Linux socket lifecycle and real request/response behavior
 are exercised as an end-to-end test; non-Linux service startup fails closed.
-The immutable store, bounded health helper and Tencent mirror worker are now
+The immutable store, bounded health helper, audit signer shell and Tencent mirror worker are now
 compiled into the attested ECS release payload. They remain absent from the
 Node production image. The deploy helper requires each binary, removes group
 execution and grants only the matching non-root workload identity an execute
-ACL. Packaging does not activate the worker or relax its deny-all network unit;
-the audit signer, exporter and recovery commands plus live cloud policy and
+ACL. The signer shell accepts only its fixed root-owned non-secret authority
+configuration and root-owned systemd socket, verifies its exact UID and the
+exporter peer UID, and has unavailable KMS/state factories by default. Packaging
+does not activate a signing authority or the mirror worker, or relax either
+default-deny network boundary. The concrete signer transport and external
+monotonic state, exporter and recovery commands, plus live cloud policy and
 retention evidence remain production blockers.
 
 The Alibaba OSS and Tencent COS SDK transports now live in separate

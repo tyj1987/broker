@@ -212,6 +212,7 @@ jobs:
       - name: Enforce audit anchor protocol statement coverage
         run: |
           test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race ./cmd/audit-signer
       - run: go test -race -coverprofile=audit-oss-coverage.out ./auditoss
       - name: Enforce Alibaba immutable adapter statement coverage
         run: |

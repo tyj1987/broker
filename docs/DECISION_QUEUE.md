@@ -206,12 +206,16 @@ continue.
   cloud resource or credential was used by this source checkpoint.
   The current release preparation now compiles the immutable store, its bounded
   health helper and the strict CVM-role COS mirror worker into the attested ECS
-  payload. The deploy helper rejects a payload missing any of them and grants
-  execute access only to the exact store, recovery and mirror identities. The
-  worker remains unstarted with deny-all network policy, and the audit signer,
-  exporter and recovery commands, isolated cloud accounts, single-writer CAM
-  policy, address-constrained egress, locked resources and live race evidence
-  are still required before DQ-003 can close.
+  payload. A source-only audit-signer command now loads an exact non-secret
+  authority configuration, requires its fixed service UID, authenticates only
+  the exporter UID over a root-owned systemd socket, and refuses to activate
+  because its default KMS and external monotonic-state factories are unavailable.
+  The release packages that command with execute access only for the signer
+  identity. The mirror worker remains unstarted with deny-all network policy,
+  and the concrete signer transport/state authority, exporter and recovery
+  commands, isolated cloud accounts, single-writer CAM policy,
+  address-constrained egress, locked resources and live race evidence are still
+  required before DQ-003 can close.
 
 ## DQ-004: provider signing and account-binding authority
 

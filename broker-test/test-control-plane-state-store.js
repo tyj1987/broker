@@ -49,9 +49,10 @@ try {
   let taskBindingValidations = 0;
   const tasks = component(
     { version: 1, tasks: [{ id: 'task-1' }], idempotency: [], rate_limits: [] },
-    (approvalState) => {
+    (approvalState, executionTokenState) => {
       taskBindingValidations += 1;
       assert.deepEqual(approvalState.records, [{ id: 'approval-1' }]);
+      assert.deepEqual(executionTokenState.records, [{ id: 'execution-1' }]);
     },
   );
   const operations = component({ version: 1, operations: [{ id: 'operation-1' }], otp_tasks: [], used_nonces: [], browser_claims: [], browser_leases: [] });
@@ -116,6 +117,19 @@ try {
     { ...validSnapshot, operations: [] },
   ]) assert.throws(() => coordinator.restoreState(corrupt), code('state_corrupt'));
   assert.throws(() => coordinator.commitGeneration(99), code('state_generation_invalid'));
+
+  const beforeExecutionBindingFailure = executionTokens.exportState();
+  const mismatchedExecutionBinding = coordinator.exportState();
+  mismatchedExecutionBinding.execution_tokens.records = [{ id: 'execution-other' }];
+  assert.throws(
+    () => coordinator.restoreState(mismatchedExecutionBinding),
+    code('state_restore_failed'),
+  );
+  assert.deepEqual(
+    executionTokens.exportState(),
+    beforeExecutionBindingFailure,
+    'cross-component execution binding failure rolls back all restored components',
+  );
 
   const beforeFailure = approvals.exportState();
   const invalidSnapshot = coordinator.exportState();

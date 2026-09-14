@@ -945,10 +945,14 @@ export class AutomationTaskBroker {
     this.prune();
   }
 
-  validateRestoredState(approvalSnapshot) {
+  validateRestoredState(approvalSnapshot, executionTokenSnapshot) {
     if (!approvalSnapshot || typeof approvalSnapshot !== 'object' || Array.isArray(approvalSnapshot)
       || !Array.isArray(approvalSnapshot.records)) {
       throw stateCorrupt('approval state is unavailable for task binding validation');
+    }
+    if (!executionTokenSnapshot || typeof executionTokenSnapshot !== 'object'
+      || Array.isArray(executionTokenSnapshot) || !Array.isArray(executionTokenSnapshot.records)) {
+      throw stateCorrupt('execution token state is unavailable for task binding validation');
     }
     const approvals = new Map();
     for (const record of approvalSnapshot.records) {
@@ -957,6 +961,14 @@ export class AutomationTaskBroker {
         throw stateCorrupt('approval state contains duplicate or invalid records');
       }
       approvals.set(record.id, record);
+    }
+    const executions = new Map();
+    for (const record of executionTokenSnapshot.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)
+        || !UUID_RE.test(record.id || '') || executions.has(record.id)) {
+        throw stateCorrupt('execution token state contains duplicate or invalid records');
+      }
+      executions.set(record.id, record);
     }
     const expectedStatuses = new Map([
       ['PENDING_APPROVAL', new Set(['REQUESTED'])],
@@ -987,6 +999,21 @@ export class AutomationTaskBroker {
         || approval.requestHash !== requestHash
         || !expectedStatuses.get(task.state)?.has(approval.status)) {
         throw stateCorrupt('task approval binding is invalid');
+      }
+    }
+    for (const task of this.tasks.values()) {
+      if (!task.executionId) continue;
+      // Consumed-token tombstones have a shorter retention period than task
+      // history. Absence is therefore valid, but any retained record must bind
+      // exactly to the task that names it.
+      const execution = executions.get(task.executionId);
+      if (!execution) continue;
+      if (execution.status !== 'CONSUMED' || execution.actor !== task.owner
+        || execution.tool !== `${task.tool.name}@${task.tool.version}`
+        || execution.target !== task.parameters.resource_ref
+        || execution.environment !== task.environment
+        || execution.requestBinding !== task.requestFingerprint) {
+        throw stateCorrupt('task execution token binding is invalid');
       }
     }
   }

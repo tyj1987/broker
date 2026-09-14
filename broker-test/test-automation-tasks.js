@@ -339,11 +339,11 @@ assert.throws(
   expectCode('state_corrupt'),
   'a high-risk task cannot be restored without an approval binding',
 );
-broker.validateRestoredState(approvals.exportState());
+broker.validateRestoredState(approvals.exportState(), broker.executionTokens.exportState());
 const orphanedApprovalState = approvals.exportState();
 orphanedApprovalState.records = orphanedApprovalState.records.filter((record) => record.id !== critical.approval_id);
 assert.throws(
-  () => broker.validateRestoredState(orphanedApprovalState),
+  () => broker.validateRestoredState(orphanedApprovalState, broker.executionTokens.exportState()),
   expectCode('state_corrupt'),
   'a task cannot be restored without its bound approval record',
 );
@@ -1049,6 +1049,28 @@ const afterRestart = new AutomationTaskBroker({
   executors: persistenceExecutors, now: () => now,
 });
 afterRestart.restoreState(taskState);
+const persistedExecutionState = beforeRestart.executionTokens.exportState();
+afterRestart.validateRestoredState(approvals.exportState(), persistedExecutionState);
+for (const mutate of [
+  (record) => { record.status = 'ACTIVE'; },
+  (record) => { record.actor = 'another-owner'; },
+  (record) => { record.tool = 'broker.tools.inspect@9.9.9'; },
+  (record) => { record.target = 'another-target'; },
+  (record) => { record.environment = 'staging'; },
+  (record) => { record.requestBinding = 'A'.repeat(43); },
+]) {
+  const forgedExecutionState = structuredClone(persistedExecutionState);
+  mutate(forgedExecutionState.records[0]);
+  assert.throws(
+    () => afterRestart.validateRestoredState(approvals.exportState(), forgedExecutionState),
+    expectCode('state_corrupt'),
+  );
+}
+afterRestart.validateRestoredState(approvals.exportState(), { version: 1, records: [] });
+assert.throws(
+  () => afterRestart.validateRestoredState(approvals.exportState(), null),
+  expectCode('state_corrupt'),
+);
 assert.equal(afterRestart.get(human, persistedSuccess.id).state, 'SUCCEEDED');
 assert.throws(
   () => afterRestart.get(sameOwnerApiKey({ allowed_resources: ['revoked-resource'] }), persistedReady.id),

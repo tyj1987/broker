@@ -143,9 +143,11 @@ The included monotonic authorizer requires a linearizable compare-and-swap
 store outside the Broker host. It accepts only a contiguous predecessor,
 allows an exact retry, and rejects gaps, rewinds, conflicting payloads, corrupt
 state and exhausted concurrency retries. The Alibaba KMS adapter maps only the
-validated 32-byte digest to `ECDSA_SHA_256` with `MessageType=DIGEST`, requires
-the immutable key ID and exact response metadata, validates canonical P-256
-DER signature bounds, and hides provider errors behind stable failures. This
+validated 32-byte digest to `AsymmetricSign` with `ECDSA_SHA_256`, requires
+the immutable key and key-version IDs, clones a pinned P-256 public key and
+verifies every returned signature locally. It rejects malformed DER,
+mismatched response metadata and signatures that do not match the pin, while
+hiding provider errors behind stable failures. This
 is an SDK-independent transport contract, not a deployed KMS integration. The
 cloud-backed state store, SDK transport and runnable signer remain production
 work; an in-memory or Broker-owned implementation cannot satisfy DQ-003.
@@ -359,9 +361,11 @@ itself prove freshness against a compromised store process. The independent
 recovery authority must read both clouds directly or verify an independently
 held freshness checkpoint.
 
-The selected primary contract uses Alibaba Cloud KMS `EC_P256` with
-`ECDSA_SHA_256` and `MessageType=DIGEST`. The runtime identity is limited to the
-exact signing key. The OSS writer can only create objects in the audit prefix;
+The selected primary contract uses Alibaba Cloud KMS `AsymmetricSign` with an
+`EC_P256` key, `ECDSA_SHA_256` and the precomputed `Digest` parameter. The
+runtime identity is limited to the exact signing key and immutable key-version
+ID. Provider metadata or well-formed DER alone is not accepted: the signer verifies the response against
+its cloned public-key pin before returning it. The OSS writer can only create objects in the audit prefix;
 it cannot delete objects or change WORM policy. BucketWorm must be completed
 and read back as `Locked` with a 365-day retention period before the exporter
 can become healthy. The Tencent mirror applies COMPLIANCE retention to each
@@ -369,9 +373,9 @@ object rather than relying only on a mutable bucket default. The initial mirror
 storage class remains STANDARD until a real account proves that direct archive
 upload, object lock and the recovery-time target work together.
 
-Official contracts checked on 2026-09-13:
+Official contracts checked on 2026-09-15:
 
-- [Alibaba Cloud KMS Sign](https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/sign-1)
+- [Alibaba Cloud KMS AsymmetricSign](https://www.alibabacloud.com/help/en/kms/key-management-service/developer-reference/api-kms-2016-01-20-asymmetricsign)
 - [Alibaba Cloud KMS key specifications](https://www.alibabacloud.com/help/en/kms/key-management-service/user-guide/key-types-and-specifications)
 - [Alibaba Cloud OSS retention policies](https://www.alibabacloud.com/help/en/oss/user-guide/oss-retention-policies)
 - [Alibaba Cloud OSS PutObject](https://www.alibabacloud.com/help/en/oss/developer-reference/putobject)

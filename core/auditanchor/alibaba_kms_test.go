@@ -3,7 +3,9 @@ package auditanchor
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/asn1"
 	"errors"
@@ -30,13 +32,27 @@ func testDERSignature(t *testing.T, r, s *big.Int) []byte {
 	return value
 }
 
-func validKMSResponse(t *testing.T, config Config) AlibabaKMSSignResponse {
+const testKMSKeyVersionID = "kms-audit-key-version-1"
+
+func testKMSKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate test key: %v", err)
+	}
+	return key
+}
+
+func validKMSResponse(t *testing.T, config Config, request SignRequest, key *ecdsa.PrivateKey) AlibabaKMSSignResponse {
+	t.Helper()
+	signature, err := ecdsa.SignASN1(rand.Reader, key, request.Digest[:])
+	if err != nil {
+		t.Fatalf("sign test digest: %v", err)
+	}
 	return AlibabaKMSSignResponse{
-		KeyID:       config.KeyID,
-		Algorithm:   AlibabaKMSSignAlgorithm,
-		MessageType: AlibabaKMSMessageType,
-		Signature:   testDERSignature(t, big.NewInt(1), big.NewInt(2)),
+		KeyID:        config.KeyID,
+		KeyVersionID: testKMSKeyVersionID,
+		Signature:    signature,
 	}
 }
 
@@ -53,27 +69,33 @@ func kmsRequest(config Config) SignRequest {
 func TestAlibabaKMSSignerMapsOnlyBoundDigestAndClonesBuffers(t *testing.T) {
 	config := Config{Algorithm: "ecdsa-p256-sha256", KeyID: "kms-audit-key-1", StreamID: "production-audit"}
 	request := kmsRequest(config)
-	response := validKMSResponse(t, config)
+	key := testKMSKey(t)
+	response := validKMSResponse(t, config, request, key)
 	originalSignature := append([]byte(nil), response.Signature...)
+	configuredPublicKey := &ecdsa.PublicKey{
+		Curve: elliptic.P256(), X: new(big.Int).Set(key.X), Y: new(big.Int).Set(key.Y),
+	}
 
 	var captured AlibabaKMSSignRequest
-	signer, err := NewAlibabaKMSSigner(config, kmsClientFunc(func(_ context.Context, input AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
+	signer, err := NewAlibabaKMSSigner(config, testKMSKeyVersionID, configuredPublicKey, kmsClientFunc(func(_ context.Context, input AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
 		captured = input
-		input.Message[0] ^= 0xff
+		input.Digest[0] ^= 0xff
 		return response, nil
 	}))
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
+	configuredPublicKey.X.SetInt64(1)
+	configuredPublicKey.Y.SetInt64(1)
 	signature, err := signer.Sign(context.Background(), request)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	if captured.KeyID != config.KeyID || captured.Algorithm != AlibabaKMSSignAlgorithm ||
-		captured.MessageType != AlibabaKMSMessageType || len(captured.Message) != 32 {
+	if captured.KeyID != config.KeyID || captured.KeyVersionID != testKMSKeyVersionID ||
+		captured.Algorithm != AlibabaKMSAsymmetricSignAlgorithm || len(captured.Digest) != 32 {
 		t.Fatalf("unexpected KMS request metadata: %#v", captured)
 	}
-	if request.Digest[0] == captured.Message[0] {
+	if request.Digest[0] == captured.Digest[0] {
 		t.Fatal("test client did not mutate its private request buffer")
 	}
 	if !bytes.Equal(signature, originalSignature) {
@@ -87,6 +109,7 @@ func TestAlibabaKMSSignerMapsOnlyBoundDigestAndClonesBuffers(t *testing.T) {
 
 func TestAlibabaKMSSignerRejectsInvalidConfigurationAndRequests(t *testing.T) {
 	baseConfig := Config{Algorithm: "ecdsa-p256-sha256", KeyID: "kms-audit-key-1", StreamID: "production-audit"}
+	key := testKMSKey(t)
 	client := kmsClientFunc(func(context.Context, AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
 		t.Fatal("KMS must not be called for a rejected request")
 		return AlibabaKMSSignResponse{}, nil
@@ -98,13 +121,29 @@ func TestAlibabaKMSSignerRejectsInvalidConfigurationAndRequests(t *testing.T) {
 		"invalid stream":  {Algorithm: baseConfig.Algorithm, KeyID: baseConfig.KeyID, StreamID: "../stream"},
 	} {
 		t.Run("config "+name, func(t *testing.T) {
-			if _, err := NewAlibabaKMSSigner(config, client); !errors.Is(err, ErrKMSRequestRejected) {
+			if _, err := NewAlibabaKMSSigner(config, testKMSKeyVersionID, &key.PublicKey, client); !errors.Is(err, ErrKMSRequestRejected) {
 				t.Fatalf("expected request rejection, got %v", err)
 			}
 		})
 	}
-	if _, err := NewAlibabaKMSSigner(baseConfig, nil); !errors.Is(err, ErrKMSRequestRejected) {
+	if _, err := NewAlibabaKMSSigner(baseConfig, testKMSKeyVersionID, &key.PublicKey, nil); !errors.Is(err, ErrKMSRequestRejected) {
 		t.Fatalf("expected nil client rejection, got %v", err)
+	}
+	if _, err := NewAlibabaKMSSigner(baseConfig, "../version", &key.PublicKey, client); !errors.Is(err, ErrKMSRequestRejected) {
+		t.Fatalf("expected invalid key version rejection, got %v", err)
+	}
+	if _, err := NewAlibabaKMSSigner(baseConfig, "version.with.dot", &key.PublicKey, client); !errors.Is(err, ErrKMSRequestRejected) {
+		t.Fatalf("expected non-provider key version rejection, got %v", err)
+	}
+	if _, err := NewAlibabaKMSSigner(baseConfig, testKMSKeyVersionID, nil, client); !errors.Is(err, ErrKMSRequestRejected) {
+		t.Fatalf("expected nil public key rejection, got %v", err)
+	}
+	wrongCurve, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate wrong-curve key: %v", err)
+	}
+	if _, err := NewAlibabaKMSSigner(baseConfig, testKMSKeyVersionID, &wrongCurve.PublicKey, client); !errors.Is(err, ErrKMSRequestRejected) {
+		t.Fatalf("expected wrong curve rejection, got %v", err)
 	}
 
 	request := kmsRequest(baseConfig)
@@ -118,7 +157,7 @@ func TestAlibabaKMSSignerRejectsInvalidConfigurationAndRequests(t *testing.T) {
 		t.Run("request "+name, func(t *testing.T) {
 			candidate := cloneRequest(request)
 			mutate(&candidate)
-			signer, err := NewAlibabaKMSSigner(baseConfig, client)
+			signer, err := NewAlibabaKMSSigner(baseConfig, testKMSKeyVersionID, &key.PublicKey, client)
 			if err != nil {
 				t.Fatalf("new signer: %v", err)
 			}
@@ -131,7 +170,7 @@ func TestAlibabaKMSSignerRejectsInvalidConfigurationAndRequests(t *testing.T) {
 	if _, err := nilSigner.Sign(context.Background(), request); !errors.Is(err, ErrKMSRequestRejected) {
 		t.Fatalf("expected nil signer rejection, got %v", err)
 	}
-	signer, _ := NewAlibabaKMSSigner(baseConfig, client)
+	signer, _ := NewAlibabaKMSSigner(baseConfig, testKMSKeyVersionID, &key.PublicKey, client)
 	if _, err := signer.Sign(nil, request); !errors.Is(err, ErrKMSRequestRejected) {
 		t.Fatalf("expected nil context rejection, got %v", err)
 	}
@@ -140,6 +179,10 @@ func TestAlibabaKMSSignerRejectsInvalidConfigurationAndRequests(t *testing.T) {
 func TestAlibabaKMSSignerFailsClosedOnProviderFailures(t *testing.T) {
 	config := Config{Algorithm: "ecdsa-p256-sha256", KeyID: "kms-audit-key-1", StreamID: "production-audit"}
 	request := kmsRequest(config)
+	key := testKMSKey(t)
+	validResponse := func() AlibabaKMSSignResponse {
+		return validKMSResponse(t, config, request, key)
+	}
 
 	providerDetail := errors.New("provider detail must not cross boundary")
 	tests := map[string]struct {
@@ -149,44 +192,42 @@ func TestAlibabaKMSSignerFailsClosedOnProviderFailures(t *testing.T) {
 	}{
 		"provider error": {err: providerDetail, expected: ErrKMSUnavailable},
 		"wrong key": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
+			value := validResponse()
 			value.KeyID = "other"
 			return value
 		}(), expected: ErrKMSResponseInvalid},
-		"wrong algorithm": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
-			value.Algorithm = "RSA_PSS_SHA_256"
-			return value
-		}(), expected: ErrKMSResponseInvalid},
-		"wrong message type": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
-			value.MessageType = "RAW"
+		"wrong key version": {response: func() AlibabaKMSSignResponse {
+			value := validResponse()
+			value.KeyVersionID = "other-version"
 			return value
 		}(), expected: ErrKMSResponseInvalid},
 		"empty signature": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
+			value := validResponse()
 			value.Signature = nil
 			return value
 		}(), expected: ErrKMSResponseInvalid},
 		"trailing bytes": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
+			value := validResponse()
 			value.Signature = append(value.Signature, 0)
 			return value
 		}(), expected: ErrKMSResponseInvalid},
 		"zero component": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
+			value := validResponse()
 			value.Signature = testDERSignature(t, big.NewInt(0), big.NewInt(1))
 			return value
 		}(), expected: ErrKMSResponseInvalid},
 		"out of range": {response: func() AlibabaKMSSignResponse {
-			value := validKMSResponse(t, config)
+			value := validResponse()
 			value.Signature = testDERSignature(t, elliptic.P256().Params().N, big.NewInt(1))
 			return value
+		}(), expected: ErrKMSResponseInvalid},
+		"unverified signature": {response: func() AlibabaKMSSignResponse {
+			return validKMSResponse(t, config, request, testKMSKey(t))
 		}(), expected: ErrKMSResponseInvalid},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			signer, err := NewAlibabaKMSSigner(config, kmsClientFunc(func(context.Context, AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
+			signer, err := NewAlibabaKMSSigner(config, testKMSKeyVersionID, &key.PublicKey, kmsClientFunc(func(context.Context, AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
 				return test.response, test.err
 			}))
 			if err != nil {
@@ -201,7 +242,7 @@ func TestAlibabaKMSSignerFailsClosedOnProviderFailures(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	signer, _ := NewAlibabaKMSSigner(config, kmsClientFunc(func(context.Context, AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
+	signer, _ := NewAlibabaKMSSigner(config, testKMSKeyVersionID, &key.PublicKey, kmsClientFunc(func(context.Context, AlibabaKMSSignRequest) (AlibabaKMSSignResponse, error) {
 		t.Fatal("KMS must not be called after cancellation")
 		return AlibabaKMSSignResponse{}, nil
 	}))

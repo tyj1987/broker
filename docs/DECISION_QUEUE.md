@@ -67,8 +67,11 @@ continue.
   compare-and-swap state contract to reject forks, gaps, rewinds and corrupt
   state while allowing an exact retry. It authenticates the local peer on Linux
   and returns only stable error codes. Its Alibaba KMS adapter now binds the
-  approved `ECDSA_SHA_256` and `DIGEST` request to the exact configured key and
-  rejects malformed P-256 DER signatures and mismatched response metadata.
+  approved `AsymmetricSign` `ECDSA_SHA_256` digest request to the exact
+  configured key and immutable key-version ID. It clones a pinned P-256 public
+  key at startup and verifies every returned signature locally, rejecting malformed DER,
+  wrong-key responses, wrong-version responses and signatures that do not
+  verify against that pin.
   The Go immutable-writer contract now rejects arbitrary object keys and
   headers, independently verifies the v2 ECDSA P-256 signature against the
   configured stream and a bounded trusted-key sequence epoch, verifies Locked

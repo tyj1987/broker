@@ -176,6 +176,15 @@ for (const plan of [githubPlan(), aliyunPlan()]) {
 }
 
 {
+  const plan = aliyunPlan();
+  const result = { ...resultFor(plan), next_token: 'next-page-token' };
+  const broker = successfulBroker(plan, { result });
+  const receipt = await createProviderContractRunner({ callBroker: broker.callBroker })(plan);
+  assert.equal(receipt.status, 'passed');
+  assert.equal(JSON.stringify(receipt).includes(result.next_token), false);
+}
+
+{
   const plan = githubPlan();
   plan.expected_authority = Object.fromEntries(Object.entries(plan.expected_authority).reverse());
   const broker = successfulBroker(plan);
@@ -395,6 +404,16 @@ for (const [result, code] of [
   result.instances[0].region_id = 'cn-shanghai';
   const broker = successfulBroker(plan, { result });
   await expectRunCode(plan, broker.callBroker, 'contract_result_invalid');
+}
+
+for (const [nextToken, code] of [
+  ['next token', 'contract_result_invalid'],
+  [`LTAI${'A'.repeat(20)}`, 'contract_result_sensitive'],
+]) {
+  const plan = aliyunPlan();
+  const result = { ...resultFor(plan), next_token: nextToken };
+  const broker = successfulBroker(plan, { result });
+  await expectRunCode(plan, broker.callBroker, code);
 }
 
 {

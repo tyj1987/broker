@@ -4,6 +4,7 @@ const SAFE_ID_RE = /^[a-z0-9][a-z0-9._:-]{2,127}$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{16,96}$/;
 const GITHUB_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?$/;
 const ALIYUN_REGION_RE = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
+const ALIYUN_NEXT_TOKEN_RE = /^[A-Za-z0-9._~-]{1,2048}$/;
 const TASK_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const ALIYUN_INSTANCE_KEYS = new Set([
@@ -179,6 +180,8 @@ function validateAliyunResult(result, plan) {
     !Number.isSafeInteger(result.total_count) ||
     result.total_count < result.instances.length ||
     result.instances.length > plan.parameters.max_results ||
+    (result.next_token !== undefined &&
+      (typeof result.next_token !== 'string' || !ALIYUN_NEXT_TOKEN_RE.test(result.next_token))) ||
     Object.keys(result).some(
       (key) => !['instances', 'total_count', 'next_token', 'authority'].includes(key),
     ) ||

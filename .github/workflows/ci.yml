@@ -241,8 +241,16 @@ jobs:
           '
       - name: Enforce immutable provider SDK dependency isolation
         run: |
-          if go list -deps ./cmd/audit-store ./cmd/audit-mirror-worker | grep -Eq 'github.com/(aliyun|tencentyun)/'; then
-            echo 'source-only audit commands must not link provider SDKs' >&2
+          if go list -deps ./cmd/audit-store | grep -Eq 'github.com/(aliyun|tencentyun)/'; then
+            echo 'provider-neutral audit store must not link provider SDKs' >&2
+            exit 1
+          fi
+          if ! go list -deps ./cmd/audit-mirror-worker | grep -q 'github.com/tencentyun/cos-go-sdk-v5'; then
+            echo 'Tencent mirror worker must link its pinned COS SDK' >&2
+            exit 1
+          fi
+          if go list -deps ./cmd/audit-mirror-worker | grep -Eq 'github.com/aliyun/'; then
+            echo 'Tencent mirror worker must not link Alibaba SDKs' >&2
             exit 1
           fi
           if go list -deps ./auditoss | grep -Eq 'github.com/tencentyun/'; then

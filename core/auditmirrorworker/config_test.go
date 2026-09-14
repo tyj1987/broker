@@ -26,7 +26,7 @@ func validConfigJSON(t *testing.T) []byte {
 	value, err := json.Marshal(map[string]any{
 		"version": ConfigVersion, "stream_id": "broker-production", "prefix": "audit-anchors/v1",
 		"profile_id": "tencent-mirror-production", "bucket": "broker-audit-mirror-1250000000",
-		"region": "ap-singapore", "trusted_keys": []map[string]any{{
+		"region": "ap-singapore", "cvm_role_name": "audit-mirror-role", "trusted_keys": []map[string]any{{
 			"key_id": "worker-key", "public_key_spki_base64": base64.StdEncoding.EncodeToString(der),
 			"valid_from_sequence": 1, "valid_through_sequence": 0,
 		}},
@@ -40,7 +40,7 @@ func validConfigJSON(t *testing.T) []byte {
 func TestParseConfigAcceptsOnlyBoundNonSecretConfiguration(t *testing.T) {
 	config, err := ParseConfig(bytes.NewReader(validConfigJSON(t)))
 	if err != nil || config.StreamID != "broker-production" || config.Region != "ap-singapore" ||
-		config.Bucket != "broker-audit-mirror-1250000000" || len(config.TrustedKeys) != 1 {
+		config.Bucket != "broker-audit-mirror-1250000000" || config.CVMRoleName != "audit-mirror-role" || len(config.TrustedKeys) != 1 {
 		t.Fatalf("config = %#v, %v", config, err)
 	}
 }
@@ -61,12 +61,13 @@ func TestParseConfigFailsClosed(t *testing.T) {
 		"oversized":           bytes.Repeat([]byte(" "), MaxConfigBytes+1),
 		"unknown":             mutated(func(value map[string]any) { value["endpoint"] = "https://example.invalid" }),
 		"secret":              mutated(func(value map[string]any) { value["credential"] = "forbidden" }),
-		"version":             mutated(func(value map[string]any) { value["version"] = float64(2) }),
+		"version":             mutated(func(value map[string]any) { value["version"] = float64(ConfigVersion + 1) }),
 		"stream":              mutated(func(value map[string]any) { value["stream_id"] = "../bad" }),
 		"prefix":              mutated(func(value map[string]any) { value["prefix"] = "../bad" }),
 		"profile":             mutated(func(value map[string]any) { value["profile_id"] = "bad profile" }),
 		"bucket":              mutated(func(value map[string]any) { value["bucket"] = "BAD" }),
 		"region":              mutated(func(value map[string]any) { value["region"] = "BAD" }),
+		"role":                mutated(func(value map[string]any) { value["cvm_role_name"] = "bad role" }),
 		"null-keys":           mutated(func(value map[string]any) { value["trusted_keys"] = nil }),
 		"empty-keys":          mutated(func(value map[string]any) { value["trusted_keys"] = []any{} }),
 		"duplicate-top-level": []byte(`{"version":1,"version":1}`),

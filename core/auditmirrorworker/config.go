@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
 
 	"github.com/tyj1987/broker/core/auditanchor"
 	"github.com/tyj1987/broker/core/auditmirror"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	ConfigVersion   = 1
+	ConfigVersion   = 2
 	MaxConfigBytes  = 32 * 1024
 	configDirectory = "/etc/secret-broker/audit"
 )
@@ -30,8 +31,11 @@ type configWire struct {
 	ProfileID   string           `json:"profile_id"`
 	Bucket      string           `json:"bucket"`
 	Region      string           `json:"region"`
+	CVMRoleName string           `json:"cvm_role_name"`
 	TrustedKeys []trustedKeyWire `json:"trusted_keys"`
 }
+
+var cvmRoleNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 type trustedKeyWire struct {
 	KeyID                string `json:"key_id"`
@@ -46,7 +50,7 @@ func ParseConfig(reader io.Reader) (Config, error) {
 	}
 	value, err := io.ReadAll(io.LimitReader(reader, MaxConfigBytes+1))
 	if err != nil || len(value) == 0 || len(value) > MaxConfigBytes || duplicateJSONKey(value) ||
-		!exactObject(value, "version", "stream_id", "prefix", "profile_id", "bucket", "region", "trusted_keys") {
+		!exactObject(value, "version", "stream_id", "prefix", "profile_id", "bucket", "region", "cvm_role_name", "trusted_keys") {
 		return Config{}, ErrConfigInvalid
 	}
 	var raw map[string]json.RawMessage
@@ -70,7 +74,7 @@ func ParseConfig(reader io.Reader) (Config, error) {
 	}
 	config := Config{
 		StreamID: wire.StreamID, Prefix: wire.Prefix, ProfileID: wire.ProfileID,
-		Bucket: wire.Bucket, Region: wire.Region,
+		Bucket: wire.Bucket, Region: wire.Region, CVMRoleName: wire.CVMRoleName,
 		TrustedKeys: make(map[string]auditanchor.TrustedSigningKey, len(wire.TrustedKeys)),
 	}
 	if wire.Version != ConfigVersion {
@@ -90,7 +94,8 @@ func ParseConfig(reader io.Reader) (Config, error) {
 		}
 	}
 	generation, err := auditanchor.TrustedKeyGeneration(config.TrustedKeys)
-	if err != nil || !bucketPattern.MatchString(config.Bucket) || !bucketPattern.MatchString(config.Region) {
+	if err != nil || !bucketPattern.MatchString(config.Bucket) || !bucketPattern.MatchString(config.Region) ||
+		!cvmRoleNamePattern.MatchString(config.CVMRoleName) {
 		return Config{}, ErrConfigInvalid
 	}
 	if _, err = auditmirror.NewBinding(config.StreamID, config.Prefix, config.ProfileID, generation); err != nil {

@@ -52,6 +52,7 @@ func NewRuntime(ctx context.Context, config Config, factory COSClientFactory) (*
 
 func cloneConfig(config Config) (Config, error) {
 	if !bucketPattern.MatchString(config.Bucket) || !bucketPattern.MatchString(config.Region) ||
+		!cvmRoleNamePattern.MatchString(config.CVMRoleName) ||
 		len(config.TrustedKeys) < 1 || len(config.TrustedKeys) > 16 {
 		return Config{}, ErrConfigInvalid
 	}

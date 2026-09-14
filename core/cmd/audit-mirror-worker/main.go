@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/tyj1987/broker/core/auditcos"
 	"github.com/tyj1987/broker/core/auditmirror"
 	"github.com/tyj1987/broker/core/auditmirrorworker"
 	"github.com/tyj1987/broker/core/internal/socketactivation"
@@ -36,8 +37,8 @@ type dependencies struct {
 	lookupUID  func(string) (uint32, error)
 	currentUID func() uint32
 	newPeer    func(uint32) (auditmirror.PeerAuthorizer, error)
+	newFactory func(auditmirrorworker.Config) (auditmirrorworker.COSClientFactory, error)
 	newRuntime func(context.Context, auditmirrorworker.Config, auditmirrorworker.COSClientFactory) (boundBackend, error)
-	factory    auditmirrorworker.COSClientFactory
 	listener   func(string, string) (net.Listener, error)
 	serve      func(context.Context, *auditmirror.Server, net.Listener) error
 }
@@ -48,10 +49,14 @@ func defaultDependencies() dependencies {
 		lookupUID:  lookupUID,
 		currentUID: currentEUID,
 		newPeer:    auditmirror.NewOSPeerAuthorizer,
+		newFactory: func(config auditmirrorworker.Config) (auditmirrorworker.COSClientFactory, error) {
+			return auditcos.NewCVMRoleCOSClientFactory(auditmirrorworker.COSProviderBinding{
+				Bucket: config.Bucket, Region: config.Region, ProviderProfileID: config.ProfileID,
+			}, config.CVMRoleName)
+		},
 		newRuntime: func(ctx context.Context, config auditmirrorworker.Config, factory auditmirrorworker.COSClientFactory) (boundBackend, error) {
 			return auditmirrorworker.NewRuntime(ctx, config, factory)
 		},
-		factory:  auditmirrorworker.UnavailableCOSClientFactory{},
 		listener: socketactivation.Listener,
 		serve: func(ctx context.Context, server *auditmirror.Server, listener net.Listener) error {
 			return server.Serve(ctx, listener)
@@ -67,7 +72,7 @@ func run(ctx context.Context, args []string, deps dependencies) (int, string) {
 		return 64, "usage_invalid"
 	}
 	if ctx == nil || deps.loadConfig == nil || deps.lookupUID == nil || deps.currentUID == nil || deps.newPeer == nil ||
-		deps.newRuntime == nil || deps.factory == nil || deps.listener == nil || deps.serve == nil {
+		deps.newFactory == nil || deps.newRuntime == nil || deps.listener == nil || deps.serve == nil {
 		return 70, "runtime_invalid"
 	}
 	config, err := deps.loadConfig(*selectedConfig)
@@ -86,7 +91,11 @@ func run(ctx context.Context, args []string, deps dependencies) (int, string) {
 	if err != nil || peer == nil {
 		return 78, "peer_identity_unavailable"
 	}
-	backend, err := deps.newRuntime(ctx, config, deps.factory)
+	factory, err := deps.newFactory(config)
+	if err != nil || factory == nil {
+		return 78, "cloud_identity_unavailable"
+	}
+	backend, err := deps.newRuntime(ctx, config, factory)
 	if err != nil || backend == nil {
 		return 78, "cloud_identity_unavailable"
 	}

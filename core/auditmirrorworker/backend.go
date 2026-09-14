@@ -43,6 +43,7 @@ type Config struct {
 	ProfileID   string
 	Bucket      string
 	Region      string
+	CVMRoleName string
 	TrustedKeys map[string]auditanchor.TrustedSigningKey
 }
 

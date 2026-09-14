@@ -36,8 +36,14 @@ func TestImmutableProviderSDKDependencyIsolation(t *testing.T) {
 		tencentSDK = "github.com/tencentyun/cos-go-sdk-v5"
 	)
 
-	commands := dependencies(t, "./cmd/audit-store", "./cmd/audit-mirror-worker")
-	rejectDependency(t, commands, alibabaSDK, tencentSDK)
+	storeCommand := dependencies(t, "./cmd/audit-store")
+	rejectDependency(t, storeCommand, alibabaSDK, tencentSDK)
+
+	mirrorCommand := dependencies(t, "./cmd/audit-mirror-worker")
+	if !strings.Contains(mirrorCommand, tencentSDK) {
+		t.Fatal("Tencent mirror command does not contain its pinned SDK")
+	}
+	rejectDependency(t, mirrorCommand, alibabaSDK)
 
 	credentialSource := dependencies(t, "./tencentcredential")
 	rejectDependency(t, credentialSource, alibabaSDK, tencentSDK)

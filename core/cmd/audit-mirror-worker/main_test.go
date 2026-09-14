@@ -74,10 +74,12 @@ func validDependencies(t *testing.T, listener *testListener) dependencies {
 			}
 			return auditmirror.PeerAuthorizerFunc(func(context.Context, net.Conn) error { return nil }), nil
 		},
+		newFactory: func(auditmirrorworker.Config) (auditmirrorworker.COSClientFactory, error) {
+			return auditmirrorworker.UnavailableCOSClientFactory{}, nil
+		},
 		newRuntime: func(context.Context, auditmirrorworker.Config, auditmirrorworker.COSClientFactory) (boundBackend, error) {
 			return backend, nil
 		},
-		factory: auditmirrorworker.UnavailableCOSClientFactory{},
 		listener: func(name, path string) (net.Listener, error) {
 			if name != socketName || path != socketPath {
 				t.Fatalf("socket = %q, %q", name, path)
@@ -107,7 +109,7 @@ func validCommandConfig(t *testing.T) auditmirrorworker.Config {
 	}
 	return auditmirrorworker.Config{
 		StreamID: "broker-production", Prefix: "audit-anchors/v1", ProfileID: "tencent-mirror-production",
-		Bucket: "broker-audit-mirror-1250000000", Region: "ap-singapore",
+		Bucket: "broker-audit-mirror-1250000000", Region: "ap-singapore", CVMRoleName: "audit-mirror-role",
 		TrustedKeys: map[string]auditanchor.TrustedSigningKey{
 			"worker-key": {PublicKey: &privateKey.PublicKey, ValidFromSequence: 1},
 		},
@@ -122,22 +124,32 @@ func TestRunUsesFixedConfigPeerAndActivatedSocket(t *testing.T) {
 	}
 }
 
-func TestDefaultCommandFailsClosedWithoutCloudFactory(t *testing.T) {
+func TestDefaultCommandBuildsStrictFactoryAndFailsClosedWithoutCloudIdentity(t *testing.T) {
 	deps := defaultDependencies()
-	if client, err := deps.factory.NewCOS(context.Background(), auditmirrorworker.COSProviderBinding{}); client != nil || !errors.Is(err, auditmirrorworker.ErrIdentityUnavailable) {
+	config := validCommandConfig(t)
+	factory, err := deps.newFactory(config)
+	if err != nil || factory == nil {
+		t.Fatalf("factory = %#v, %v", factory, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if client, err := factory.NewCOS(ctx, auditmirrorworker.COSProviderBinding{
+		Bucket: config.Bucket, Region: config.Region, ProviderProfileID: config.ProfileID,
+	}); client != nil || err == nil {
 		t.Fatalf("client = %#v, %v", client, err)
 	}
 	testDeps := validDependencies(t, &testListener{})
 	testDeps.newRuntime = func(ctx context.Context, config auditmirrorworker.Config, factory auditmirrorworker.COSClientFactory) (boundBackend, error) {
 		return auditmirrorworker.NewRuntime(ctx, config, factory)
 	}
-	testDeps.factory = auditmirrorworker.UnavailableCOSClientFactory{}
+	testDeps.newFactory = func(auditmirrorworker.Config) (auditmirrorworker.COSClientFactory, error) {
+		return auditmirrorworker.UnavailableCOSClientFactory{}, nil
+	}
 	listenerCalled := false
 	testDeps.listener = func(string, string) (net.Listener, error) {
 		listenerCalled = true
 		return nil, errors.New("must not be called")
 	}
-	config := validCommandConfig(t)
 	testDeps.loadConfig = func(string) (auditmirrorworker.Config, error) { return config, nil }
 	if code, reason := run(context.Background(), []string{"--config", configPath}, testDeps); code != 78 || reason != "cloud_identity_unavailable" || listenerCalled {
 		t.Fatalf("default boundary = %d, %q, listener=%v", code, reason, listenerCalled)
@@ -192,6 +204,11 @@ func TestRunFailsClosedWithStableReasons(t *testing.T) {
 				return nil, errors.New("provider detail")
 			}
 		}, 78, "cloud_identity_unavailable"},
+		"cloud factory": {func(value *dependencies) {
+			value.newFactory = func(auditmirrorworker.Config) (auditmirrorworker.COSClientFactory, error) {
+				return nil, errors.New("provider detail")
+			}
+		}, 78, "cloud_identity_unavailable"},
 		"socket": {func(value *dependencies) {
 			value.listener = func(string, string) (net.Listener, error) { return nil, errors.New("detail") }
 		}, 78, "socket_activation_invalid"},
@@ -199,7 +216,7 @@ func TestRunFailsClosedWithStableReasons(t *testing.T) {
 			value.serve = func(context.Context, *auditmirror.Server, net.Listener) error { return errors.New("detail") }
 		}, 70, "service_failed"},
 		"deps":               {func(value *dependencies) { value.newRuntime = nil }, 70, "runtime_invalid"},
-		"factory dependency": {func(value *dependencies) { value.factory = nil }, 70, "runtime_invalid"},
+		"factory dependency": {func(value *dependencies) { value.newFactory = nil }, 70, "runtime_invalid"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -122,7 +122,7 @@ func workerConfig(privateKey *ecdsa.PrivateKey) Config {
 	return Config{
 		StreamID: "broker-production", Prefix: "audit-anchors/v1",
 		ProfileID: "tencent-mirror-production", Bucket: "broker-audit-mirror-1250000000",
-		Region: "ap-singapore",
+		Region: "ap-singapore", CVMRoleName: "audit-mirror-role",
 		TrustedKeys: map[string]auditanchor.TrustedSigningKey{"worker-key": {
 			PublicKey: &privateKey.PublicKey, ValidFromSequence: 1,
 		}},

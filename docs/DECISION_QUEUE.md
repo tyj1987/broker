@@ -275,9 +275,13 @@ continue.
   source-only COS factory now consumes only that strict provider, fixes the
   current `tencentcos.cn` regional HTTPS origin, rejects caller authentication
   and proxy identity headers, and disables redirects, proxies, host switching
-  and SDK retries. It remains disconnected from the worker command. Isolated
-  CAM policy, address-constrained COS egress and the live account receipt remain
-  absent, so Tencent stays fail closed.
+  and SDK retries. The source worker command now composes this factory from a
+  version 2 non-secret config that names one exact CVM CAM role; it probes that
+  role before socket activation and rechecks bucket, region and provider
+  profile bindings. The production unit remains `PrivateNetwork=true` and
+  `AF_UNIX`-only, and the release/deployment allowlists do not ship the command.
+  Isolated CAM policy, address-constrained metadata/COS egress and the live
+  account receipt remain absent, so Tencent stays fail closed.
   A source-only version 2 contract runner now validates one exact GitHub or
   Alibaba Cloud read-only binding through the real `/api/v2/tasks` path. The
   same execution-bound signer path first calls a fixed GitHub App installation

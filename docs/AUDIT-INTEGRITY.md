@@ -202,10 +202,15 @@ fresh in-memory temporary credential, rejects caller authentication and proxy
 identity headers, disables environment proxies, redirects, host switching and
 SDK retries, bounds network time and response size, and removes signing headers
 from the response request before it returns to the SDK. Only GET and PUT can
-reach this transport. The production mirror command deliberately remains bound
-to its unavailable factory: isolated CAM policy, address-constrained COS
-egress, locked resources and live contract evidence are still required before
-activation.
+reach this transport. The source command now composes that client through a
+version 2 non-secret worker configuration containing one exact CVM CAM role.
+Startup probes the named temporary workload credential before it can activate
+the mirror socket, and binds bucket, region and provider profile again at the
+factory boundary. The deployed unit still has `PrivateNetwork=true`, permits
+only `AF_UNIX`, and the release/deployment allowlists still exclude this
+binary. Consequently the source is runnable while production remains
+fail-closed until an isolated CAM policy, address-constrained metadata/COS
+egress, locked resources and live contract evidence are approved and supplied.
 
 OSS read-back requests a bounded byte range. A valid range response is `206
 Partial Content`, so the transport accepts it only when `Content-Range` proves
@@ -302,8 +307,9 @@ Create and exact-version read responses must echo the same
 `x-cos-version-id`. COS retention lookup does not expose a version selector, so
 the adapter verifies the same unique version immediately before and after that
 lookup and rejects any change. This is deterministic source evidence only: the
-production command still uses the unavailable factory, and the Tencent identity,
-single-writer policy and live race behavior remain unverified.
+production service is not packaged and its network policy still denies cloud
+traffic; the Tencent identity, single-writer policy and live race behavior
+remain unverified.
 `core/tencentcredential` now supplies the source-only workload-identity half of
 that boundary. It requests one configured CVM CAM role from the fixed
 `metadata.tencentyun.com` credential path, accepts only a link-local IPv4
@@ -312,8 +318,10 @@ temporary ID, key, token and two equivalent expiration fields. It has no role
 discovery, environment/profile/static-key fallback or SDK default chain.
 Refresh failures clear cached authority and use a bounded cooldown; concurrent
 callers share one hard-deadline refresh, while caller cancellation, clock
-rollback and late responses fail closed. This package is not connected to the
-mirror command and no live metadata request is part of the evidence.
+rollback and late responses fail closed. The mirror command now uses this
+provider only through the strict, named-role COS factory, but its current
+systemd and release boundaries prevent a production metadata request. No live
+metadata request is part of the evidence.
 The protocol choices are checked against Tencent's current
 [object-version listing](https://cloud.tencent.com/document/product/436/64993),
 [GET Object](https://cloud.tencent.com/document/api/436/7753) and

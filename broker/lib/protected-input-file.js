@@ -4,7 +4,7 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
+  readSync,
   realpathSync,
 } from 'node:fs';
 import { dirname, isAbsolute, normalize } from 'node:path';
@@ -46,7 +46,7 @@ export function readProtectedInputFile(
     realpathImpl = realpathSync.native,
     openImpl = openSync,
     fstatImpl = fstatSync,
-    readFileImpl = readFileSync,
+    readImpl = readSync,
     closeImpl = closeSync,
   } = {},
 ) {
@@ -62,14 +62,10 @@ export function readProtectedInputFile(
 
   const parent = dirname(filePath);
   const parentStat = lstatImpl(parent);
-  const pathStat = lstatImpl(filePath);
   if (
     !parentStat.isDirectory() ||
     parentStat.isSymbolicLink() ||
-    !pathStat.isFile() ||
-    pathStat.isSymbolicLink() ||
-    !sameCanonicalPath(realpathImpl(parent), parent, platform) ||
-    !sameCanonicalPath(realpathImpl(filePath), filePath, platform)
+    !sameCanonicalPath(realpathImpl(parent), parent, platform)
   ) {
     throw new Error(`${label} file boundary is unsafe`);
   }
@@ -78,14 +74,9 @@ export function readProtectedInputFile(
     platform !== 'win32' &&
     (!Number.isSafeInteger(effectiveUid) ||
       !trustedOwner(parentStat.uid, effectiveUid) ||
-      !trustedOwner(pathStat.uid, effectiveUid) ||
-      (parentStat.mode & 0o022) !== 0 ||
-      (pathStat.mode & (sensitive ? 0o077 : 0o022)) !== 0)
+      (parentStat.mode & 0o022) !== 0)
   ) {
     throw new Error(`${label} file permissions are unsafe`);
-  }
-  if (pathStat.size < 1 || pathStat.size > maxBytes) {
-    throw new Error(`${label} file size is invalid`);
   }
 
   let descriptor;
@@ -93,19 +84,36 @@ export function readProtectedInputFile(
     const flags = constants.O_RDONLY | (platform === 'win32' ? 0 : constants.O_NOFOLLOW);
     descriptor = openImpl(filePath, flags);
     const openedStat = fstatImpl(descriptor);
-    if (!openedStat.isFile() || !sameFile(pathStat, openedStat)) {
-      throw new Error(`${label} file changed before open`);
+    if (!openedStat.isFile()
+      || !sameCanonicalPath(realpathImpl(filePath), filePath, platform)) {
+      throw new Error(`${label} file boundary is unsafe`);
     }
-    const bytes = readFileImpl(descriptor);
+    if (platform !== 'win32'
+      && (!trustedOwner(openedStat.uid, effectiveUid)
+        || (openedStat.mode & (sensitive ? 0o077 : 0o022)) !== 0)) {
+      throw new Error(`${label} file permissions are unsafe`);
+    }
+    if (openedStat.size < 1 || openedStat.size > maxBytes) {
+      throw new Error(`${label} file size is invalid`);
+    }
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readImpl(descriptor, buffer, length, buffer.length - length, length);
+      if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length - length) {
+        throw new Error(`${label} file read is invalid`);
+      }
+      if (count === 0) break;
+      length += count;
+    }
     const finalStat = fstatImpl(descriptor);
     if (
-      !Buffer.isBuffer(bytes) ||
-      bytes.length !== openedStat.size ||
+      length !== openedStat.size ||
       !sameFile(openedStat, finalStat)
     ) {
       throw new Error(`${label} file changed while reading`);
     }
-    return bytes;
+    return buffer.subarray(0, length);
   } finally {
     if (descriptor !== undefined) closeImpl(descriptor);
   }

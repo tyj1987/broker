@@ -276,11 +276,27 @@ const secureReadDeps = {
   realpathImpl: (path) => path,
   openImpl: () => 7,
   fstatImpl: () => fileStat,
-  readFileImpl: () => Buffer.from('safe'),
+  readImpl: (_descriptor, buffer, offset, length, position) => {
+    const contents = Buffer.from('safe');
+    if (position >= contents.length) return 0;
+    const count = Math.min(length, contents.length - position);
+    contents.copy(buffer, offset, position, position + count);
+    return count;
+  },
   closeImpl: () => {},
 };
 assert.deepEqual(
   readProtectedInputFile(securePath, 'Protected input', 16, secureReadDeps),
+  Buffer.from('safe'),
+);
+assert.deepEqual(
+  readProtectedInputFile(securePath, 'Protected input', 16, {
+    ...secureReadDeps,
+    lstatImpl: (path) => {
+      if (path !== secureParent) throw new Error('file path must not be checked before open');
+      return parentStat;
+    },
+  }),
   Buffer.from('safe'),
 );
 
@@ -289,10 +305,7 @@ for (const overrides of [
     lstatImpl: (path) =>
       path === secureParent ? fakeStat({ file: false, directory: false, ino: 10 }) : fileStat,
   },
-  { lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ symbolicLink: true })) },
-  {
-    lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ mode: 0o100640 })),
-  },
+  { fstatImpl: () => fakeStat({ mode: 0o100640 }) },
   {
     lstatImpl: (path) =>
       path === secureParent
@@ -300,13 +313,26 @@ for (const overrides of [
         : fileStat,
   },
   { effectiveUid: null },
-  { lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ size: 0 })) },
-  { lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ size: 17 })) },
+  { fstatImpl: () => fakeStat({ size: 0 }) },
+  { fstatImpl: () => fakeStat({ size: 17 }) },
   { realpathImpl: (path) => (path === securePath ? `${path}.redirected` : path) },
   { fstatImpl: () => fakeStat({ file: false }) },
-  { fstatImpl: () => fakeStat({ ino: 21 }) },
-  { readFileImpl: () => 'safe' },
-  { readFileImpl: () => Buffer.from('drift') },
+  {
+    fstatImpl: (() => {
+      let calls = 0;
+      return () => fakeStat({ ino: ++calls === 1 ? 20 : 21 });
+    })(),
+  },
+  { readImpl: () => -1 },
+  {
+    readImpl: (_descriptor, buffer, offset, length, position) => {
+      const contents = Buffer.from('drift');
+      if (position >= contents.length) return 0;
+      const count = Math.min(length, contents.length - position);
+      contents.copy(buffer, offset, position, position + count);
+      return count;
+    },
+  },
 ]) {
   assert.throws(() =>
     readProtectedInputFile(securePath, 'Protected input', 16, {
@@ -321,7 +347,6 @@ assert.deepEqual(
   readProtectedInputFile(securePath, 'Public input', 16, {
     ...secureReadDeps,
     sensitive: false,
-    lstatImpl: (path) => (path === secureParent ? parentStat : fakeStat({ mode: 0o100644 })),
     fstatImpl: () => fakeStat({ mode: 0o100644 }),
   }),
   Buffer.from('safe'),

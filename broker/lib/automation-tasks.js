@@ -202,12 +202,14 @@ function restoreTaskRecord(value, toolRegistry) {
   }
   const approvalId = value.approval_id;
   const executionId = value.execution_id;
+  const executionStarted = value.events.some((event) => event.state === 'EXECUTING');
   const approvalRequiredByRisk = ['HIGH', 'CRITICAL'].includes(tool.risk_level);
   if ((approvalId !== null && !UUID_RE.test(approvalId || ''))
     || (executionId !== null && !UUID_RE.test(executionId || ''))
     || (approvalRequiredByRisk && approvalId === null)
     || (value.state === 'PENDING_APPROVAL' && approvalId === null)
-    || (value.state === 'EXECUTING' && executionId === null)) {
+    || ((executionId !== null) !== executionStarted)
+    || (value.policy_decision === 'deny' && value.state !== 'FAILED')) {
     throw stateCorrupt('task execution binding is invalid');
   }
   let result;
@@ -589,8 +591,14 @@ export class AutomationTaskBroker {
         throw error;
       }
       if (!decision?.allow) {
+        const previousPolicyDecision = task.policyDecision;
         task.policyDecision = 'deny';
-        return this.completePreExecutionFailure(task, approvalClaim, decision?.reason || 'policy_denied');
+        try {
+          return this.completePreExecutionFailure(task, approvalClaim, decision?.reason || 'policy_denied');
+        } catch (error) {
+          task.policyDecision = previousPolicyDecision;
+          throw error;
+        }
       }
       try {
         this.assertExecutionEnabled();
@@ -634,6 +642,7 @@ export class AutomationTaskBroker {
       try {
         this.transition(task, 'EXECUTING', 'executor_started');
       } catch (error) {
+        task.executionId = undefined;
         if (approvalClaim) this.approvalBroker.releaseClaim(approvalClaim.id);
         this.releaseExecutionRateLimit(task);
         throw error;

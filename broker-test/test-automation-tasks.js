@@ -721,6 +721,16 @@ await assert.rejects(auditFailureBroker.run(human, auditProtected.id), /mandator
 assert.equal(auditedExecutionCalls, 0, 'executor must not run when its EXECUTING audit cannot be stored');
 assert.equal(auditFailureBroker.get(human, auditProtected.id).state, 'READY', 'failed audit leaves prior task state intact');
 assert.equal(
+  auditFailureBroker.get(human, auditProtected.id).execution_id,
+  null,
+  'failed pre-execution audit clears the unused execution binding',
+);
+assert.equal(
+  auditFailureBroker.exportState().tasks[0].execution_id,
+  null,
+  'a later checkpoint cannot persist a READY task with a consumed execution id',
+);
+assert.equal(
   mandatoryAuditEvents.filter((event) => event.state === 'EXECUTING').length,
   1,
   'the mandatory sink receives exactly one attempted execution transition',
@@ -851,6 +861,11 @@ denialAuditApprovals.decide(approver('admin-n'), denialAuditTask.approval_id, 'a
 denialAuditApprovals.decide(approver('admin-o'), denialAuditTask.approval_id, 'approve');
 await assert.rejects(denialAuditBroker.run(human, denialAuditTask.id), /denial audit unavailable/);
 assert.equal(denialAuditBroker.get(human, denialAuditTask.id).state, 'READY');
+assert.equal(
+  denialAuditBroker.exportState().tasks[0].policy_decision,
+  'allow',
+  'failed denial audit restores the last committed policy decision',
+);
 assert.equal(denialAuditApprovals.list(human)[0].status, 'APPROVED');
 assert.equal((await denialAuditBroker.run(human, denialAuditTask.id)).state, 'FAILED');
 assert.equal(denialAuditApprovals.list(human)[0].status, 'FAILED');
@@ -1116,6 +1131,8 @@ for (const corrupt of [
   { ...taskState, tasks: [{ ...readyTaskState, updated_at: new Date(now + 1).toISOString() }] },
   { ...taskState, tasks: [{ ...validTaskState, approval_id: 'not-a-uuid' }] },
   { ...taskState, tasks: [{ ...validTaskState, execution_id: null }] },
+  { ...taskState, tasks: [{ ...readyTaskState, execution_id: validTaskState.execution_id }] },
+  { ...taskState, tasks: [{ ...validTaskState, policy_decision: 'deny' }] },
   { ...taskState, tasks: [{ ...validTaskState, result: null }] },
   { ...taskState, tasks: [{
     ...validTaskState,

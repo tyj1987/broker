@@ -186,6 +186,20 @@ jobs:
       - name: Enforce provider credential protocol statement coverage
         run: |
           test "$(go tool cover -func=provider-credential-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=tencent-credential-coverage.out ./tencentcredential
+      - name: Enforce Tencent workload credential statement coverage
+        run: |
+          go tool cover -func=tencent-credential-coverage.out | awk '
+            $1 == "total:" { gsub("%", "", $3); found += 1; coverage = $3 + 0 }
+            END {
+              if (found != 1) {
+                print "expected exactly one total coverage row" > "/dev/stderr"
+                exit 1
+              }
+              printf "Tencent workload credential statement coverage: %.1f%%\n", coverage
+              exit coverage >= 90 ? 0 : 1
+            }
+          '
       - run: go test -race -coverprofile=audit-anchor-coverage.out ./auditanchor
       - name: Enforce audit anchor protocol statement coverage
         run: |
@@ -230,6 +244,10 @@ jobs:
           fi
           if go list -deps ./auditcos | grep -Eq 'github.com/aliyun/'; then
             echo 'Tencent adapter must not link Alibaba SDKs' >&2
+            exit 1
+          fi
+          if go list -deps ./tencentcredential | grep -Eq 'github.com/(aliyun|tencentyun)/'; then
+            echo 'Tencent credential source must not link provider SDKs' >&2
             exit 1
           fi
       - run: go test -race -coverprofile=audit-mirror-coverage.out ./auditmirror

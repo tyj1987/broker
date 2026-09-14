@@ -444,20 +444,21 @@ func TestCOSSDKRejectsUnboundRequestsAndInvalidConstruction(t *testing.T) {
 	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, cosSDKTestRegion, &tencentcos.Client{}); !errors.Is(err, ErrImmutableSDKRequestRejected) {
 		t.Fatalf("incomplete constructor error = %v", err)
 	}
-	endpoint, _ := url.Parse("https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com")
+	endpoint, _ := url.Parse("https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn")
 	realClient := tencentcos.NewClient(&tencentcos.BaseURL{BucketURL: endpoint}, &http.Client{})
 	if _, err := NewCOSSDKImmutableClient(cosSDKTestBucket, cosSDKTestRegion, realClient); err != nil {
 		t.Fatalf("public constructor error = %v", err)
 	}
 	for name, endpointValue := range map[string]string{
-		"http":         "http://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com",
-		"wrong_bucket": "https://other-1250000000.cos." + cosSDKTestRegion + ".myqcloud.com",
-		"wrong_region": "https://" + cosSDKTestBucket + ".cos.ap-shanghai.myqcloud.com",
-		"userinfo":     "https://user@" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com",
-		"port":         "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com:443",
-		"path":         "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com/prefix",
-		"query":        "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com?x=1",
-		"fragment":     "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com#x",
+		"http":          "http://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn",
+		"wrong_bucket":  "https://other-1250000000.cos." + cosSDKTestRegion + ".tencentcos.cn",
+		"wrong_region":  "https://" + cosSDKTestBucket + ".cos.ap-shanghai.tencentcos.cn",
+		"legacy_domain": "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".myqcloud.com",
+		"userinfo":      "https://user@" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn",
+		"port":          "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn:443",
+		"path":          "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn/prefix",
+		"query":         "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn?x=1",
+		"fragment":      "https://" + cosSDKTestBucket + ".cos." + cosSDKTestRegion + ".tencentcos.cn#x",
 	} {
 		t.Run("reject_endpoint_"+name, func(t *testing.T) {
 			badEndpoint, parseErr := url.Parse(endpointValue)

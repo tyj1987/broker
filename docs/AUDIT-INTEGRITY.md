@@ -185,7 +185,7 @@ Tencent COS Go SDK v5 `v0.7.75`. They bind every call to one configured bucket.
 The OSS public constructor derives the SDK endpoint from an exact region and
 rejects custom endpoints, plaintext TLS, redirect, CNAME, proxy and alternate
 addressing modes. The COS public constructor requires the exact regional
-`https://<bucket>.cos.<region>.myqcloud.com` BucketURL with no userinfo, port,
+`https://<bucket>.cos.<region>.tencentcos.cn` BucketURL with no userinfo, port,
 path, query or fragment. The transports accept no arbitrary headers, expose no
 delete or retention-policy mutation, bound read-back data, and stop between
 SDK calls when the context is cancelled.
@@ -194,6 +194,18 @@ idempotent existing object. The COS transport applies COMPLIANCE mode and the
 exact retain-until timestamp in the original PutObject request. These are still
 source-only transports: credentials, cloud resources and a runnable store
 service do not yet exist.
+
+The source-only COS client factory now accepts only the strict, explicitly
+named CVM CAM-role provider. It uses Tencent's current
+`<bucket>.cos.<region>.tencentcos.cn` HTTPS endpoint, signs each request with a
+fresh in-memory temporary credential, rejects caller authentication and proxy
+identity headers, disables environment proxies, redirects, host switching and
+SDK retries, bounds network time and response size, and removes signing headers
+from the response request before it returns to the SDK. Only GET and PUT can
+reach this transport. The production mirror command deliberately remains bound
+to its unavailable factory: isolated CAM policy, address-constrained COS
+egress, locked resources and live contract evidence are still required before
+activation.
 
 OSS read-back requests a bounded byte range. A valid range response is `206
 Partial Content`, so the transport accepts it only when `Content-Range` proves

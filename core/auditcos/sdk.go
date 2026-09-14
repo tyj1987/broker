@@ -31,7 +31,8 @@ var (
 	ErrImmutableSDKUnavailable     = auditanchor.ErrImmutableSDKUnavailable
 	ErrImmutableSDKResponseInvalid = auditanchor.ErrImmutableSDKResponseInvalid
 	ErrImmutableObjectNotFound     = auditanchor.ErrImmutableObjectNotFound
-	bucketPattern                  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+	bucketPattern                  = regexp.MustCompile(`^([a-z0-9]|[a-z0-9][a-z0-9-]{0,48}[a-z0-9])-[0-9]{5,20}$`)
+	regionPattern                  = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
 )
 
 type cosBucketSDKAPI interface {
@@ -66,19 +67,34 @@ func NewCOSSDKImmutableClient(bucket, region string, client *tencentcos.Client) 
 }
 
 func validCOSBucketEndpoint(bucket, region string, baseURL *tencentcos.BaseURL) bool {
-	if !bucketPattern.MatchString(bucket) || !bucketPattern.MatchString(region) || baseURL == nil || baseURL.BucketURL == nil {
+	if !validCOSBucketAndRegion(bucket, region) || baseURL == nil || baseURL.BucketURL == nil {
 		return false
 	}
 	endpoint := baseURL.BucketURL
-	expectedHost := bucket + ".cos." + region + ".myqcloud.com"
+	expectedHost := expectedCOSBucketHost(bucket, region)
 	return endpoint.Scheme == "https" && endpoint.Host == expectedHost && endpoint.Hostname() == expectedHost &&
 		endpoint.Port() == "" && endpoint.User == nil && (endpoint.Path == "" || endpoint.Path == "/") &&
 		endpoint.RawPath == "" && endpoint.RawQuery == "" && endpoint.Fragment == "" && endpoint.Opaque == "" &&
 		!endpoint.ForceQuery && endpoint.IsAbs()
 }
 
+func expectedCOSBucketHost(bucket, region string) string {
+	if !validCOSBucketAndRegion(bucket, region) {
+		return ""
+	}
+	return bucket + ".cos." + region + "." + cosEndpointSuffix
+}
+
+func validCOSBucketAndRegion(bucket, region string) bool {
+	return validCOSBucket(bucket) && regionPattern.MatchString(region)
+}
+
+func validCOSBucket(bucket string) bool {
+	return len(bucket) <= 60 && bucketPattern.MatchString(bucket)
+}
+
 func newCOSSDKImmutableClient(bucket string, bucketAPI cosBucketSDKAPI, objectAPI cosObjectSDKAPI) (*COSSDKImmutableClient, error) {
-	if !bucketPattern.MatchString(bucket) || bucketAPI == nil || objectAPI == nil {
+	if !validCOSBucket(bucket) || bucketAPI == nil || objectAPI == nil {
 		return nil, ErrImmutableSDKRequestRejected
 	}
 	return &COSSDKImmutableClient{bucket: bucket, bucketAPI: bucketAPI, objectAPI: objectAPI}, nil
@@ -234,7 +250,7 @@ func (client *COSSDKImmutableClient) ListObjectKeys(ctx context.Context, bucket,
 }
 
 func validSDKCall(ctx context.Context, bucket, expected string, available bool) bool {
-	return ctx != nil && ctx.Err() == nil && available && bucket == expected && bucketPattern.MatchString(bucket)
+	return ctx != nil && ctx.Err() == nil && available && bucket == expected && validCOSBucket(bucket)
 }
 
 func validSDKListCall(ctx context.Context, bucket, expected, prefix, after string, limit int, available bool) bool {

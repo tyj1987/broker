@@ -272,8 +272,12 @@ continue.
   CVM CAM role through the fixed metadata hostname/path and returns temporary
   ID/key/token material only to a future in-process signer factory. It avoids
   the COS SDK default credential chain and its automatic role selection. The
-  factory, TC3/COS transport wiring, isolated CAM policy and live account receipt
-  remain absent, so Tencent stays fail closed.
+  source-only COS factory now consumes only that strict provider, fixes the
+  current `tencentcos.cn` regional HTTPS origin, rejects caller authentication
+  and proxy identity headers, and disables redirects, proxies, host switching
+  and SDK retries. It remains disconnected from the worker command. Isolated
+  CAM policy, address-constrained COS egress and the live account receipt remain
+  absent, so Tencent stays fail closed.
   A source-only version 2 contract runner now validates one exact GitHub or
   Alibaba Cloud read-only binding through the real `/api/v2/tasks` path. The
   same execution-bound signer path first calls a fixed GitHub App installation

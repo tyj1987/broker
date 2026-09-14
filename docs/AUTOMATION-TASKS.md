@@ -255,6 +255,14 @@ replacement is reported as `state_commit_indeterminate`; the matching in-memory
 mutation is retained for reconciliation, and an idempotent creation retry
 returns the original task instead of duplicating it.
 
+Task snapshot restore accepts only states reachable at a durable checkpoint.
+`REQUESTED` is an in-memory creation transition and is never restorable;
+approval identifiers are required exactly for `HIGH` and `CRITICAL` tools.
+Transition timestamps must be nondecreasing, and execution identifiers plus
+terminal latency markers must agree with an observed `EXECUTING` transition.
+These checks reject a structurally valid but forged snapshot before it can
+reopen an approval or execution path.
+
 A definite failure of the pre-side-effect `EXECUTING` checkpoint restores the
 task to `READY`, clears its unused execution binding, releases the approval
 claim and restores the execution-rate slot. The consumed capability remains an

@@ -1185,6 +1185,23 @@ assert.throws(() => restoreGuard.restoreState(taskState), expectCode('state_busy
 restoreGuard.tasks.get(guardTask.id).running = false;
 const validTaskState = taskState.tasks[0];
 const readyTaskState = taskState.tasks[1];
+const replacePersistedTask = (record) => ({
+  ...taskState,
+  tasks: taskState.tasks.map((task) => task.id === record.id ? record : task),
+});
+const requestedTaskState = {
+  ...readyTaskState,
+  state: 'REQUESTED',
+  events: [readyTaskState.events[0]],
+  next_sequence: 2,
+  updated_at: readyTaskState.events[0].at,
+};
+const nonMonotonicTaskState = structuredClone(validTaskState);
+const eventHeadMs = Date.parse(validTaskState.updated_at);
+nonMonotonicTaskState.created_at = new Date(eventHeadMs - 3).toISOString();
+nonMonotonicTaskState.events[0].at = new Date(eventHeadMs - 3).toISOString();
+nonMonotonicTaskState.events[1].at = new Date(eventHeadMs - 1).toISOString();
+nonMonotonicTaskState.events[2].at = new Date(eventHeadMs - 2).toISOString();
 for (const corrupt of [
   null,
   { version: 2, tasks: [], idempotency: [], rate_limits: [] },
@@ -1219,6 +1236,9 @@ for (const corrupt of [
   }] },
   { ...taskState, tasks: [{ ...readyTaskState, next_sequence: readyTaskState.next_sequence + 1 }] },
   { ...taskState, tasks: [{ ...readyTaskState, updated_at: new Date(now + 1).toISOString() }] },
+  replacePersistedTask({ ...readyTaskState, approval_id: validTaskState.execution_id }),
+  replacePersistedTask(requestedTaskState),
+  replacePersistedTask(nonMonotonicTaskState),
   { ...taskState, tasks: [{ ...validTaskState, approval_id: 'not-a-uuid' }] },
   { ...taskState, tasks: [{ ...validTaskState, execution_id: null }] },
   { ...taskState, tasks: [{ ...readyTaskState, execution_id: validTaskState.execution_id }] },
@@ -1231,6 +1251,8 @@ for (const corrupt of [
   { ...taskState, tasks: [{ ...validTaskState, error: 'unexpected' }] },
   { ...taskState, tasks: [{ ...readyTaskState, result: validTaskState.result }] },
   { ...taskState, tasks: [{ ...validTaskState, latency_ms: -1 }] },
+  replacePersistedTask({ ...readyTaskState, latency_ms: 0 }),
+  replacePersistedTask({ ...validTaskState, latency_ms: null }),
   { ...taskState, tasks: [validTaskState, validTaskState] },
   { ...taskState, idempotency: [null] },
   { ...taskState, idempotency: [{ ...taskState.idempotency[0], key: '' }] },

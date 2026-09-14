@@ -185,16 +185,19 @@ function restoreTaskRecord(value, toolRegistry) {
   }
   let priorState = null;
   let priorSequence = 0;
+  let priorEventAtMs = createdAtMs;
   for (const event of value.events) {
+    const eventAtMs = Date.parse(event?.at);
     if (!event || typeof event !== 'object' || Array.isArray(event) || !hasExactKeys(event, EVENT_STATE_KEYS)
       || !Number.isSafeInteger(event.sequence) || event.sequence !== priorSequence + 1
       || !STATES.has(event.state) || !TRANSITIONS.get(priorState)?.has(event.state)
       || !validBoundedString(event.reason, 128) || !validTimestamp(event.at)
-      || Date.parse(event.at) < createdAtMs || Date.parse(event.at) > updatedAtMs) {
+      || eventAtMs < priorEventAtMs || eventAtMs > updatedAtMs) {
       throw stateCorrupt('task event is invalid');
     }
     priorSequence = event.sequence;
     priorState = event.state;
+    priorEventAtMs = eventAtMs;
   }
   if (priorSequence + 1 !== value.next_sequence || priorState !== value.state
     || value.events.at(-1).at !== value.updated_at) {
@@ -207,9 +210,11 @@ function restoreTaskRecord(value, toolRegistry) {
   if ((approvalId !== null && !UUID_RE.test(approvalId || ''))
     || (executionId !== null && !UUID_RE.test(executionId || ''))
     || (approvalRequiredByRisk && approvalId === null)
+    || (!approvalRequiredByRisk && approvalId !== null)
+    || value.state === 'REQUESTED'
     || (value.state === 'PENDING_APPROVAL' && approvalId === null)
     || ((executionId !== null) !== executionStarted)
-    || (value.policy_decision === 'deny' && value.state !== 'FAILED')) {
+    || (value.policy_decision === 'deny' && (value.state !== 'FAILED' || executionStarted))) {
     throw stateCorrupt('task execution binding is invalid');
   }
   let result;
@@ -232,6 +237,10 @@ function restoreTaskRecord(value, toolRegistry) {
   if (value.latency_ms !== null
     && (!Number.isSafeInteger(value.latency_ms) || value.latency_ms < 0)) {
     throw stateCorrupt('task latency is invalid');
+  }
+  if ((value.latency_ms !== null && !executionStarted)
+    || (executionStarted && TERMINAL.has(value.state) && value.latency_ms === null)) {
+    throw stateCorrupt('task latency marker is invalid');
   }
   return {
     id: value.id, owner: value.owner, tool, accountRef: value.account_ref,

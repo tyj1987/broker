@@ -142,7 +142,15 @@ function validateExpectedAuthority(provider, authority) {
     fail('contract_plan_invalid');
 }
 
-function validTaskBinding(task, plan, state, expectedTaskId) {
+function validTaskIdentity(
+  task,
+  plan,
+  {
+    expectedTaskId,
+    accountRef = plan.account_ref,
+    resourceRef = plan.parameters.resource_ref,
+  } = {},
+) {
   return (
     task &&
     typeof task === 'object' &&
@@ -150,10 +158,16 @@ function validTaskBinding(task, plan, state, expectedTaskId) {
     (expectedTaskId === undefined || task.id === expectedTaskId) &&
     task.tool === plan.tool_name &&
     task.tool_version === plan.tool_version &&
-    task.account_ref === plan.account_ref &&
+    task.provider === plan.provider &&
+    task.operation_id === PROVIDERS[plan.provider].operationId &&
+    task.account_ref === accountRef &&
     task.environment === plan.environment &&
-    task.state === state
+    task.target === resourceRef
   );
+}
+
+function validTaskBinding(task, plan, state, options) {
+  return validTaskIdentity(task, plan, options) && task.state === state;
 }
 
 function validateGitHubResult(result, plan) {
@@ -234,8 +248,16 @@ async function createTask(callBroker, plan, accountRef, parameters, suffix) {
   });
 }
 
-async function cancelUnexpectedTask(callBroker, task) {
-  if (!TASK_ID_RE.test(task?.id || '')) return;
+async function cancelUnexpectedTask(callBroker, task, plan, accountRef, parameters) {
+  if (
+    !validTaskIdentity(task, plan, {
+      accountRef,
+      resourceRef: parameters.resource_ref,
+    }) ||
+    !['REQUESTED', 'PENDING_APPROVAL', 'READY'].includes(task.state)
+  ) {
+    return;
+  }
   try {
     await callBroker(`/api/v2/tasks/${task.id}/cancel`, { method: 'POST', body: {} });
   } catch {
@@ -246,7 +268,7 @@ async function cancelUnexpectedTask(callBroker, task) {
 async function requireDenied(callBroker, plan, accountRef, parameters, suffix) {
   try {
     const task = await createTask(callBroker, plan, accountRef, parameters, suffix);
-    await cancelUnexpectedTask(callBroker, task);
+    await cancelUnexpectedTask(callBroker, task, plan, accountRef, parameters);
     fail('contract_negative_boundary_failed');
   } catch (error) {
     if (error instanceof ProviderContractError) throw error;
@@ -318,7 +340,7 @@ export function createProviderContractRunner({ callBroker } = {}) {
     } catch {
       fail('contract_positive_run_failed');
     }
-    if (!validTaskBinding(completed, plan, 'SUCCEEDED', created.id)) {
+    if (!validTaskBinding(completed, plan, 'SUCCEEDED', { expectedTaskId: created.id })) {
       fail('contract_positive_task_invalid');
     }
     validateSafeResult(completed.result, plan);

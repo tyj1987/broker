@@ -68,8 +68,11 @@ function requestImpl(options, callback) {
         id: taskId,
         tool: plan.tool_name,
         tool_version: plan.tool_version,
+        provider: plan.provider,
+        operation_id: 'repo.read',
         account_ref: plan.account_ref,
         environment: plan.environment,
+        target: plan.parameters.resource_ref,
         state: 'SUCCEEDED',
         result: {
           id: 123,
@@ -90,8 +93,11 @@ function requestImpl(options, callback) {
         id: taskId,
         tool: plan.tool_name,
         tool_version: plan.tool_version,
+        provider: plan.provider,
+        operation_id: 'repo.read',
         account_ref: plan.account_ref,
         environment: plan.environment,
+        target: body.parameters.resource_ref,
         state: 'READY',
       };
     }

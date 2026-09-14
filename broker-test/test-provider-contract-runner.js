@@ -109,8 +109,11 @@ function successfulBroker(plan, { result = resultFor(plan) } = {}) {
         id: taskId,
         tool: plan.tool_name,
         tool_version: plan.tool_version,
+        provider: plan.provider,
+        operation_id: plan.provider === 'github' ? 'repo.read' : 'ecs.instances.list',
         account_ref: plan.account_ref,
         environment: plan.environment,
+        target: plan.parameters.resource_ref,
         state: 'SUCCEEDED',
         result: structuredClone(result),
       };
@@ -129,8 +132,11 @@ function successfulBroker(plan, { result = resultFor(plan) } = {}) {
         id: taskId,
         tool: plan.tool_name,
         tool_version: plan.tool_version,
-        account_ref: plan.account_ref,
+        provider: plan.provider,
+        operation_id: plan.provider === 'github' ? 'repo.read' : 'ecs.instances.list',
+        account_ref: options.body.account_ref,
         environment: plan.environment,
+        target: options.body.parameters.resource_ref,
         state: 'READY',
       };
     }
@@ -331,6 +337,20 @@ for (const [response, code] of [
   await expectRunCode(
     plan,
     async (path, options) => {
+      const result = await broker.callBroker(path, options);
+      if (path.endsWith('/run')) return { ...result, target: plan.wrong_resource_ref };
+      return result;
+    },
+    'contract_positive_task_invalid',
+  );
+}
+
+{
+  const plan = githubPlan();
+  const broker = successfulBroker(plan);
+  await expectRunCode(
+    plan,
+    async (path, options) => {
       if (path.endsWith('/run')) throw new Error('private detail');
       return broker.callBroker(path, options);
     },
@@ -432,8 +452,11 @@ for (const [nextToken, code] of [
           id: taskId,
           tool: plan.tool_name,
           tool_version: plan.tool_version,
-          account_ref: plan.account_ref,
+          provider: plan.provider,
+          operation_id: 'repo.read',
+          account_ref: options.body.account_ref,
           environment: plan.environment,
+          target: options.body.parameters.resource_ref,
           state: 'READY',
         };
       }
@@ -442,6 +465,37 @@ for (const [nextToken, code] of [
     'contract_negative_boundary_failed',
   );
   assert.equal(cancelled, true);
+}
+
+{
+  const plan = githubPlan();
+  const broker = successfulBroker(plan);
+  let cancelled = false;
+  await expectRunCode(
+    plan,
+    async (path, options) => {
+      if (path.endsWith('/cancel')) {
+        cancelled = true;
+        return { state: 'CANCELLED' };
+      }
+      if (path === '/api/v2/tasks' && !options.body.idempotency_key.endsWith(':positive')) {
+        return {
+          id: taskId,
+          tool: plan.tool_name,
+          tool_version: plan.tool_version,
+          provider: plan.provider,
+          operation_id: 'repo.read',
+          account_ref: plan.account_ref,
+          environment: plan.environment,
+          target: plan.parameters.resource_ref,
+          state: 'READY',
+        };
+      }
+      return broker.callBroker(path, options);
+    },
+    'contract_negative_boundary_failed',
+  );
+  assert.equal(cancelled, false, 'an unrelated task returned by a negative check is not cancelled');
 }
 
 {
@@ -456,8 +510,11 @@ for (const [nextToken, code] of [
           id: taskId,
           tool: plan.tool_name,
           tool_version: plan.tool_version,
-          account_ref: plan.account_ref,
+          provider: plan.provider,
+          operation_id: 'repo.read',
+          account_ref: options.body.account_ref,
           environment: plan.environment,
+          target: options.body.parameters.resource_ref,
           state: 'READY',
         };
       }

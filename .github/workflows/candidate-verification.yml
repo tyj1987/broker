@@ -59,6 +59,27 @@ jobs:
           cache: npm
           cache-dependency-path: broker/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Package fixed-SHA offline development inputs
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(node --version)" = 'v24.20.0'
+          offline="$RUNNER_TEMP/broker-offline"
+          mkdir -p "$offline"
+          git archive --format=tar.gz --output="$offline/source.tar.gz" HEAD
+          tar -czf "$offline/dependencies.tar.gz" -C broker node_modules
+          node_home="$(dirname "$(dirname "$(command -v node)")")"
+          tar -czf "$offline/runtime.tar.gz" -C "$node_home" bin/node bin/npm bin/npx lib/node_modules/npm
+          printf '{"version":1,"source_sha":"%s","node_version":"%s","purpose":"offline-development-only"}\n' \
+            "$GITHUB_SHA" "$(node --version)" > "$offline/manifest.json"
+          (cd "$offline" && sha256sum source.tar.gz dependencies.tar.gz runtime.tar.gz manifest.json > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: broker-offline-${{ github.sha }}
+          path: ${{ runner.temp }}/broker-offline/
+          if-no-files-found: error
+          retention-days: 3
       - run: npm audit --audit-level=high
       - run: npm run lint
       - run: npm run test:coverage

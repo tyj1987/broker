@@ -335,4 +335,183 @@ await assert.rejects(
     error.code === 'anchor_export_failed' && error.message === 'Audit anchor export failed',
 );
 
+// Source-only rejection and cleanup coverage. All keys and file metadata are
+// synthetic; these tests never read production paths or contact a provider.
+for (const input of [null, undefined, 42, '', ' '.repeat(32 * 1024 + 1), 'version: 1']) {
+  assert.throws(() => parseAuditAnchorExporterConfig(input), {
+    code: 'anchor_exporter_config_invalid',
+  });
+}
+
+const invalidDocuments = [
+  null,
+  [],
+  {},
+  { ...validDocument, version: 2 },
+  { ...validDocument, purpose: 'other-purpose' },
+  { ...validDocument, stream_id: '' },
+  { ...validDocument, active_key_id: '' },
+  { ...validDocument, trusted_keys: null },
+  { ...validDocument, trusted_keys: [] },
+  { ...validDocument, trusted_keys: Array(9).fill(validDocument.trusted_keys[0]) },
+  { ...validDocument, revoked_key_ids: null },
+  { ...validDocument, revoked_key_ids: Array(9).fill('retired-key') },
+  { ...validDocument, revoked_key_ids: [''] },
+  { ...validDocument, revoked_key_ids: ['retired-key', 'retired-key'] },
+  { ...validDocument, export_deadline_ms: 60_000, interval_ms: 60_000 },
+];
+for (const [field, minimum, maximum] of [
+  ['signer_timeout_ms', 100, 10_000],
+  ['store_timeout_ms', 100, 60_000],
+  ['export_deadline_ms', 1_000, 60_000],
+  ['interval_ms', 60_000, 3_600_000],
+]) {
+  for (const invalid of [minimum - 1, maximum + 1, minimum + 0.5, String(minimum)]) {
+    invalidDocuments.push({ ...validDocument, [field]: invalid });
+  }
+}
+for (const document of invalidDocuments) {
+  assert.throws(() => parseAuditAnchorExporterConfig(JSON.stringify(document)), {
+    code: 'anchor_exporter_config_invalid',
+  });
+}
+
+const entry = validDocument.trusted_keys[0];
+const invalidDer = Buffer.from('synthetic non-DER public data');
+const oversizedDer = Buffer.alloc(513, 1);
+const p384Der = generateKeyPairSync('ec', { namedCurve: 'P-384' }).publicKey.export({
+  format: 'der', type: 'spki',
+});
+for (const candidateKey of [
+  null,
+  [],
+  { ...entry, key_id: '' },
+  { ...entry, unexpected: true },
+  { ...entry, public_key_spki_der_base64: null },
+  { ...entry, public_key_spki_der_base64: '' },
+  { ...entry, public_key_spki_der_base64: 'A'.repeat(1_025) },
+  { ...entry, public_key_sha256: 'invalid-digest' },
+  { ...entry, public_key_spki_der_base64: '====' },
+  { ...entry, public_key_spki_der_base64: entry.public_key_spki_der_base64 + '\n' },
+  ...[invalidDer, oversizedDer, p384Der].map((der) => ({
+    ...entry,
+    public_key_spki_der_base64: der.toString('base64'),
+    public_key_sha256: createHash('sha256').update(der).digest('hex'),
+  })),
+]) {
+  assert.throws(
+    () => parseAuditAnchorExporterConfig(JSON.stringify({
+      ...validDocument, trusted_keys: [candidateKey],
+    })),
+    { code: 'anchor_exporter_config_invalid' },
+  );
+}
+const historicalConfig = parseAuditAnchorExporterConfig(JSON.stringify({
+  ...validDocument, revoked_key_ids: ['retired-key'],
+}));
+historicalConfig.trustedKeyIds.clear();
+historicalConfig.revokedKeyIds.clear();
+assert.deepEqual([...historicalConfig.trustedKeyIds], [validDocument.active_key_id]);
+assert.deepEqual([...historicalConfig.revokedKeyIds], ['retired-key']);
+
+const trustedDirectory = {
+  isDirectory: () => true,
+  isSymbolicLink: () => false,
+  uid: 0,
+  mode: 0o040755,
+};
+const readerOptions = {
+  processGroups: [1202],
+  statPath: async () => trustedDirectory,
+  resolvePath: async (path) => path,
+  openFile: async () => ({
+    stat: async () => fileMetadata,
+    readFile: async () => JSON.stringify(validDocument),
+    close: async () => {},
+  }),
+};
+for (const overrides of [
+  { processGroups: null },
+  { ownerUid: -1 },
+  { ownerUid: 0.5 },
+  { statPath: null },
+  { resolvePath: null },
+  { openFile: null },
+  { statPath: async () => ({ ...trustedDirectory, isDirectory: () => false }) },
+  { statPath: async () => ({ ...trustedDirectory, isSymbolicLink: () => true }) },
+  { statPath: async () => ({ ...trustedDirectory, uid: 1 }) },
+  { resolvePath: async () => '/synthetic/redirect' },
+]) {
+  await assert.rejects(
+    readAuditAnchorExporterConfig('/etc/secret-broker/audit/exporter.json', {
+      ...readerOptions, ...overrides,
+    }),
+    { code: 'anchor_exporter_config_untrusted' },
+  );
+}
+for (const metadata of [
+  { ...fileMetadata, isFile: () => false },
+  { ...fileMetadata, uid: 1 },
+  { ...fileMetadata, gid: 9999 },
+  { ...fileMetadata, size: 0 },
+  { ...fileMetadata, size: 32 * 1024 + 1 },
+]) {
+  let closed = 0;
+  let reads = 0;
+  await assert.rejects(
+    readAuditAnchorExporterConfig('/etc/secret-broker/audit/exporter.json', {
+      ...readerOptions,
+      openFile: async () => ({
+        stat: async () => metadata,
+        readFile: async () => { reads += 1; return JSON.stringify(validDocument); },
+        close: async () => { closed += 1; },
+      }),
+    }),
+    { code: 'anchor_exporter_config_untrusted' },
+  );
+  assert.equal(reads, 0, 'untrusted file metadata must block content reads');
+  assert.equal(closed, 1, 'rejected handles must be closed exactly once');
+}
+let cleanupCalls = 0;
+const cleanupConfig = await readAuditAnchorExporterConfig('/etc/secret-broker/audit/exporter.json', {
+  ...readerOptions,
+  openFile: async () => ({
+    stat: async () => fileMetadata,
+    readFile: async () => JSON.stringify(validDocument),
+    close: async () => { cleanupCalls += 1; throw new Error('synthetic cleanup error'); },
+  }),
+});
+assert.equal(cleanupConfig.streamId, validDocument.stream_id);
+assert.equal(cleanupCalls, 1);
+
+let serviceCalls = 0;
+const serviceOptions = {
+  runtime: { exportOnce: async () => { serviceCalls += 1; throw new Error('must not execute'); } },
+  intervalMs: 60_000,
+  exportDeadlineMs: 1_000,
+  signal: new AbortController().signal,
+  writeStatus: () => {},
+};
+for (const overrides of [
+  { runtime: null },
+  { runtime: { exportOnce: null } },
+  { intervalMs: 59_999 },
+  { exportDeadlineMs: 999 },
+  { exportDeadlineMs: 60_000 },
+  { signal: {} },
+  { writeStatus: null },
+]) {
+  await assert.rejects(runAuditAnchorExporterService({ ...serviceOptions, ...overrides }), TypeError);
+}
+assert.equal(serviceCalls, 0, 'invalid service configuration must fail before exporting');
+for (const code of [42, '', 'UNSAFE-code', 'x'.repeat(65)]) {
+  await assert.rejects(
+    runAuditAnchorExporterService({
+      ...serviceOptions,
+      runtime: { exportOnce: async () => { throw Object.assign(new Error('synthetic detail'), { code }); } },
+    }),
+    (error) => error.code === 'anchor_export_failed' && error.message === 'Audit anchor export failed',
+  );
+}
+
 console.log('audit anchor exporter runtime: strict config and complete local closure passed');

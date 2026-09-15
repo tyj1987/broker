@@ -109,7 +109,7 @@ const safe = redactDeep(nested);
 ok('user not redacted', safe.user === 'tyj');
 ok('top-level PAT redacted', !safe.pat.includes('ghp_1234567890'));
 ok('aws key redacted in nested', !safe.secrets.aws.includes('AKIAIOSFODNN7'));
-ok('plain text not redacted', safe.list[1] === 'plain text');
+ok('plain text not redacted', safe.list[0] !== null && safe.list[1] === 'plain text');
 ok('array object redacted', !safe.list[0].y.includes('abc_DEF_123_ghi_456'));
 ok('array object has placeholder', safe.list[0].y.includes('***'));
 ok('nested ok public kept', safe.secrets.nested.ok === 'public');
@@ -171,6 +171,123 @@ ok('non-secret unchanged', redact('hello world this is benign content') === 'hel
 section('meta');
 ok('SUPPORTED_PATTERNS non-empty', Array.isArray(SUPPORTED_PATTERNS) && SUPPORTED_PATTERNS.length >= 15);
 ok('all patterns have unique names', new Set(SUPPORTED_PATTERNS).size === SUPPORTED_PATTERNS.length);
+
+
+// === Short labelled credentials and prefix fallthrough ===
+section('labelled credential boundary regressions');
+for (const label of ['sig', 'token', 'cookie', 'session', 'password', 'api_key']) {
+  for (const separator of ['=', ':']) {
+    const input = `${label}${separator}x`;
+    ok(`${label} ${separator} short value reaches redaction`, hasLikelySecret(input));
+    ok(`${label} ${separator} short value is removed`, redact(input) === `${label}${separator}***`);
+  }
+}
+
+// These are intentionally synthetic, invalid short values, not provider credentials.
+const shortProviderValues = [
+  'mb_live_x', 'mb_test_x', 'ghp_x', 'github_pat_x', 'gho_x', 'ghu_x',
+  'ghs_x', 'ghr_x', 'sk-x', 'sk-proj-x', 'sk-ant-x', 'sk_live_x',
+  'rk_test_x', 'AIzaX', 'LTAIx', 'STS.x', 'AKIDx', 'AKIAx', 'ASIAx',
+  'xoxb-x', 'xoxp-x', 'docker_x',
+];
+for (const value of shortProviderValues) {
+  ok(`label overrides incomplete ${value.split(/[-_]/)[0]} prefix`,
+    redact(`password=${value}`) === 'password=***');
+}
+ok('mixed-case label is still binding', redact('PaSsWoRd=SK-short') === 'PaSsWoRd=***');
+ok('spaced label is still binding', redact('password :  sk-short') === 'password :  ***');
+ok('placeholder-looking value with suffix is not trusted',
+  redact('password=sk-***suffix-canary') === 'password=***');
+ok('placeholder-looking value with dot is not trusted',
+  redact('password=mb_live_***.suffix-canary') === 'password=***');
+ok('partially matched provider value cannot retain a tail',
+  redact('password=sk-' + 'A'.repeat(24) + '.suffix-canary') === 'password=***');
+ok('bare provider name is not treated as a credential', redact('gho_') === 'gho_');
+
+// === OAuth access tokens ===
+section('GitHub OAuth access token regressions');
+const oauthCanary = 'gho_' + 'A'.repeat(36);
+ok('OAuth pattern is registered', SUPPORTED_PATTERNS.includes('github_oauth_gho'));
+ok('bare OAuth value is redacted', redact(oauthCanary) === 'gho_***');
+ok('OAuth value in error message is redacted',
+  redact(`upstream rejected ${oauthCanary}; retry=false`) === 'upstream rejected gho_***; retry=false');
+ok('OAuth value under a public object key is redacted', redactDeep({ message: oauthCanary }).message === 'gho_***');
+ok('OAuth value in a JSON array is redacted', redactJson([oauthCanary]) === '["gho_***"]');
+ok('multiple OAuth values are all redacted', redact(`${oauthCanary},${oauthCanary}`) === 'gho_***,gho_***');
+
+// === Quoted free-form error values ===
+section('quoted labelled credential regressions');
+const quotedCases = [
+  ['double quoted spaces', 'password="alpha beta gamma" status=ok', 'password=*** status=ok'],
+  ['single quoted spaces', "password='alpha beta gamma' status=ok", 'password=*** status=ok'],
+  ['quoted delimiters', 'password="alpha,beta;gamma" status=ok', 'password=*** status=ok'],
+  ['escaped double quote', 'password="alpha\\" beta" status=ok', 'password=*** status=ok'],
+  ['escaped single quote', "password='alpha\\' beta' status=ok", 'password=*** status=ok'],
+  ['quoted backslash', 'password="alpha\\\\ beta" status=ok', 'password=*** status=ok'],
+  ['empty double quotes', 'password="" status=ok', 'password=*** status=ok'],
+  ['empty single quotes', "password='' status=ok", 'password=*** status=ok'],
+  ['unclosed double quote', 'password="alpha beta gamma', 'password=***'],
+  ['unclosed single quote', "password='alpha beta gamma", 'password=***'],
+  ['trailing escape in double quote', 'password="alpha beta\\', 'password=***'],
+  ['trailing escape in single quote', "password='alpha beta\\", 'password=***'],
+  ['multiline quoted input', 'password="alpha\nbeta" status=ok', 'password=*** status=ok'],
+  ['quoted prefixed credential', 'password="sk-short alpha beta" status=ok', 'password=*** status=ok'],
+  ['adjacent labelled fields', 'password="alpha beta" token=x status=ok', 'password=*** token=*** status=ok'],
+];
+for (const [name, input, expected] of quotedCases) ok(name, redact(input) === expected);
+
+// Preserve existing provider-specific placeholders without trusting arbitrary tails.
+section('placeholder stability');
+const stablePlaceholders = [
+  'mb_live_***', 'mb_test_***', 'ghp_***', 'github_pat_***', 'gho_***',
+  'ghu_***', 'ghs_***', 'ghr_***', 'sk-***', 'sk-proj-***', 'sk-ant-***',
+  'sk_live_***', 'sk_test_***', 'rk_live_***', 'rk_test_***', 'AIza***',
+  'LTAI***', 'STS.***', 'AKID***', 'AKIA***', 'ASIA***', 'xoxb-***',
+  'xoxp-***', 'docker_***',
+];
+for (const placeholder of stablePlaceholders) {
+  ok(`exact ${placeholder} placeholder is stable`, redact(`token=${placeholder}`) === `token=${placeholder}`);
+}
+
+// Deterministic matrix: no random flakiness, network, real keys, or external libraries.
+section('redaction regression matrix');
+let matrixCases = 0;
+let matrixPassed = true;
+const labels = ['sig', 'TOKEN', 'password', 'api-key', 'client_secret', 'signing-key'];
+const values = ['x', 'sk-short', 'mb_live_x', 'sk-***suffix', 'ordinary-value', oauthCanary];
+for (const label of labels) {
+  for (const separator of ['=', ':', ' : ']) {
+    for (const value of values) {
+      for (const quote of ['', '"', "'"]) {
+        const input = `${label}${separator}${quote}${value}${quote}`;
+        const output = redact(input);
+        const expected = !quote && value === oauthCanary ? `${label}${separator}gho_***` : `${label}${separator}***`;
+        const deep = redactDeep({ message: input, list: [input], status: 'public' });
+        matrixPassed = matrixPassed && output === expected && redact(output) === output &&
+          deep.message === expected && deep.list[0] === expected && deep.status === 'public' &&
+          redactJson({ message: input }) === JSON.stringify({ message: expected });
+        matrixCases++;
+      }
+    }
+  }
+}
+ok('324 string/deep/JSON/idempotence matrix cases pass', matrixPassed && matrixCases === 324);
+console.log(`  Matrix inputs checked: ${matrixCases}`);
+
+section('non-secret and type regressions');
+for (const value of ['', 'a', 'ok', 'status=ok', 'gho_', 'ordinary public text']) {
+  ok('public text remains unchanged', redact(value) === value);
+}
+ok('heuristic handles null', hasLikelySecret(null) === false);
+ok('heuristic handles numbers', hasLikelySecret(42) === false);
+ok('deep redaction handles null', redactDeep(null) === null);
+ok('deep redaction handles undefined', redactDeep(undefined) === undefined);
+ok('deep redaction preserves numeric fields', redactDeep({ status: 200 }).status === 200);
+ok('JSON serialization failure uses safe fallback', redactJson({ count: 1n }) === '[unserializable]');
+const inputObject = { message: 'token=x', nested: { password: 'sk-short' } };
+const inputBefore = JSON.stringify(inputObject);
+redactDeep(inputObject);
+ok('redaction does not mutate input', JSON.stringify(inputObject) === inputBefore);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

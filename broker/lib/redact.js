@@ -3,6 +3,7 @@
 //
 // Patterns matched (case-insensitive where appropriate):
 //   - GitHub classic PAT  (ghp_...)
+//   - GitHub OAuth access (gho_...)
 //   - GitHub fine-grained (github_pat_...)
 //   - GitHub App user-to-server (ghu_...)
 //   - GitHub App server-to-server (ghs_...)
@@ -25,8 +26,13 @@
 //
 // Zero deps. Safe to use in any hot path.
 
+// Preserve only exact placeholders emitted by provider patterns below. A token
+// prefix alone does not prove a labelled value was already redacted.
+const REDACTED_PROVIDER_TOKEN = /^(?:mb_(?:live|test)_|gh[pousr]_|github_pat_|sk-(?:proj-|ant-)?|(?:sk|rk)_(?:live|test)_|AIza|LTAI|STS\.|AKID|AKIA|ASIA|xox[bp]-|docker_)\*{3}$/;
+
 const PATTERNS = [
   // GitHub
+  { name: 'github_oauth_gho',   regex: /gho_[A-Za-z0-9]{20,}/g,                    replace: 'gho_***' },
   { name: 'github_pat',        regex: /ghp_[A-Za-z0-9]{20,}/g,                     replace: 'ghp_***' },
   { name: 'github_fine_grain',  regex: /github_pat_[A-Za-z0-9_]{20,}/g,            replace: 'github_pat_***' },
   { name: 'github_app_ghu',     regex: /ghu_[A-Za-z0-9]{20,}/g,                    replace: 'ghu_***' },
@@ -68,7 +74,8 @@ const PATTERNS = [
   // Signed URLs and query-string credentials
   { name: 'url_secret_query',   regex: /([?&](?:token|access_token|refresh_token|api[_-]?key|password|secret|signature|sig|x-amz-signature|x-amz-security-token)=)[^&#\s]+/gi, replace: '$1***' },
   // Free-form error text containing a labelled credential assignment
-  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token|token|session|cookie|signature|sig)\s*[:=]\s*)(?!(?:mb_|ghp_|github_pat_|ghu_|ghs_|ghr_|sk[-_]|AIza|LTAI|STS\.|AKID|AKIA|ASIA|xox|docker_))[^\s,;]+/gi, replace: '$1***' },
+  { name: 'labelled_secret',    regex: /((?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token|token|session|cookie|signature|sig)\s*[:=]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$)|[^\s,;]+)/gi,
+    replace: (_match, label, value) => label + (REDACTED_PROVIDER_TOKEN.test(value) ? value : '***') },
   // Generic Bearer token (long opaque string after "Bearer ")
   { name: 'bearer_token',       regex: /(Bearer\s+)[A-Za-z0-9_\-\.~+\/=]{20,}/g,    replace: '$1***' },
   // Docker registry token
@@ -138,7 +145,8 @@ export function redactDeep(value, seen = new WeakSet()) {
  * the matching prefix/keyword should be added here too.
  */
 export function hasLikelySecret(s) {
-  if (typeof s !== 'string' || s.length < 8) return false;
+  // Labels such as sig=x and token=x are meaningful even below eight characters.
+  if (typeof s !== 'string' || s.length === 0) return false;
   // Heuristics: presence of common token prefixes, PEM marker, JWT shape, UUID
   return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|mb_(?:live|test)_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|[?&](?:token|access_token|refresh_token|api[_-]?key|password|secret|signature|sig|x-amz-signature|x-amz-security-token)=|[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@/\s]+@|(?:password|passwd|passphrase|client[_-]?secret|app[_-]?secret|signing[_-]?key|encryption[_-]?key|master[_-]?key|kms[_-]?key|api[_-]?key|access[_-]?key[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|refresh[_-]?token|access[_-]?token|token|session|cookie|signature|sig)\s*[:=]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
 }

@@ -1,0 +1,99 @@
+name: Broker candidate verification
+
+# Additive source-only checks. The existing CI and Deploy ECS workflows remain
+# unchanged; this workflow never grants production approval or deploys a release.
+on:
+  push:
+    branches: ['chatgpt/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: broker-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  logging-boundary:
+    name: Logging boundary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+      - run: node --check broker/lib/log.js
+      - run: node --check broker/lib/redact.js
+      - run: node --check broker-test/test-log.js
+      - run: node --check broker-test/test-redact.js
+      - name: Enforce logging boundary coverage
+        run: >-
+          node --experimental-test-coverage
+          --test-coverage-include=broker/lib/log.js
+          --test-coverage-include=broker/lib/redact.js
+          --test-coverage-lines=90 --test-coverage-branches=85
+          --test-coverage-functions=90
+          --test broker-test/test-log.js broker-test/test-redact.js
+
+  broker-regression:
+    name: Candidate Node regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: broker/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Package fixed-SHA offline development inputs
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(node --version)" = 'v24.20.0'
+          offline="$RUNNER_TEMP/broker-offline"
+          mkdir -p "$offline"
+          git archive --format=tar.gz --output="$offline/source.tar.gz" HEAD
+          tar -czf "$offline/dependencies.tar.gz" -C broker node_modules
+          node_home="$(dirname "$(dirname "$(command -v node)")")"
+          tar -czf "$offline/runtime.tar.gz" -C "$node_home" bin/node bin/npm bin/npx lib/node_modules/npm
+          printf '{"version":1,"source_sha":"%s","node_version":"%s","purpose":"offline-development-only"}\n' \
+            "$GITHUB_SHA" "$(node --version)" > "$offline/manifest.json"
+          (cd "$offline" && sha256sum source.tar.gz dependencies.tar.gz runtime.tar.gz manifest.json > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: broker-offline-${{ github.sha }}
+          path: ${{ runner.temp }}/broker-offline/
+          if-no-files-found: error
+          retention-days: 3
+      - run: npm audit --audit-level=high
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm run test:coverage:trust-domain-cli
+      - run: npm run test:coverage:audit-exporter-runtime
+      - name: Enforce protected provider input coverage
+        working-directory: .
+        run: >-
+          node broker/node_modules/c8/bin/c8.js --check-coverage --clean --all
+          --include=broker/lib/protected-input-file.js --reporter=text
+          --lines=90 --branches=85 --functions=90
+          node broker-test/test-provider-contract-check-cli.js
+      - name: Verify generated OpenAPI is current
+        run: npm run openapi:generate
+      - name: Check generated contract diff
+        working-directory: .
+        run: git diff --exit-code -- contracts/openapi.yaml

@@ -91,6 +91,7 @@ nav:
   - MCP typed-task bridge: MCP-TASK-BRIDGE.md
   - Execution tokens: EXECUTION-TOKENS.md
   - Audit integrity: AUDIT-INTEGRITY.md
+  - Audit recovery check: AUDIT-RECOVERY-CHECK.md
   - Provider adapters:
       - GitHub: GITHUB-ADAPTER.md
       - Cloudflare: CLOUDFLARE-ADAPTER.md

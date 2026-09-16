@@ -87,6 +87,7 @@ jobs:
       - run: npm run test:coverage
       - run: npm run test:coverage:trust-domain-cli
       - run: npm run test:coverage:audit-exporter-runtime
+      - run: npm run test:coverage:audit-recovery-check
       - name: Enforce protected provider input coverage
         working-directory: .
         run: >-

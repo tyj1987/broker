@@ -88,6 +88,7 @@ jobs:
       - run: npm run test:coverage:trust-domain-cli
       - run: npm run test:coverage:audit-exporter-runtime
       - run: npm run test:coverage:audit-recovery-check
+      - run: npm run test:coverage:audit-exporter-service
       - run: npm run test:coverage:audit-recovery-service
       - name: Enforce protected provider input coverage
         working-directory: .
@@ -101,3 +102,43 @@ jobs:
       - name: Check generated contract diff
         working-directory: .
         run: git diff --exit-code -- contracts/openapi.yaml
+
+  audit-process-integration:
+    name: Audit processes (real systemd, synthetic providers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: core/go.sum
+      - run: npm ci --prefix broker --ignore-scripts --no-audit --no-fund
+      - name: Build isolated audit process packages
+        run: |
+          set -euo pipefail
+          mkdir .ci-audit
+          (cd core && CGO_ENABLED=0 go build -trimpath -o ../.ci-audit/secret-broker-audit-exporter ./cmd/audit-exporter)
+          (cd core && CGO_ENABLED=0 go build -trimpath -o ../.ci-audit/secret-broker-audit-recovery ./cmd/audit-recovery)
+          node broker/bin/package-audit-exporter.js
+          node broker/bin/package-audit-recovery.js
+          python3 -m py_compile broker-test/audit-process-integration.py
+          python3 broker-test/test-audit-process-integration.py
+      - name: Install disposable runner ACL utility
+        run: sudo apt-get update -qq && sudo apt-get install --yes acl
+      - name: Verify actual systemd and workload isolation
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY,GITHUB_EVENT_NAME,GITHUB_REF,GITHUB_SHA,RUNNER_OS \
+            python3 broker-test/audit-process-integration.py --source "$GITHUB_WORKSPACE" \
+            --node "$(command -v node)" --output "$RUNNER_TEMP/audit-process-evidence.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: audit-process-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/audit-process-evidence.json
+          if-no-files-found: error
+          retention-days: 7

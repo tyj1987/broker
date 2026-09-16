@@ -19,7 +19,7 @@ assert.ok(release.jobs.build.steps.some(s => s.run?.includes('-o ../broker/bin/s
 assert.match(image, /-o \/out\/secret-broker-audit-recovery \.\/cmd\/audit-recovery/);
 assert.doesNotMatch(image, /COPY --from=core-build \/out\/secret-broker-audit-recovery \/app/);
 assert.match(image, /rm -f[^\n]*bin\/audit-recovery-service-check\.js/);
-assert.match(image, /rm -rf recovery-runtime/);
+assert.match(image, /rm -rf exporter-runtime recovery-runtime/);
 for(const text of ['Type=notify','NotifyAccess=main','WatchdogSec=120s','TimeoutStartSec=75s','KillMode=control-group',
   'PrivateNetwork=true','RestrictAddressFamilies=AF_UNIX','MemoryDenyWriteExecute=true','NoNewPrivileges=true',
   'SupplementaryGroups=broker-audit-store','Requires=secret-broker-audit-store.service']) assert.ok(unit.includes(text),text);

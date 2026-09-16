@@ -56,6 +56,54 @@ sequence and a checkpoint-match flag. It contains no audit events, paths,
 stream/key identifiers or digests. Failures emit a fixed error code and nonzero
 exit status. The existing portable `verifyRecovery()` API is unchanged and
 still proves consistency with a supplied store head, not independent freshness.
-This new command is not wired into production systemd units or release approval.
+This one-shot command does not itself start a service or grant release approval.
 Independent checkpoint provenance, cloud retention, key administration and a
 real disaster-recovery exercise remain separate acceptance evidence.
+
+## Isolated recovery process and release wiring
+
+The native `core/cmd/audit-recovery` command supplies the existing systemd
+entrypoint `secret-broker-audit-recovery --config
+/etc/secret-broker/audit/recovery.json`. It is a supervisor, not a second
+cryptographic implementation: each iteration starts the existing Node verifier
+with a fresh config/checkpoint and the fixed store socket. Only the distinct
+`broker-audit-recovery` UID/GID with the audit-store supplementary group is
+accepted. The native executable must reside in the immutable, SHA-named
+release; Node and the verifier entrypoint must be root-owned with protected
+ancestors. No command shell, inherited NODE_OPTIONS, cloud credentials, or
+caller-selected executable is accepted.
+
+The root-managed config uses the schema above. Its sibling
+`/etc/secret-broker/audit/recovery-checkpoint.json` is the independently obtained
+checkpoint. Both service input files must be root-owned, single-link, mode
+0440 and readable by an explicit recovery group. All configuration directory
+ancestors are root-owned and non-writable by group/other. The interactive
+`audit-recovery-check.js` owner-only input convention remains unchanged.
+
+The process sends systemd `READY=1` only after the first complete checkpoint
+verification. Subsequent successful checks refresh the watchdog; an invalid,
+expired, revoked, unavailable or changed checkpoint/head terminates the
+process. Each child has a 65-second hard deadline and at most 1,024 stdout
+bytes; stderr is never reflected. A 30-second wait separates completed checks.
+The systemd unit uses `Type=notify`, `NotifyAccess=main`, a 75-second startup
+limit, a 120-second watchdog, bounded restarts, control-group cleanup, and only
+AF_UNIX networking. Node runs with `--jitless --disable-proto=throw --no-addons`
+so the existing executable-memory restriction is not removed.
+
+`package-audit-recovery.js` creates a closed `recovery-runtime` dependency
+set containing only the verifier code and the locked YAML parser. Its manifest
+is checked against the actual source closure before release installation;
+manifest edits alone cannot authorize extra or modified files. The native
+binary and runtime are built into the signed multi-service release, excluded
+from the Node production container, and installed with recovery-only read/execute
+ACLs without making the Broker application's tree readable by that identity.
+The full-CI and production-approval triggers are unchanged.
+
+This wiring does not provision accounts, input files, an independent checkpoint
+publisher, KMS/CAS authority, immutable storage or a restored audit copy. It does
+not automatically start any production service. The operator must coordinate a
+quiescent recovery copy and independently issued checkpoint with the selected
+store head. A store advancing beyond that exact checkpoint is a rejection, not
+permission to rewrite or automatically advance the checkpoint. Production
+readiness still requires current independent recovery evidence and all existing
+LIVE checks; a successful unit build is not a recovery drill.

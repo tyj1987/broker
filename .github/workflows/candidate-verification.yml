@@ -1,7 +1,7 @@
 name: Broker candidate verification
 
 # Additive source-only checks alongside the full CI development-branch gate.
-# Deploy ECS remains unchanged; this workflow never approves or deploys releases.
+# Production approval/trigger boundaries remain unchanged; this never deploys.
 on:
   push:
     branches: ['chatgpt/**']
@@ -88,6 +88,7 @@ jobs:
       - run: npm run test:coverage:trust-domain-cli
       - run: npm run test:coverage:audit-exporter-runtime
       - run: npm run test:coverage:audit-recovery-check
+      - run: npm run test:coverage:audit-recovery-service
       - name: Enforce protected provider input coverage
         working-directory: .
         run: >-

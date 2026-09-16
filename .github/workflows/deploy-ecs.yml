@@ -65,6 +65,8 @@ jobs:
           go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-store ./cmd/audit-store
           go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-store-health ./cmd/audit-store-health
           go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-mirror-worker ./cmd/audit-mirror-worker
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o ../broker/bin/secret-broker-audit-recovery ./cmd/audit-recovery
+          node ../broker/bin/package-audit-recovery.js
       - name: Create immutable payload and checksum
         run: |
           cp -R tools broker/tools

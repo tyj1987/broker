@@ -25,7 +25,7 @@ const services = Object.freeze({
     exec: 'secret-broker-audit-store',
   },
   recovery: {
-    network: 'AF_UNIX AF_INET AF_INET6',
+    network: 'AF_UNIX',
     exec: 'secret-broker-audit-recovery',
   },
 });
@@ -124,7 +124,7 @@ assert.match(mirrorSocket, /^SocketGroup=broker-audit-store$/m);
 assert.match(mirrorSocket, /^SocketMode=0660$/m);
 assert.doesNotMatch(mirrorSocket, /^\[Install\]$/m);
 assert.equal(mirrorTmpfiles.trim(), 'd /run/secret-broker-audit-mirror 0750 root broker-audit-store -');
-for (const name of ['signer', 'store', 'recovery']) {
+for (const name of ['signer', 'store']) {
   assert.doesNotMatch(
     read(`../deploy/systemd/secret-broker-audit-${name}.service`),
     /^PrivateNetwork=true$/m,

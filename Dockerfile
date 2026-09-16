@@ -89,6 +89,8 @@ COPY core/ ./
 RUN CGO_ENABLED=0 go test ./... \
     && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-policy ./cmd/policy-server \
     && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-signer ./cmd/audit-signer \
+    && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-exporter ./cmd/audit-exporter \
+    && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-recovery ./cmd/audit-recovery \
     && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-store ./cmd/audit-store \
     && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-store-health ./cmd/audit-store-health \
     && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/secret-broker-audit-mirror-worker ./cmd/audit-mirror-worker
@@ -115,7 +117,8 @@ COPY --from=core-build /out/secret-broker-policy /app/bin/secret-broker-policy
 COPY broker/ ./
 COPY tools/ ./tools/
 COPY providers/ ./providers/
-RUN rm -f package-lock.json bin/secret-broker-audit-exporter
+RUN rm -f package-lock.json bin/secret-broker-audit-exporter bin/audit-exporter-service-check.js bin/package-audit-exporter.js bin/audit-recovery-service-check.js bin/package-audit-recovery.js \
+    && rm -rf exporter-runtime recovery-runtime
 
 ENV NODE_ENV=production \
     PKI_DIR=/run/secrets/broker/pki \

@@ -27,6 +27,7 @@ import { createHmac } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { createSocket } from 'node:dgram';
+import { redactDeep } from './redact.js';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -75,8 +76,9 @@ class FileSink {
         renameSync(this.path, rotated);
         this.bytes = 0;
       }
-    } catch (err) {
-      console.error(`[log-sink ${this.name}] write failed:`, err.message);
+    } catch {
+      // Sink paths and platform error messages may contain credentials.
+      console.error('[log-sink file] write failed');
     } finally {
       if (descriptor !== undefined) {
         try { closeSync(descriptor); } catch { /* best effort */ }
@@ -93,8 +95,10 @@ class HttpSink {
     this.timeoutMs = opts.timeoutMs || 2000;
   }
   write(level, msg, fields, line) {
-    // Use global fetch (Node 18+) or http module (Node < 18)
-    const body = JSON.stringify({ ts: new Date().toISOString(), level, msg, ...fields });
+    // Forward the same normalized record as every other sink; never rebuild
+    // a payload from mutable message/fields arguments at the transport boundary.
+    if (typeof line !== 'string') return;
+    const body = line;
     const doPost = (url) => {
       try {
         const u = new URL(url);
@@ -149,7 +153,7 @@ function parseSinks(spec) {
     else if (part.startsWith('file:')) sinks.push(new FileSink(part.slice(5)));
     else if (part.startsWith('http:') || part.startsWith('https:')) sinks.push(new HttpSink(part));
     else if (part === 'syslog') sinks.push(new SyslogSink());
-    else console.error(`[log] unknown sink: ${part}`);
+    else console.error('[log] unknown sink type');
   }
   return sinks.length ? sinks : [new StdoutSink()];
 }
@@ -169,16 +173,44 @@ export function _setSinks(sinks) {
   _sinks = sinks;
 }
 
+// Normalize both before and after JSON conversion: getters/toJSON may throw or
+// introduce new values. The second pass sees only inert JSON data. No caller
+// references or user-controlled functions reach a sink.
+function normalizeLogValue(value) {
+  const json = JSON.stringify(redactDeep(value));
+  return json === undefined ? undefined : redactDeep(JSON.parse(json));
+}
+
 function emit(level, msg, fields = {}) {
   if ((LEVELS[level] ?? 99) < currentLevel()) return;
-  const line = JSON.stringify({
-    ts: new Date().toISOString(),
-    level,
-    msg,
-    ...fields,
-  });
-  for (const sink of getSinks()) {
-    try { sink.write(level, msg, fields, line); } catch { /* never throw */ }
+  const ts = new Date().toISOString();
+  let line;
+  try {
+    const normalized = normalizeLogValue(fields);
+    const safeFields = normalized && typeof normalized === 'object' && !Array.isArray(normalized)
+      ? normalized : {};
+    line = JSON.stringify({
+      ...safeFields,
+      ts,
+      level,
+      msg: normalizeLogValue(msg),
+    });
+  } catch {
+    // Do not forward the raw record or an exception message on failure.
+    line = JSON.stringify({ ts, level, msg: '[log record unavailable]' });
+  }
+  let sinks;
+  try { sinks = getSinks(); } catch { return; }
+  for (const sink of sinks) {
+    try {
+      // An earlier sink must not be able to alter a later sink's fields.
+      const record = JSON.parse(line);
+      const safeFields = { ...record };
+      delete safeFields.ts;
+      delete safeFields.level;
+      delete safeFields.msg;
+      sink.write(level, record.msg, safeFields, line);
+    } catch { /* never throw */ }
   }
 }
 

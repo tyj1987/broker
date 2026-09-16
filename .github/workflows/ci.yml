@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # Run the same complete gate on isolated Chat development branches.
+    # Deploy ECS separately requires workflow_run.head_branch == master.
+    branches: [master, 'chatgpt/**']
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
@@ -214,6 +216,14 @@ jobs:
         run: |
           test "$(go tool cover -func=audit-anchor-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race ./cmd/audit-signer
+      - run: go test -race -coverprofile=audit-exporter-process-coverage.out ./cmd/audit-exporter
+      - name: Enforce audit exporter process statement coverage
+        run: |
+          go tool cover -func=audit-exporter-process-coverage.out | awk '/^total:/ { gsub(/%/, "", $3); if ($3 < 90) exit 1; found=1 } END { if (!found) exit 1 }'
+      - run: go test -race -coverprofile=audit-recovery-coverage.out ./cmd/audit-recovery
+      - name: Enforce recovery process statement coverage
+        run: |
+          go tool cover -func=audit-recovery-coverage.out | awk '/^total:/ { gsub(/%/, "", $3); if ($3 < 90) exit 1; found=1 } END { if (!found) exit 1 }'
       - run: go test -race -coverprofile=audit-oss-coverage.out ./auditoss
       - name: Enforce Alibaba immutable adapter statement coverage
         run: |

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const read = name => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
+const require = createRequire(new URL('../broker/package.json', import.meta.url));
+const { parse } = require('yaml');
+const ci = parse(read('.github/workflows/ci.yml'));
+const release = parse(read('.github/workflows/deploy-ecs.yml'));
+const helper = read('deploy/bin/secret-broker-deploy');
+const image = read('Dockerfile');
+const unit = read('deploy/systemd/secret-broker-audit-recovery.service');
+assert.deepEqual(release.on.workflow_run.branches, ['master']);
+assert.match(release.jobs.build.if, /head_branch == 'master'/);
+assert.equal(release.jobs.deploy.environment, 'production-aliyun');
+assert.equal(release.jobs.deploy.needs, 'build');
+assert.ok(ci.jobs['go-core'].steps.some(s => s.run?.includes('go test -race -coverprofile=audit-recovery-coverage.out ./cmd/audit-recovery')));
+assert.ok(ci.jobs['go-core'].steps.some(s => s.run?.includes('$3 < 90')));
+assert.ok(release.jobs.build.steps.some(s => s.run?.includes('-o ../broker/bin/secret-broker-audit-recovery ./cmd/audit-recovery') && s.run.includes('node ../broker/bin/package-audit-recovery.js')));
+assert.match(image, /-o \/out\/secret-broker-audit-recovery \.\/cmd\/audit-recovery/);
+assert.doesNotMatch(image, /COPY --from=core-build \/out\/secret-broker-audit-recovery \/app/);
+assert.match(image, /rm -f[^\n]*bin\/audit-recovery-service-check\.js/);
+assert.match(image, /rm -rf exporter-runtime recovery-runtime/);
+for(const text of ['Type=notify','NotifyAccess=main','WatchdogSec=120s','TimeoutStartSec=75s','KillMode=control-group',
+  'PrivateNetwork=true','RestrictAddressFamilies=AF_UNIX','MemoryDenyWriteExecute=true','NoNewPrivileges=true',
+  'SupplementaryGroups=broker-audit-store','Requires=secret-broker-audit-store.service']) assert.ok(unit.includes(text),text);
+assert.doesNotMatch(unit,/^Environment(File)?=/m);
+assert.match(helper, /-x "\$PAYLOAD\/bin\/secret-broker-audit-recovery"/);
+assert.match(helper, /"\$NODE_RUNTIME" "\$PAYLOAD\/bin\/package-audit-recovery\.js" --verify/);
+assert.match(helper, /chmod 0500 "\$PAYLOAD\/bin\/secret-broker-audit-recovery"/);
+assert.match(helper, /u:broker-audit-recovery:r-x,m::r-x "\$PAYLOAD\/bin\/secret-broker-audit-recovery"/);
+assert.match(helper, /find "\$PAYLOAD\/recovery-runtime" -type f -exec chmod 0400/);
+assert.match(helper, /find "\$PAYLOAD\/recovery-runtime" -type f -exec "\$SETFACL" -m u:broker-audit-recovery:r--,m::r--/);
+assert.ok(helper.indexOf('package-audit-recovery.js" --verify') < helper.indexOf('mv -- "$PAYLOAD" "$RELEASE"'));
+console.log('audit recovery release: fixed native process, closed runtime ACL and unchanged approval gates passed');

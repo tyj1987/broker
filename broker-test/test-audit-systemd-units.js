@@ -25,7 +25,7 @@ const services = Object.freeze({
     exec: 'secret-broker-audit-store',
   },
   recovery: {
-    network: 'AF_UNIX AF_INET AF_INET6',
+    network: 'AF_UNIX',
     exec: 'secret-broker-audit-recovery',
   },
 });
@@ -75,7 +75,7 @@ const signer = read('../deploy/systemd/secret-broker-audit-signer.service');
 assert.match(signer, /^Requires=secret-broker-audit-signer\.socket$/m);
 assert.match(signer, /^IPAddressDeny=any$/m);
 for (const address of ['100.100.100.200/32', '100.100.2.136/32', '100.100.2.138/32']) {
-  assert.match(signer, new RegExp(`^IPAddressAllow=${address.replaceAll('.', '\\.')}$`, 'm'));
+  assert.match(signer, new RegExp(`^IPAddressAllow=${address.replaceAll('.', '\\.')}\u0024`, 'm'));
 }
 assert.match(signerSocket, /^ListenStream=\/run\/secret-broker-audit-anchor\/signer\.sock$/m);
 assert.match(signerSocket, /^FileDescriptorName=audit-signer$/m);
@@ -124,7 +124,7 @@ assert.match(mirrorSocket, /^SocketGroup=broker-audit-store$/m);
 assert.match(mirrorSocket, /^SocketMode=0660$/m);
 assert.doesNotMatch(mirrorSocket, /^\[Install\]$/m);
 assert.equal(mirrorTmpfiles.trim(), 'd /run/secret-broker-audit-mirror 0750 root broker-audit-store -');
-for (const name of ['signer', 'store', 'recovery']) {
+for (const name of ['signer', 'store']) {
   assert.doesNotMatch(
     read(`../deploy/systemd/secret-broker-audit-${name}.service`),
     /^PrivateNetwork=true$/m,
@@ -144,7 +144,7 @@ for (const binary of ['secret-broker-audit-store', 'secret-broker-audit-store-he
     new RegExp(`COPY --from=core-build /out/${binary} /app/bin/${binary}`),
   );
 }
-assert.match(deployHelper, /chmod 0550 .*secret-broker-audit-exporter/);
+assert.match(deployHelper, /chmod 0500 .*secret-broker-audit-exporter/);
 assert.match(deployHelper, /u:broker-audit-exporter:r-x[^\n]*secret-broker-audit-exporter/);
 assert.match(dockerfile, /rm -f package-lock\.json bin\/secret-broker-audit-exporter/);
 assert.match(

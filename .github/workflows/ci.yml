@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # Run the same complete gate on isolated Chat development branches.
+    # Deploy ECS separately requires workflow_run.head_branch == master.
+    branches: [master, 'chatgpt/**']
     paths-ignore:
       - 'docs/**'
       - '**/*.md'

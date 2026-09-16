@@ -1,7 +1,7 @@
 name: Broker candidate verification
 
-# Additive source-only checks. The existing CI and Deploy ECS workflows remain
-# unchanged; this workflow never grants production approval or deploys a release.
+# Additive source-only checks alongside the full CI development-branch gate.
+# Deploy ECS remains unchanged; this workflow never approves or deploys releases.
 on:
   push:
     branches: ['chatgpt/**']
@@ -59,6 +59,8 @@ jobs:
           cache: npm
           cache-dependency-path: broker/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify development and production branch isolation
+        run: node ../broker-test/test-ci-branch-isolation.js
       - name: Package fixed-SHA offline development inputs
         working-directory: .
         run: |

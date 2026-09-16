@@ -1,5 +1,6 @@
 // CI ONLY. In-memory synthetic signing/store fixture; never a production backend.
 import net from 'node:net';
+import { fixtureReadPage } from './audit-fixture-protocol.mjs';
 import { writeFileSync, chmodSync, chownSync } from 'node:fs';
 import { generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { sealEvent, GENESIS_HASH } from '../broker/lib/audit-hash-chain.js';
@@ -34,7 +35,7 @@ const store=listen('/run/secret-broker-audit-store/store.sock',storeGid,req=>{
  if(req.version!==1||req.stream_id!==stream)throw new Error('invalid synthetic store request');
  let result;
  if(req.operation==='read_head')result={current:records.at(-1)??null,previous:records.at(-2)??null};
- else if(req.operation==='read_page')result={anchors:records.filter(a=>a.payload.sequence>req.parameters.after_sequence&&a.payload.sequence<=req.parameters.through_sequence).slice(0,req.parameters.limit)};
+ else if(req.operation==='read_page')result=fixtureReadPage(records,req.parameters);
  else if(req.operation==='publish'){
   const env=req.parameters.envelope;
   if(env.payload.sequence!==records.length+1||req.parameters.expected_previous_digest!==(records.at(-1)?.payload_digest??GENESIS_HASH))throw new Error('synthetic conflict');

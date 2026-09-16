@@ -33,3 +33,35 @@ assert.match(helper, /find "\$PAYLOAD\/exporter-runtime" -type f -exec "\$SETFAC
 assert.ok(helper.indexOf('package-audit-exporter.js" --verify') < helper.indexOf('mv -- "$PAYLOAD" "$RELEASE"'));
 assert.doesNotMatch(helper, /^chmod\s+[0-7]{3,4}\s*$/m, 'permission commands require targets');
 console.log('audit exporter release: fixed native process, closed runtime ACL and unchanged approval gates passed');
+
+// Exercise the real wire decoder, not the higher-level store API projection.
+const { EventEmitter } = await import('node:events');
+const { fixtureReadPage } = await import('./audit-fixture-protocol.mjs');
+const { createLocalAuditAnchorStoreClient } = await import('../broker/lib/local-audit-anchor-store-client.js');
+function fixtureClient(project) {
+  return createLocalAuditAnchorStoreClient({ streamId: 'synthetic-wire', processUid: 1001,
+    processGroups: [2001], timeoutMs: 100,
+    stat: async path => ({ uid: 0, gid: 2001, mode: path.endsWith('.sock') ? 0o140660 : 0o040750,
+      isDirectory: () => !path.endsWith('.sock'), isSocket: () => path.endsWith('.sock'), isSymbolicLink: () => false }),
+    connect: (_options, connected) => {
+      const socket = new EventEmitter();
+      socket.setTimeout = () => {}; socket.destroy = () => {};
+      socket.end = body => {
+        const request = JSON.parse(body);
+        const response = JSON.stringify({ version: 1, purpose: request.purpose, request_id: request.request_id,
+          operation: request.operation, status: 'ok', stream_id: request.stream_id, result: project(request.parameters) }) + '\n';
+        queueMicrotask(() => { socket.emit('data', response); socket.emit('end'); });
+      };
+      queueMicrotask(connected);
+      return socket;
+    },
+  });
+}
+const query = { streamId: 'synthetic-wire', afterSequence: 0, throughSequence: 1, limit: 1 };
+await assert.rejects(fixtureClient(() => ({ anchors: [] })).readPage(query), { code: 'anchor_store_response_invalid' });
+assert.deepEqual(await fixtureClient(parameters => fixtureReadPage([], parameters)).readPage(query), { anchors: [] });
+const records = [1, 2, 3].map(sequence => ({ payload: { sequence } }));
+assert.deepEqual(fixtureReadPage(records, { after_sequence: 1, through_sequence: 3, limit: 1 }),
+  { after_sequence: 1, through_sequence: 3, anchors: [records[1]] });
+assert.throws(() => fixtureReadPage(records, { after_sequence: 3, through_sequence: 1, limit: 1 }));
+console.log('audit fixture wire: missing range binding rejected; complete wire page accepted by real client decoder');

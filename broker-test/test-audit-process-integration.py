@@ -39,6 +39,27 @@ class GuardTests(unittest.TestCase):
             run.assert_not_called()
             remove.assert_not_called()
 
+    def test_command_failure_does_not_reflect_arguments_or_output(self):
+        result = subprocess.CompletedProcess([], 4, 'private-output', 'private-error')
+        with patch.object(subprocess, 'run', return_value=result):
+            with self.assertRaisesRegex(RuntimeError, '^systemctl show exited 4$'):
+                module.run('systemctl', 'show', 'private-argument')
+            self.assertIs(module.run('systemctl', 'show', check=False), result)
+            with self.assertRaisesRegex(RuntimeError, '^command operation exited 4$'):
+                module.run('/private/path', 'private-argument')
+
+    def test_unit_diagnostics_only_include_allowlisted_properties_and_codes(self):
+        status = subprocess.CompletedProcess([], 0, 'ActiveState=failed\nEnvironment=PRIVATE\nExecMainStatus=78\n', '')
+        journal = subprocess.CompletedProcess([], 0, 'private-journal\naudit_exporter_failed=identity_or_release_invalid\n', '')
+        from io import StringIO
+        output = StringIO()
+        with patch.object(module, 'run', side_effect=[status, journal]*len(module.UNITS)), patch.object(module.sys, 'stderr', output):
+            module.safe_unit_diagnostics()
+        self.assertIn('ActiveState=failed', output.getvalue())
+        self.assertIn('identity_or_release_invalid', output.getvalue())
+        self.assertNotIn('PRIVATE', output.getvalue())
+        self.assertNotIn('private-journal', output.getvalue())
+
     def test_incomplete_work_cannot_be_reported_successful(self):
         with self.assertRaises(RuntimeError):
             module.require(False, 'incomplete integration')

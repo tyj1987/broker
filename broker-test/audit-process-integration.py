@@ -25,8 +25,31 @@ UNITS = ['secret-broker-audit-store.service', 'secret-broker-audit-signer.servic
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
 
 def run(*args, check=True, timeout=90):
-    return subprocess.run([str(a) for a in args], check=check, timeout=timeout, env=ENV,
-                          text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run([str(a) for a in args], check=False, timeout=timeout, env=ENV,
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if check and result.returncode != 0:
+        # Fixed command categories only: never print dynamic paths, arguments,
+        # child output, journal text or environment contents on failure.
+        command = str(args[0]) if args and str(args[0]) in {
+            'systemctl', 'useradd', 'userdel', 'groupdel', 'setfacl', 'runuser'} else 'command'
+        verb = str(args[1]) if len(args) > 1 and str(args[1]) in {
+            'show', 'start', 'stop', 'daemon-reload', 'reset-failed'} else 'operation'
+        raise RuntimeError(f'{command} {verb} exited {result.returncode}')
+    return result
+
+def safe_unit_diagnostics():
+    for unit in UNITS:
+        result = run('systemctl', 'show', unit,
+                     '--property=LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus',
+                     check=False)
+        lines = [line for line in result.stdout.splitlines() if re.fullmatch(
+            r'(LoadState|ActiveState|SubState|Result|ExecMainCode|ExecMainStatus)=[a-z0-9-]+', line)]
+        print('audit integration diagnostic ' + unit + ': ' + ' '.join(lines), file=sys.stderr)
+        journal = run('journalctl', '--unit', unit, '--no-pager', '--output=cat', '-n', '20', check=False)
+        codes = re.findall(r'^audit_(?:exporter|recovery)_failed=[a-z_]+$', journal.stdout, re.M)
+        for value in sorted(set(codes)):
+            print(value, file=sys.stderr)
+
 
 def require(value, message):
     if not value:
@@ -174,6 +197,9 @@ def integration(source, node, output):
         require(denied.returncode != 0 and property_of(UNITS[2], 'ActiveState') != 'active', 'revoked exporter became ready')
         run('systemctl', 'stop', UNITS[2])
         results.append('revoked-signing-key-never-ready')
+    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
+        safe_unit_diagnostics()
+        raise
     finally:
         for name in reversed(UNITS):
             run('systemctl', 'stop', name, check=False, timeout=15)

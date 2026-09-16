@@ -5,6 +5,8 @@ Uses real systemd, service UIDs, ACLs, AF_UNIX and native/Node processes, with
 synthetic in-memory signing/store backends. No cloud or production evidence.
 """
 import argparse
+from contextlib import contextmanager
+import stat
 import grp
 import json
 import os
@@ -139,109 +141,129 @@ def identity_check(unit, release, user):
     require(property_of(unit, 'MemoryDenyWriteExecute') == 'yes', 'executable-memory restriction absent')
     require(property_of(unit, 'ProtectSystem') == 'strict', 'read-only system absent')
 
+@contextmanager
+def protected_fixture_parent(path=Path('/opt')):
+    # The hosted image uses a world-writable /opt and a permissive umask.
+    # Tighten that one ancestor while the fixture exists; always restore it.
+    # Never change existing descendants, owners or ACL entries recursively.
+    info = path.lstat()
+    require(info.st_uid == 0 and stat.S_ISDIR(info.st_mode) and not path.is_symlink(),
+            'fixture parent is not root-managed')
+    original_mode = stat.S_IMODE(info.st_mode)
+    original_umask = os.umask(0o022)
+    try:
+        path.chmod(original_mode & ~0o022)
+        yield
+    finally:
+        try:
+            path.chmod(original_mode)
+        finally:
+            os.umask(original_umask)
+
 def integration(source, node, output):
     guard(source, node)
-    created = []
-    results = []
-    sha = os.environ['GITHUB_SHA']
-    release = BASE / 'releases' / sha
-    try:
-        for name in ACCOUNTS:
-            run('useradd', '--system', '--no-create-home', '--user-group', '--shell', '/usr/sbin/nologin', name)
-            created.append(name)
-        for folder in [release / 'bin', BASE / 'runtime/node/bin', CONFIG / 'audit', DATA / 'audit', *RUN]:
-            folder.mkdir(parents=True, exist_ok=True)
-            folder.chmod(0o755)
-        (BASE / 'broker').symlink_to(release, target_is_directory=True)
-        shutil.copyfile(node, BASE / 'runtime/node/bin/node')
-        (BASE / 'runtime/node/bin/node').chmod(0o755)
-        for role in ['exporter', 'recovery']:
-            binary = release / 'bin' / f'secret-broker-audit-{role}'
-            shutil.copyfile(source / '.ci-audit' / binary.name, binary)
-            binary.chmod(0o500)
-            run('setfacl', '-m', f'u:broker-audit-{role}:r-x,m::r-x', binary)
-            folder = release / f'{role}-runtime'
-            shutil.copytree(source / 'broker' / f'{role}-runtime', folder)
-            package_acl(folder, 'broker-audit-' + role)
-            # Exact checked-in unit, no security-relaxing drop-in.
-            save(Path('/etc/systemd/system', f'secret-broker-audit-{role}.service'),
-                 (source / 'deploy/systemd' / f'secret-broker-audit-{role}.service').read_text())
-        save(release / 'server.js', 'synthetic inaccessible Broker application\n', 0o400)
-        for path, group in [(RUN[0], 'broker-audit-signer'), (RUN[1], 'broker-audit-store')]:
-            os.chown(path, 0, grp.getgrnam(group).gr_gid)
-            path.chmod(0o750)
-        RUN[2].chmod(0o700)
-        gids = [grp.getgrnam(n).gr_gid for n in ['broker-audit-exporter', 'broker-audit-recovery', 'broker-audit-signer', 'broker-audit-store']]
-        fixture = source / 'broker-test/audit-process-fixture.mjs'
-        require(not re.search(r'[\s%]', str(source)), 'unsupported CI workspace path')
-        save(Path('/etc/systemd/system/secret-broker-audit-store.service'),
-             '[Unit]\nDescription=CI synthetic in-memory audit fixture, NOT a production store\n[Service]\nType=simple\n'
-             f'ExecStart={BASE}/runtime/node/bin/node {fixture} ' + ' '.join(map(str, gids)) + '\nKillMode=control-group\n')
-        save(Path('/etc/systemd/system/secret-broker-audit-signer.service'),
-             '[Unit]\nDescription=CI dependency marker, NOT a production signer\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/true\n')
-        run('systemctl', 'daemon-reload')
-        run('systemctl', 'start', UNITS[0])
-        wait_file(RUN[1] / 'store.sock')
-        wait_file(CONFIG / 'audit/exporter.json')
-        for path in [DATA, DATA / 'audit', DATA / 'audit/audit-chain-ci.jsonl']:
+    with protected_fixture_parent():
+        created = []
+        results = []
+        sha = os.environ['GITHUB_SHA']
+        release = BASE / 'releases' / sha
+        try:
+            for name in ACCOUNTS:
+                run('useradd', '--system', '--no-create-home', '--user-group', '--shell', '/usr/sbin/nologin', name)
+                created.append(name)
+            for folder in [release / 'bin', BASE / 'runtime/node/bin', CONFIG / 'audit', DATA / 'audit', *RUN]:
+                folder.mkdir(parents=True, exist_ok=True)
+                folder.chmod(0o755)
+            (BASE / 'broker').symlink_to(release, target_is_directory=True)
+            shutil.copyfile(node, BASE / 'runtime/node/bin/node')
+            (BASE / 'runtime/node/bin/node').chmod(0o755)
             for role in ['exporter', 'recovery']:
-                access = 'r-x' if path.is_dir() else 'r--'
-                run('setfacl', '-m', f'u:broker-audit-{role}:{access},m::{access}', path)
-        run('systemctl', 'start', UNITS[2])
-        identity_check(UNITS[2], release, 'broker-audit-exporter')
-        require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1}, 'initial export not completed')
-        results.append('exporter-ready-after-sign-publish-readback')
-        run('systemctl', 'start', UNITS[3])
-        identity_check(UNITS[3], release, 'broker-audit-recovery')
-        results.append('recovery-ready-after-checkpoint-and-chain-verification')
-        for user in ['broker-audit-exporter', 'broker-audit-recovery']:
-            denied = run('runuser', '-u', user, '--', 'test', '-r', release / 'server.js', check=False)
-            require(denied.returncode != 0, 'Broker source exposed to audit identity')
-        for role, other in [('exporter', 'recovery'), ('recovery', 'exporter')]:
-            require(run('runuser', '-u', f'broker-audit-{role}', '--', 'test', '-r', release / f'{other}-runtime/package.json', check=False).returncode != 0, 'cross-workload runtime read allowed')
-        results.append('isolated-uids-acls-capabilities-seccomp-private-network')
-        run('systemctl', 'stop', UNITS[2])
-        run('systemctl', 'start', UNITS[2])
-        identity_check(UNITS[2], release, 'broker-audit-exporter')
-        require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1}, 'restart repeated signing/publication')
-        results.append('restart-reuses-verified-existing-anchor')
-        run('systemctl', 'stop', UNITS[3])
-        pin = CONFIG / 'audit/recovery-checkpoint.json'
-        checkpoint = json.loads(pin.read_text())
-        checkpoint.update(issued_at_ms=int(time.time()*1000)-2000, expires_at_ms=int(time.time()*1000)-1000)
-        pin.write_text(json.dumps(checkpoint))
-        denied = run('systemctl', 'start', UNITS[3], check=False)
-        require(denied.returncode != 0 and property_of(UNITS[3], 'ActiveState') != 'active', 'expired recovery became ready')
-        run('systemctl', 'stop', UNITS[3])
-        results.append('expired-checkpoint-never-ready')
-        run('systemctl', 'stop', UNITS[2])
-        config = CONFIG / 'audit/exporter.json'
-        raw = json.loads(config.read_text()); raw['revoked_key_ids'] = [raw['active_key_id']]; config.write_text(json.dumps(raw))
-        denied = run('systemctl', 'start', UNITS[2], check=False)
-        require(denied.returncode != 0 and property_of(UNITS[2], 'ActiveState') != 'active', 'revoked exporter became ready')
-        run('systemctl', 'stop', UNITS[2])
-        results.append('revoked-signing-key-never-ready')
-    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
-        safe_unit_diagnostics()
-        raise
-    finally:
-        for name in reversed(UNITS):
-            run('systemctl', 'stop', name, check=False, timeout=15)
-        for name in UNITS:
-            Path('/etc/systemd/system', name).unlink(missing_ok=True)
-            run('systemctl', 'reset-failed', name, check=False)
-        run('systemctl', 'daemon-reload')
-        for path in [BASE, CONFIG, DATA, *RUN]:
-            if path.is_dir():
-                shutil.rmtree(path)
-        for name in reversed(created):
-            run('userdel', name, check=False)
-            run('groupdel', name, check=False)
-    require(len(results) == 6, 'incomplete integration')
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps({'source_sha': sha, 'status': 'passed', 'checks': results,
-                                 'backend': 'synthetic-in-memory', 'production_verified': False}, indent=2)+'\n')
-    print(f'audit process integration: {len(results)} real systemd scenarios passed; synthetic backends only')
+                binary = release / 'bin' / f'secret-broker-audit-{role}'
+                shutil.copyfile(source / '.ci-audit' / binary.name, binary)
+                binary.chmod(0o500)
+                run('setfacl', '-m', f'u:broker-audit-{role}:r-x,m::r-x', binary)
+                folder = release / f'{role}-runtime'
+                shutil.copytree(source / 'broker' / f'{role}-runtime', folder)
+                package_acl(folder, 'broker-audit-' + role)
+                # Exact checked-in unit, no security-relaxing drop-in.
+                save(Path('/etc/systemd/system', f'secret-broker-audit-{role}.service'),
+                     (source / 'deploy/systemd' / f'secret-broker-audit-{role}.service').read_text())
+            save(release / 'server.js', 'synthetic inaccessible Broker application\n', 0o400)
+            for path, group in [(RUN[0], 'broker-audit-signer'), (RUN[1], 'broker-audit-store')]:
+                os.chown(path, 0, grp.getgrnam(group).gr_gid)
+                path.chmod(0o750)
+            RUN[2].chmod(0o700)
+            gids = [grp.getgrnam(n).gr_gid for n in ['broker-audit-exporter', 'broker-audit-recovery', 'broker-audit-signer', 'broker-audit-store']]
+            fixture = source / 'broker-test/audit-process-fixture.mjs'
+            require(not re.search(r'[\s%]', str(source)), 'unsupported CI workspace path')
+            save(Path('/etc/systemd/system/secret-broker-audit-store.service'),
+                 '[Unit]\nDescription=CI synthetic in-memory audit fixture, NOT a production store\n[Service]\nType=simple\n'
+                 f'ExecStart={BASE}/runtime/node/bin/node {fixture} ' + ' '.join(map(str, gids)) + '\nKillMode=control-group\n')
+            save(Path('/etc/systemd/system/secret-broker-audit-signer.service'),
+                 '[Unit]\nDescription=CI dependency marker, NOT a production signer\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/true\n')
+            run('systemctl', 'daemon-reload')
+            run('systemctl', 'start', UNITS[0])
+            wait_file(RUN[1] / 'store.sock')
+            wait_file(CONFIG / 'audit/exporter.json')
+            for path in [DATA, DATA / 'audit', DATA / 'audit/audit-chain-ci.jsonl']:
+                for role in ['exporter', 'recovery']:
+                    access = 'r-x' if path.is_dir() else 'r--'
+                    run('setfacl', '-m', f'u:broker-audit-{role}:{access},m::{access}', path)
+            run('systemctl', 'start', UNITS[2])
+            identity_check(UNITS[2], release, 'broker-audit-exporter')
+            require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1}, 'initial export not completed')
+            results.append('exporter-ready-after-sign-publish-readback')
+            run('systemctl', 'start', UNITS[3])
+            identity_check(UNITS[3], release, 'broker-audit-recovery')
+            results.append('recovery-ready-after-checkpoint-and-chain-verification')
+            for user in ['broker-audit-exporter', 'broker-audit-recovery']:
+                denied = run('runuser', '-u', user, '--', 'test', '-r', release / 'server.js', check=False)
+                require(denied.returncode != 0, 'Broker source exposed to audit identity')
+            for role, other in [('exporter', 'recovery'), ('recovery', 'exporter')]:
+                require(run('runuser', '-u', f'broker-audit-{role}', '--', 'test', '-r', release / f'{other}-runtime/package.json', check=False).returncode != 0, 'cross-workload runtime read allowed')
+            results.append('isolated-uids-acls-capabilities-seccomp-private-network')
+            run('systemctl', 'stop', UNITS[2])
+            run('systemctl', 'start', UNITS[2])
+            identity_check(UNITS[2], release, 'broker-audit-exporter')
+            require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1}, 'restart repeated signing/publication')
+            results.append('restart-reuses-verified-existing-anchor')
+            run('systemctl', 'stop', UNITS[3])
+            pin = CONFIG / 'audit/recovery-checkpoint.json'
+            checkpoint = json.loads(pin.read_text())
+            checkpoint.update(issued_at_ms=int(time.time()*1000)-2000, expires_at_ms=int(time.time()*1000)-1000)
+            pin.write_text(json.dumps(checkpoint))
+            denied = run('systemctl', 'start', UNITS[3], check=False)
+            require(denied.returncode != 0 and property_of(UNITS[3], 'ActiveState') != 'active', 'expired recovery became ready')
+            run('systemctl', 'stop', UNITS[3])
+            results.append('expired-checkpoint-never-ready')
+            run('systemctl', 'stop', UNITS[2])
+            config = CONFIG / 'audit/exporter.json'
+            raw = json.loads(config.read_text()); raw['revoked_key_ids'] = [raw['active_key_id']]; config.write_text(json.dumps(raw))
+            denied = run('systemctl', 'start', UNITS[2], check=False)
+            require(denied.returncode != 0 and property_of(UNITS[2], 'ActiveState') != 'active', 'revoked exporter became ready')
+            run('systemctl', 'stop', UNITS[2])
+            results.append('revoked-signing-key-never-ready')
+        except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
+            safe_unit_diagnostics()
+            raise
+        finally:
+            for name in reversed(UNITS):
+                run('systemctl', 'stop', name, check=False, timeout=15)
+            for name in UNITS:
+                Path('/etc/systemd/system', name).unlink(missing_ok=True)
+                run('systemctl', 'reset-failed', name, check=False)
+            run('systemctl', 'daemon-reload')
+            for path in [BASE, CONFIG, DATA, *RUN]:
+                if path.is_dir():
+                    shutil.rmtree(path)
+            for name in reversed(created):
+                run('userdel', name, check=False)
+                run('groupdel', name, check=False)
+        require(len(results) == 6, 'incomplete integration')
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps({'source_sha': sha, 'status': 'passed', 'checks': results,
+                                     'backend': 'synthetic-in-memory', 'production_verified': False}, indent=2)+'\n')
+        print(f'audit process integration: {len(results)} real systemd scenarios passed; synthetic backends only')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

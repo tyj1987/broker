@@ -60,6 +60,41 @@ class GuardTests(unittest.TestCase):
         self.assertNotIn('PRIVATE', output.getvalue())
         self.assertNotIn('private-journal', output.getvalue())
 
+    def test_fixture_parent_and_umask_restore_on_success_and_failure(self):
+        import tempfile
+        from types import SimpleNamespace
+        for fail in [False, True]:
+            with tempfile.TemporaryDirectory() as name:
+                path = Path(name)
+                path.chmod(0o777)
+                owner = SimpleNamespace(st_uid=0, st_mode=0o40777)
+                before = os.umask(0o022)
+                os.umask(before)
+                try:
+                    with patch.object(Path, 'lstat', return_value=owner):
+                        with module.protected_fixture_parent(path):
+                            self.assertEqual(os.stat(path).st_mode & 0o777, 0o755)
+                            mask = os.umask(0o022)
+                            self.assertEqual(mask, 0o022)
+                            (path / 'child').mkdir()
+                            self.assertEqual(os.stat(path / 'child').st_mode & 0o777, 0o755)
+                            if fail:
+                                raise ValueError('synthetic failure')
+                except ValueError:
+                    self.assertTrue(fail)
+                self.assertEqual(os.stat(path).st_mode & 0o777, 0o777)
+                after = os.umask(before)
+                self.assertEqual(after, before)
+
+    def test_untrusted_fixture_parent_is_never_modified(self):
+        from types import SimpleNamespace
+        for mode, uid in [(0o40777, 1234), (0o120777, 0), (0o100777, 0)]:
+            with patch.object(Path, 'lstat', return_value=SimpleNamespace(st_uid=uid, st_mode=mode)), patch.object(Path, 'chmod') as chmod:
+                with self.assertRaises(RuntimeError):
+                    with module.protected_fixture_parent(Path('/unused')):
+                        self.fail('untrusted parent entered')
+                chmod.assert_not_called()
+
     def test_incomplete_work_cannot_be_reported_successful(self):
         with self.assertRaises(RuntimeError):
             module.require(False, 'incomplete integration')

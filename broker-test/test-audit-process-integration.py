@@ -95,6 +95,38 @@ class GuardTests(unittest.TestCase):
                         self.fail('untrusted parent entered')
                 chmod.assert_not_called()
 
+    def test_every_new_directory_is_normalized_despite_permissive_inheritance(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as name:
+            parent = Path(name)
+            original = Path.mkdir
+            def permissive(path):
+                original(path)
+                path.chmod(0o777)
+            with patch.object(Path, 'mkdir', permissive), patch.object(module, 'run') as acl:
+                for path in [parent / 'fixture', parent / 'fixture/releases', parent / 'fixture/releases/sha']:
+                    module.make_fixture_directory(path)
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+                    acl.assert_called_with('setfacl', '--remove-all', '--remove-default', path)
+                self.assertEqual(acl.call_count, 3)
+
+    def test_existing_directory_is_not_chmodded_or_given_acl_changes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name)
+            path.chmod(0o777)
+            with patch.object(module, 'run') as acl:
+                with self.assertRaises(FileExistsError):
+                    module.make_fixture_directory(path)
+                acl.assert_not_called()
+            self.assertEqual(path.stat().st_mode & 0o777, 0o777)
+
+    def test_acl_normalization_failure_cannot_be_ignored(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as name, patch.object(module, 'run', side_effect=RuntimeError('ACL failed')):
+            with self.assertRaisesRegex(RuntimeError, 'ACL failed'):
+                module.make_fixture_directory(Path(name) / 'new')
+
     def test_incomplete_work_cannot_be_reported_successful(self):
         with self.assertRaises(RuntimeError):
             module.require(False, 'incomplete integration')

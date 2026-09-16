@@ -113,6 +113,17 @@ def save(path, content, mode=0o644):
     path.write_text(content)
     path.chmod(mode)
 
+def make_fixture_directory(path):
+    # No parents/exist_ok: a pre-existing path or unexpected ancestor is never
+    # repaired or overwritten. Callers enumerate new directories parent-first.
+    path.mkdir()
+    run('setfacl', '--remove-all', '--remove-default', path)
+    path.chmod(0o755)
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode) and not path.is_symlink()
+            and info.st_uid == os.geteuid() and (info.st_mode & 0o777) == 0o755,
+            'fixture directory permissions unavailable')
+
 def package_acl(folder, user):
     for path in [folder, *folder.rglob('*')]:
         require(not path.is_symlink(), 'linked runtime refused')
@@ -171,9 +182,12 @@ def integration(source, node, output):
             for name in ACCOUNTS:
                 run('useradd', '--system', '--no-create-home', '--user-group', '--shell', '/usr/sbin/nologin', name)
                 created.append(name)
-            for folder in [release / 'bin', BASE / 'runtime/node/bin', CONFIG / 'audit', DATA / 'audit', *RUN]:
-                folder.mkdir(parents=True, exist_ok=True)
-                folder.chmod(0o755)
+            # Create every new ancestor explicitly. Default ACL inheritance can
+            # override umask; normalize only pristine fixture-owned directories.
+            for folder in [BASE, BASE / 'releases', release, release / 'bin',
+                           BASE / 'runtime', BASE / 'runtime/node', BASE / 'runtime/node/bin',
+                           CONFIG, CONFIG / 'audit', DATA, DATA / 'audit', *RUN]:
+                make_fixture_directory(folder)
             (BASE / 'broker').symlink_to(release, target_is_directory=True)
             shutil.copyfile(node, BASE / 'runtime/node/bin/node')
             (BASE / 'runtime/node/bin/node').chmod(0o755)

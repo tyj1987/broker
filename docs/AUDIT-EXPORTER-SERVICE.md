@@ -73,7 +73,10 @@ install or test a production host. Its cleanup touches only the pristine paths,
 units and accounts created by that isolated run. The runner image has a
 world-writable `/opt`; the fixture temporarily removes group/other write bits
 from that root-owned ancestor and uses umask 022, restoring both on all exit
-paths. It never changes existing descendant permissions or ownership recursively.
+paths. Every newly created fixture ancestor is explicitly normalized to 0755,
+with inherited access/default ACLs removed before creating children; umask alone
+is not sufficient on a directory with inherited default ACLs. It never changes
+existing descendant permissions or ownership recursively.
 It does not invoke the
 production deployment helper or claim to test production rollback.
 

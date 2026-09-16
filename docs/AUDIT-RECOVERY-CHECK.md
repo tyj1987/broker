@@ -107,3 +107,10 @@ store head. A store advancing beyond that exact checkpoint is a rejection, not
 permission to rewrite or automatically advance the checkpoint. Production
 readiness still requires current independent recovery evidence and all existing
 LIVE checks; a successful unit build is not a recovery drill.
+
+
+The native recovery supervisor also rejects a sequence below any earlier
+verified sequence in the same process, before output or watchdog notification.
+Equal sequences and verified advances remain valid. This extra check does not
+survive process restart and does not replace the independent durable authority
+or checkpoint provenance. See [exporter lifecycle validation](AUDIT-EXPORTER-SERVICE.md#continuous-verification-and-failure-detection) for shared process tests.

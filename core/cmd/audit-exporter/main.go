@@ -131,6 +131,7 @@ func run(ctx context.Context, args []string, d dependencies) (int, string) {
 		return 70, "runtime_invalid"
 	}
 	ready := false
+	var lastSequence int64 // Process-local only; external durable state remains authoritative.
 	for ctx.Err() == nil {
 		// Revalidate immutable executable boundaries before every new child.
 		script, err := d.prepare()
@@ -151,6 +152,9 @@ func run(ctx context.Context, args []string, d dependencies) (int, string) {
 		if err != nil {
 			return 70, "response_invalid"
 		}
+		if value.Sequence < lastSequence {
+			return 69, "sequence_regressed"
+		}
 		line, _ := json.Marshal(value)
 		line = append(line, '\n')
 		if n, err := d.output.Write(line); err != nil || n != len(line) {
@@ -159,13 +163,19 @@ func run(ctx context.Context, args []string, d dependencies) (int, string) {
 		if ctx.Err() != nil {
 			return 0, ""
 		}
-		message := "WATCHDOG=1\nSTATUS=Audit anchor publication read-back verified"
+		// The unit's 3700s watchdog is a startup ceiling, not the default
+		// steady-state failure budget. Narrow it to one validated interval
+		// plus the hard child deadline and 10s scheduling/notification margin.
+		// No timer-only heartbeat may keep an unverified process healthy.
+		watchdog := time.Duration(value.IntervalMs)*time.Millisecond + checkDeadline + 10*time.Second
+		message := fmt.Sprintf("WATCHDOG_USEC=%d\nWATCHDOG=1\nSTATUS=Audit anchor publication read-back verified", watchdog.Microseconds())
 		if !ready {
 			message = "READY=1\n" + message
 		}
 		if err := d.notify(message); err != nil {
 			return 70, "notification_failed"
 		}
+		lastSequence = value.Sequence
 		ready = true
 		if err := d.wait(ctx, time.Duration(value.IntervalMs)*time.Millisecond); err != nil {
 			if ctx.Err() != nil {

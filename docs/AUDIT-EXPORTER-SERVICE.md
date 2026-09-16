@@ -83,3 +83,32 @@ production deployment helper or claim to test production rollback.
 The final system still requires independent KMS/CAS and provider identities,
 locked external stores, independent recovery authority, final-head review and
 LIVE production acceptance before deployment can be approved.
+
+
+## Continuous verification and failure detection
+
+The exporter native supervisor narrows systemd's static 3,700-second watchdog
+ceiling after every successfully verified record. The active budget is the
+validated export interval plus the 65-second child deadline plus 10 seconds
+for scheduling and notification. With the default 60-second interval this is
+135 seconds; the maximum permitted interval gives 3,675 seconds. The configured
+export interval is preserved. No idle timer sends unverified health heartbeats,
+and a failed child, malformed record or output failure cannot adjust the timer.
+The timeout is changed with systemd's `WATCHDOG_USEC` notification; the main
+native process remains the sole notification sender.
+
+Both native supervisors also retain the highest verified sequence during their
+own process lifetime. Equal sequences remain valid for idempotent rechecks,
+and later verified sequences may advance. A lower sequence terminates with a
+stable failure code before producing a success record or watchdog notification.
+This is additional in-process protection, not an independent persistent counter:
+it does not survive restart, prove the freshness of a first response, or replace
+the external signer/store monotonic authority and recovery checkpoint provenance.
+
+The disposable CI runner exercises the actual unchanged systemd isolation
+rules, adaptive watchdog value, native SIGKILL/restart with idempotent publication,
+and a corrupted local audit copy discovered by already-running exporter and
+recovery processes. The corruption scenario must end with verifier exit code 69;
+mere inactivity, startup rate limiting or watchdog termination is not counted as
+successful detection. Its signer/store and checkpoint remain synthetic fixtures,
+so these runtime results do not constitute KMS/WORM/COS or production evidence.

@@ -131,5 +131,38 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             module.require(False, 'incomplete integration')
 
+class LifecycleTests(unittest.TestCase):
+    def test_systemctl_watchdog_representation(self):
+        for value, expected in [('2min 15s', 135000000), ('135s', 135000000),
+                                ('1h 1min 15s', 3675000000), ('1ms 1us', 1001)]:
+            self.assertEqual(module.duration_microseconds(value), expected)
+        for value in ['', 'infinity', '135', '-1s', '1.5s', '10unknown']:
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                module.duration_microseconds(value)
+
+    def test_restart_requires_a_new_running_pid_and_restart_counter(self):
+        valid = {'ActiveState': 'active', 'MainPID': '124', 'NRestarts': '2'}
+        with patch.object(module, 'property_of', side_effect=lambda unit, prop: valid[prop]):
+            module.wait_for_restarted_process('fixture', 123, 1)
+        for change in [{'ActiveState': 'activating'}, {'MainPID': '0'},
+                       {'MainPID': '123'}, {'NRestarts': '1'}]:
+            values = dict(valid, **change)
+            with self.subTest(change=change), patch.object(module, 'property_of', side_effect=lambda unit, prop: values[prop]), \
+                 patch.object(module.time, 'monotonic', side_effect=[0, 0, 21]), patch.object(module.time, 'sleep'):
+                with self.assertRaisesRegex(RuntimeError, 'restart was not verified'):
+                    module.wait_for_restarted_process('fixture', 123, 1)
+
+    def test_failure_requires_the_verifiers_exit_code_not_just_inactivity(self):
+        valid = {'ActiveState': 'activating', 'ExecMainCode': '1', 'ExecMainStatus': '69'}
+        with patch.object(module, 'property_of', side_effect=lambda unit, prop: valid[prop]):
+            module.wait_for_failed_verification('fixture')
+        for change in [{'ActiveState': 'active'}, {'ExecMainCode': '2'},
+                       {'ExecMainStatus': '0'}, {'ExecMainStatus': '9'}, {'ExecMainStatus': '78'}]:
+            values = dict(valid, **change)
+            with self.subTest(change=change), patch.object(module, 'property_of', side_effect=lambda unit, prop: values[prop]), \
+                 patch.object(module.time, 'monotonic', side_effect=[0, 0, 81]), patch.object(module.time, 'sleep'):
+                with self.assertRaisesRegex(RuntimeError, 'did not report failure'):
+                    module.wait_for_failed_verification('fixture')
+
 if __name__ == '__main__':
     unittest.main()

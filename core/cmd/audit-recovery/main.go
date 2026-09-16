@@ -135,6 +135,7 @@ func run(ctx context.Context, args []string, d dependencies) (int, string) {
 		return 70, "runtime_invalid"
 	}
 	ready := false
+	var lastSequence int64 // Process-local only; external durable state remains authoritative.
 	for ctx.Err() == nil {
 		// Revalidate immutable executable boundaries before every new child.
 		script, err := d.prepare()
@@ -155,6 +156,9 @@ func run(ctx context.Context, args []string, d dependencies) (int, string) {
 		if err != nil {
 			return 70, "response_invalid"
 		}
+		if value.Sequence < lastSequence {
+			return 69, "sequence_regressed"
+		}
 		line, _ := json.Marshal(value)
 		line = append(line, '\n')
 		if n, err := d.output.Write(line); err != nil || n != len(line) {
@@ -170,6 +174,7 @@ func run(ctx context.Context, args []string, d dependencies) (int, string) {
 		if err := d.notify(message); err != nil {
 			return 70, "notification_failed"
 		}
+		lastSequence = value.Sequence
 		ready = true
 		if err := d.wait(ctx); err != nil {
 			if ctx.Err() != nil {

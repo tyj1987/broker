@@ -152,6 +152,44 @@ def identity_check(unit, release, user):
     require(property_of(unit, 'MemoryDenyWriteExecute') == 'yes', 'executable-memory restriction absent')
     require(property_of(unit, 'ProtectSystem') == 'strict', 'read-only system absent')
 
+
+def duration_microseconds(value):
+    # systemctl renders durations (not bare D-Bus integers). Reject unexpected
+    # representations rather than accidentally interpreting an absent timeout.
+    units = {'us': 1, 'ms': 1000, 's': 1000000, 'min': 60000000, 'h': 3600000000}
+    parts = value.split()
+    require(bool(parts), 'watchdog duration unavailable')
+    total = 0
+    for part in parts:
+        match = re.fullmatch(r'(\d+)(us|ms|s|min|h)', part)
+        require(match is not None, 'watchdog duration unavailable')
+        total += int(match[1]) * units[match[2]]
+    return total
+
+
+def wait_for_restarted_process(unit, previous_pid, previous_restarts):
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
+        if (property_of(unit, 'ActiveState') == 'active'
+                and int(property_of(unit, 'MainPID')) not in [0, previous_pid]
+                and int(property_of(unit, 'NRestarts')) > previous_restarts):
+            return
+        time.sleep(0.1)
+    raise RuntimeError('native process restart was not verified')
+
+
+def wait_for_failed_verification(unit):
+    end = time.monotonic() + 80
+    while time.monotonic() < end:
+        # A watchdog signal, startup-limit refusal or mere inactivity is NOT
+        # evidence that the running verifier detected the changed audit data.
+        if (property_of(unit, 'ActiveState') != 'active'
+                and property_of(unit, 'ExecMainCode') == '1'
+                and property_of(unit, 'ExecMainStatus') == '69'):
+            return
+        time.sleep(0.1)
+    raise RuntimeError('running verifier did not report failure')
+
 @contextmanager
 def protected_fixture_parent(path=Path('/opt')):
     # The hosted image uses a world-writable /opt and a permissive umask.
@@ -227,6 +265,9 @@ def integration(source, node, output):
             identity_check(UNITS[2], release, 'broker-audit-exporter')
             require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1}, 'initial export not completed')
             results.append('exporter-ready-after-sign-publish-readback')
+            require(duration_microseconds(property_of(UNITS[2], 'WatchdogUSec')) == 135000000,
+                    'verified interval did not narrow the watchdog')
+            results.append('watchdog-bound-to-verified-interval-and-child-deadline')
             run('systemctl', 'start', UNITS[3])
             identity_check(UNITS[3], release, 'broker-audit-recovery')
             results.append('recovery-ready-after-checkpoint-and-chain-verification')
@@ -241,6 +282,34 @@ def integration(source, node, output):
             identity_check(UNITS[2], release, 'broker-audit-exporter')
             require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1}, 'restart repeated signing/publication')
             results.append('restart-reuses-verified-existing-anchor')
+            previous_pid = int(property_of(UNITS[2], 'MainPID'))
+            previous_restarts = int(property_of(UNITS[2], 'NRestarts'))
+            run('systemctl', 'kill', '--kill-whom=main', '--signal=SIGKILL', UNITS[2])
+            wait_for_restarted_process(UNITS[2], previous_pid, previous_restarts)
+            identity_check(UNITS[2], release, 'broker-audit-exporter')
+            require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1},
+                    'crash recovery repeated signing/publication')
+            require(duration_microseconds(property_of(UNITS[2], 'WatchdogUSec')) == 135000000,
+                    'restarted process did not renegotiate its watchdog')
+            results.append('native-crash-restart-reverifies-without-duplicate-publication')
+            # Clear only this disposable test unit's accumulated start counter;
+            # its unchanged start-limit and restart policy still apply.
+            run('systemctl', 'reset-failed', UNITS[2])
+            audit_file = DATA / 'audit/audit-chain-ci.jsonl'
+            original_chain = audit_file.read_bytes()
+            audit_file.write_bytes(b'{}\n')
+            try:
+                wait_for_failed_verification(UNITS[3])
+                run('systemctl', 'stop', UNITS[3])
+                wait_for_failed_verification(UNITS[2])
+                run('systemctl', 'stop', UNITS[2])
+                require(json.loads((RUN[2] / 'stats.json').read_text()) == {'signed': 1, 'published': 1},
+                        'invalid chain reached signing/publication')
+            finally:
+                run('systemctl', 'stop', UNITS[3], check=False)
+                run('systemctl', 'stop', UNITS[2], check=False)
+                audit_file.write_bytes(original_chain)
+            results.append('running-exporter-and-recovery-fail-after-audit-copy-corruption')
             run('systemctl', 'stop', UNITS[3])
             pin = CONFIG / 'audit/recovery-checkpoint.json'
             checkpoint = json.loads(pin.read_text())
@@ -273,7 +342,7 @@ def integration(source, node, output):
             for name in reversed(created):
                 run('userdel', name, check=False)
                 run('groupdel', name, check=False)
-        require(len(results) == 6, 'incomplete integration')
+        require(len(results) == 9, 'incomplete integration')
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps({'source_sha': sha, 'status': 'passed', 'checks': results,
                                      'backend': 'synthetic-in-memory', 'production_verified': False}, indent=2)+'\n')

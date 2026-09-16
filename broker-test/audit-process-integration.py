@@ -38,6 +38,30 @@ def run(*args, check=True, timeout=90):
     return result
 
 def safe_unit_diagnostics():
+    # Fixed fixture paths and public OS ownership, never config/event contents.
+    sha = os.environ.get('GITHUB_SHA', '')
+    if re.fullmatch('[a-f0-9]{40}', sha):
+        targets = [BASE / 'runtime/node/bin/node', BASE / 'releases' / sha / 'bin/secret-broker-audit-exporter',
+                   BASE / 'releases' / sha / 'exporter-runtime/bin/audit-exporter-service-check.js']
+        seen = set()
+        for target in targets:
+            for path in [target, *target.parents]:
+                if path in seen:
+                    continue
+                seen.add(path)
+                try:
+                    info = path.lstat()
+                    if info.st_uid != 0 or info.st_mode & 0o022 or path.is_symlink():
+                        print(f'audit fixture untrusted path={path} uid={info.st_uid} mode={info.st_mode & 0o7777:o}', file=sys.stderr)
+                except OSError:
+                    print(f'audit fixture unavailable path={path}', file=sys.stderr)
+        for name in ACCOUNTS:
+            try:
+                user = pwd.getpwnam(name)
+                group = grp.getgrnam(name)
+                print(f'audit fixture identity={name} uid={user.pw_uid} gid={user.pw_gid} named_gid={group.gr_gid}', file=sys.stderr)
+            except KeyError:
+                print(f'audit fixture identity unavailable={name}', file=sys.stderr)
     for unit in UNITS:
         result = run('systemctl', 'show', unit,
                      '--property=LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus',

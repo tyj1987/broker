@@ -112,3 +112,27 @@ recovery processes. The corruption scenario must end with verifier exit code 69;
 mere inactivity, startup rate limiting or watchdog termination is not counted as
 successful detection. Its signer/store and checkpoint remain synthetic fixtures,
 so these runtime results do not constitute KMS/WORM/COS or production evidence.
+
+## Cancellation and bounded callers
+
+The shared exporter rechecks cancellation after chain-proof and signature
+verification callbacks and before starting the next signing/publication stage.
+A cancelled idempotent recheck or conflict verification cannot return a success
+result. Cancellation does not undo a signing or publication already submitted;
+an uncertain outcome still requires a later independently authorized, idempotent
+reconciliation, not a blind retry.
+
+The optional continuous Node service (`runAuditAnchorExporterService`) does not
+start an iteration with an already-aborted signal. Each iteration has its own
+referenced deadline timer and cancellation listener, both removed on settlement.
+It stops waiting even when a dependency ignores its signal, discards late
+fulfilments, handles late rejections and never starts a replacement iteration
+after cancellation or timeout. A monotonic time check also rejects late success
+when a blocked event loop delays the timer callback. Only a completed, still-
+active iteration can emit its status.
+
+This caller-side bound cannot preempt synchronous JavaScript, terminate arbitrary
+remote work or roll back an in-flight provider operation. The native 65-second
+child-process bound and existing production approval gates remain unchanged.
+Tests use synthetic keys, local in-memory stores and deliberately non-cooperative
+Promises; they are not production KMS/CAS or retention evidence.

@@ -109,6 +109,7 @@ export function createAuditAnchorExporter({
     }
     try {
       const proof = await chainProof(envelope.payload.event_count, signal);
+      validateSignal(signal);
       verifyAuditAnchorEnvelope(envelope, {
         chainProof: proof,
         previousEnvelope,
@@ -153,6 +154,7 @@ export function createAuditAnchorExporter({
 
     if (head.current !== null) {
       await verifyStored(head.current, head.previous, signal);
+      validateSignal(signal);
       if (sameChainState(head.current, state)) {
         return Object.freeze({
           status: 'already_published',
@@ -180,6 +182,7 @@ export function createAuditAnchorExporter({
       fail('anchor_export_request_invalid', 'Audit anchor export request is invalid');
     }
 
+    validateSignal(signal);
     let signature;
     try {
       signature = await signer.signAnchor(request, { signal });
@@ -203,6 +206,7 @@ export function createAuditAnchorExporter({
       fail('anchor_signature_invalid', 'Audit anchor signature verification failed');
     }
 
+    validateSignal(signal);
     const result = await publish(
       envelope,
       head.current === null ? GENESIS_HASH : head.current.payload_digest,
@@ -224,6 +228,7 @@ export function createAuditAnchorExporter({
     } catch {
       fail('anchor_publish_conflict', 'Audit anchor sequence changed during publication');
     }
+    validateSignal(signal);
     return Object.freeze({
       status: 'already_published',
       envelope: structuredClone(result.current),

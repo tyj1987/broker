@@ -274,14 +274,7 @@ await runAuditAnchorExporterService({
   writeStatus: (value) => log.push(value),
 });
 assert.equal(calls, 1);
-assert.deepEqual(log, [
-  {
-    status: 'published',
-    stream_id: 'production-audit',
-    sequence: 1,
-    payload_digest: records[0].payload_digest,
-  },
-]);
+assert.deepEqual(log, [], 'cancellation during export must suppress the late status');
 
 const delayedStop = new AbortController();
 setImmediate(() => delayedStop.abort());
@@ -513,5 +506,101 @@ for (const code of [42, '', 'UNSAFE-code', 'x'.repeat(65)]) {
     (error) => error.code === 'anchor_export_failed' && error.message === 'Audit anchor export failed',
   );
 }
+
+
+// A stopped service must not begin work or report a late result as successful.
+const alreadyStopped = new AbortController();
+alreadyStopped.abort(new Error('synthetic-private-reason'));
+let stoppedCalls = 0;
+await runAuditAnchorExporterService({
+  runtime: { exportOnce: async () => { stoppedCalls += 1; return { status: 'published', envelope: records[0] }; } },
+  intervalMs: 60_000, signal: alreadyStopped.signal,
+  writeStatus: () => assert.fail('pre-aborted service emitted output'),
+});
+assert.equal(stoppedCalls, 0, 'pre-aborted service must not invoke runtime');
+
+const beforeInvocation = new AbortController();
+let earlyCalls = 0;
+queueMicrotask(() => beforeInvocation.abort());
+await runAuditAnchorExporterService({
+  runtime: { exportOnce: async () => { earlyCalls += 1; return { status: 'published', envelope: records[0] }; } },
+  intervalMs: 60_000, signal: beforeInvocation.signal,
+  writeStatus: () => assert.fail('cancelled queued invocation emitted output'),
+});
+assert.equal(earlyCalls, 0, 'queued invocation must recheck cancellation');
+
+async function withSettlementGuard(promise) {
+  let guard;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      guard = setTimeout(() => reject(new Error('service did not settle within its bound')), 4_000);
+    })]);
+  } finally { clearTimeout(guard); }
+}
+
+for (const mode of ['cancel_resolve', 'cancel_reject', 'timeout_resolve', 'timeout_reject']) {
+  const shutdown = new AbortController();
+  const status = [];
+  let childSignal, complete, failPending, iterations = 0;
+  const service = runAuditAnchorExporterService({
+    runtime: { exportOnce: ({ signal: received }) => {
+      iterations += 1;
+      childSignal = received;
+      if (mode.startsWith('cancel_')) queueMicrotask(() => shutdown.abort(new Error('synthetic-private-reason')));
+      // Deliberately ignore the signal to verify the caller's own wait bound.
+      return new Promise((resolve, reject) => { complete = resolve; failPending = reject; });
+    } },
+    intervalMs: 60_000, exportDeadlineMs: 1_000, signal: shutdown.signal,
+    writeStatus: value => status.push(value),
+  });
+  try {
+    if (mode.startsWith('timeout_')) {
+      await assert.rejects(withSettlementGuard(service), error =>
+        error.code === 'anchor_export_timeout' && error.message === 'Audit anchor export failed');
+    } else {
+      await withSettlementGuard(service);
+    }
+    assert.equal(childSignal.aborted, true, mode + ': cancellation forwarded');
+    assert.equal(iterations, 1, mode + ': no automatic retry');
+    assert.deepEqual(status, [], mode + ': no premature status');
+    if (mode.endsWith('_resolve')) complete({ status: 'published', envelope: records[0] });
+    else failPending(new Error('synthetic-private-late-rejection'));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(status, [], mode + ': late outcome ignored');
+    assert.equal(iterations, 1, mode + ': late outcome cannot restart service');
+  } finally {
+    shutdown.abort();
+    complete?.({ status: 'published', envelope: records[0] });
+  }
+}
+
+
+// A blocked event loop can delay timer dispatch. The monotonic deadline must
+// still reject a success returned after that deadline without accepting it.
+let delayedChildSignal;
+const delayedReports = [];
+await assert.rejects(withSettlementGuard(runAuditAnchorExporterService({
+  runtime: { exportOnce: ({ signal: received }) => {
+    delayedChildSignal = received;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
+    return { status: 'published', envelope: records[0] };
+  } },
+  intervalMs: 60_000, exportDeadlineMs: 1_000, signal: new AbortController().signal,
+  writeStatus: value => delayedReports.push(value),
+})), error => error.code === 'anchor_export_timeout');
+assert.equal(delayedChildSignal.aborted, true);
+assert.deepEqual(delayedReports, []);
+
+// A healthy result still produces one report before an operator stops the loop.
+const stopAfterSuccess = new AbortController();
+const successfulReports = [];
+await runAuditAnchorExporterService({
+  runtime: { exportOnce: async () => ({ status: 'already_published', envelope: records[0] }) },
+  intervalMs: 60_000, signal: stopAfterSuccess.signal,
+  writeStatus: value => { successfulReports.push(value); stopAfterSuccess.abort(); },
+});
+assert.equal(successfulReports.length, 1);
+assert.equal(successfulReports[0].status, 'already_published');
+console.log('audit exporter service: pre-abort, queued abort, pending cancel/timeout and late outcomes passed');
 
 console.log('audit anchor exporter runtime: strict config and complete local closure passed');

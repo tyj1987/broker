@@ -2,6 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { isAbsolute } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { parseDocument } from 'yaml';
 import { createAuditAnchorExporter } from './audit-anchor-exporter.js';
 
@@ -315,10 +316,36 @@ export async function runAuditAnchorExporterService({
   ) {
     throw new TypeError('Audit anchor exporter service configuration is invalid');
   }
-  do {
+  while (!signal.aborted) {
+    const deadline = new AbortController();
+    const combined = AbortSignal.any([signal, deadline.signal]);
+    const endsAt = performance.now() + exportDeadlineMs;
+    let timer;
+    let onAbort;
+    const ensureActive = () => {
+      if (signal.aborted) fail('anchor_export_aborted', 'Audit anchor export failed');
+      if (combined.aborted || performance.now() >= endsAt) {
+        deadline.abort();
+        fail('anchor_export_timeout', 'Audit anchor export failed');
+      }
+    };
     try {
-      const deadline = AbortSignal.timeout(exportDeadlineMs);
-      const result = await runtime.exportOnce({ signal: AbortSignal.any([signal, deadline]) });
+      // A signal alone cannot bound a dependency that ignores cancellation.
+      // Keep rejection handlers attached even after cancellation wins the race.
+      const result = await new Promise((resolve, reject) => {
+        onAbort = () => reject(new AuditAnchorExporterRuntimeError(
+          signal.aborted ? 'anchor_export_aborted' : 'anchor_export_timeout',
+          'Audit anchor export failed',
+        ));
+        combined.addEventListener('abort', onAbort, { once: true });
+        timer = setTimeout(() => deadline.abort(), exportDeadlineMs);
+        Promise.resolve().then(() => {
+          ensureActive();
+          return runtime.exportOnce({ signal: combined });
+        }).then(resolve, reject);
+      });
+      // Recheck after the awaited result, including delayed timer dispatch.
+      ensureActive();
       writeStatus(
         Object.freeze({
           status: result.status,
@@ -330,9 +357,12 @@ export async function runAuditAnchorExporterService({
     } catch (error) {
       if (signal.aborted) return;
       throw safeFailure(error);
+    } finally {
+      clearTimeout(timer);
+      combined.removeEventListener('abort', onAbort);
     }
     if (!signal.aborted) await waitForInterval(intervalMs, signal);
-  } while (!signal.aborted);
+  }
 }
 
 export const AUDIT_ANCHOR_EXPORTER_RUNTIME_CONTRACT = Object.freeze({

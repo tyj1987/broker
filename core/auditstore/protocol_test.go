@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tyj1987/broker/core/auditanchor"
@@ -448,21 +449,63 @@ func TestPeerReceivesRequestDeadline(t *testing.T) {
 }
 
 func TestExpiredRepositoryCannotProduceSuccess(t *testing.T) {
-	repository := &fakeRepository{
-		health:               Health{Status: "ready", LockContract: "verified", MirrorState: "in_sync", ReasonCode: "ok"},
-		healthWaitForContext: true,
-	}
-	server := testServer(t, repository, &fakeVerifier{}, ExporterRole)
-	connection := newMemoryConn(requestLine(t, "health", map[string]any{}, nil))
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if err := server.ServeConn(ctx, connection); protocolCode(err) != "deadline_exceeded" {
-		t.Fatalf("expired repository result was accepted: %v", err)
-	}
-	response := responseDocument(t, connection)
-	if response["status"] != "error" || response["error_code"] != "deadline_exceeded" {
-		t.Fatalf("expired repository produced success: %#v", response)
-	}
+	// Real scheduler pauses must not expire the request before it reaches the
+	// repository: this test specifically verifies rejection of a late result.
+	synctest.Test(t, func(t *testing.T) {
+		called := make(chan struct{}, 1)
+		repository := &fakeRepository{
+			health:               Health{Status: "ready", LockContract: "verified", MirrorState: "in_sync", ReasonCode: "ok"},
+			healthCalled:         called,
+			healthWaitForContext: true,
+		}
+		server := testServer(t, repository, &fakeVerifier{}, ExporterRole)
+		connection := newMemoryConn(requestLine(t, "health", map[string]any{}, nil))
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if err := server.ServeConn(ctx, connection); protocolCode(err) != "deadline_exceeded" {
+			t.Fatalf("expired repository result was accepted: %v", err)
+		}
+		select {
+		case <-called:
+		default:
+			t.Fatal("request expired before the repository was exercised")
+		}
+		if ctx.Err() != context.DeadlineExceeded {
+			t.Fatalf("repository returned without deadline expiry: %v", ctx.Err())
+		}
+		response := responseDocument(t, connection)
+		if response["status"] != "error" || response["error_code"] != "deadline_exceeded" {
+			t.Fatalf("expired repository produced success: %#v", response)
+		}
+	})
+}
+
+func TestExpiredRequestCannotReachRepository(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		called := make(chan struct{}, 1)
+		repository := &fakeRepository{healthCalled: called}
+		server := testServer(t, repository, &fakeVerifier{}, ExporterRole)
+		reader := &countingReader{reader: strings.NewReader(requestLine(t, "health", map[string]any{}, nil))}
+		connection := newMemoryConn("")
+		connection.input = reader
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		time.Sleep(21 * time.Millisecond)
+		if ctx.Err() != context.DeadlineExceeded {
+			t.Fatal("test did not establish an expired request")
+		}
+		if err := server.ServeConn(ctx, connection); protocolCode(err) != "deadline_exceeded" {
+			t.Fatalf("expired request was accepted: %v", err)
+		}
+		select {
+		case <-called:
+			t.Fatal("expired request reached the repository")
+		default:
+		}
+		if reader.read != 0 || connection.output.Len() != 0 {
+			t.Fatal("expired request read input or emitted an unbound response")
+		}
+	})
 }
 
 func TestRepositoryErrorsAreStableAndDoNotLeak(t *testing.T) {

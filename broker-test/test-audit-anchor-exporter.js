@@ -258,4 +258,54 @@ await assert.rejects(
   expectCode('anchor_export_aborted'),
 );
 
+
+// Cancellation must be rechecked between every independently awaited or
+// callback-driven stage. All authority and storage below are synthetic.
+for (const phase of ['proof_same', 'proof_growth', 'stored_verification', 'clock',
+  'new_signature', 'conflict_signature']) {
+  const stop = new AbortController();
+  const existing = ['proof_same', 'proof_growth', 'stored_verification'].includes(phase);
+  const state = phase === 'proof_same' ? firstState : existing ? laterState : firstState;
+  const counts = { sign: 0, publish: 0, verify: 0 };
+  const stopped = exporter({
+    state,
+    store: {
+      readHead: async () => ({ current: existing ? first.envelope : null, previous: null }),
+      publish: async () => {
+        counts.publish += 1;
+        return phase === 'conflict_signature'
+          ? { status: 'conflict', current: winner }
+          : { status: 'published' };
+      },
+    },
+    signer: { signAnchor: async (request) => { counts.sign += 1; return signRequest(request); } },
+    proof: async (count) => {
+      await Promise.resolve();
+      if (phase.startsWith('proof_')) stop.abort(new Error('synthetic-private-reason'));
+      return count === 2 && state === laterState
+        ? { ...laterState, anchoredEventCount: 2, hashAtAnchor: firstState.lastHash, filesAtAnchor: 1 }
+        : proofFor(state, count);
+    },
+    clock: () => {
+      if (phase === 'clock') stop.abort(new Error('synthetic-private-reason'));
+      return 1_900_000_010_000;
+    },
+    verifySignature: (input) => {
+      counts.verify += 1;
+      const valid = verifier(input);
+      if (phase === 'stored_verification' || phase === 'new_signature'
+        || (phase === 'conflict_signature' && counts.verify === 2)) {
+        stop.abort(new Error('synthetic-private-reason'));
+      }
+      return valid;
+    },
+  });
+  await assert.rejects(stopped.value.exportAnchor({ signal: stop.signal }),
+    expectCode('anchor_export_aborted'), phase);
+  assert.equal(counts.sign, existing || phase === 'clock' ? 0 : 1, phase + ': no later signing');
+  assert.equal(counts.publish, phase === 'conflict_signature' ? 1 : 0, phase + ': no later publication');
+  if (phase.startsWith('proof_')) assert.equal(counts.verify, 0, 'aborted proof must not reach verification');
+}
+console.log('audit exporter cancellation: 6 stage-boundary regressions passed');
+
 console.log('audit anchor exporter: verified CAS publication, idempotency and safe failures passed');

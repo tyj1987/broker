@@ -26,6 +26,8 @@ import { X509Certificate } from 'node:crypto';
  * @param {Function} deps.recordUse           - (apiKey) => void
  * @param {Function} deps.recordClientSeen    - (clientName) => void
  * @param {Function} deps.audit               - (event) => void
+ * @param {{sourceIp?: string, fingerprintSha256?: string, clientName?: string}} [deps.forwardedMtls]
+ *        Optional Cloudflare Tunnel mTLS bridge. All three fields are required when enabled.
  * @param {Function} [deps.requireNodeCrypto] - override for tests; defaults to node:crypto X509Certificate
  */
 export function createIdentityResolver(deps) {
@@ -39,6 +41,7 @@ export function createIdentityResolver(deps) {
     recordUse,
     recordClientSeen,
     audit,
+    forwardedMtls,
     requireNodeCrypto,
   } = deps;
 
@@ -64,6 +67,8 @@ export function createIdentityResolver(deps) {
     if (!c || typeof c !== 'object') return null;
     return c;
   }
+
+  const forwardedMtlsConfig = normalizeForwardedMtlsConfig(forwardedMtls);
 
   function getApiKeyIdentity(req) {
     const authHeader = req.headers['authorization'] || req.headers['Authorization'];
@@ -106,7 +111,7 @@ export function createIdentityResolver(deps) {
    * @param {import('node:http').IncomingMessage} req
    * @returns {null | {
    *   cn: string, fp: string, client: object, clientName: string,
-   *   certSubject: object, via: 'api_key'|'session'|'mtls-header'|'mtls',
+   *   certSubject: object, via: 'api_key'|'session'|'mtls-header'|'mtls-forwarded-rfc9440'|'mtls',
    *   apiKey?: object,
    * }}
    */
@@ -121,7 +126,39 @@ export function createIdentityResolver(deps) {
     }
 
     let primary = null;
-    // 1a. nginx-forwarded mTLS. A proxy marker on any other connection is a
+
+    // 1a. Cloudflare-managed mTLS forwarded through the existing local nginx
+    // proxy. nginx overwrites X-Forwarded-For with the immediate peer address,
+    // and its workload certificate must already be trusted by Broker. This
+    // path is therefore enabled only for one explicitly configured Tunnel
+    // connector address and one exact Cloudflare certificate fingerprint.
+    const config = effectiveConfig();
+    const fromForwardedMtlsSource = forwardedMtlsConfig
+      && config
+      && trustedProxyConnection(req, config)
+      && exactForwardedSource(req, forwardedMtlsConfig.sourceIp);
+    if (fromForwardedMtlsSource) {
+      const nginxVerify = String(req.headers['x-ssl-client-verify'] || '');
+      if (nginxVerify === 'NONE') {
+        const resolved = resolveForwardedMtlsCertificate(
+          req.headers['client-cert'],
+          config,
+          forwardedMtlsConfig,
+          requireNodeCrypto,
+        );
+        if (!resolved.ok) {
+          audit({ action: 'connect', status: 'denied', reason: resolved.reason, remote: forwardedMtlsConfig.sourceIp });
+          return null;
+        }
+        recordClientSeen(resolved.identity.clientName);
+        primary = resolved.identity;
+      } else if (nginxVerify !== 'SUCCESS') {
+        audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_proxy_verify_invalid', remote: forwardedMtlsConfig.sourceIp });
+        return null;
+      }
+    }
+
+    // 1b. nginx-forwarded mTLS. A proxy marker on any other connection is a
     // hard failure; it is never treated as ordinary caller metadata.
     const remote = req.socket?.remoteAddress || '';
     const fromLocalProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
@@ -156,7 +193,7 @@ export function createIdentityResolver(deps) {
       }
     }
 
-    // 1b. Direct mTLS is never inferred through a marked reverse-proxy hop.
+    // 1c. Direct mTLS is never inferred through a marked reverse-proxy hop.
     if (!proxyHeaderPresent && req.socket?.authorized === true) {
       let cert = null;
       if (typeof req.socket.getPeerCertificate === 'function') {
@@ -215,6 +252,87 @@ export function createIdentityResolver(deps) {
   }
 
   return { getIdentity, getApiKeyIdentity };
+}
+
+function normalizeForwardedMtlsConfig(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('mtls: forwardedMtls must be an object');
+  }
+  const sourceIp = String(value.sourceIp || '').trim();
+  const fingerprintSha256 = String(value.fingerprintSha256 || '').replace(/:/g, '').toUpperCase();
+  const clientName = String(value.clientName || '').trim();
+  if (!sourceIp && !fingerprintSha256 && !clientName) return null;
+  if (!sourceIp || !fingerprintSha256 || !clientName) {
+    throw new Error('mtls: forwardedMtls requires sourceIp, fingerprintSha256, and clientName');
+  }
+  if (sourceIp.length > 128 || /[\s,\r\n\0]/.test(sourceIp)) {
+    throw new Error('mtls: forwardedMtls sourceIp is invalid');
+  }
+  if (!/^[0-9A-F]{64}$/.test(fingerprintSha256)) {
+    throw new Error('mtls: forwardedMtls fingerprintSha256 must be 64 hex characters');
+  }
+  if (!/^[a-z][a-z0-9_.-]{0,63}$/.test(clientName)) {
+    throw new Error('mtls: forwardedMtls clientName is invalid');
+  }
+  return Object.freeze({ sourceIp, fingerprintSha256, clientName });
+}
+
+function exactForwardedSource(req, expected) {
+  const forwarded = req.headers['x-forwarded-for'];
+  return typeof forwarded === 'string'
+    && !forwarded.includes(',')
+    && forwarded.trim() === expected;
+}
+
+function normalizedFingerprint(value) {
+  return String(value || '').replace(/:/g, '').toUpperCase();
+}
+
+function resolveForwardedMtlsCertificate(rawHeader, config, settings, requireNodeCrypto) {
+  if (typeof rawHeader !== 'string' || rawHeader.length < 4 || rawHeader.length > 16 * 1024) {
+    return { ok: false, reason: 'forwarded_mtls_certificate_missing' };
+  }
+  const match = /^:([A-Za-z0-9+/]+={0,2}):$/.exec(rawHeader);
+  if (!match || match[1].length % 4 !== 0) {
+    return { ok: false, reason: 'forwarded_mtls_certificate_malformed' };
+  }
+  let der;
+  try {
+    der = Buffer.from(match[1], 'base64');
+  } catch {
+    return { ok: false, reason: 'forwarded_mtls_certificate_malformed' };
+  }
+  if (der.length === 0 || der.toString('base64') !== match[1]) {
+    return { ok: false, reason: 'forwarded_mtls_certificate_malformed' };
+  }
+  try {
+    const X509 = requireNodeCrypto?.X509Certificate || X509Certificate;
+    const x509 = new X509(der);
+    const fingerprint = normalizedFingerprint(x509.fingerprint256);
+    if (fingerprint !== settings.fingerprintSha256) {
+      return { ok: false, reason: 'forwarded_mtls_fingerprint_mismatch' };
+    }
+    const client = config.clients?.[settings.clientName];
+    if (!client) {
+      return { ok: false, reason: 'forwarded_mtls_client_missing' };
+    }
+    const cnMatch = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '');
+    const cn = cnMatch ? cnMatch[1] : settings.clientName;
+    return {
+      ok: true,
+      identity: {
+        cn,
+        fp: x509.fingerprint256,
+        client,
+        clientName: settings.clientName,
+        certSubject: { CN: cn },
+        via: 'mtls-forwarded-rfc9440',
+      },
+    };
+  } catch {
+    return { ok: false, reason: 'forwarded_mtls_certificate_malformed' };
+  }
 }
 
 function trustedProxyConnection(req, config) {

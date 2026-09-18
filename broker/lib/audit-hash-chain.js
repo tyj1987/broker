@@ -54,7 +54,9 @@ export function computeHash(eventWithoutHash) {
  * @returns {object} event with { prev_hash, hash }
  */
 export function sealEvent(event, prevHash) {
-  const withPrev = { ...event, prev_hash: prevHash || GENESIS_HASH };
+  const wire = JSON.parse(JSON.stringify(event));
+  delete wire.hash;
+  const withPrev = { ...wire, prev_hash: prevHash || GENESIS_HASH };
   // hash is computed over the event WITHOUT the hash field
   const hash = computeHash(withPrev);
   return { ...withPrev, hash };
@@ -97,7 +99,21 @@ function parseLines(content, file) {
   const events = [];
   for (const [index, line] of content.split('\n').entries()) {
     if (!line) continue;
-    try { events.push(JSON.parse(line)); } catch {
+    try {
+      const decoded = JSON.parse(line);
+      // Lossless recovery of the two optional fields omitted by the old writer.
+      // Rehydrate only when the recovered original preimage EXACTLY matches SHA256.
+      // verifyChain remains unchanged and still verifies every hash and link.
+      if (decoded.action === 'v2_request' && decoded.status === 'denied'
+          && !Object.hasOwn(decoded, 'cn') && !Object.hasOwn(decoded, 'actor')) {
+        const { hash, ...body } = decoded;
+        if (computeHash({ ...body, cn: undefined, actor: undefined }) === hash) {
+          decoded.cn = undefined;
+          decoded.actor = undefined;
+        }
+      }
+      events.push(decoded);
+    } catch {
       throw new Error(`invalid audit JSON in ${file} at line ${index + 1}`);
     }
   }

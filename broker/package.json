@@ -33,7 +33,7 @@
     "test:can-proxy-policy": "node ../broker-test/test-can-proxy-policy-engine.js",
     "test:read-api": "node ../broker-test/test-read-api.js",
     "test:audit-async": "node ../broker-test/test-audit-async.js",
-    "test:audit-hash-chain": "node ../broker-test/test-audit-hash-chain.js && node ../broker-test/test-audit-chain-check-cli.js && node ../broker-test/test-audit-anchor.js && node ../broker-test/test-local-audit-anchor-signer-client.js && node ../broker-test/test-local-audit-anchor-store-client.js && node ../broker-test/test-audit-anchor-exporter.js && node ../broker-test/test-audit-anchor-exporter-runtime.js && node ../broker-test/test-audit-anchor-recovery.js && node ../broker-test/test-audit-recovery-check.js && node ../broker-test/test-audit-recovery-service.js && node ../broker-test/test-audit-exporter-service.js",
+    "test:audit-hash-chain": "node ../broker-test/test-audit-hash-chain.js && node ../broker-test/test-audit-chain-check-cli.js && node ../broker-test/test-audit-anchor.js && node ../broker-test/test-local-audit-anchor-signer-client.js && node ../broker-test/test-local-audit-anchor-store-client.js && node ../broker-test/test-audit-anchor-exporter.js && node ../broker-test/test-audit-anchor-exporter-runtime.js && node ../broker-test/test-audit-anchor-recovery.js && node ../broker-test/test-audit-recovery-check.js && node ../broker-test/test-audit-recovery-service.js && node ../broker-test/test-audit-exporter-service.js && node ../broker-test/test-audit-json-roundtrip.js && node ../broker-test/test-audit-json-proof.js",
     "test:fuzz-parsers": "node ../broker-test/test-fuzz-parsers.js",
     "test:log": "node ../broker-test/test-log.js",
     "test:webauthn": "node ../broker-test/test-webauthn.js",

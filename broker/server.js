@@ -3229,6 +3229,11 @@ const identityResolver = createIdentityResolver({
   recordUse,
   recordClientSeen,
   audit,
+  forwardedMtls: {
+    sourceIp: process.env.BROKER_FORWARDED_MTLS_SOURCE_IP,
+    fingerprintSha256: process.env.BROKER_FORWARDED_MTLS_FINGERPRINT_SHA256,
+    clientName: process.env.BROKER_FORWARDED_MTLS_CLIENT,
+  },
 });
 
 function getIdentity(req) {

@@ -30,6 +30,9 @@ function section(t) { console.log(`\n[${t}]`); }
 const FP = 'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89';
 const FP_LOWER = FP.toLowerCase();
 const PROXY_FP = '11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00';
+const CF_FP_HEX = '1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF';
+const CF_FP = CF_FP_HEX.match(/../g).join(':');
+const CF_CERT_RFC9440 = ':' + Buffer.from('synthetic-cloudflare-client-der').toString('base64') + ':';
 
 function makeConfig() {
   return {
@@ -71,6 +74,7 @@ function makeDeps(overrides = {}) {
     recordUse: overrides.recordUse || (() => {}),
     recordClientSeen: overrides.recordClientSeen || (() => {}),
     requireNodeCrypto: overrides.requireNodeCrypto,
+    forwardedMtls: overrides.forwardedMtls,
     audit: overrides.audit || ((e) => auditEvents.push(e)),
     auditEvents,
   };
@@ -392,6 +396,245 @@ section('19. Trusted proxy X-Forwarded-For is used only as a single value');
     },
   }));
   ok('uses sanitized forwarded client IP', observedIp === '198.51.100.7');
+}
+
+section('20. Cloudflare-forwarded RFC9440 mTLS resolves an existing client');
+
+{
+  class FakeX509Certificate {
+    constructor(der) {
+      if (!Buffer.isBuffer(der) || der.toString() !== 'synthetic-cloudflare-client-der') throw new Error('invalid der');
+      this.fingerprint256 = CF_FP;
+      this.subject = 'O=52TRZ\nCN=client.tyj-laptop.cf-public';
+    }
+  }
+  const deps = makeDeps({
+    requireNodeCrypto: { X509Certificate: FakeX509Certificate },
+    forwardedMtls: {
+      sourceIp: '192.168.2.200',
+      fingerprintSha256: CF_FP_HEX.toLowerCase(),
+      clientName: 'client.alice',
+    },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('forwarded certificate resolves client', id?.clientName === 'client.alice');
+  ok('forwarded certificate uses dedicated via', id?.via === 'mtls-forwarded-rfc9440');
+  ok('forwarded certificate keeps leaf CN', id?.cn === 'client.tyj-laptop.cf-public');
+}
+
+section('21. Forwarded certificate is ignored from the wrong immediate source');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.201',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('wrong forwarded source has no identity', id === null);
+}
+
+section('22. Forwarded certificate still requires the trusted nginx workload certificate');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: FP }),
+    },
+  }));
+  ok('untrusted nginx workload rejected', id === null);
+  ok('untrusted proxy rejection audited', deps.auditEvents.some(e => e.reason === 'untrusted_proxy_identity'));
+}
+
+section('23. Trusted Tunnel source without RFC9440 certificate fails closed');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: { 'x-ssl-client-verify': 'NONE', 'x-forwarded-for': '192.168.2.200' },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('missing forwarded cert denied', id === null);
+  ok('missing cert denial audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+}
+
+section('24. Malformed RFC9440 certificate fails closed');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': ':not canonical base64!:',
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('malformed forwarded cert denied', id === null);
+  ok('malformed denial audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_malformed'));
+}
+
+section('25. Forwarded certificate fingerprint must match exactly');
+
+{
+  class FakeX509Certificate {
+    constructor() { this.fingerprint256 = FP; this.subject = 'CN=client.alice'; }
+  }
+  const deps = makeDeps({
+    requireNodeCrypto: { X509Certificate: FakeX509Certificate },
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('mismatched forwarded fingerprint denied', id === null);
+  ok('fingerprint mismatch audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_fingerprint_mismatch'));
+}
+
+section('26. Forwarded certificate cannot name an unknown Broker client');
+
+{
+  class FakeX509Certificate {
+    constructor() { this.fingerprint256 = CF_FP; this.subject = 'CN=cloudflare-client'; }
+  }
+  const deps = makeDeps({
+    requireNodeCrypto: { X509Certificate: FakeX509Certificate },
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.missing' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('missing mapped client denied', id === null);
+  ok('missing client denial audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_client_missing'));
+}
+
+section('27. Partial or malformed forwarded mTLS configuration is rejected');
+
+{
+  let constructed = true;
+  try { createIdentityResolver(makeDeps({ forwardedMtls: {} })); } catch { constructed = false; }
+  ok('empty forwarded config cleanly disables feature', constructed);
+}
+for (const forwardedMtls of [
+  { sourceIp: '192.168.2.200' },
+  { sourceIp: '192.168.2.200', fingerprintSha256: 'bad', clientName: 'client.alice' },
+  { sourceIp: '192.168.2.200,192.168.2.201', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: '../bad' },
+]) {
+  let rejected = false;
+  try { createIdentityResolver(makeDeps({ forwardedMtls })); } catch { rejected = true; }
+  ok('invalid forwarded config rejected', rejected);
+}
+
+section('28. Direct private-CA mTLS from the Tunnel host remains valid');
+
+{
+  class FakeX509Certificate {
+    constructor(pem) {
+      if (pem !== 'FAKE CLIENT CERTIFICATE') throw new Error('invalid certificate');
+      this.fingerprint256 = FP;
+      this.subject = 'CN=client.alice';
+    }
+  }
+  const deps = makeDeps({
+    requireNodeCrypto: { X509Certificate: FakeX509Certificate },
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'SUCCESS',
+      'x-ssl-client-cert': encodeURIComponent('FAKE CLIENT CERTIFICATE'),
+      'x-forwarded-for': '192.168.2.200',
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('legacy private-CA identity still passes', id?.via === 'mtls-header' && id?.clientName === 'client.alice');
+}
+
+section('29. Missing forwarded certificate cannot fall back to a bearer key');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: {
+      authorization: 'Bearer mb_test_aaaa',
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+    },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('trusted Tunnel source cannot downgrade to API key', id === null);
+  ok('missing cert downgrade is audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
 }
 
 // ---------- summary ----------

@@ -736,6 +736,7 @@ function lastSeenAgo(name) {
 // are referenced in URL paths like /api/v1/proxy/:name).
 const SERVICE_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const SERVICE_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 function isValidServiceName(name) {
   return typeof name === 'string' && SERVICE_NAME_RE.test(name) && !RESERVED_OBJECT_KEYS.has(name);
 }
@@ -781,6 +782,13 @@ function normalizeServiceConfig(body) {
   if (Array.isArray(body.allow_paths)) {
     out.allow_paths = body.allow_paths.map(s => String(s));
   }
+  // Retain explicit method constraints. Preserve malformed shapes for validation
+  // rather than silently dropping them and falling back to a broader default.
+  if (body.allowed_methods !== undefined) {
+    out.allowed_methods = Array.isArray(body.allowed_methods)
+      ? body.allowed_methods.map(method => typeof method === 'string' ? method.toUpperCase() : method)
+      : body.allowed_methods;
+  }
   // dashboard_actions: array of {label, method, path, query?}
   if (Array.isArray(body.dashboard_actions)) {
     out.dashboard_actions = body.dashboard_actions
@@ -819,6 +827,14 @@ function validateServiceConfig(name, cfg) {
   }
   if (cfg.type === 'aliyun_v2' && !cfg.region) {
     errs.push('type=aliyun_v2 requires region');
+  }
+  if (cfg.allowed_methods !== undefined) {
+    const methods = cfg.allowed_methods;
+    if (!Array.isArray(methods) || methods.length > SERVICE_HTTP_METHODS.size
+      || methods.some(method => typeof method !== 'string' || !SERVICE_HTTP_METHODS.has(method))
+      || new Set(methods).size !== methods.length) {
+      errs.push('allowed_methods must be an array of distinct supported HTTP methods');
+    }
   }
   if (cfg.token_secret && !isValidSecretName(cfg.token_secret)) {
     errs.push(`token_secret "${cfg.token_secret}" is not a valid secret name`);
@@ -2474,6 +2490,7 @@ async function handle(req, res) {
         header_name: svc.header_name || null,
         header_value_template: svc.header_value_template || null,
         allow_paths: svc.allow_paths || null,
+        allowed_methods: svc.allowed_methods === undefined ? ['GET', 'POST'] : svc.allowed_methods,
         dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
         allowed_clients: clientNamesAllowedFor(name),
         action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
@@ -2508,6 +2525,7 @@ async function handle(req, res) {
       header_name: svc.header_name || null,
       header_value_template: svc.header_value_template || null,
       allow_paths: svc.allow_paths || null,
+      allowed_methods: svc.allowed_methods === undefined ? ['GET', 'POST'] : svc.allowed_methods,
       dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
       allowed_clients: clientNamesAllowedFor(name),
     });

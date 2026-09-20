@@ -173,6 +173,10 @@ jobs:
       - name: Enforce signer protocol line coverage
         run: |
           test "$(go tool cover -func=signer-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
+      - run: go test -race -coverprofile=provider-credential-coverage.out ./providercredential
+      - name: Enforce provider credential protocol line coverage
+        run: |
+          test "$(go tool cover -func=provider-credential-coverage.out | awk '/^total:/ {gsub("%", "", $3); print ($3 >= 90) ? "yes" : "no"}')" = yes
       - run: go test -race ./server
       - run: go build ./...
 

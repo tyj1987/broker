@@ -14,6 +14,8 @@ import { loadToolRegistry } from '../broker/lib/tool-registry.js';
 import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
 const parameters = {
   resource_ref: 'tyj1987/broker',
@@ -38,6 +40,8 @@ const context = {
     tool: 'github.issues.list@1.0.0',
     target: 'tyj1987/broker',
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
   signal: new AbortController().signal,
 };
@@ -117,6 +121,8 @@ assert.deepEqual(result, {
 assert.equal(tokenInput.repository, 'tyj1987/broker');
 assert.equal(tokenInput.account_ref, 'github-primary');
 assert.equal(tokenInput.signal, context.signal);
+assert.equal(tokenInput.execution_id, EXECUTION_ID);
+assert.equal(tokenInput.request_binding, REQUEST_BINDING);
 assert.equal(requestInput.origin, 'https://api.github.com');
 assert.equal(requestInput.method, 'GET');
 assert.equal(requestInput.redirect, 'manual');
@@ -126,7 +132,12 @@ assert.equal(
   '/repos/tyj1987/broker/issues?state=all&sort=updated&direction=asc&per_page=2&page=3&assignee=*&creator=octocat&mentioned=reviewer-a&since=2026-01-01T00%3A00%3A00Z&labels=security%2CP0',
 );
 assert.equal(requestInput.headers.Authorization, 'Bearer unit-token');
-for (const excluded of ['unit-token', 'must never leave', 'hidden pull request body', 'private@example.test']) {
+for (const excluded of [
+  'unit-token',
+  'must never leave',
+  'hidden pull request body',
+  'private@example.test',
+]) {
   assert.equal(JSON.stringify(result).includes(excluded), false);
 }
 
@@ -145,11 +156,17 @@ assert.equal(onlyIssues.page, 1);
 assert.equal(onlyIssues.per_page, 30);
 assert.equal(onlyIssues.has_more, false);
 const onlyPulls = await filterAdapter({ ...parameters, item_kind: 'pull_requests' }, context);
-assert.deepEqual(onlyPulls.issues.map((issue) => issue.number), [24]);
+assert.deepEqual(
+  onlyPulls.issues.map((issue) => issue.number),
+  [24],
+);
 
 assert.throws(() => createGitHubIssuesListAdapter(), TypeError);
 assert.throws(() => createGitHubIssuesListAdapter({ request: async () => {} }), TypeError);
-for (const invalid of [{ ...parameters, owner: '../admin' }, { ...parameters, repo: '..' }]) {
+for (const invalid of [
+  { ...parameters, owner: '../admin' },
+  { ...parameters, repo: '..' },
+]) {
   await assert.rejects(adapter(invalid, context), expectCode('github_invalid_repository'));
 }
 await assert.rejects(
@@ -175,26 +192,40 @@ for (const [field, values] of Object.entries({
   }
 }
 await assert.rejects(
-  adapter({ ...parameters, labels: Array.from({ length: 11 }, (_, index) => `label-${index}`) }, context),
+  adapter(
+    { ...parameters, labels: Array.from({ length: 11 }, (_, index) => `label-${index}`) },
+    context,
+  ),
   expectCode('github_invalid_filter'),
 );
 for (const invalid of [0, 101, 1.5]) {
-  await assert.rejects(adapter({ ...parameters, per_page: invalid }, context), expectCode('github_invalid_pagination'));
+  await assert.rejects(
+    adapter({ ...parameters, per_page: invalid }, context),
+    expectCode('github_invalid_pagination'),
+  );
 }
 for (const invalid of [0, 10_001, 1.5]) {
-  await assert.rejects(adapter({ ...parameters, page: invalid }, context), expectCode('github_invalid_pagination'));
+  await assert.rejects(
+    adapter({ ...parameters, page: invalid }, context),
+    expectCode('github_invalid_pagination'),
+  );
 }
 for (const execution of [
   { ...context.execution, tool: 'github.commits.list@1.0.0' },
   { ...context.execution, target: 'other/repo' },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ]) {
   await assert.rejects(
     adapter(parameters, { ...context, execution }),
     expectCode('github_execution_binding_mismatch'),
   );
 }
-await assert.rejects(adapter(parameters, { ...context, accountRef: '' }), expectCode('github_account_unavailable'));
+await assert.rejects(
+  adapter(parameters, { ...context, accountRef: '' }),
+  expectCode('github_account_unavailable'),
+);
 
 const withLease = (lease) =>
   createGitHubIssuesListAdapter({
@@ -208,10 +239,16 @@ for (const [lease, code] of [
   [{ ...validLease(), token: 'x'.repeat(4097) }, 'github_credential_unavailable'],
   [{ ...validLease(), repository: 'other/repo' }, 'github_credential_scope_mismatch'],
   [{ ...validLease(), permissions: { contents: 'read' } }, 'github_credential_scope_mismatch'],
-  [{ ...validLease(), permissions: { issues: 'read', contents: 'read' } }, 'github_credential_scope_mismatch'],
+  [
+    { ...validLease(), permissions: { issues: 'read', contents: 'read' } },
+    'github_credential_scope_mismatch',
+  ],
   [{ ...validLease(), expires_at: 'invalid' }, 'github_credential_expired'],
   [{ ...validLease(), expires_at: new Date(NOW).toISOString() }, 'github_credential_expired'],
-  [{ ...validLease(), expires_at: new Date(NOW + 60 * 60_000 + 31_000).toISOString() }, 'github_credential_expired'],
+  [
+    { ...validLease(), expires_at: new Date(NOW + 60 * 60_000 + 31_000).toISOString() },
+    'github_credential_expired',
+  ],
 ]) {
   await assert.rejects(withLease(lease)(parameters, context), expectCode(code));
 }
@@ -223,7 +260,8 @@ await assert.rejects(
     },
     request: async () => ({ status: 200, body: validBody() }),
   })(parameters, context),
-  (error) => expectCode('github_credential_unavailable')(error) && !error.message.includes('canary'),
+  (error) =>
+    expectCode('github_credential_unavailable')(error) && !error.message.includes('canary'),
 );
 
 const withResponse = (response) =>
@@ -233,7 +271,10 @@ const withResponse = (response) =>
     request: async () => response,
   });
 for (const status of [301, 302, 303, 307, 308]) {
-  await assert.rejects(withResponse({ status })(parameters, context), expectCode('github_redirect_denied'));
+  await assert.rejects(
+    withResponse({ status })(parameters, context),
+    expectCode('github_redirect_denied'),
+  );
 }
 for (const [status, code] of [
   [401, 'github_credential_rejected'],
@@ -254,7 +295,10 @@ await assert.rejects(
   withResponse({ status: 200, body: 'x'.repeat(1024 * 1024 + 1) })(parameters, context),
   expectCode('github_response_too_large'),
 );
-await assert.rejects(withResponse({ status: 200, body: {} })(parameters, context), expectCode('github_invalid_response'));
+await assert.rejects(
+  withResponse({ status: 200, body: {} })(parameters, context),
+  expectCode('github_invalid_response'),
+);
 await assert.rejects(
   withResponse({ status: 200, body: [...validBody(), validBody()[0]] })(parameters, context),
   expectCode('github_invalid_response'),
@@ -396,7 +440,9 @@ assert.deepEqual(
   taskBroker.eventsFor(actor, task.id).map((event) => event.state),
   ['REQUESTED', 'READY', 'EXECUTING', 'SUCCEEDED'],
 );
-assert.ok(taskEvents.every((event) => !JSON.stringify(event).includes('short-lived-installation-token')));
+assert.ok(
+  taskEvents.every((event) => !JSON.stringify(event).includes('short-lived-installation-token')),
+);
 await assert.rejects(taskBroker.run(actor, task.id), expectCode('invalid_state'));
 assert.equal(calls.length, 4, 'a terminal task cannot replay its GitHub capability');
 await assert.rejects(

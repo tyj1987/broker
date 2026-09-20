@@ -1,9 +1,8 @@
-// broker-test/test-signing.js — V4 签名算法单元测试
-// 用官方文档示例验证输出格式正确(不要求签名值 byte-equal,只要结构对)
+// broker-test/test-signing.js — signing algorithm unit tests
 import { signAliyunV3 } from '../broker/signing/aliyun-v3.js';
 import { signTencentV3 } from '../broker/signing/tencent-v3.js';
 import { signAwsSigV4 } from '../broker/signing/aws-sigv4.js';
-import { buildServiceAccountJwt, exchangeJwtForToken, signGcpJwt, clearGcpCache } from '../broker/signing/gcp-jwt.js';
+import { buildServiceAccountJwt, clearGcpCache } from '../broker/signing/gcp-jwt.js';
 import { getAzureToken, signAzureAd, clearAzureCache } from '../broker/signing/azure-ad.js';
 import { signCloudflare } from '../broker/signing/cloudflare.js';
 import { getDockerRegistryToken, signDockerRegistry } from '../broker/signing/docker-registry.js';
@@ -15,25 +14,141 @@ function ok(name, cond) {
   else { fail++; console.error(`  FAIL  ${name}`); }
 }
 function section(t) { console.log(`\n[${t}]`); }
+function throwsLike(run, pattern) {
+  try {
+    run();
+    return false;
+  } catch (error) {
+    return pattern.test(error.message);
+  }
+}
 
 // === Aliyun v3 ===
 section('Aliyun v3');
 {
   const h = signAliyunV3({
     method: 'POST',
-    host: 'ecs.aliyuncs.com',
+    host: 'ecs.cn-shanghai.aliyuncs.com',
     path: '/',
-    query: { Action: 'DescribeInstances', RegionId: 'cn-hangzhou' },
-    body: '{}',
-    secret: { access_key_id: 'LTAI_TEST', access_key_secret: 'fake-secret-for-shape-test' },
-    now: new Date('2026-08-26T09:12:34Z'),
+    query: {
+      ImageId: 'win2019_1809_x64_dtc_zh-cn_40G_alibase_20230811.vhd',
+      RegionId: 'cn-shanghai',
+    },
+    headers: {
+      'x-acs-action': 'RunInstances',
+      'x-acs-version': '2014-05-26',
+    },
+    body: '',
+    secret: {
+      access_key_id: 'YourAccessKeyId',
+      access_key_secret: 'YourAccessKeySecret',
+    },
+    now: new Date('2023-10-26T10:22:32Z'),
+    nonce: '3156853299f313e23d1673dc12e1703d',
   });
-  ok('auth header is ACS3', h.Authorization.startsWith('ACS3-HMAC-SHA256 Credential=LTAI_TEST,'));
-  ok('has SignedHeaders', /SignedHeaders=[^,]+,/.test(h.Authorization));
-  ok('has Signature=64hex', /Signature=[0-9a-f]{64}$/.test(h.Authorization));
-  ok('has x-acs-date', !!h['x-acs-date']);
-  ok('has x-acs-content-sha256', /^[0-9a-f]{64}$/.test(h['x-acs-content-sha256']));
-  ok('host header included', h.host === 'ecs.aliyuncs.com');
+  ok(
+    'official signature vector matches byte-for-byte',
+    h.Authorization ===
+      'ACS3-HMAC-SHA256 Credential=YourAccessKeyId,' +
+        'SignedHeaders=host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version,' +
+        'Signature=06563a9e1b43f5dfe96b81484da74bceab24a1d853912eee15083a6f0f3283c0',
+  );
+  ok('uses ISO 8601 UTC date', h['x-acs-date'] === '2023-10-26T10:22:32Z');
+  ok('includes required nonce', h['x-acs-signature-nonce'] === '3156853299f313e23d1673dc12e1703d');
+  ok('host header included', h.host === 'ecs.cn-shanghai.aliyuncs.com');
+}
+{
+  const h = signAliyunV3({
+    method: 'GET',
+    host: 'ecs.cn-hangzhou.aliyuncs.com',
+    path: '/',
+    headers: { 'x-acs-action': 'DescribeInstances', 'x-acs-version': '2014-05-26' },
+    query: { RegionId: 'cn-hangzhou' },
+    secret: {
+      access_key_id: 'STS.TEST',
+      access_key_secret: 'temporary-secret',
+      security_token: 'temporary-security-token',
+    },
+    now: new Date('2026-09-11T00:00:00Z'),
+    nonce: 'nonce-1',
+  });
+  ok('STS security token is signed', h.Authorization.includes('x-acs-security-token'));
+  ok('STS security token is returned', h['x-acs-security-token'] === 'temporary-security-token');
+}
+{
+  let rejectedAuthorization = false;
+  try {
+    signAliyunV3({
+      method: 'GET', host: 'ecs.cn-hangzhou.aliyuncs.com', path: '/',
+      headers: { Authorization: 'Bearer attacker' },
+      secret: { access_key_id: 'test', access_key_secret: 'test' }, nonce: 'nonce-2',
+    });
+  } catch (error) {
+    rejectedAuthorization = /authorization header is forbidden/.test(error.message);
+  }
+  ok('rejects caller-supplied Authorization', rejectedAuthorization);
+}
+{
+  let rejectedMissingMetadata = false;
+  try {
+    signAliyunV3({
+      method: 'GET', host: 'ecs.cn-hangzhou.aliyuncs.com', path: '/', headers: {},
+      secret: { access_key_id: 'test', access_key_secret: 'test' }, nonce: 'nonce-3',
+    });
+  } catch (error) {
+    rejectedMissingMetadata = /x-acs-action must be a non-empty string/.test(error.message);
+  }
+  ok('rejects missing API action metadata', rejectedMissingMetadata);
+}
+{
+  let rejectedInjection = false;
+  try {
+    signAliyunV3({
+      method: 'GET', host: 'ecs.cn-hangzhou.aliyuncs.com\r\nX-Evil: yes', path: '/',
+      secret: { access_key_id: 'test', access_key_secret: 'test' }, nonce: 'nonce-4',
+    });
+  } catch (error) {
+    rejectedInjection = /control characters/.test(error.message);
+  }
+  ok('rejects header injection through host', rejectedInjection);
+}
+{
+  const base = {
+    method: 'POST',
+    host: 'ecs.cn-hangzhou.aliyuncs.com',
+    path: '/',
+    headers: { 'x-acs-action': 'DescribeInstances', 'x-acs-version': '2014-05-26' },
+    query: { RegionId: 'cn-hangzhou', Omitted: undefined, Enabled: true },
+    body: { PageNumber: 1 },
+    secret: { access_key_id: 'test', access_key_secret: 'test' },
+    now: '2026-09-11T00:00:00Z',
+  };
+  const generated = signAliyunV3(base);
+  ok('generates a nonce when omitted', /^[0-9a-f-]{36}$/.test(generated['x-acs-signature-nonce']));
+  ok('serializes object request bodies', /^[0-9a-f]{64}$/.test(generated['x-acs-content-sha256']));
+  for (const [name, change, pattern] of [
+    ['rejects an invalid method', { method: '' }, /method must be a non-empty string/],
+    ['rejects a relative path', { path: 'relative' }, /path must start/],
+    ['rejects a missing secret', { secret: null }, /secret is required/],
+    ['rejects a missing access key id', { secret: { access_key_secret: 'test' } }, /access_key_id/],
+    ['rejects a missing access key secret', { secret: { access_key_id: 'test' } }, /access_key_secret/],
+    ['rejects an invalid nonce', { nonce: 'bad\nnonce' }, /nonce contains control/],
+    ['rejects an invalid date', { now: 'not-a-date' }, /now must be a valid date/],
+    ['rejects non-object query input', { query: [] }, /query must be an object/],
+    ['rejects structured query values', { query: { RegionId: {} } }, /must be a scalar/],
+    ['rejects non-object headers', { headers: [] }, /headers must be an object/],
+    ['rejects invalid header names', { headers: { 'bad header': 'x' } }, /invalid header name/],
+    ['rejects duplicate normalized headers', { headers: { Accept: 'a', accept: 'b' } }, /duplicate header/],
+    ['rejects empty header values', { headers: { Accept: ' ' } }, /invalid header value/],
+    ['rejects control characters in header values', { headers: { Accept: 'a\r\nb' } }, /invalid header value/],
+    [
+      'rejects invalid STS security tokens',
+      { secret: { access_key_id: 'test', access_key_secret: 'test', security_token: '' } },
+      /security_token must be a non-empty string/,
+    ],
+  ]) {
+    ok(name, throwsLike(() => signAliyunV3({ ...base, ...change }), pattern));
+  }
 }
 
 // === Tencent v3 ===
@@ -132,7 +247,7 @@ section('Azure AD');
 {
   // mock fetch
   const origFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url, _opts) => {
     const parsed = new URL(url);
     if (parsed.protocol === 'https:' && parsed.hostname === 'login.microsoftonline.com'
       && parsed.pathname.endsWith('/oauth2/v2.0/token')) {

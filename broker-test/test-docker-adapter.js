@@ -11,6 +11,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = Date.parse('2026-09-09T08:00:00Z');
 const REPOSITORY = 'library/alpine';
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const parameters = { resource_ref: REPOSITORY, namespace: 'library', repository: 'alpine' };
 const context = {
   accountRef: 'docker-pull-account',
@@ -19,6 +21,8 @@ const context = {
     tool: 'docker.repository.tags.list@1.0.0',
     target: REPOSITORY,
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
   signal: new AbortController().signal,
 };
@@ -49,6 +53,8 @@ assert.deepEqual(tokenInput, {
   environment: 'production',
   repository: REPOSITORY,
   scope: 'repository:library/alpine:pull',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: context.signal,
 });
 assert.equal(requestInput.origin, 'https://registry-1.docker.io');
@@ -86,6 +92,8 @@ for (const execution of [
   { ...context.execution, tool: 'docker.repository.push@1.0.0' },
   { ...context.execution, target: 'library/ubuntu' },
   { ...context.execution, environment: 'staging' },
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
 ]) {
   await assert.rejects(
     adapter(parameters, { ...context, execution }),

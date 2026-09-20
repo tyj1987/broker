@@ -8,6 +8,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TOKEN_TTL_MS = 60 * 60_000 + 30_000;
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPO_RE = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 
 function fail(code, message, status = 400) {
   throw new V2Error(code, message, status);
@@ -20,7 +22,8 @@ function repositoryRef(owner, repo) {
 function parseJsonBody(body) {
   if (body && typeof body === 'object' && !Buffer.isBuffer(body)) return body;
   const text = Buffer.isBuffer(body) ? body.toString('utf8') : String(body || '');
-  if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) fail('github_response_too_large', 'GitHub response exceeded the configured limit', 502);
+  if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES)
+    fail('github_response_too_large', 'GitHub response exceeded the configured limit', 502);
   try {
     return JSON.parse(text);
   } catch {
@@ -29,16 +32,31 @@ function parseJsonBody(body) {
 }
 
 function validateLease(lease, expectedRepository, now) {
-  if (!lease || typeof lease !== 'object') fail('github_credential_unavailable', 'GitHub installation credential is unavailable', 503);
+  if (!lease || typeof lease !== 'object')
+    fail('github_credential_unavailable', 'GitHub installation credential is unavailable', 503);
   if (typeof lease.token !== 'string' || lease.token.length < 1 || lease.token.length > 4096) {
     fail('github_credential_unavailable', 'GitHub installation credential is unavailable', 503);
   }
-  if (typeof lease.repository !== 'string' || lease.repository.toLowerCase() !== expectedRepository.toLowerCase()) {
-    fail('github_credential_scope_mismatch', 'GitHub installation credential is not repository scoped', 403);
+  if (
+    typeof lease.repository !== 'string' ||
+    lease.repository.toLowerCase() !== expectedRepository.toLowerCase()
+  ) {
+    fail(
+      'github_credential_scope_mismatch',
+      'GitHub installation credential is not repository scoped',
+      403,
+    );
   }
-  if (!lease.permissions || lease.permissions.metadata !== 'read'
-    || Object.keys(lease.permissions).some((key) => key !== 'metadata')) {
-    fail('github_credential_scope_mismatch', 'GitHub installation credential permission is invalid', 403);
+  if (
+    !lease.permissions ||
+    lease.permissions.metadata !== 'read' ||
+    Object.keys(lease.permissions).some((key) => key !== 'metadata')
+  ) {
+    fail(
+      'github_credential_scope_mismatch',
+      'GitHub installation credential permission is invalid',
+      403,
+    );
   }
   const expiresAt = Date.parse(lease.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= now || expiresAt - now > MAX_TOKEN_TTL_MS) {
@@ -48,10 +66,15 @@ function validateLease(lease, expectedRepository, now) {
 }
 
 function projectRepository(body, expectedRepository) {
-  if (!body || !Number.isSafeInteger(body.id) || body.id < 1
-    || typeof body.full_name !== 'string' || body.full_name.toLowerCase() !== expectedRepository.toLowerCase()
-    || !['public', 'private', 'internal'].includes(body.visibility)
-    || typeof body.archived !== 'boolean') {
+  if (
+    !body ||
+    !Number.isSafeInteger(body.id) ||
+    body.id < 1 ||
+    typeof body.full_name !== 'string' ||
+    body.full_name.toLowerCase() !== expectedRepository.toLowerCase() ||
+    !['public', 'private', 'internal'].includes(body.visibility) ||
+    typeof body.archived !== 'boolean'
+  ) {
     fail('github_invalid_response', 'GitHub returned an invalid repository projection', 502);
   }
   return {
@@ -62,23 +85,47 @@ function projectRepository(body, expectedRepository) {
   };
 }
 
-export function createGitHubRepositoryReadAdapter({ request, tokenProvider, now = () => Date.now() } = {}) {
-  if (typeof request !== 'function') throw new TypeError('GitHub adapter requires a pinned request transport');
-  if (typeof tokenProvider !== 'function') throw new TypeError('GitHub adapter requires an installation token provider');
+export function createGitHubRepositoryReadAdapter({
+  request,
+  tokenProvider,
+  now = () => Date.now(),
+} = {}) {
+  if (typeof request !== 'function')
+    throw new TypeError('GitHub adapter requires a pinned request transport');
+  if (typeof tokenProvider !== 'function')
+    throw new TypeError('GitHub adapter requires an installation token provider');
 
   return async function githubRepositoryRead(parameters, context = {}) {
     const owner = parameters?.owner;
     const repo = parameters?.repo;
     const target = repositoryRef(owner, repo);
-    if (!OWNER_RE.test(owner || '') || !REPO_RE.test(repo || '')) fail('github_invalid_repository', 'GitHub repository identity is invalid');
-    if (typeof parameters.resource_ref !== 'string' || parameters.resource_ref.toLowerCase() !== target.toLowerCase()) {
-      fail('github_target_mismatch', 'GitHub repository target does not match typed parameters', 403);
+    if (!OWNER_RE.test(owner || '') || !REPO_RE.test(repo || ''))
+      fail('github_invalid_repository', 'GitHub repository identity is invalid');
+    if (
+      typeof parameters.resource_ref !== 'string' ||
+      parameters.resource_ref.toLowerCase() !== target.toLowerCase()
+    ) {
+      fail(
+        'github_target_mismatch',
+        'GitHub repository target does not match typed parameters',
+        403,
+      );
     }
-    if (context.execution?.tool !== TOOL || context.execution?.target?.toLowerCase() !== target.toLowerCase()
-      || context.execution?.environment !== context.environment) {
-      fail('github_execution_binding_mismatch', 'Execution capability is not bound to this GitHub repository', 403);
+    if (
+      context.execution?.tool !== TOOL ||
+      context.execution?.target?.toLowerCase() !== target.toLowerCase() ||
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
+    ) {
+      fail(
+        'github_execution_binding_mismatch',
+        'Execution capability is not bound to this GitHub repository',
+        403,
+      );
     }
-    if (typeof context.accountRef !== 'string' || !context.accountRef) fail('github_account_unavailable', 'GitHub account binding is unavailable', 503);
+    if (typeof context.accountRef !== 'string' || !context.accountRef)
+      fail('github_account_unavailable', 'GitHub account binding is unavailable', 503);
 
     let lease;
     try {
@@ -88,6 +135,8 @@ export function createGitHubRepositoryReadAdapter({ request, tokenProvider, now 
         owner,
         repo,
         repository: target,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
         signal: context.signal,
       });
     } catch {
@@ -114,11 +163,15 @@ export function createGitHubRepositoryReadAdapter({ request, tokenProvider, now 
       if (error instanceof V2Error) throw error;
       fail('github_unavailable', 'GitHub request failed', 502);
     }
-    if ([301, 302, 303, 307, 308].includes(response?.status)) fail('github_redirect_denied', 'GitHub redirect was denied', 502);
-    if (response?.status === 401) fail('github_credential_rejected', 'GitHub installation credential was rejected', 502);
-    if (response?.status === 403) fail('github_forbidden', 'GitHub App lacks repository access', 403);
+    if ([301, 302, 303, 307, 308].includes(response?.status))
+      fail('github_redirect_denied', 'GitHub redirect was denied', 502);
+    if (response?.status === 401)
+      fail('github_credential_rejected', 'GitHub installation credential was rejected', 502);
+    if (response?.status === 403)
+      fail('github_forbidden', 'GitHub App lacks repository access', 403);
     if (response?.status === 404) fail('github_not_found', 'GitHub repository was not found', 404);
-    if (response?.status !== 200) fail('github_upstream_error', 'GitHub repository request failed', 502);
+    if (response?.status !== 200)
+      fail('github_upstream_error', 'GitHub repository request failed', 502);
     return projectRepository(parseJsonBody(response.body), target);
   };
 }

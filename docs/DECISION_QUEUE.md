@@ -59,12 +59,53 @@ continue.
   by deterministic tests plus a fixed, signature-only Unix-socket client. The
   Broker runtime registers verified GitHub operations only after the socket and
   metadata bindings pass preflight. The Go signer protocol core independently
-  validates peer authorization, exact account/environment/client bindings and
-  the bounded GitHub App JWT before giving only a SHA-256 digest to an injected
-  non-exportable backend. Linux peer identity is verified with `SO_PEERCRED`
+  validates peer authorization, exact account/environment/client bindings, the
+  consumed task execution ID, the canonical request binding, and the bounded
+  GitHub App JWT before giving only a SHA-256 digest plus those non-secret
+  execution bindings to an injected non-exportable backend. Linux peer identity
+  is verified with `SO_PEERCRED`
   against an explicit non-root Broker UID. No production signer workload or
-  KMS/HSM authority has been selected, and every provider remains
-  `contract_required`.
+  KMS/HSM authority has been selected. A source-only GitHub pull-request
+  creation operation now exercises the same boundary with a fixed API path, a
+  draft-by-default request, and WebAuthn step-up approval, but remains disabled
+  in production until this decision and its isolated GitHub App contract test
+  are closed. The Cloudflare runtime now has a fixed,
+  ownership-checked Unix-socket credential lease client and refuses plaintext
+  token configuration; only exact five-minute account/environment/resource
+  leases are accepted. Its source-only DNS inventory operation additionally
+  binds the task resource to an account-allowed zone and releases no DNS record
+  content or other potentially sensitive provider fields. Docker now uses the
+  same isolated boundary with exact
+  repository bindings and a second expiry check in the adapter. The external
+  credential-service implementation and its authority remain undecided, so
+  every provider remains `contract_required`. Alibaba Cloud Signature V3 now
+  matches the current official byte-level example, uses ISO 8601 time and a
+  per-request nonce, and signs temporary STS security tokens. This corrects the
+  local primitive only. A typed `ecs.instances.list` adapter now fixes the
+  regional endpoint and API metadata, uses the current token-based pagination,
+  releases only bounded inventory fields and accepts only an isolated signed
+  request capability. A fixed, ownership-checked Unix socket and exact
+  account/environment/region/resource runtime binding are implemented; a
+  verified policy fails startup when that signer is absent. No signer service,
+  authoritative account store or production operation is enabled while this
+  decision is open. A separate Go credential-service protocol core now validates
+  Linux peer identity, the exact provider/operation/account/environment/resource
+  tuple, the consumed task execution ID, the canonical request binding, and a
+  maximum five-minute printable lease before returning it to the Broker runtime.
+  It supports only the bounded Cloudflare, Docker and DeepSeek resource shapes
+  already enforced by the Node client, which also rejects responses with altered
+  execution bindings. Its issuer remains
+  dependency-injected: this protocol boundary is not a credential store and
+  does not enable a provider by itself. OpenAI model inventory now uses the
+  same source-only, execution-bound lease boundary with an exact project
+  resource and model-ID-only response projection. WIF token exchange and the
+  isolated OpenAI project contract remain required before activation. Tencent
+  Cloud CVM inventory now has a source-only adapter with a fixed API 3.0
+  endpoint, execution-bound payload hash, temporary-token requirement and a
+  network-address-free response projection. Its runtime is gated on an
+  explicitly verified policy and an ownership-checked local signer socket, and
+  fails startup when either is missing. The isolated TC3 signer service, CAM
+  role authority and account contract test remain required before activation.
 
 ## DQ-005: SSH target, host-key and certificate authority
 
@@ -132,7 +173,10 @@ continue.
   for the local listener and a pre-provisioned scoped Broker API key. The two
   values cannot be reused. Master keys, environment credentials, secret
   resolution, arbitrary proxying and external MCP healthcheck execution are
-  denied.
+  denied. The deployed STDIO bridge is being accepted first with a seven-day
+  key constrained to `broker:tools.inspect`, `control-plane`, `tool-registry`
+  and `production`; this proves the boundary but does not close this decision
+  or authorize remotely reachable MCP execution.
 
 ## DQ-009: production trust-domain cutover
 
@@ -150,3 +194,21 @@ continue.
 - Current safe default: keep the legacy service available for existing users,
   deny protected CD, and continue source/staging work. Do not copy the old key
   hierarchy into the hardened layout or use it to satisfy the preflight.
+
+## DQ-010: DeepSeek credential authority and usage controls
+
+- Status: open
+- Needed before: any DeepSeek operation is production-enabled
+- Decision: select the authoritative API-key store, rotation owner, account and
+  environment binding, spending limits, model allowlist and emergency revoke
+  process. Decide whether a future response-generation operation requires
+  per-task approval, budget reservation and content-retention controls.
+- Required evidence: isolated-account contract test, wrong-account and
+  wrong-environment denial, lease expiry and revocation latency, quota and
+  upstream outage behavior, output bounds, prompt/result audit policy and
+  secret-free logs, errors and crash artifacts.
+- Current safe default: only the official read-only `GET /models` operation is
+  implemented. It uses a fixed origin and path, a five-minute account-bound
+  credential lease, bounded response projection and startup preflight. The
+  provider remains `contract_required`; response generation and production
+  credentials are not enabled.

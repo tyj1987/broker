@@ -1182,6 +1182,65 @@ assert.throws(
 assert.equal(indeterminateCancellationBroker.get(human, indeterminateCancellationTask.id).state, 'CANCELLED');
 assert.equal(indeterminateCancellationApprovals.list(human)[0].status, 'CANCELLED');
 
+let expiryCheckpointNow = now;
+let failExpiryCheckpoint = true;
+const expiryCheckpointApprovals = new ApprovalBroker({
+  now: () => expiryCheckpointNow,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const expiryCheckpointSnapshots = [];
+let expiryCheckpointBroker;
+expiryCheckpointBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: expiryCheckpointApprovals, executors,
+  now: () => expiryCheckpointNow,
+  onCheckpoint(event) {
+    if (event.phase === 'expired' && failExpiryCheckpoint) {
+      failExpiryCheckpoint = false;
+      throw new Error('expiry checkpoint unavailable');
+    }
+    expiryCheckpointSnapshots.push(expiryCheckpointBroker.exportState());
+  },
+});
+const expiryCheckpointTask = await expiryCheckpointBroker.create(human, {
+  ...criticalInput, idempotency_key: 'checkpoint-expire-fail1',
+});
+expiryCheckpointNow += 60_001;
+assert.throws(
+  () => expiryCheckpointBroker.get(human, expiryCheckpointTask.id),
+  /expiry checkpoint unavailable/,
+);
+assert.equal(expiryCheckpointBroker.tasks.get(expiryCheckpointTask.id).state, 'PENDING_APPROVAL');
+assert.equal(expiryCheckpointApprovals.list(human)[0].status, 'REQUESTED');
+assert.equal(expiryCheckpointBroker.get(human, expiryCheckpointTask.id).state, 'EXPIRED');
+assert.equal(expiryCheckpointApprovals.list(human)[0].status, 'CANCELLED');
+assert.equal(expiryCheckpointSnapshots.at(-1).tasks[0].state, 'EXPIRED');
+
+let indeterminateExpiryNow = now;
+const indeterminateExpiryApprovals = new ApprovalBroker({
+  now: () => indeterminateExpiryNow,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const indeterminateExpiryBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: indeterminateExpiryApprovals, executors,
+  now: () => indeterminateExpiryNow,
+  onCheckpoint(event) {
+    if (event.phase === 'expired') {
+      throw new V2Error('state_commit_indeterminate', 'state requires reconciliation', 503);
+    }
+  },
+});
+const indeterminateExpiryTask = await indeterminateExpiryBroker.create(human, {
+  ...criticalInput, idempotency_key: 'checkpoint-expire-unknown1',
+});
+indeterminateExpiryNow += 60_001;
+assert.throws(
+  () => indeterminateExpiryBroker.get(human, indeterminateExpiryTask.id),
+  expectCode('state_commit_indeterminate'),
+);
+assert.equal(indeterminateExpiryBroker.tasks.get(indeterminateExpiryTask.id).state, 'EXPIRED');
+assert.equal(indeterminateExpiryApprovals.list(human)[0].status, 'CANCELLED');
+assert.equal(indeterminateExpiryBroker.exportState().tasks[0].state, 'EXPIRED');
+
 let checkpointExecutorCalls = 0;
 const unavailableCheckpointBroker = new AutomationTaskBroker({
   toolRegistry: registry, authorize, approvalBroker: approvals,
@@ -1207,6 +1266,49 @@ await assert.rejects(
 assert.equal(checkpointExecutorCalls, 0, 'executor cannot run before the durable EXECUTING checkpoint');
 assert.equal(unavailableCheckpointBroker.get(human, unavailableCheckpointTask.id).state, 'EXECUTING');
 assert.equal(unavailableCheckpointBroker.exportState().tasks[0].state, 'EXECUTING');
+
+let executingExpiryNow = now;
+let failExecutingPreCheckpoint = true;
+let failExecutingExpiryCheckpoint = true;
+const executingExpiryApprovals = new ApprovalBroker({
+  now: () => executingExpiryNow,
+  getPolicy: (provider, operationId) => provider === 'broker' && operationId === 'device.state' ? criticalPolicy : null,
+});
+const executingExpiryBroker = new AutomationTaskBroker({
+  toolRegistry: registry, authorize, approvalBroker: executingExpiryApprovals, executors,
+  now: () => executingExpiryNow,
+  onCheckpoint(event) {
+    if (event.phase === 'pre_execute' && failExecutingPreCheckpoint) {
+      failExecutingPreCheckpoint = false;
+      throw new Error('pre-execution checkpoint unavailable');
+    }
+    if (event.phase === 'expired' && failExecutingExpiryCheckpoint) {
+      failExecutingExpiryCheckpoint = false;
+      throw new Error('executing expiry checkpoint unavailable');
+    }
+  },
+});
+const executingExpiryTask = await executingExpiryBroker.create(human, {
+  ...criticalInput, idempotency_key: 'checkpoint-executing-expiry1',
+});
+executingExpiryApprovals.decide(approver('admin-f'), executingExpiryTask.approval_id, 'approve');
+executingExpiryApprovals.decide(approver('admin-g'), executingExpiryTask.approval_id, 'approve');
+await assert.rejects(
+  executingExpiryBroker.run(human, executingExpiryTask.id),
+  /pre-execution checkpoint unavailable/,
+);
+assert.equal(executingExpiryBroker.tasks.get(executingExpiryTask.id).state, 'EXECUTING');
+assert.equal(executingExpiryApprovals.list(human)[0].status, 'EXECUTING');
+executingExpiryNow += 60_001;
+assert.throws(
+  () => executingExpiryBroker.get(human, executingExpiryTask.id),
+  /executing expiry checkpoint unavailable/,
+);
+assert.equal(executingExpiryBroker.tasks.get(executingExpiryTask.id).state, 'EXECUTING');
+assert.equal(executingExpiryApprovals.list(human)[0].status, 'EXECUTING');
+assert.equal(executingExpiryBroker.get(human, executingExpiryTask.id).state, 'EXPIRED');
+assert.equal(executingExpiryApprovals.list(human)[0].status, 'FAILED');
+
 assert.throws(
   () => new AutomationTaskBroker({ toolRegistry: registry, authorize, approvalBroker: approvals, onCheckpoint: null }),
   expectCode('checkpoint_invalid'),

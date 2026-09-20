@@ -8,18 +8,46 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TOKEN_TTL_MS = 60 * 60_000 + 30_000;
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPO_RE = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const EVENT_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const UNSAFE_TEXT_RE = /[\u0000-\u001f\u007f]/;
 const FILTER_STATUSES = new Set([
-  'completed', 'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale',
-  'success', 'timed_out', 'in_progress', 'queued', 'requested', 'waiting', 'pending',
+  'completed',
+  'action_required',
+  'cancelled',
+  'failure',
+  'neutral',
+  'skipped',
+  'stale',
+  'success',
+  'timed_out',
+  'in_progress',
+  'queued',
+  'requested',
+  'waiting',
+  'pending',
 ]);
-const RUN_STATUSES = new Set(['completed', 'in_progress', 'queued', 'requested', 'waiting', 'pending']);
+const RUN_STATUSES = new Set([
+  'completed',
+  'in_progress',
+  'queued',
+  'requested',
+  'waiting',
+  'pending',
+]);
 const CONCLUSIONS = new Set([
-  'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'success',
-  'timed_out', 'startup_failure',
+  'action_required',
+  'cancelled',
+  'failure',
+  'neutral',
+  'skipped',
+  'stale',
+  'success',
+  'timed_out',
+  'startup_failure',
 ]);
 
 function fail(code, message, status = 400) {
@@ -62,8 +90,13 @@ function parseJsonBody(body) {
 }
 
 function validateLease(lease, expectedRepository, now) {
-  if (!lease || typeof lease !== 'object' || typeof lease.token !== 'string'
-    || lease.token.length < 1 || lease.token.length > 4096) {
+  if (
+    !lease ||
+    typeof lease !== 'object' ||
+    typeof lease.token !== 'string' ||
+    lease.token.length < 1 ||
+    lease.token.length > 4096
+  ) {
     fail('github_credential_unavailable', 'GitHub installation credential is unavailable', 503);
   }
   if (
@@ -88,8 +121,12 @@ function safeTimestamp(value) {
   }
   const timestamp = Date.parse(value);
   const year = Number(value.slice(0, 4));
-  if (!Number.isFinite(timestamp) || year < 1970 || year > 2099
-    || new Date(timestamp).toISOString().replace('.000Z', 'Z') !== value) {
+  if (
+    !Number.isFinite(timestamp) ||
+    year < 1970 ||
+    year > 2099 ||
+    new Date(timestamp).toISOString().replace('.000Z', 'Z') !== value
+  ) {
     fail('github_invalid_response', 'GitHub returned an invalid workflow run projection', 502);
   }
   return value;
@@ -97,26 +134,48 @@ function safeTimestamp(value) {
 
 function safeNullableText(value, maximum) {
   if (value === null) return null;
-  if (typeof value !== 'string' || value.length < 1 || value.length > maximum || UNSAFE_TEXT_RE.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > maximum ||
+    UNSAFE_TEXT_RE.test(value)
+  ) {
     fail('github_invalid_response', 'GitHub returned an invalid workflow run projection', 502);
   }
   return value;
 }
 
 function projectRuns(body, maximumItems) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)
-    || !Number.isSafeInteger(body.total_count) || body.total_count < 0
-    || !Array.isArray(body.workflow_runs) || body.workflow_runs.length > maximumItems) {
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    !Number.isSafeInteger(body.total_count) ||
+    body.total_count < 0 ||
+    !Array.isArray(body.workflow_runs) ||
+    body.workflow_runs.length > maximumItems
+  ) {
     fail('github_invalid_response', 'GitHub returned an invalid workflow run collection', 502);
   }
   const workflowRuns = body.workflow_runs.map((item) => {
-    if (!item || typeof item !== 'object' || !Number.isSafeInteger(item.id) || item.id < 1
-      || !Number.isSafeInteger(item.run_number) || item.run_number < 1
-      || !Number.isSafeInteger(item.run_attempt) || item.run_attempt < 1
-      || typeof item.name !== 'string' || item.name.length < 1 || item.name.length > 255
-      || UNSAFE_TEXT_RE.test(item.name) || !EVENT_RE.test(item.event || '')
-      || !RUN_STATUSES.has(item.status) || (item.conclusion !== null && !CONCLUSIONS.has(item.conclusion))
-      || !SHA_RE.test(item.head_sha || '')) {
+    if (
+      !item ||
+      typeof item !== 'object' ||
+      !Number.isSafeInteger(item.id) ||
+      item.id < 1 ||
+      !Number.isSafeInteger(item.run_number) ||
+      item.run_number < 1 ||
+      !Number.isSafeInteger(item.run_attempt) ||
+      item.run_attempt < 1 ||
+      typeof item.name !== 'string' ||
+      item.name.length < 1 ||
+      item.name.length > 255 ||
+      UNSAFE_TEXT_RE.test(item.name) ||
+      !EVENT_RE.test(item.event || '') ||
+      !RUN_STATUSES.has(item.status) ||
+      (item.conclusion !== null && !CONCLUSIONS.has(item.conclusion)) ||
+      !SHA_RE.test(item.head_sha || '')
+    ) {
       fail('github_invalid_response', 'GitHub returned an invalid workflow run projection', 502);
     }
     return {
@@ -137,9 +196,15 @@ function projectRuns(body, maximumItems) {
   return { totalCount: body.total_count, workflowRuns };
 }
 
-export function createGitHubWorkflowRunsListAdapter({ request, tokenProvider, now = () => Date.now() } = {}) {
-  if (typeof request !== 'function') throw new TypeError('GitHub workflow runs adapter requires a pinned request transport');
-  if (typeof tokenProvider !== 'function') throw new TypeError('GitHub workflow runs adapter requires an installation token provider');
+export function createGitHubWorkflowRunsListAdapter({
+  request,
+  tokenProvider,
+  now = () => Date.now(),
+} = {}) {
+  if (typeof request !== 'function')
+    throw new TypeError('GitHub workflow runs adapter requires a pinned request transport');
+  if (typeof tokenProvider !== 'function')
+    throw new TypeError('GitHub workflow runs adapter requires an installation token provider');
 
   return async function githubWorkflowRunsList(parameters, context = {}) {
     const owner = parameters?.owner;
@@ -148,45 +213,80 @@ export function createGitHubWorkflowRunsListAdapter({ request, tokenProvider, no
     if (!OWNER_RE.test(owner || '') || !REPO_RE.test(repo || '')) {
       fail('github_invalid_repository', 'GitHub repository identity is invalid');
     }
-    if (typeof parameters.resource_ref !== 'string'
-      || parameters.resource_ref.toLowerCase() !== target.toLowerCase()) {
-      fail('github_target_mismatch', 'GitHub repository target does not match typed parameters', 403);
+    if (
+      typeof parameters.resource_ref !== 'string' ||
+      parameters.resource_ref.toLowerCase() !== target.toLowerCase()
+    ) {
+      fail(
+        'github_target_mismatch',
+        'GitHub repository target does not match typed parameters',
+        403,
+      );
     }
     const actor = optionalString(parameters.actor, 'actor', LOGIN_RE, 39);
     const branch = optionalString(parameters.branch, 'branch', null, 255);
     const event = optionalString(parameters.event, 'event', EVENT_RE, 64);
     const headSha = optionalString(parameters.head_sha, 'head_sha', SHA_RE, 64);
     const status = parameters.status === undefined ? undefined : parameters.status;
-    if (status !== undefined && !FILTER_STATUSES.has(status)) fail('github_invalid_filter', 'status is invalid');
-    if (parameters.exclude_pull_requests !== undefined && typeof parameters.exclude_pull_requests !== 'boolean') {
+    if (status !== undefined && !FILTER_STATUSES.has(status))
+      fail('github_invalid_filter', 'status is invalid');
+    if (
+      parameters.exclude_pull_requests !== undefined &&
+      typeof parameters.exclude_pull_requests !== 'boolean'
+    ) {
       fail('github_invalid_filter', 'exclude_pull_requests is invalid');
     }
-    const checkSuiteId = parameters.check_suite_id === undefined ? undefined : parameters.check_suite_id;
+    const checkSuiteId =
+      parameters.check_suite_id === undefined ? undefined : parameters.check_suite_id;
     if (checkSuiteId !== undefined && (!Number.isSafeInteger(checkSuiteId) || checkSuiteId < 1)) {
       fail('github_invalid_filter', 'check_suite_id is invalid');
     }
     const perPage = boundedInteger(parameters.per_page, 30, 1, 100, 'per_page');
     const page = boundedInteger(parameters.page, 1, 1, 10_000, 'page');
-    if (context.execution?.tool !== TOOL || context.execution?.target?.toLowerCase() !== target.toLowerCase()
-      || context.execution?.environment !== context.environment) {
-      fail('github_execution_binding_mismatch', 'Execution capability is not bound to this GitHub repository', 403);
+    if (
+      context.execution?.tool !== TOOL ||
+      context.execution?.target?.toLowerCase() !== target.toLowerCase() ||
+      context.execution?.environment !== context.environment ||
+      !EXECUTION_ID_RE.test(context.execution?.execution_id || '') ||
+      !REQUEST_BINDING_RE.test(context.execution?.request_binding || '')
+    ) {
+      fail(
+        'github_execution_binding_mismatch',
+        'Execution capability is not bound to this GitHub repository',
+        403,
+      );
     }
     if (typeof context.accountRef !== 'string' || !context.accountRef) {
       fail('github_account_unavailable', 'GitHub account binding is unavailable', 503);
     }
     let lease;
     try {
-      lease = await tokenProvider({ account_ref: context.accountRef, environment: context.environment,
-        owner, repo, repository: target, signal: context.signal });
+      lease = await tokenProvider({
+        account_ref: context.accountRef,
+        environment: context.environment,
+        owner,
+        repo,
+        repository: target,
+        execution_id: context.execution.execution_id,
+        request_binding: context.execution.request_binding,
+        signal: context.signal,
+      });
     } catch {
       fail('github_credential_unavailable', 'GitHub installation credential is unavailable', 503);
     }
     const token = validateLease(lease, target, now());
     const query = new URLSearchParams({ per_page: String(perPage), page: String(page) });
-    for (const [key, value] of Object.entries({ actor, branch, event, status, head_sha: headSha })) {
+    for (const [key, value] of Object.entries({
+      actor,
+      branch,
+      event,
+      status,
+      head_sha: headSha,
+    })) {
       if (value !== undefined) query.set(key, value);
     }
-    if (parameters.exclude_pull_requests !== undefined) query.set('exclude_pull_requests', String(parameters.exclude_pull_requests));
+    if (parameters.exclude_pull_requests !== undefined)
+      query.set('exclude_pull_requests', String(parameters.exclude_pull_requests));
     if (checkSuiteId !== undefined) query.set('check_suite_id', String(checkSuiteId));
 
     let response;
@@ -195,8 +295,12 @@ export function createGitHubWorkflowRunsListAdapter({ request, tokenProvider, no
         origin: ORIGIN,
         method: 'GET',
         path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?${query}`,
-        headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`,
-          'X-GitHub-Api-Version': API_VERSION, 'User-Agent': `secret-broker/${BROKER_VERSION}` },
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'X-GitHub-Api-Version': API_VERSION,
+          'User-Agent': `secret-broker/${BROKER_VERSION}`,
+        },
         max_response_bytes: MAX_RESPONSE_BYTES,
         redirect: 'manual',
         signal: context.signal,
@@ -205,12 +309,17 @@ export function createGitHubWorkflowRunsListAdapter({ request, tokenProvider, no
       if (error instanceof V2Error) throw error;
       fail('github_unavailable', 'GitHub request failed', 502);
     }
-    if ([301, 302, 303, 307, 308].includes(response?.status)) fail('github_redirect_denied', 'GitHub redirect was denied', 502);
-    if (response?.status === 401) fail('github_credential_rejected', 'GitHub installation credential was rejected', 502);
-    if (response?.status === 403) fail('github_forbidden', 'GitHub App lacks actions read permission', 403);
+    if ([301, 302, 303, 307, 308].includes(response?.status))
+      fail('github_redirect_denied', 'GitHub redirect was denied', 502);
+    if (response?.status === 401)
+      fail('github_credential_rejected', 'GitHub installation credential was rejected', 502);
+    if (response?.status === 403)
+      fail('github_forbidden', 'GitHub App lacks actions read permission', 403);
     if (response?.status === 404) fail('github_not_found', 'GitHub repository was not found', 404);
-    if (response?.status === 400 || response?.status === 422) fail('github_filter_rejected', 'GitHub rejected the workflow run filters', 400);
-    if (response?.status !== 200) fail('github_upstream_error', 'GitHub workflow runs request failed', 502);
+    if (response?.status === 400 || response?.status === 422)
+      fail('github_filter_rejected', 'GitHub rejected the workflow run filters', 400);
+    if (response?.status !== 200)
+      fail('github_upstream_error', 'GitHub workflow runs request failed', 502);
     const { totalCount, workflowRuns } = projectRuns(parseJsonBody(response.body), perPage);
     return {
       workflow_runs: workflowRuns,
@@ -233,5 +342,12 @@ export const GITHUB_WORKFLOW_RUNS_LIST_CONTRACT = Object.freeze({
   credential_maximum_ttl_seconds: 3600,
   required_permission: 'actions:read',
   output_content_trust: 'untrusted_external',
-  output_excludes: Object.freeze(['pull_requests', 'jobs', 'logs', 'artifacts', 'authorization', 'token']),
+  output_excludes: Object.freeze([
+    'pull_requests',
+    'jobs',
+    'logs',
+    'artifacts',
+    'authorization',
+    'token',
+  ]),
 });

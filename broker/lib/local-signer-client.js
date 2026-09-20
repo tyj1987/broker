@@ -9,6 +9,8 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENVIRONMENT_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const CLIENT_ID_RE = /^[A-Za-z0-9._-]{3,128}$/;
 const SIGNING_INPUT_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const EXECUTION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_BINDING_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export class LocalSignerError extends Error {
   constructor(code, message) {
@@ -29,14 +31,23 @@ function validateInput(input) {
     Array.isArray(input) ||
     Object.keys(input).some(
       (key) =>
-        !['algorithm', 'signing_input', 'account_ref', 'environment', 'client_id', 'signal'].includes(
-          key,
-        ),
+        ![
+          'algorithm',
+          'signing_input',
+          'account_ref',
+          'environment',
+          'client_id',
+          'execution_id',
+          'request_binding',
+          'signal',
+        ].includes(key),
     ) ||
     input.algorithm !== 'RS256' ||
     !ID_RE.test(input.account_ref || '') ||
     !ENVIRONMENT_RE.test(input.environment || '') ||
     !CLIENT_ID_RE.test(input.client_id || '') ||
+    !EXECUTION_ID_RE.test(input.execution_id || '') ||
+    !REQUEST_BINDING_RE.test(input.request_binding || '') ||
     typeof input.signing_input !== 'string' ||
     input.signing_input.length < 20 ||
     input.signing_input.length > 4096 ||
@@ -49,12 +60,14 @@ function validateInput(input) {
 
 function encodeRequest(input) {
   const payload = `${JSON.stringify({
-    version: 1,
+    version: 2,
     algorithm: input.algorithm,
     signing_input: input.signing_input,
     account_ref: input.account_ref,
     environment: input.environment,
     client_id: input.client_id,
+    execution_id: input.execution_id,
+    request_binding: input.request_binding,
   })}\n`;
   if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) {
     fail('signer_request_invalid', 'Local signer request is invalid');
@@ -62,7 +75,7 @@ function encodeRequest(input) {
   return payload;
 }
 
-function decodeResponse(value) {
+function decodeResponse(input, value) {
   let document;
   try {
     document = JSON.parse(value);
@@ -73,8 +86,12 @@ function decodeResponse(value) {
     !document ||
     typeof document !== 'object' ||
     Array.isArray(document) ||
-    Object.keys(document).some((key) => !['version', 'signature'].includes(key)) ||
-    document.version !== 1 ||
+    Object.keys(document).some(
+      (key) => !['version', 'signature', 'execution_id', 'request_binding'].includes(key),
+    ) ||
+    document.version !== 2 ||
+    document.execution_id !== input.execution_id ||
+    document.request_binding !== input.request_binding ||
     typeof document.signature !== 'string' ||
     !/^[A-Za-z0-9_-]+$/.test(document.signature)
   ) {
@@ -108,10 +125,7 @@ export function createLocalSignerClient({
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000) {
     throw new TypeError('Local signer timeout is invalid');
   }
-  if (
-    processUid !== null &&
-    (!Number.isSafeInteger(processUid) || processUid < 0)
-  ) {
+  if (processUid !== null && (!Number.isSafeInteger(processUid) || processUid < 0)) {
     throw new TypeError('Local signer process identity is invalid');
   }
   if (
@@ -170,8 +184,7 @@ export function createLocalSignerClient({
         socket?.destroy?.();
         handler(value);
       };
-      const rejectSafe = (code, message) =>
-        finish(reject, new LocalSignerError(code, message));
+      const rejectSafe = (code, message) => finish(reject, new LocalSignerError(code, message));
       const abort = () => rejectSafe('signer_aborted', 'Local signer request was aborted');
 
       try {
@@ -192,13 +205,16 @@ export function createLocalSignerClient({
         socket.on('end', () => {
           if (settled) return;
           try {
-            finish(resolve, decodeResponse(Buffer.concat(chunks).toString('utf8').trim()));
+            finish(resolve, decodeResponse(input, Buffer.concat(chunks).toString('utf8').trim()));
           } catch (error) {
             finish(
               reject,
               error instanceof LocalSignerError
                 ? error
-                : new LocalSignerError('signer_response_invalid', 'Local signer returned an invalid response'),
+                : new LocalSignerError(
+                    'signer_response_invalid',
+                    'Local signer returned an invalid response',
+                  ),
             );
           }
         });
@@ -218,7 +234,7 @@ export const LOCAL_SIGNER_CONTRACT = Object.freeze({
   socket_directory: SOCKET_DIRECTORY,
   socket_path: SOCKET_PATH,
   algorithm: 'RS256',
-  protocol_version: 1,
+  protocol_version: 2,
   maximum_request_bytes: MAX_REQUEST_BYTES,
   maximum_response_bytes: MAX_RESPONSE_BYTES,
   maximum_timeout_ms: 10_000,

@@ -1,7 +1,7 @@
 manifest_version: 1
 id: openai
 display_name: OpenAI API
-checked_at: 2026-09-09
+checked_at: 2026-09-11
 status: contract_required
 official_docs:
   - https://developers.openai.com/api/reference/overview
@@ -9,7 +9,7 @@ official_docs:
 origins: [https://api.openai.com]
 authentication:
   priority: [workload_identity_federation, project_service_account, project_api_key]
-  inject: { Authorization: "Bearer {{access_token}}" }
+  inject: { Authorization: 'Bearer {{access_token}}' }
   rotation: Prefer WIF; otherwise rotate a project-scoped service account key.
   revocation: Remove the project service account key in the OpenAI platform.
 operations:
@@ -20,6 +20,8 @@ operations:
     mutating: false
     approval: none
     parameters: {}
+    account_binding: resource_ref is the exact OpenAI project ID registered under account_ref.
+    response_projection: Returns model IDs only; owner and other provider metadata are not released.
     maximum_response_bytes: 2097152
 redaction: [Authorization, api_key, access_token, organization_id, project_id]
 contract_test: { account: isolated_openai_project, required: true, last_result: not_run }

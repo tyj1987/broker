@@ -10,12 +10,16 @@ import {
 const SOCKET = '/run/secret-broker-signer/github.sock';
 const SOCKET_DIRECTORY = '/run/secret-broker-signer';
 const signature = Buffer.alloc(256, 7);
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const validInput = {
   algorithm: 'RS256',
   signing_input: `${'a'.repeat(20)}.${'b'.repeat(20)}`,
   account_ref: 'github-primary',
   environment: 'production',
   client_id: 'Iv1.runtime-test',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
   signal: new AbortController().signal,
 };
 const safeStat = async (path) =>
@@ -69,7 +73,12 @@ function socketHarness({ response, error, timeout = false, throwOnConnect = fals
 }
 
 const successHarness = socketHarness({
-  response: JSON.stringify({ version: 1, signature: signature.toString('base64url') }),
+  response: JSON.stringify({
+    version: 2,
+    signature: signature.toString('base64url'),
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+  }),
 });
 const client = createLocalSignerClient({
   connect: successHarness.connect,
@@ -86,12 +95,14 @@ assert.equal(successHarness.state.timeoutMs, 500);
 assert.equal(successHarness.state.destroyed, true);
 const request = JSON.parse(successHarness.state.payload.trim());
 assert.deepEqual(request, {
-  version: 1,
+  version: 2,
   algorithm: 'RS256',
   signing_input: validInput.signing_input,
   account_ref: 'github-primary',
   environment: 'production',
   client_id: 'Iv1.runtime-test',
+  execution_id: EXECUTION_ID,
+  request_binding: REQUEST_BINDING,
 });
 assert.doesNotMatch(successHarness.state.payload, /private|secret|token|authorization/i);
 
@@ -106,13 +117,34 @@ for (const timeoutMs of [99, 10_001, 1.5]) {
 
 for (const [metadata, code] of [
   [null, 'signer_boundary_invalid'],
-  [{ isSocket: () => false, isSymbolicLink: () => false, mode: 0o100660, uid: 2000, gid: 3000 }, 'signer_boundary_invalid'],
-  [{ isSocket: () => true, isSymbolicLink: () => true, mode: 0o140660, uid: 2000, gid: 3000 }, 'signer_boundary_invalid'],
-  [{ isSocket: () => true, isSymbolicLink: () => false, mode: 0o140666, uid: 2000, gid: 3000 }, 'signer_boundary_invalid'],
-  [{ isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660, uid: 1000, gid: 3000 }, 'signer_boundary_invalid'],
-  [{ isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660, uid: 2001, gid: 3000 }, 'signer_boundary_invalid'],
-  [{ isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660, uid: 2000, gid: 3001 }, 'signer_boundary_invalid'],
-  [{ isSocket: () => true, isSymbolicLink: () => false, mode: 0o140640, uid: 2000, gid: 3000 }, 'signer_boundary_invalid'],
+  [
+    { isSocket: () => false, isSymbolicLink: () => false, mode: 0o100660, uid: 2000, gid: 3000 },
+    'signer_boundary_invalid',
+  ],
+  [
+    { isSocket: () => true, isSymbolicLink: () => true, mode: 0o140660, uid: 2000, gid: 3000 },
+    'signer_boundary_invalid',
+  ],
+  [
+    { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140666, uid: 2000, gid: 3000 },
+    'signer_boundary_invalid',
+  ],
+  [
+    { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660, uid: 1000, gid: 3000 },
+    'signer_boundary_invalid',
+  ],
+  [
+    { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660, uid: 2001, gid: 3000 },
+    'signer_boundary_invalid',
+  ],
+  [
+    { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140660, uid: 2000, gid: 3001 },
+    'signer_boundary_invalid',
+  ],
+  [
+    { isSocket: () => true, isSymbolicLink: () => false, mode: 0o140640, uid: 2000, gid: 3000 },
+    'signer_boundary_invalid',
+  ],
 ]) {
   const boundaryClient = createLocalSignerClient({
     stat: async (path) => (path === SOCKET_DIRECTORY ? safeStat(path) : metadata),
@@ -139,7 +171,9 @@ for (const directoryMetadata of [
 }
 await assert.rejects(
   createLocalSignerClient({
-    stat: async () => { throw new Error('canary-stat'); },
+    stat: async () => {
+      throw new Error('canary-stat');
+    },
     processUid: 1000,
     processGroups: [3000],
   }).probe(),
@@ -160,22 +194,65 @@ for (const input of [
   { ...validInput, account_ref: '../account' },
   { ...validInput, environment: 'Production' },
   { ...validInput, client_id: 'x' },
+  { ...validInput, execution_id: 'wrong' },
+  { ...validInput, request_binding: 'wrong' },
   { ...validInput, signal: {} },
 ]) {
   await assert.rejects(client.sign(input), expectCode('signer_request_invalid'));
 }
 const preAborted = new AbortController();
 preAborted.abort();
-await assert.rejects(client.sign({ ...validInput, signal: preAborted.signal }), expectCode('signer_aborted'));
+await assert.rejects(
+  client.sign({ ...validInput, signal: preAborted.signal }),
+  expectCode('signer_aborted'),
+);
 
 for (const response of [
   '{bad-json',
   JSON.stringify(null),
-  JSON.stringify({ version: 2, signature: signature.toString('base64url') }),
-  JSON.stringify({ version: 1, signature: signature.toString('base64url'), extra: true }),
-  JSON.stringify({ version: 1, signature: '*' }),
-  JSON.stringify({ version: 1, signature: Buffer.alloc(255).toString('base64url') }),
-  JSON.stringify({ version: 1, signature: Buffer.alloc(1025).toString('base64url') }),
+  JSON.stringify({
+    version: 1,
+    signature: signature.toString('base64url'),
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+  }),
+  JSON.stringify({
+    version: 2,
+    signature: signature.toString('base64url'),
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+    extra: true,
+  }),
+  JSON.stringify({
+    version: 2,
+    signature: '*',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+  }),
+  JSON.stringify({
+    version: 2,
+    signature: Buffer.alloc(255).toString('base64url'),
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+  }),
+  JSON.stringify({
+    version: 2,
+    signature: Buffer.alloc(1025).toString('base64url'),
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
+  }),
+  JSON.stringify({
+    version: 2,
+    signature: signature.toString('base64url'),
+    execution_id: '87654321-1234-4123-8123-123456789abc',
+    request_binding: REQUEST_BINDING,
+  }),
+  JSON.stringify({
+    version: 2,
+    signature: signature.toString('base64url'),
+    execution_id: EXECUTION_ID,
+    request_binding: 'b'.repeat(43),
+  }),
 ]) {
   const invalidClient = createLocalSignerClient({
     connect: socketHarness({ response }).connect,
@@ -231,11 +308,13 @@ assert.deepEqual(LOCAL_SIGNER_CONTRACT, {
   socket_directory: SOCKET_DIRECTORY,
   socket_path: SOCKET,
   algorithm: 'RS256',
-  protocol_version: 1,
+  protocol_version: 2,
   maximum_request_bytes: 8192,
   maximum_response_bytes: 4096,
   maximum_timeout_ms: 10_000,
   private_key_available_to_broker: false,
 });
 
-console.log('local signer client: fixed socket, ownership boundary, bounded protocol and safe failures passed');
+console.log(
+  'local signer client: fixed socket, ownership boundary, bounded protocol and safe failures passed',
+);

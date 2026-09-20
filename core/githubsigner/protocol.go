@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	ProtocolVersion    = 1
+	ProtocolVersion    = 2
 	MaxRequestBytes    = 8 * 1024
 	MaxSignatureBytes  = 1024
 	MinSignatureBytes  = 256
@@ -28,18 +28,22 @@ const (
 )
 
 var (
-	accountRefPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	environmentPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	clientIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
+	accountRefPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	environmentPattern    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	clientIDPattern       = regexp.MustCompile(`^[A-Za-z0-9._-]{3,128}$`)
+	executionIDPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	requestBindingPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 )
 
 type wireRequest struct {
-	Version      int    `json:"version"`
-	Algorithm    string `json:"algorithm"`
-	SigningInput string `json:"signing_input"`
-	AccountRef   string `json:"account_ref"`
-	Environment  string `json:"environment"`
-	ClientID     string `json:"client_id"`
+	Version        int    `json:"version"`
+	Algorithm      string `json:"algorithm"`
+	SigningInput   string `json:"signing_input"`
+	AccountRef     string `json:"account_ref"`
+	Environment    string `json:"environment"`
+	ClientID       string `json:"client_id"`
+	ExecutionID    string `json:"execution_id"`
+	RequestBinding string `json:"request_binding"`
 }
 
 type jwtHeader struct {
@@ -54,16 +58,20 @@ type jwtClaims struct {
 }
 
 type wireResponse struct {
-	Version   int    `json:"version"`
-	Signature string `json:"signature"`
+	Version        int    `json:"version"`
+	Signature      string `json:"signature"`
+	ExecutionID    string `json:"execution_id"`
+	RequestBinding string `json:"request_binding"`
 }
 
 // DigestRequest deliberately has no plaintext signing-input or private-key field.
 type DigestRequest struct {
-	AccountRef  string
-	Environment string
-	ClientID    string
-	Digest      [sha256.Size]byte
+	AccountRef     string
+	Environment    string
+	ClientID       string
+	ExecutionID    string
+	RequestBinding string
+	Digest         [sha256.Size]byte
 }
 
 type DigestSigner interface {
@@ -206,7 +214,8 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 	digest := sha256.Sum256([]byte(request.SigningInput))
 	signature, err := server.Signer.SignDigest(ctx, DigestRequest{
 		AccountRef: request.AccountRef, Environment: request.Environment,
-		ClientID: request.ClientID, Digest: digest,
+		ClientID: request.ClientID, ExecutionID: request.ExecutionID,
+		RequestBinding: request.RequestBinding, Digest: digest,
 	})
 	if err != nil {
 		return fail("signing_failed")
@@ -215,8 +224,10 @@ func (server *Server) ServeConn(ctx context.Context, connection net.Conn) error 
 		return fail("signature_invalid")
 	}
 	response := wireResponse{
-		Version:   ProtocolVersion,
-		Signature: base64.RawURLEncoding.EncodeToString(signature),
+		Version:        ProtocolVersion,
+		Signature:      base64.RawURLEncoding.EncodeToString(signature),
+		ExecutionID:    request.ExecutionID,
+		RequestBinding: request.RequestBinding,
 	}
 	if err := json.NewEncoder(connection).Encode(response); err != nil {
 		return fail("response_failed")
@@ -241,7 +252,9 @@ func readRequest(reader io.Reader, now time.Time) (wireRequest, error) {
 	if request.Version != ProtocolVersion || request.Algorithm != "RS256" ||
 		!accountRefPattern.MatchString(request.AccountRef) ||
 		!environmentPattern.MatchString(request.Environment) ||
-		!clientIDPattern.MatchString(request.ClientID) {
+		!clientIDPattern.MatchString(request.ClientID) ||
+		!executionIDPattern.MatchString(request.ExecutionID) ||
+		!requestBindingPattern.MatchString(request.RequestBinding) {
 		return wireRequest{}, fail("request_invalid")
 	}
 	if err := validateSigningInput(request.SigningInput, request.ClientID, now); err != nil {

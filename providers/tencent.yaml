@@ -1,11 +1,11 @@
 manifest_version: 1
 id: tencent
 display_name: Tencent Cloud
-checked_at: 2026-09-09
+checked_at: 2026-09-11
 status: contract_required
 official_docs:
-  - https://www.tencentcloud.com/document/product/213/30657
-  - https://www.tencentcloud.com/document/product/598/30348
+  - https://cloud.tencent.com/document/product/213/15728
+  - https://cloud.tencent.com/document/product/1278/46716
 origins: [https://cvm.tencentcloudapi.com, https://sts.tencentcloudapi.com]
 authentication:
   priority: [cam_role, oidc_federation, temporary_credentials]
@@ -20,7 +20,7 @@ operations:
     permission: cvm:DescribeInstances
     mutating: false
     approval: none
-    parameters: { Region: { type: string }, Offset: { type: integer }, Limit: { type: integer } }
+    parameters: { Region: { type: string }, Offset: { type: integer, maximum: 10000 }, Limit: { type: integer, maximum: 100 } }
     fixed_headers: { X-TC-Action: DescribeInstances, X-TC-Version: "2017-03-12" }
     maximum_response_bytes: 2097152
 redaction: [Authorization, SecretId, SecretKey, Token, Signature]

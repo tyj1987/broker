@@ -1,105 +1,154 @@
-// broker/signing/aliyun-v3.js — V4 阿里云 API v3 签名 (HMAC-SHA256)
-// Reference: https://help.aliyun.com/document_detail/315526.htm
-//
-// Headers injected:
-//   Authorization: ACS3-HMAC-SHA256 Credential=<ak>,SignedHeaders=<list>,Signature=<hex>
-//   x-acs-date: <RFC 1123 date, e.g. "Mon, 26 Aug 2026 09:12:34 GMT">
-//   x-acs-content-sha256: <hex of body sha256>
-//   Accept: application/json
-//
-// Used for newer Aliyun OpenAPI (e.g. ACK, ECS 2024+).
-// Falls back to aliyun-v2 for older endpoints.
+// Alibaba Cloud OpenAPI Signature V3 (ACS3-HMAC-SHA256).
+// Reference: https://www.alibabacloud.com/help/en/sdk/product-overview/v3-request-structure-and-signature
 
-import { createHmac, createHash } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
-function sha256Hex(s) {
-  return createHash('sha256').update(s || '').digest('hex');
+const SIGNATURE_ALGORITHM = 'ACS3-HMAC-SHA256';
+const HEADER_NAME_RE = /^[a-z0-9-]+$/;
+const CONTROL_CHARACTER_RE = /[\u0000-\u001f\u007f]/;
+
+function sha256Hex(value) {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
-function hmacSha256(key, data) {
-  return createHmac('sha256', key).update(data).digest();
+
+function assertNonEmptyString(name, value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${name} must be a non-empty string`);
+  }
+  if (CONTROL_CHARACTER_RE.test(value)) {
+    throw new TypeError(`${name} contains control characters`);
+  }
+  return value;
+}
+
+function percentEncode(value) {
+  return encodeURIComponent(String(value)).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function compareUtf8(left, right) {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
 }
 
 function canonicalQueryString(query) {
-  if (!query) return '';
-  const entries = Object.entries(query)
-    .filter(([, v]) => v !== undefined && v !== null)
-    .map(([k, v]) => [
-      encodeURIComponent(k),
-      encodeURIComponent(String(v)),
-    ])
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return entries.map(([k, v]) => `${k}=${v}`).join('&');
+  if (query == null) return '';
+  if (typeof query !== 'object' || Array.isArray(query)) {
+    throw new TypeError('query must be an object');
+  }
+
+  return Object.entries(query)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([name, value]) => {
+      if (typeof value === 'object') {
+        throw new TypeError(`query parameter ${name} must be a scalar value`);
+      }
+      return [percentEncode(name), percentEncode(value)];
+    })
+    .sort(
+      ([leftName, leftValue], [rightName, rightValue]) =>
+        compareUtf8(leftName, rightName) || compareUtf8(leftValue, rightValue),
+    )
+    .map(([name, value]) => `${name}=${value}`)
+    .join('&');
 }
 
-function canonicalHeaders(headers) {
-  const entries = Object.entries(headers)
-    .filter(([, v]) => v !== undefined && v !== null && v !== '')
-    .map(([k, v]) => [k.toLowerCase().trim(), String(v).trim()])
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return entries.map(([k, v]) => `${k}:${v}\n`).join('');
+function normalizeHeaders(headers) {
+  if (headers == null || typeof headers !== 'object' || Array.isArray(headers)) {
+    throw new TypeError('headers must be an object');
+  }
+
+  const normalized = {};
+  for (const [rawName, rawValue] of Object.entries(headers)) {
+    if (rawValue === undefined || rawValue === null) continue;
+    const name = rawName.trim().toLowerCase();
+    if (!HEADER_NAME_RE.test(name)) throw new TypeError(`invalid header name: ${rawName}`);
+    if (name === 'authorization') {
+      throw new TypeError('caller-supplied authorization header is forbidden');
+    }
+    if (Object.hasOwn(normalized, name)) throw new TypeError(`duplicate header: ${name}`);
+
+    const value = String(rawValue).trim();
+    if (value.length === 0 || CONTROL_CHARACTER_RE.test(value)) {
+      throw new TypeError(`invalid header value: ${name}`);
+    }
+    normalized[name] = value;
+  }
+  return normalized;
 }
 
-function signedHeaders(headers) {
-  return Object.keys(headers)
-    .map(k => k.toLowerCase().trim())
-    .filter(Boolean)
-    .sort()
-    .join(';');
+function formatAcsDate(value) {
+  const date = value instanceof Date ? value : new Date(value ?? Date.now());
+  if (Number.isNaN(date.getTime())) throw new TypeError('now must be a valid date');
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 /**
- * Compute Aliyun v3 signature headers.
- * @param {{
- *   method: string,
- *   host: string,
- *   path: string,
- *   query?: object,
- *   headers?: object,
- *   body?: string|object|null,
- *   secret: { access_key_id: string, access_key_secret: string },
- *   now?: Date,
- * }} args
- * @returns {object} headers to merge (Authorization, x-acs-date, x-acs-content-sha256)
+ * Compute the headers required for an Alibaba Cloud OpenAPI V3 request.
+ * The caller must send the exact method, host, path, query, headers and body used here.
  */
-export function signAliyunV3({ method, host, path, query, headers = {}, body, secret, now }) {
-  const date = now || new Date();
-  const rfcDate = date.toUTCString();
-  const bodyStr = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
-  const payloadHash = sha256Hex(bodyStr);
+export function signAliyunV3({
+  method,
+  host,
+  path,
+  query,
+  headers = {},
+  body,
+  secret,
+  now,
+  nonce,
+}) {
+  const normalizedMethod = assertNonEmptyString('method', method).toUpperCase();
+  const normalizedHost = assertNonEmptyString('host', host).toLowerCase();
+  const normalizedPath = assertNonEmptyString('path', path);
+  if (!normalizedPath.startsWith('/')) throw new TypeError('path must start with /');
+  if (!secret || typeof secret !== 'object') throw new TypeError('secret is required');
+  const accessKeyId = assertNonEmptyString('access_key_id', secret.access_key_id);
+  const accessKeySecret = assertNonEmptyString('access_key_secret', secret.access_key_secret);
+  const signatureNonce = assertNonEmptyString('nonce', nonce ?? randomUUID());
+  const bodyString = body == null ? '' : typeof body === 'string' ? body : JSON.stringify(body);
+  const payloadHash = sha256Hex(bodyString);
 
-  // Always required headers
-  const allHeaders = {
-    host,
-    'x-acs-date': rfcDate,
+  const signedHeaderValues = {
+    ...normalizeHeaders(headers),
+    host: normalizedHost,
     'x-acs-content-sha256': payloadHash,
-    ...Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])),
+    'x-acs-date': formatAcsDate(now),
+    'x-acs-signature-nonce': signatureNonce,
   };
-  const canonical = canonicalHeaders(allHeaders);
-  const signed = signedHeaders(allHeaders);
+  assertNonEmptyString('x-acs-action', signedHeaderValues['x-acs-action']);
+  assertNonEmptyString('x-acs-version', signedHeaderValues['x-acs-version']);
+  if (secret.security_token != null) {
+    signedHeaderValues['x-acs-security-token'] = assertNonEmptyString(
+      'security_token',
+      secret.security_token,
+    );
+  }
 
+  const sortedHeaderNames = Object.keys(signedHeaderValues).sort(compareUtf8);
+  const canonicalHeaders = sortedHeaderNames
+    .map((name) => `${name}:${signedHeaderValues[name]}\n`)
+    .join('');
+  const signedHeaders = sortedHeaderNames.join(';');
   const canonicalRequest = [
-    (method || 'GET').toUpperCase(),
-    path || '/',
+    normalizedMethod,
+    normalizedPath,
     canonicalQueryString(query),
-    canonical,
-    signed,
+    canonicalHeaders,
+    signedHeaders,
     payloadHash,
   ].join('\n');
-
-  const hashedCanonical = sha256Hex(canonicalRequest);
-  const stringToSign = `ACS3-HMAC-SHA256\n${hashedCanonical}`;
-
-  // Signing chain: kDate -> kRegion -> kProduct -> kSigning
-  // Aliyun v3 doesn't require region/product in signing (they're metadata).
-  const kSecret = Buffer.from(secret.access_key_secret, 'utf8');
-  const signature = createHmac('sha256', kSecret).update(stringToSign).digest('hex');
+  const stringToSign = `${SIGNATURE_ALGORITHM}\n${sha256Hex(canonicalRequest)}`;
+  const signature = createHmac('sha256', accessKeySecret)
+    .update(stringToSign, 'utf8')
+    .digest('hex');
 
   return {
-    ...headers,
-    'host': host,
-    'Authorization': `ACS3-HMAC-SHA256 Credential=${secret.access_key_id},SignedHeaders=${signed},Signature=${signature}`,
-    'x-acs-date': rfcDate,
-    'x-acs-content-sha256': payloadHash,
+    ...signedHeaderValues,
+    Authorization:
+      `${SIGNATURE_ALGORITHM} Credential=${accessKeyId},` +
+      `SignedHeaders=${signedHeaders},Signature=${signature}`,
   };
 }
 

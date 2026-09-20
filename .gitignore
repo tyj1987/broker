@@ -55,6 +55,7 @@ coverage/
 coverage.txt
 coverage.out
 *-coverage.out
+*.coverage
 /core/coverage
 .nyc_output/
 *.vsix

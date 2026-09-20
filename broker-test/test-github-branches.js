@@ -15,6 +15,8 @@ import { V2Error } from '../broker/lib/operations-v2.js';
 
 const NOW = 2_000_000_000_000;
 const SHA = 'a'.repeat(40);
+const EXECUTION_ID = '12345678-1234-4123-8123-123456789abc';
+const REQUEST_BINDING = 'a'.repeat(43);
 const expectCode = (code) => (error) => error instanceof V2Error && error.code === code;
 const parameters = {
   resource_ref: 'tyj1987/broker',
@@ -31,6 +33,8 @@ const context = {
     tool: 'github.branches.list@1.0.0',
     target: 'tyj1987/broker',
     environment: 'production',
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
   },
   signal: new AbortController().signal,
 };
@@ -74,6 +78,8 @@ assert.deepEqual(
     environment: tokenInput.environment,
     repository: tokenInput.repository,
     signal: tokenInput.signal,
+    execution_id: tokenInput.execution_id,
+    request_binding: tokenInput.request_binding,
     origin: requestInput.origin,
     method: requestInput.method,
     path: requestInput.path,
@@ -85,6 +91,8 @@ assert.deepEqual(
     environment: 'production',
     repository: 'tyj1987/broker',
     signal: context.signal,
+    execution_id: EXECUTION_ID,
+    request_binding: REQUEST_BINDING,
     origin: 'https://api.github.com',
     method: 'GET',
     path: '/repos/tyj1987/broker/branches?per_page=2&page=3&protected=true',
@@ -97,7 +105,8 @@ assert.equal(JSON.stringify(result).includes('unit-token'), false);
 
 const defaultResult = await createGitHubBranchesListAdapter({
   tokenProvider: async () => ({
-    ...validLease(), expires_at: new Date(Date.now() + 60_000).toISOString(),
+    ...validLease(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
   }),
   request: async (input) => {
     assert.equal(input.path, '/repos/tyj1987/broker/branches?per_page=30&page=1');
@@ -148,6 +157,15 @@ await assert.rejects(
   adapter(parameters, { ...context, execution: { ...context.execution, environment: 'staging' } }),
   expectCode('github_execution_binding_mismatch'),
 );
+for (const execution of [
+  { ...context.execution, execution_id: 'wrong' },
+  { ...context.execution, request_binding: 'wrong' },
+]) {
+  await assert.rejects(
+    adapter(parameters, { ...context, execution }),
+    expectCode('github_execution_binding_mismatch'),
+  );
+}
 await assert.rejects(
   adapter(parameters, { ...context, accountRef: '' }),
   expectCode('github_account_unavailable'),
@@ -372,9 +390,7 @@ assert.deepEqual(
   ['REQUESTED', 'READY', 'EXECUTING', 'SUCCEEDED'],
 );
 assert.ok(
-  taskEvents.every(
-    (event) => !JSON.stringify(event).includes('short-lived-installation-token'),
-  ),
+  taskEvents.every((event) => !JSON.stringify(event).includes('short-lived-installation-token')),
 );
 await assert.rejects(taskBroker.run(actor, task.id), expectCode('invalid_state'));
 assert.equal(calls.length, 4, 'a terminal task cannot replay its GitHub capability');

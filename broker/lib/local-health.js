@@ -48,12 +48,20 @@ export function startLocalHealthServer(opts) {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     if (listen.path && existsSync(listen.path)) {
-      try { unlinkSync(listen.path); } catch { /* stale socket */ }
+      try {
+        unlinkSync(listen.path);
+      } catch {
+        /* stale socket */
+      }
     }
     const onListening = () => {
       server.removeListener('error', reject);
       if (listen.path) {
-        try { chmodSync(listen.path, 0o600); } catch { /* win32 / already 0600 */ }
+        try {
+          chmodSync(listen.path, 0o600);
+        } catch {
+          /* win32 / already 0600 */
+        }
       }
       if (typeof log === 'function') {
         log(`[broker] local health listener on ${describeHealthBind(listen)}`);

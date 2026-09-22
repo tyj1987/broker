@@ -15,10 +15,18 @@ export function shouldSampleAudit(event, policy = {}) {
   const drop = (policy.dropActions || []).map((a) => a.toLowerCase());
   if (drop.includes(action)) return false;
 
-  const always = (policy.alwaysActions || [
-    'login', 'login_mfa', 'logout', 'secret_get', 'secret_put', 'secret_delete',
-    'proxy', 'connect',
-  ]).map((a) => a.toLowerCase());
+  const always = (
+    policy.alwaysActions || [
+      'login',
+      'login_mfa',
+      'logout',
+      'secret_get',
+      'secret_put',
+      'secret_delete',
+      'proxy',
+      'connect',
+    ]
+  ).map((a) => a.toLowerCase());
   if (always.includes(action)) return true;
   if (event?.status === 'denied' || event?.status === 'error') return true;
 
@@ -97,12 +105,8 @@ export function pruneAuditFiles(auditDir, retainDays = 30) {
  *   AUDIT_RETAIN_DAYS=30
  */
 export function auditPolicyFromEnv(env = process.env) {
-  const sampleRate = env.AUDIT_SAMPLE_RATE != null
-    ? Number(env.AUDIT_SAMPLE_RATE)
-    : 1;
-  const retainDays = env.AUDIT_RETAIN_DAYS != null
-    ? Number(env.AUDIT_RETAIN_DAYS)
-    : 30;
+  const sampleRate = env.AUDIT_SAMPLE_RATE != null ? Number(env.AUDIT_SAMPLE_RATE) : 1;
+  const retainDays = env.AUDIT_RETAIN_DAYS != null ? Number(env.AUDIT_RETAIN_DAYS) : 30;
   return {
     sampleRate: Number.isFinite(sampleRate) ? sampleRate : 1,
     retainDays: Number.isFinite(retainDays) ? retainDays : 30,

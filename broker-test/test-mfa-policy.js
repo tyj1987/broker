@@ -8,36 +8,49 @@ import {
   loadMfaPolicy,
   DEFAULT_MFA_POLICY as DEFAULT_POLICY,
 } from '../broker/lib/index.js';
+import { hashPassword, verifyPasswordCompat } from '../broker/totp.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // === calcRiskScore ===
 // All tests use a fixed `now` at local noon (12:00) to keep tests
 // deterministic across timezones / CI runner hours. Without this, the
 // `unusual_hour` factor (hour<6 || hour>=23) would fire during UTC 23-05
 // and break the 6 strict-equality tests below (CI failures 2026-09-01).
-const TEST_NOW = new Date(2026, 8, 1, 12, 0, 0);  // 2026-09-01 12:00 local
+const TEST_NOW = new Date(2026, 8, 1, 12, 0, 0); // 2026-09-01 12:00 local
 section('calcRiskScore basics');
 {
   const r = calcRiskScore({ client: { role: 'developer' }, now: TEST_NOW });
   ok('no context = 0', r.score === 0 && r.factors.length === 0);
 }
 {
-  const r = calcRiskScore({ source_ip: '8.8.8.8', client: { ip_whitelist: ['10.0.0.0/8'] }, now: TEST_NOW });
+  const r = calcRiskScore({
+    source_ip: '8.8.8.8',
+    client: { ip_whitelist: ['10.0.0.0/8'] },
+    now: TEST_NOW,
+  });
   ok('unusual_ip = 30', r.score === 30 && r.factors.includes('unusual_ip'));
 }
 {
-  const old = TEST_NOW.getTime() - 40 * 86400_000;  // 40 days before TEST_NOW
+  const old = TEST_NOW.getTime() - 40 * 86400_000; // 40 days before TEST_NOW
   const r = calcRiskScore({ last_login_at: old, now: TEST_NOW });
   ok('stale_account >30d = 20', r.score === 20 && r.factors.includes('stale_account'));
 }
 {
-  const old = TEST_NOW.getTime() - 10 * 86400_000;  // 10 days before TEST_NOW
+  const old = TEST_NOW.getTime() - 10 * 86400_000; // 10 days before TEST_NOW
   const r = calcRiskScore({ last_login_at: old, now: TEST_NOW });
   ok('stale 7-30d = 10', r.score === 10);
 }
@@ -56,14 +69,15 @@ section('calcRiskScore basics');
 }
 {
   // all factors combined
-  const old = Date.now() - 40 * 86400_000;
+  const old = TEST_NOW.getTime() - 40 * 86400_000;
   const r = calcRiskScore({
     source_ip: '8.8.8.8',
     client: { ip_whitelist: ['10.0.0.0/8'] },
     last_login_at: old,
     action: 'rotate-cert',
-    user_agent: 'A', last_user_agent: 'B',
-    now: new Date(2026, 8, 1, 3, 0, 0),  // local 3 AM
+    user_agent: 'A',
+    last_user_agent: 'B',
+    now: new Date(2026, 8, 1, 3, 0, 0), // local 3 AM
   });
   ok('combined = 30+20+25+10+15 = 100 (capped)', r.score === 100 && r.factors.length === 5);
 }
@@ -71,6 +85,21 @@ section('calcRiskScore basics');
   // low-risk path (mid-day, no flags)
   const r = calcRiskScore({ now: new Date('2026-09-01T12:00:00Z') });
   ok('low risk = 0', r.score === 0);
+}
+
+// === password compatibility regression ===
+section('password compatibility');
+{
+  const legacy = 'legacy-password-123';
+  ok('legacy plaintext correct password', verifyPasswordCompat(legacy, legacy) === true);
+  ok(
+    'legacy plaintext wrong password denied',
+    verifyPasswordCompat('wrong-password', legacy) === false,
+  );
+
+  const hashed = hashPassword('current-password-123');
+  ok('scrypt correct password', verifyPasswordCompat('current-password-123', hashed) === true);
+  ok('scrypt wrong password denied', verifyPasswordCompat('wrong-password', hashed) === false);
 }
 
 // === SENSITIVE_ACTIONS ===
@@ -91,8 +120,15 @@ section('loadMfaPolicy');
   ok('empty config = DEFAULT', p === DEFAULT_POLICY);
 }
 {
-  const p = loadMfaPolicy({ mfa_policy: { default_policy: { admin: { secondary_required_when: ['always'] } } } });
+  const p = loadMfaPolicy({
+    mfa_policy: { default_policy: { admin: { secondary_required_when: ['always'] } } },
+  });
   ok('partial config merged', p.default_policy.admin.secondary_required_when[0] === 'always');
+  ok(
+    'partial role override preserves default options',
+    p.default_policy.admin.secondary_options.includes('totp'),
+  );
+  ok('partial role override preserves min count', p.default_policy.admin.secondary_min_count === 1);
   ok('developer default still present', !!p.default_policy.developer);
 }
 
@@ -124,9 +160,12 @@ section('risk-based');
   // client 必须有 ip_whitelist,否则 unusual_ip 不触发(空白名单=放行)
   const d = decideMfaRequirement({
     client: { role: 'developer', ip_whitelist: ['10.0.0.0/8'] },
-    source_ip: '8.8.8.8',  // unusual_ip = 30
+    source_ip: '8.8.8.8', // unusual_ip = 30
   });
-  ok('developer with unusual_ip = 1 factor', d.mfa_required && d.min_count === 1 && d.reason === 'trigger_match');
+  ok(
+    'developer with unusual_ip = 1 factor',
+    d.mfa_required && d.min_count === 1 && d.reason === 'trigger_match',
+  );
 }
 {
   // Build a high-risk scenario: unusual_ip + 40d stale + sensitive = 75 (medium) but we need 60+ for medium, 100 for high
@@ -135,7 +174,7 @@ section('risk-based');
     client: { role: 'developer', ip_whitelist: ['10.0.0.0/8'] },
     source_ip: '8.8.8.8',
     last_login_at: Date.now() - 40 * 86400_000,
-    action: 'rotate-cert',  // sensitive -> returns at min_count=1 (early)
+    action: 'rotate-cert', // sensitive -> returns at min_count=1 (early)
   });
   ok('sensitive action overrides -> min 1', d.reason === 'sensitive_action' && d.min_count === 1);
 }
@@ -145,9 +184,10 @@ section('risk-based');
   const d = decideMfaRequirement({
     client: { role: 'developer', ip_whitelist: ['10.0.0.0/8'] },
     source_ip: '8.8.8.8',
-    last_login_at: Date.now() - 40 * 86400_000,
-    user_agent: 'new', last_user_agent: 'old',
-    now: new Date(2026, 8, 1, 3, 0, 0),  // local 3 AM
+    last_login_at: TEST_NOW.getTime() - 40 * 86400_000,
+    user_agent: 'new',
+    last_user_agent: 'old',
+    now: new Date(2026, 8, 1, 3, 0, 0), // local 3 AM
   });
   ok('high risk = 2 factors', d.reason === 'high_risk' && d.min_count === 2);
 }

@@ -19,7 +19,10 @@
 
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { BROKER_VERSION } from './version.js';
+import { readBody as readBodySafe, send as sendHttp, wrapAsyncRequestHandler } from './lib/http.js';
 // v3.0 M4.5: healthcheck 引擎复用 (broker 内核 / mcp-server 外延 同一份)
 // 注: 实际会从 broker/healthcheck.js 动态 import (见下面 lazy load)
 let _healthcheckModule = null;
@@ -46,16 +49,48 @@ function parseArgs(argv) {
   return args;
 }
 const ARGS = parseArgs(process.argv);
-const BROKER_URL = (ARGS['broker'] || process.env.BROKER_URL || 'https://127.0.0.1:18443').replace(/\/$/, '');
+const BROKER_URL = (ARGS['broker'] || process.env.BROKER_URL || 'https://127.0.0.1:18443').replace(
+  /\/$/,
+  '',
+);
 const PORT = parseInt(ARGS.port || process.env.MCP_PORT || '3001', 10);
 const HOST = ARGS.host || process.env.MCP_HOST || '127.0.0.1';
+const MCP_AUTH_TOKEN = ARGS['auth-token'] || process.env.MCP_AUTH_TOKEN || '';
+const MCP_ALLOW_INSECURE_REMOTE = process.env.MCP_ALLOW_INSECURE_REMOTE === '1';
+const MCP_CORS_ORIGINS = String(ARGS['cors-origin'] || process.env.MCP_CORS_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+function boundedPositiveInt(value, fallback, hardMax) {
+  const parsed = Number.parseInt(String(value || ''), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, hardMax) : fallback;
+}
+const MCP_MAX_BATCH_SIZE = boundedPositiveInt(process.env.MCP_MAX_BATCH_SIZE, 50, 1_000);
+const MCP_MAX_BROKER_RESPONSE_BYTES = boundedPositiveInt(
+  process.env.MCP_MAX_BROKER_RESPONSE_BYTES,
+  16 * 1024 * 1024,
+  64 * 1024 * 1024,
+);
+const MCP_BROKER_TIMEOUT_MS = boundedPositiveInt(
+  process.env.MCP_BROKER_TIMEOUT_MS,
+  30_000,
+  5 * 60_000,
+);
 // Master key resolution: --master-key-file (preferred, 永不入 ps) > --master-key / MCP_MASTER_KEY (兼容)
 let MASTER_KEY = ARGS['master-key'] || process.env.MCP_MASTER_KEY || '';
+if (ARGS['master-key']) {
+  console.error(
+    '[mcp] WARNING: --master-key is visible in the process list; prefer --master-key-file or MCP_MASTER_KEY',
+  );
+}
 if (ARGS['master-key-file']) {
   try {
     MASTER_KEY = readFileSync(ARGS['master-key-file'], 'utf8').trim();
   } catch (e) {
-    console.error(`[mcp] ERROR: cannot read --master-key-file ${ARGS['master-key-file']}: ${e.message}`);
+    console.error(
+      `[mcp] ERROR: cannot read --master-key-file ${ARGS['master-key-file']}: ${e.message}`,
+    );
     process.exit(1);
   }
 }
@@ -67,15 +102,24 @@ if (!MASTER_KEY) {
   process.exit(1);
 }
 if (!MASTER_KEY.startsWith('mb_')) {
-  console.error('[mcp] ERROR: --master-key must be a broker master API key (mb_live_... or mb_test_...)');
+  console.error(
+    '[mcp] ERROR: --master-key must be a broker master API key (mb_live_... or mb_test_...)',
+  );
+  process.exit(1);
+}
+if (!LOOPBACK_HOSTS.has(HOST) && (!MCP_AUTH_TOKEN || !MCP_ALLOW_INSECURE_REMOTE)) {
+  console.error(
+    '[mcp] ERROR: non-loopback plain-HTTP binding requires both MCP_AUTH_TOKEN and MCP_ALLOW_INSECURE_REMOTE=1; prefer a loopback bind behind an HTTPS reverse proxy',
+  );
   process.exit(1);
 }
 
 // ============================================================
 // Child key cache + auto-refresh
 // ============================================================
-let childCache = {
+const childCache = {
   secret: null,
+  key: null,
   expires_at: null,
   refreshTimer: null,
 };
@@ -86,7 +130,7 @@ async function refreshChildKey() {
   const res = await callBrokerRaw(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${MASTER_KEY}`,
+      Authorization: `Bearer ${MASTER_KEY}`,
       'Content-Type': 'application/json',
     },
     body,
@@ -98,6 +142,7 @@ async function refreshChildKey() {
   if (!j.ok || !j.secret) throw new Error(`issue-child bad response: ${res.body.slice(0, 200)}`);
   const expiresAt = new Date(j.key.expires_at);
   childCache.secret = j.secret;
+  childCache.key = j.key ? { ...j.key } : null;
   childCache.expires_at = expiresAt;
   scheduleNextRefresh();
   console.error(`[mcp] child key refreshed, expires ${expiresAt.toISOString()}`);
@@ -110,7 +155,7 @@ function scheduleNextRefresh() {
   const delay = childCache.expires_at.getTime() - Date.now() - REFRESH_MARGIN_MS;
   const safeDelay = Math.max(delay, 30_000);
   childCache.refreshTimer = setTimeout(() => {
-    refreshChildKey().catch(e => {
+    refreshChildKey().catch((e) => {
       console.error(`[mcp] refresh failed: ${e.message}, retry in 30s`);
       childCache.refreshTimer = setTimeout(refreshChildKey, 30_000);
     });
@@ -130,6 +175,14 @@ async function getChildKey() {
 // ============================================================
 // HTTP client → broker
 // ============================================================
+class BrokerResponseTooLargeError extends Error {
+  constructor(limit) {
+    super(`Broker response exceeded ${limit} bytes`);
+    this.name = 'BrokerResponseTooLargeError';
+    this.code = 'BROKER_RESPONSE_TOO_LARGE';
+  }
+}
+
 function callBrokerRaw(url, opts = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -143,12 +196,43 @@ function callBrokerRaw(url, opts = {}) {
       headers: opts.headers || {},
       rejectUnauthorized: process.env.MCP_INSECURE_TLS === '1' ? false : true,
     };
+    let settled = false;
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     const req = lib(reqOpts, (res) => {
+      const advertised = Number(res.headers['content-length']);
+      if (Number.isFinite(advertised) && advertised > MCP_MAX_BROKER_RESPONSE_BYTES) {
+        res.destroy();
+        rejectOnce(new BrokerResponseTooLargeError(MCP_MAX_BROKER_RESPONSE_BYTES));
+        return;
+      }
       const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') }));
+      let size = 0;
+      res.on('data', (chunk) => {
+        if (settled) return;
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        if (size > MCP_MAX_BROKER_RESPONSE_BYTES) {
+          res.destroy();
+          rejectOnce(new BrokerResponseTooLargeError(MCP_MAX_BROKER_RESPONSE_BYTES));
+          return;
+        }
+        chunks.push(buffer);
+      });
+      res.on('error', rejectOnce);
+      res.on('end', () => {
+        if (settled) return;
+        settled = true;
+        resolve({ status: res.statusCode, body: Buffer.concat(chunks, size).toString('utf-8') });
+      });
     });
-    req.on('error', reject);
+    req.setTimeout(MCP_BROKER_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Broker request timed out after ${MCP_BROKER_TIMEOUT_MS}ms`));
+    });
+    req.on('error', rejectOnce);
     if (opts.body) req.write(opts.body);
     req.end();
   });
@@ -158,8 +242,8 @@ async function callBroker(path, opts = {}) {
   const token = await getChildKey();
   const url = `${BROKER_URL}${path}`;
   const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Accept': 'application/json',
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/json',
     ...(opts.headers || {}),
   };
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
@@ -169,7 +253,11 @@ async function callBroker(path, opts = {}) {
     body: opts.body,
   });
   let json = null;
-  try { json = JSON.parse(res.body); } catch (_) { /* not JSON */ }
+  try {
+    json = JSON.parse(res.body);
+  } catch (_) {
+    /* not JSON */
+  }
   return { status: res.status, body: res.body, json };
 }
 
@@ -213,11 +301,9 @@ const TOOLS = [
   },
   {
     name: 'list_api_keys',
-    description: '列出当前 client 自己的 API Keys。',
-    inputSchema: {
-      type: 'object',
-      properties: { include_master: { type: 'boolean', default: false } },
-    },
+    description:
+      '返回当前 MCP Server 正在使用的 delegated child API key 公开元信息（不枚举同账号其他 Key，不返回 secret）。',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'get_audit',
@@ -233,7 +319,8 @@ const TOOLS = [
   {
     // v3.0 M4.5: 走 mcp-server 出网验单个 secret 凭据 (broker 自身不出网, 委托 mcp-server)
     name: 'check_credential',
-    description: '验单个 secret 凭据是否仍有效 (调上游 no-side-effect API). 凭据零接触: 返 status/detail/latency, 不返 value.',
+    description:
+      '验单个 secret 凭据是否仍有效 (调上游 no-side-effect API). 凭据零接触: 返 status/detail/latency, 不返 value.',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', description: 'secret name' } },
@@ -243,7 +330,8 @@ const TOOLS = [
   {
     // v3.0 M4.5: 跑全部 4 secrets healthcheck, 返 {name: {status, detail, latency_ms, type, ts}}
     name: 'run_healthcheck',
-    description: '跑全部 secret 凭据自检 (mcp-server 出网, 凭据零接触). 返 summary + 每 secret status.',
+    description:
+      '跑全部 secret 凭据自检 (mcp-server 出网, 凭据零接触). 返 summary + 每 secret status.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -252,7 +340,7 @@ async function toolListSecrets() {
   const r = await callBroker('/api/v1/secrets');
   if (r.status !== 200) throw new Error(`list_secrets failed: ${r.status} ${r.body.slice(0, 200)}`);
   const items = r.json?.secrets || [];
-  const names = items.map(s => s.name || s).filter(Boolean);
+  const names = items.map((s) => s.name || s).filter(Boolean);
   return { names, count: names.length, _items: items };
 }
 
@@ -265,7 +353,9 @@ async function toolDescribeSecret(args) {
     body: JSON.stringify({ name: args.name }),
   });
   if (r.status === 404 || r.status === 403) return { found: false, name: args.name };
-  if (r.status !== 200) throw new Error(`describe_secret failed: ${r.status} ${r.body.slice(0, 200)}`);
+  if (r.status !== 200) {
+    throw new Error(`describe_secret failed: ${r.status} ${r.body.slice(0, 200)}`);
+  }
   const item = r.json || {};
   // ⚠️ 凭据零接触: 显式 redact 所有可能的 value 字段
   return {
@@ -279,11 +369,18 @@ async function toolDescribeSecret(args) {
 }
 
 async function toolCallService(args) {
-  if (!args?.service || !args?.method || !args?.path) throw new Error('Missing {service, method, path}');
+  if (!args?.service || !args?.method || !args?.path) {
+    throw new Error('Missing {service, method, path}');
+  }
   // broker 端 proxy 路径是 /api/v1/proxy/:name (不是 /api/v1/services/:name/proxy)
   const r = await callBroker(`/api/v1/proxy/${encodeURIComponent(args.service)}`, {
     method: 'POST',
-    body: JSON.stringify({ method: args.method, path: args.path, query: args.query || {}, body: args.body || null }),
+    body: JSON.stringify({
+      method: args.method,
+      path: args.path,
+      query: args.query || {},
+      body: args.body || null,
+    }),
   });
   return { status: r.status, body: r.body, json: r.json };
 }
@@ -293,18 +390,28 @@ async function toolGetHealth() {
   return { status: r.status, broker_response: r.json || r.body };
 }
 
-async function toolListApiKeys(args) {
-  const r = await callBroker('/api/v1/api-keys');
-  if (r.status !== 200) throw new Error(`list_api_keys failed: ${r.status} ${r.body.slice(0, 200)}`);
-  let keys = r.json?.keys || [];
-  if (!args?.include_master) keys = keys.filter(k => !k.is_master);
-  return { count: keys.length, keys };
+async function toolListApiKeys() {
+  const key = childCache.key;
+  if (!key) return { count: 0, keys: [] };
+  const safe = {
+    id: key.id || null,
+    name: key.name || CHILD_NAME,
+    client: key.client || null,
+    scopes: Array.isArray(key.scopes) ? key.scopes : [],
+    allowed_secrets: Array.isArray(key.allowed_secrets) ? key.allowed_secrets : [],
+    allowed_services: Array.isArray(key.allowed_services) ? key.allowed_services : [],
+    expires_at: key.expires_at || childCache.expires_at?.toISOString() || null,
+    parent_master_id: key.parent_master_id || null,
+    is_master: false,
+    delegated: true,
+  };
+  return { count: 1, keys: [safe] };
 }
 
 async function toolGetAudit(args) {
   const limit = Math.min(parseInt(args?.limit || 50, 10), 200);
   const since = args?.since ? `&since=${encodeURIComponent(args.since)}` : '';
-  const r = await callBroker(`/api/v1/audit?limit=${limit}${since}`);
+  const r = await callBroker(`/api/v1/me/audit?limit=${limit}${since}`);
   if (r.status !== 200) throw new Error(`get_audit failed: ${r.status} ${r.body.slice(0, 200)}`);
   return r.json || { events: [] };
 }
@@ -330,13 +437,21 @@ async function toolCheckCredential(args) {
 }
 
 // v3.0 M4.5 + v3.1 M5.3: 跑全部 secret healthcheck (loop 调 check_credential + 累加 5 维 summary)
-async function toolRunHealthcheck(args) {
+async function toolRunHealthcheck(_args) {
   const list = await callBroker('/api/v1/secrets');
   if (list.status !== 200) throw new Error(`list_secrets failed: ${list.status}`);
   const items = list.json?.secrets || [];
   const checks = {};
   // v3.1 M5.3: 5 维 status 兜底 (M4 4 维 + unreachable / misconfigured)
-  const summary = { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 };
+  const summary = {
+    ok: 0,
+    expired: 0,
+    unreachable: 0,
+    misconfigured: 0,
+    fail: 0,
+    skipped: 0,
+    total: 0,
+  };
   const t0 = Date.now();
   for (const s of items) {
     const name = typeof s === 'string' ? s : s.name;
@@ -353,8 +468,11 @@ async function toolRunHealthcheck(args) {
     summary.total++;
   }
   // v3.1 M5.3: last_status 计算看 4 个非 ok 维度 (M4 只看 expired/fail)
-  const allPass = summary.expired === 0 && summary.unreachable === 0
-    && summary.misconfigured === 0 && summary.fail === 0;
+  const allPass =
+    summary.expired === 0 &&
+    summary.unreachable === 0 &&
+    summary.misconfigured === 0 &&
+    summary.fail === 0;
   return {
     last_status: allPass ? 'ok' : 'degraded',
     last_run_at: new Date().toISOString(),
@@ -380,12 +498,16 @@ const TOOL_HANDLERS = {
 // ============================================================
 const SERVER_INFO = {
   name: 'secret-broker-mcp-server',
-  version: '3.0.0',
+  version: BROKER_VERSION,
   protocolVersion: '2025-06-18',
 };
 
-function jsonRpcResult(id, result) { return { jsonrpc: '2.0', id, result }; }
-function jsonRpcError(id, code, message) { return { jsonrpc: '2.0', id, error: { code, message } }; }
+function jsonRpcResult(id, result) {
+  return { jsonrpc: '2.0', id, result };
+}
+function jsonRpcError(id, code, message) {
+  return { jsonrpc: '2.0', id, error: { code, message } };
+}
 
 async function handleRpcInit(req) {
   return jsonRpcResult(req.id, {
@@ -409,13 +531,16 @@ async function handleRpcCallTool(req) {
       isError: false,
     });
   } catch (e) {
+    console.error(`[mcp] tool ${name} failed: ${e?.message || String(e)}`);
     return jsonRpcResult(req.id, {
-      content: [{ type: 'text', text: `Error: ${e.message}` }],
+      content: [{ type: 'text', text: 'Tool execution failed' }],
       isError: true,
     });
   }
 }
-async function handleRpcPing(req) { return jsonRpcResult(req.id, {}); }
+async function handleRpcPing(req) {
+  return jsonRpcResult(req.id, {});
+}
 
 const RPC_HANDLERS = {
   initialize: handleRpcInit,
@@ -428,54 +553,96 @@ const RPC_HANDLERS = {
 // ============================================================
 // HTTP server
 // ============================================================
-function readBody(req) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    req.on('error', () => resolve(''));
+function tokenMatches(candidate, expected) {
+  if (!candidate || !expected) return false;
+  const a = createHash('sha256').update(String(candidate)).digest();
+  const b = createHash('sha256').update(String(expected)).digest();
+  return timingSafeEqual(a, b);
+}
+
+function rpcAuthorized(req) {
+  if (!MCP_AUTH_TOKEN) return true;
+  const match = /^Bearer\s+(\S+)$/.exec(String(req.headers.authorization || ''));
+  return !!match && tokenMatches(match[1], MCP_AUTH_TOKEN);
+}
+
+function applyCorsPolicy(req, res) {
+  const origin = String(req.headers.origin || '').trim();
+  if (!origin) return true; // native MCP clients do not send Origin
+  if (!MCP_CORS_ORIGINS.includes(origin)) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  return true;
+}
+
+function send(res, status, body, extraHeaders = {}) {
+  return sendHttp(res, status, body, {
+    noSecurityHeaders: true,
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    ...extraHeaders,
   });
 }
 
-function send(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(typeof body === 'string' ? body : JSON.stringify(body));
-}
+const httpServer = createHttpServer(
+  wrapAsyncRequestHandler(
+    async (req, res) => {
+      if (!applyCorsPolicy(req, res)) {
+        return send(res, 403, { error: 'Browser origin is not allowed' });
+      }
+      if (req.method === 'OPTIONS') {
+        return send(res, 204, '');
+      }
 
-const httpServer = createHttpServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+      if (req.method === 'GET' && req.url === '/health') {
+        return send(res, 200, { ok: true });
+      }
 
-  if (req.method === 'GET' && req.url === '/health') {
-    return send(res, 200, {
-      ok: true, server: SERVER_INFO.name, version: SERVER_INFO.version,
-      protocol: SERVER_INFO.protocolVersion,
-      child_key_expires_at: childCache.expires_at?.toISOString() || null,
-      tools: TOOLS.map(t => t.name),
-    });
-  }
+      if (req.method === 'POST' && (req.url === '/' || req.url === '/mcp')) {
+        if (!rpcAuthorized(req)) return send(res, 401, { error: 'Unauthorized' });
+        const req2 = await readBodySafe(req);
+        if (
+          req2 === null ||
+          (req2 &&
+            typeof req2 === 'object' &&
+            !Array.isArray(req2) &&
+            Object.keys(req2).length === 1 &&
+            typeof req2._raw === 'string')
+        ) {
+          return send(res, 400, jsonRpcError(null, -32700, 'Parse error'));
+        }
 
-  if (req.method === 'POST' && (req.url === '/' || req.url === '/mcp')) {
-    const raw = await readBody(req);
-    let req2;
-    try { req2 = JSON.parse(raw); }
-    catch (e) { return send(res, 400, jsonRpcError(null, -32700, 'Parse error: ' + e.message)); }
+        if (Array.isArray(req2)) {
+          if (req2.length === 0) {
+            return send(res, 400, jsonRpcError(null, -32600, 'Empty JSON-RPC batch'));
+          }
+          if (req2.length > MCP_MAX_BATCH_SIZE) {
+            return send(
+              res,
+              400,
+              jsonRpcError(null, -32600, `JSON-RPC batch exceeds ${MCP_MAX_BATCH_SIZE} items`),
+            );
+          }
+          const results = await Promise.all(req2.map((request) => handleOne(request)));
+          const filtered = results.filter(Boolean);
+          if (filtered.length === 0) return send(res, 204, '');
+          return send(res, 200, filtered);
+        }
+        const r = await handleOne(req2);
+        if (r === null) return send(res, 204, '');
+        return send(res, 200, r);
+      }
 
-    if (Array.isArray(req2)) {
-      const results = await Promise.all(req2.map(r => handleOne(r)));
-      const filtered = results.filter(Boolean);
-      if (filtered.length === 0) return send(res, 204, '');
-      return send(res, 200, filtered);
-    }
-    const r = await handleOne(req2);
-    if (r === null) return send(res, 204, '');
-    return send(res, 200, r);
-  }
-
-  return send(res, 404, { error: 'Not found' });
-});
+      return send(res, 404, { error: 'Not found' });
+    },
+    {
+      errorResponder: (res, status, message) => send(res, status, { error: message }),
+      onError: (err) => console.error(`[mcp] request error: ${err?.message || String(err)}`),
+    },
+  ),
+);
 
 async function handleOne(req2) {
   if (!req2 || req2.jsonrpc !== '2.0' || !req2.method) {
@@ -493,7 +660,9 @@ async function boot() {
   console.error(`[mcp] starting ${SERVER_INFO.name} v${SERVER_INFO.version}`);
   console.error(`[mcp] broker: ${BROKER_URL}`);
   console.error(`[mcp] listen: http://${HOST}:${PORT}/`);
-  console.error(`[mcp] master key: <loaded from ${ARGS['master-key-file'] || 'env/CLI'}, length=${MASTER_KEY.length}> (凭据零接触: secret 永不入日志)`);
+  console.error(
+    `[mcp] master key: <loaded from ${ARGS['master-key-file'] || 'env/CLI'}, length=${MASTER_KEY.length}> (凭据零接触: secret 永不入日志)`,
+  );
   try {
     await refreshChildKey();
   } catch (e) {
@@ -507,7 +676,16 @@ async function boot() {
   });
 }
 
-process.on('SIGTERM', () => { console.error('[mcp] SIGTERM, exit'); process.exit(0); });
-process.on('SIGINT', () => { console.error('[mcp] SIGINT, exit'); process.exit(0); });
+process.on('SIGTERM', () => {
+  console.error('[mcp] SIGTERM, exit');
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  console.error('[mcp] SIGINT, exit');
+  process.exit(0);
+});
 
-boot().catch(e => { console.error(`[mcp] boot failed: ${e.message}`); process.exit(1); });
+boot().catch((e) => {
+  console.error(`[mcp] boot failed: ${e.message}`);
+  process.exit(1);
+});

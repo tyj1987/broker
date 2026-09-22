@@ -1,16 +1,28 @@
 // broker-test/test-phase-c-obs.js
 import {
-  inc, observeMs, snapshot, prometheusText, timedRequest, getCounter, _resetMetricsForTests,
+  inc,
+  observeMs,
+  snapshot,
+  prometheusText,
+  timedRequest,
+  getCounter,
+  _resetMetricsForTests,
 } from '../broker/lib/metrics.js';
 import { log } from '../broker/lib/log.js';
 import { handleHealth } from '../broker/routes/health.js';
 import { handleMetrics } from '../broker/routes/metrics.js';
 import { BROKER_VERSION } from '../broker/version.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 _resetMetricsForTests();
@@ -47,51 +59,124 @@ console.log('=== log ===');
 console.log('=== /ready /live ===');
 {
   const res = { status: 0, body: null };
-  const send = (r, s, b) => { r.status = s; r.body = b; };
-  handleHealth({}, res, { method: 'GET', pathname: '/live' }, { send, secretCache: new Map(), config: {}, surface: 'local' });
+  const send = (r, s, b) => {
+    r.status = s;
+    r.body = b;
+  };
+  handleHealth(
+    {},
+    res,
+    { method: 'GET', pathname: '/live' },
+    { send, secretCache: new Map(), config: {}, surface: 'local' },
+  );
   assert(res.body?.status === 'live', 'live');
-  handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
-    send, secretCache: new Map([['a', 1]]), config: { services: {} }, requireSops: true, surface: 'local',
-  });
+  handleHealth(
+    {},
+    res,
+    { method: 'GET', pathname: '/ready' },
+    {
+      send,
+      secretCache: new Map([['a', 1]]),
+      config: { services: {} },
+      requireSops: true,
+      surface: 'local',
+    },
+  );
   assert(res.status === 200 && res.body?.status === 'ready', 'ready');
-  handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
-    send, secretCache: new Map(), config: {}, requireSops: true, surface: 'local',
-  });
+  handleHealth(
+    {},
+    res,
+    { method: 'GET', pathname: '/ready' },
+    {
+      send,
+      secretCache: new Map(),
+      config: {},
+      requireSops: true,
+      surface: 'local',
+    },
+  );
   assert(res.status === 503, 'not ready');
 }
 
 console.log('=== /metrics ===');
 {
   const res = {
-    status: 0, body: null, headers: {},
-    writeHead(s, h) { this.status = s; this.headers = h; },
-    end(b) { this.body = b; },
+    status: 0,
+    body: null,
+    headers: {},
+    writeHead(s, h) {
+      this.status = s;
+      this.headers = h;
+    },
+    end(b) {
+      this.body = b;
+    },
   };
-  handleMetrics({}, res, { method: 'GET', pathname: '/metrics' }, {
-    send: (r, s, b) => { r.status = s; r.body = b; },
-    jsonError: (r, s, m) => { r.status = s; r.body = { error: m, status: s }; },
-    version: BROKER_VERSION,
-    isLocal: true,
-  });
+  handleMetrics(
+    {},
+    res,
+    { method: 'GET', pathname: '/metrics' },
+    {
+      send: (r, s, b) => {
+        r.status = s;
+        r.body = b;
+      },
+      jsonError: (r, s, m) => {
+        r.status = s;
+        r.body = { error: m, status: s };
+      },
+      version: BROKER_VERSION,
+      isLocal: true,
+    },
+  );
   assert(res.status === 200 && String(res.body).includes('broker_up'), 'metrics text');
-  handleMetrics({}, res, { method: 'GET', pathname: '/metrics.json' }, {
-    send: (r, s, b) => { r.status = s; r.body = b; },
-    jsonError: (r, s, m) => { r.status = s; r.body = { error: m, status: s }; },
-    version: BROKER_VERSION,
-    isLocal: true,
-  });
+  handleMetrics(
+    {},
+    res,
+    { method: 'GET', pathname: '/metrics.json' },
+    {
+      send: (r, s, b) => {
+        r.status = s;
+        r.body = b;
+      },
+      jsonError: (r, s, m) => {
+        r.status = s;
+        r.body = { error: m, status: s };
+      },
+      version: BROKER_VERSION,
+      isLocal: true,
+    },
+  );
   assert(res.body?.counters !== undefined, 'metrics json');
   const denied = {
-    status: 0, body: null, headers: {},
-    writeHead(s, h) { this.status = s; this.headers = h; },
-    end(b) { this.body = b; },
+    status: 0,
+    body: null,
+    headers: {},
+    writeHead(s, h) {
+      this.status = s;
+      this.headers = h;
+    },
+    end(b) {
+      this.body = b;
+    },
   };
-  handleMetrics({}, denied, { method: 'GET', pathname: '/metrics' }, {
-    send: (r, s, b) => { r.status = s; r.body = b; },
-    jsonError: (r, s, m) => { r.status = s; r.body = { error: m, status: s }; },
-    version: BROKER_VERSION,
-    isLocal: false,
-  });
+  handleMetrics(
+    {},
+    denied,
+    { method: 'GET', pathname: '/metrics' },
+    {
+      send: (r, s, b) => {
+        r.status = s;
+        r.body = b;
+      },
+      jsonError: (r, s, m) => {
+        r.status = s;
+        r.body = { error: m, status: s };
+      },
+      version: BROKER_VERSION,
+      isLocal: false,
+    },
+  );
   assert(denied.status === 401, 'metrics denied without local/admin');
 }
 

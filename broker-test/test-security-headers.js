@@ -8,18 +8,23 @@
 //   - send() in http.js merges security headers
 //   - snapshotHeaders() is pure
 
-import {
-  securityHeaders,
-  snapshotHeaders,
-} from '../broker/lib/security-headers.js';
+import { securityHeaders, snapshotHeaders } from '../broker/lib/security-headers.js';
 import { send } from '../broker/lib/http.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- tests ----------
 
@@ -32,8 +37,14 @@ ok('Referrer-Policy: no-referrer', json['Referrer-Policy'] === 'no-referrer');
 ok('Strict-Transport-Security set', /^max-age=\d+/.test(json['Strict-Transport-Security'] || ''));
 ok('HSTS includes includeSubDomains', /includeSubDomains/.test(json['Strict-Transport-Security']));
 ok('Cross-Origin-Opener-Policy: same-origin', json['Cross-Origin-Opener-Policy'] === 'same-origin');
-ok('Cross-Origin-Resource-Policy: same-origin', json['Cross-Origin-Resource-Policy'] === 'same-origin');
-ok('Permissions-Policy present', typeof json['Permissions-Policy'] === 'string' && json['Permissions-Policy'].length > 0);
+ok(
+  'Cross-Origin-Resource-Policy: same-origin',
+  json['Cross-Origin-Resource-Policy'] === 'same-origin',
+);
+ok(
+  'Permissions-Policy present',
+  typeof json['Permissions-Policy'] === 'string' && json['Permissions-Policy'].length > 0,
+);
 
 section('2. CSP varies by kind');
 
@@ -42,12 +53,21 @@ const jsonH = securityHeaders({ kind: 'json' });
 const sseH = securityHeaders({ kind: 'sse' });
 const staticH = securityHeaders({ kind: 'static' });
 ok('html CSP has script-src', /script-src/.test(htmlH['Content-Security-Policy']));
-ok('html CSP has frame-ancestors none', /frame-ancestors 'none'/.test(htmlH['Content-Security-Policy']));
+ok(
+  'html CSP has frame-ancestors none',
+  /frame-ancestors 'none'/.test(htmlH['Content-Security-Policy']),
+);
 ok('json CSP has default-src none', /default-src 'none'/.test(jsonH['Content-Security-Policy']));
-ok('json CSP has frame-ancestors none', /frame-ancestors 'none'/.test(jsonH['Content-Security-Policy']));
+ok(
+  'json CSP has frame-ancestors none',
+  /frame-ancestors 'none'/.test(jsonH['Content-Security-Policy']),
+);
 ok('sse CSP = json CSP', sseH['Content-Security-Policy'] === jsonH['Content-Security-Policy']);
 ok('sse adds Cache-Control: no-store', sseH['Cache-Control'] === 'no-store');
-ok('static CSP = html CSP', staticH['Content-Security-Policy'] === htmlH['Content-Security-Policy']);
+ok(
+  'static CSP = html CSP',
+  staticH['Content-Security-Policy'] === htmlH['Content-Security-Policy'],
+);
 ok('default kind is json', JSON.stringify(jsonH) === JSON.stringify(securityHeaders()));
 
 section('3. snapshotHeaders is a pure snapshot');

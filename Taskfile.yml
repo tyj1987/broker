@@ -60,14 +60,9 @@ tasks:
   # Broker 测试 / Broker tests
   # ============================
   test:
-    desc: Run all broker test suites / 跑全部 broker 测试
+    desc: Run the complete broker quality gate / 执行完整 Broker 质量门禁
     cmds:
-      - cd broker-test && node test-can-proxy.js
-      - cd broker-test && node test-master-key.js
-      - cd broker-test && node test-healthcheck.js
-      - cd broker-test && node test-mcp-server.js
-      - cd broker-test && node test-proxy-guard.js
-      - cd broker-test && node test-alert-history.js
+      - cd broker && npm run quality:gate
 
   test:one:
     desc: Run a single test suite / 跑单个测试 (e.g. task test:one -- test-healthcheck.js)
@@ -78,9 +73,9 @@ tasks:
   # 构建 / Build (broker docker image)
   # ============================
   build:
-    desc: Build broker Docker image (linux/amd64) / 构建 broker 镜像
+    desc: Build the production broker Docker image (linux/amd64) / 构建生产 Broker 镜像
     cmds:
-      - docker buildx build --platform linux/amd64 -t {{.IMAGE_NAME}}:{{.TAG | default "latest"}} --load ./broker
+      - docker buildx build --platform linux/amd64 --target production -f Dockerfile -t {{.IMAGE_NAME}}:{{.TAG | default "latest"}} --load .
 
   push:
     desc: Push broker image to dual registry (Aliyun + Tencent) / 推送到双云 registry

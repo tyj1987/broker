@@ -10,12 +10,15 @@
 import { createSign } from 'node:crypto';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const TOKEN_CACHE = new Map();  // key = saEmail -> { access_token, expires_at }
+const TOKEN_CACHE = new Map(); // key = saEmail -> { access_token, expires_at }
 const SAFETY_MARGIN_MS = 5 * 60 * 1000;
 
 function base64url(buf) {
-  return Buffer.from(buf).toString('base64')
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return Buffer.from(buf)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
 }
 
 /**
@@ -79,11 +82,15 @@ export async function getAccessToken(sa) {
   if (cached && cached.expires_at - Date.now() > SAFETY_MARGIN_MS) {
     return cached.access_token;
   }
-  const jwt = buildServiceAccountJwt(sa.email, sa.private_key, sa.scopes || ['https://www.googleapis.com/auth/cloud-platform']);
+  const jwt = buildServiceAccountJwt(
+    sa.email,
+    sa.private_key,
+    sa.scopes || ['https://www.googleapis.com/auth/cloud-platform'],
+  );
   const tok = await exchangeJwtForToken(jwt);
   TOKEN_CACHE.set(key, {
     access_token: tok.access_token,
-    expires_at: Date.now() + (tok.expires_in * 1000),
+    expires_at: Date.now() + tok.expires_in * 1000,
   });
   return tok.access_token;
 }
@@ -94,7 +101,7 @@ export async function getAccessToken(sa) {
 export async function signGcpJwt(args) {
   const token = await getAccessToken(args);
   return {
-    'Authorization': `Bearer ${token}`,
+    Authorization: `Bearer ${token}`,
   };
 }
 
@@ -103,4 +110,10 @@ export function clearGcpCache(saEmail) {
   else TOKEN_CACHE.clear();
 }
 
-export default { buildServiceAccountJwt, exchangeJwtForToken, getAccessToken, signGcpJwt, clearGcpCache };
+export default {
+  buildServiceAccountJwt,
+  exchangeJwtForToken,
+  getAccessToken,
+  signGcpJwt,
+  clearGcpCache,
+};

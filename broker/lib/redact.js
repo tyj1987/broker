@@ -27,44 +27,56 @@
 
 const PATTERNS = [
   // GitHub
-  { name: 'github_pat',        regex: /ghp_[A-Za-z0-9]{20,}/g,                     replace: 'ghp_***' },
-  { name: 'github_fine_grain',  regex: /github_pat_[A-Za-z0-9_]{20,}/g,            replace: 'github_pat_***' },
-  { name: 'github_app_ghu',     regex: /ghu_[A-Za-z0-9]{20,}/g,                    replace: 'ghu_***' },
-  { name: 'github_app_ghs',     regex: /ghs_[A-Za-z0-9]{20,}/g,                    replace: 'ghs_***' },
-  { name: 'github_oauth_ghr',   regex: /ghr_[A-Za-z0-9]{20,}/g,                    replace: 'ghr_***' },
+  { name: 'github_pat', regex: /ghp_[A-Za-z0-9]{20,}/g, replace: 'ghp_***' },
+  { name: 'github_fine_grain', regex: /github_pat_[A-Za-z0-9_]{20,}/g, replace: 'github_pat_***' },
+  { name: 'github_app_ghu', regex: /ghu_[A-Za-z0-9]{20,}/g, replace: 'ghu_***' },
+  { name: 'github_app_ghs', regex: /ghs_[A-Za-z0-9]{20,}/g, replace: 'ghs_***' },
+  { name: 'github_oauth_ghr', regex: /ghr_[A-Za-z0-9]{20,}/g, replace: 'ghr_***' },
   // OpenAI
-  { name: 'openai_sk_proj',     regex: /sk-proj-[A-Za-z0-9_\-]{20,}/g,            replace: 'sk-proj-***' },
-  { name: 'openai_classic',     regex: /sk-[A-Za-z0-9]{20,}/g,                    replace: 'sk-***' },
+  { name: 'openai_sk_proj', regex: /sk-proj-[A-Za-z0-9_\-]{20,}/g, replace: 'sk-proj-***' },
+  { name: 'openai_classic', regex: /sk-[A-Za-z0-9]{20,}/g, replace: 'sk-***' },
   // Anthropic
-  { name: 'anthropic_key',      regex: /sk-ant-[A-Za-z0-9_\-]{20,}/g,              replace: 'sk-ant-***' },
+  { name: 'anthropic_key', regex: /sk-ant-[A-Za-z0-9_\-]{20,}/g, replace: 'sk-ant-***' },
   // Google AI
-  { name: 'google_ai_key',      regex: /AIza[A-Za-z0-9_\-]{30,}/g,                 replace: 'AIza***' },
+  { name: 'google_ai_key', regex: /AIza[A-Za-z0-9_\-]{30,}/g, replace: 'AIza***' },
   // Aliyun
-  { name: 'aliyun_ak',          regex: /LTAI[A-Za-z0-9]{12,}/g,                    replace: 'LTAI***' },
-  { name: 'aliyun_sts',         regex: /STS\.[A-Za-z0-9_\-]{16,}/g,                replace: 'STS.***' },
+  { name: 'aliyun_ak', regex: /LTAI[A-Za-z0-9]{12,}/g, replace: 'LTAI***' },
+  { name: 'aliyun_sts', regex: /STS\.[A-Za-z0-9_\-]{16,}/g, replace: 'STS.***' },
   // Tencent
-  { name: 'tencent_secret_id',  regex: /AKID[A-Za-z0-9]{16,}/g,                    replace: 'AKID***' },
+  { name: 'tencent_secret_id', regex: /AKID[A-Za-z0-9]{16,}/g, replace: 'AKID***' },
   // AWS
-  { name: 'aws_access_key',     regex: /\b(AKIA|ASIA)[A-Z0-9]{12,}\b/g,            replace: '$1***' },
+  { name: 'aws_access_key', regex: /\b(AKIA|ASIA)[A-Z0-9]{12,}\b/g, replace: '$1***' },
   // Azure (tenant_id is UUID)
-  { name: 'azure_tenant',       regex: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, replace: '***-tenant-***' },
+  {
+    name: 'azure_tenant',
+    regex: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+    replace: '***-tenant-***',
+  },
   // Slack
-  { name: 'slack_bot',          regex: /xoxb-[A-Za-z0-9\-]{20,}/g,                replace: 'xoxb-***' },
-  { name: 'slack_user',         regex: /xoxp-[A-Za-z0-9\-]{20,}/g,                replace: 'xoxp-***' },
+  { name: 'slack_bot', regex: /xoxb-[A-Za-z0-9\-]{20,}/g, replace: 'xoxb-***' },
+  { name: 'slack_user', regex: /xoxp-[A-Za-z0-9\-]{20,}/g, replace: 'xoxp-***' },
   // Stripe
-  { name: 'stripe_sk',          regex: /\bsk_(live|test)_[A-Za-z0-9]{20,}\b/g,     replace: 'sk_$1_***' },
-  { name: 'stripe_rk',          regex: /\brk_(live|test)_[A-Za-z0-9]{20,}\b/g,     replace: 'rk_$1_***' },
+  { name: 'stripe_sk', regex: /\bsk_(live|test)_[A-Za-z0-9]{20,}\b/g, replace: 'sk_$1_***' },
+  { name: 'stripe_rk', regex: /\brk_(live|test)_[A-Za-z0-9]{20,}\b/g, replace: 'rk_$1_***' },
   // JWT (heuristic: three base64url segments separated by dots, length > 50)
-  { name: 'jwt',                regex: /\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b/g, replace: 'eyJ***.***.***' },
+  {
+    name: 'jwt',
+    regex: /\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b/g,
+    replace: 'eyJ***.***.***',
+  },
   // PEM private keys (single line content might be wrapped; match start/end markers)
-  { name: 'pem_private_key',    regex: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED |)PRIVATE KEY-----/g,
-    replace: '-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----' },
+  {
+    name: 'pem_private_key',
+    regex:
+      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED |)PRIVATE KEY-----/g,
+    replace: '-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----',
+  },
   // Basic auth header
-  { name: 'basic_auth',         regex: /(Basic\s+)[A-Za-z0-9+/=]{8,}/g,             replace: '$1***' },
+  { name: 'basic_auth', regex: /(Basic\s+)[A-Za-z0-9+/=]{8,}/g, replace: '$1***' },
   // Generic Bearer token (long opaque string after "Bearer ")
-  { name: 'bearer_token',       regex: /(Bearer\s+)[A-Za-z0-9_\-\.~+\/=]{20,}/g,    replace: '$1***' },
+  { name: 'bearer_token', regex: /(Bearer\s+)[A-Za-z0-9_\-\.~+\/=]{20,}/g, replace: '$1***' },
   // Docker registry token
-  { name: 'docker_registry',    regex: /\bdocker_[A-Za-z0-9_\-]{20,}\b/g,            replace: 'docker_***' },
+  { name: 'docker_registry', regex: /\bdocker_[A-Za-z0-9_\-]{20,}\b/g, replace: 'docker_***' },
 ];
 
 /**
@@ -99,7 +111,7 @@ export function redactDeep(value, seen = new WeakSet()) {
   if (seen.has(value)) return value;
   seen.add(value);
   if (Array.isArray(value)) {
-    return value.map(v => redactDeep(v, seen));
+    return value.map((v) => redactDeep(v, seen));
   }
   const out = {};
   for (const [k, v] of Object.entries(value)) {
@@ -117,7 +129,9 @@ export function redactDeep(value, seen = new WeakSet()) {
 export function hasLikelySecret(s) {
   if (typeof s !== 'string' || s.length < 8) return false;
   // Heuristics: presence of common token prefixes, PEM marker, JWT shape, UUID
-  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s);
+  return /ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-|sk-ant-|sk-proj-|AIza|LTAI|AKID|AKIA|ASIA|STS\.|xoxb|xoxp|xapp|xoxa|sk_(live|test)|rk_(live|test)|docker_|-----BEGIN|Basic\s|Bearer\s+[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(
+    s,
+  );
 }
 
 /**
@@ -135,4 +149,4 @@ export function redactJson(value) {
 /**
  * Names of patterns currently supported (for tests / docs).
  */
-export const SUPPORTED_PATTERNS = PATTERNS.map(p => p.name);
+export const SUPPORTED_PATTERNS = PATTERNS.map((p) => p.name);

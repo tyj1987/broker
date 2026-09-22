@@ -2,7 +2,7 @@
 // 覆盖: pub/sub / 事件过滤 / 心跳 / 凭据零接触 / 错误处理
 
 import ws from '../broker/node_modules/ws/index.js';
-const { WebSocketServer, WebSocket } = ws;
+const { WebSocketServer } = ws;
 import {
   broadcastEvent,
   subscribeClient,
@@ -13,28 +13,19 @@ import {
   _resetForTests,
   HEARTBEAT_INTERVAL_MS,
 } from '../broker/lib/ws.js';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
-
-// ============================================================
-// 准备自签证书 (用于 wss://)
-// ============================================================
-function genKeyPair() {
-  return generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
-}
-function makeSelfSigned(cn) {
-  const k = genKeyPair();
-  // 写个伪证书 — 我们用 Node 提供的 selfsigned 替代
-  // 简单办法: 让 server 用 key 但 verifyClient 不做证书验证(本测试跳过 mTLS)
-  return { key: k.privateKey, cert: k.publicKey };
+function section(t) {
+  console.log(`\n[${t}]`);
 }
 
 // 简化: 不测 wss,直接测 broadcastEvent/subscribeClient/sanitization
@@ -74,9 +65,12 @@ section('subscribe + broadcast');
 }
 {
   _resetForTests();
-  const r1 = [], r2 = [];
+  const r1 = [],
+    r2 = [];
   subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r1.push(JSON.parse(d)) }, ['audit']);
-  subscribeClient('c2', { OPEN: 1, readyState: 1, send: (d) => r2.push(JSON.parse(d)) }, ['alerts']);
+  subscribeClient('c2', { OPEN: 1, readyState: 1, send: (d) => r2.push(JSON.parse(d)) }, [
+    'alerts',
+  ]);
   broadcastEvent({ type: 'audit', data: {} });
   broadcastEvent({ type: 'alerts', data: {} });
   ok('c1 only got audit', r1.length === 1 && r1[0].event_type === 'audit');
@@ -115,7 +109,10 @@ section('unsubscribe');
 {
   _resetForTests();
   const r = [];
-  subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) }, ['audit', 'alerts']);
+  subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) }, [
+    'audit',
+    'alerts',
+  ]);
   // 部分 unsubscribe
   const sub = { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) };
   // 不能部分 unsub(API 是 unsub all),验证
@@ -132,7 +129,12 @@ section('event filter');
 {
   _resetForTests();
   const r = [];
-  subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) }, ['alerts'], { severity_eq: 'critical' });
+  subscribeClient(
+    'c1',
+    { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) },
+    ['alerts'],
+    { severity_eq: 'critical' },
+  );
   broadcastEvent({ type: 'alerts', severity: 'info', data: {} });
   broadcastEvent({ type: 'alerts', severity: 'warning', data: {} });
   broadcastEvent({ type: 'alerts', severity: 'critical', data: {} });
@@ -142,7 +144,12 @@ section('event filter');
 {
   _resetForTests();
   const r = [];
-  subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) }, ['alerts'], { severity_gte: 'high' });
+  subscribeClient(
+    'c1',
+    { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) },
+    ['alerts'],
+    { severity_gte: 'high' },
+  );
   broadcastEvent({ type: 'alerts', severity: 'info', data: {} });
   broadcastEvent({ type: 'alerts', severity: 'high', data: {} });
   broadcastEvent({ type: 'alerts', severity: 'critical', data: {} });
@@ -152,7 +159,12 @@ section('event filter');
   // updateClientFilter
   _resetForTests();
   const r = [];
-  subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) }, ['alerts'], { severity_eq: 'critical' });
+  subscribeClient(
+    'c1',
+    { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) },
+    ['alerts'],
+    { severity_eq: 'critical' },
+  );
   updateClientFilter('c1', { severity_eq: 'info' });
   broadcastEvent({ type: 'alerts', severity: 'critical', data: {} });
   broadcastEvent({ type: 'alerts', severity: 'info', data: {} });
@@ -169,7 +181,10 @@ section('zero credential leakage in broadcast');
   subscribeClient('c1', { OPEN: 1, readyState: 1, send: (d) => r.push(JSON.parse(d)) }, ['alerts']);
   broadcastEvent({
     type: 'alerts',
-    data: { message: 'token=ghp_xxxxABCDEFGHIJabcdefghij leaked', token: 'sk-abcdef1234567890ABCDEFGHIJK' },
+    data: {
+      message: 'token=ghp_xxxxABCDEFGHIJabcdefghij leaked',
+      token: 'sk-abcdef1234567890ABCDEFGHIJK',
+    },
   });
   ok('alerts leaked', r.length === 1);
   const msgStr = JSON.stringify(r[0]);
@@ -206,7 +221,10 @@ section('stats');
   ok('events tracked', s.events.includes('audit') && s.events.includes('alerts'));
   const lst = listSubscribers();
   ok('listSubscribers has 2', lst.length === 2);
-  ok('list has metadata only', lst.every(s => s.id && Array.isArray(s.events) && !('send' in s)));
+  ok(
+    'list has metadata only',
+    lst.every((s) => s.id && Array.isArray(s.events) && !('send' in s)),
+  );
 }
 
 // ============================================================
@@ -216,7 +234,11 @@ section('broadcastEvent validation');
 {
   _resetForTests();
   let threw = false;
-  try { broadcastEvent({}); } catch (e) { threw = /type required/.test(e.message); }
+  try {
+    broadcastEvent({});
+  } catch (e) {
+    threw = /type required/.test(e.message);
+  }
   ok('missing type throws', threw);
 }
 
@@ -245,8 +267,14 @@ section('end-to-end WebSocket');
   // 广播
   broadcastEvent({ type: 'alerts', severity: 'critical', data: { msg: 'x' } });
   await new Promise((r) => setTimeout(r, 50));
-  ok('ack received', received.some(m => m.type === 'ack'));
-  ok('event broadcasted', received.some(m => m.type === 'event' && m.event_type === 'alerts'));
+  ok(
+    'ack received',
+    received.some((m) => m.type === 'ack'),
+  );
+  ok(
+    'event broadcasted',
+    received.some((m) => m.type === 'event' && m.event_type === 'alerts'),
+  );
   c.close();
   wss.close();
 }

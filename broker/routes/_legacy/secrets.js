@@ -22,8 +22,16 @@ export async function handleSecrets(req, res, route, deps) {
   if (!p.startsWith('/api/v1/secrets')) return false;
 
   const {
-    send, jsonError, readBody, audit, ctx, config, secretCache,
-    canAccessSecret, sopsEncryptAtomic, reloadSecrets,
+    send,
+    jsonError,
+    readBody,
+    audit,
+    ctx,
+    config,
+    secretCache,
+    canAccessSecret,
+    sopsEncryptAtomic,
+    reloadSecrets,
   } = deps;
 
   if (!requireAuth(ctx, res, jsonError)) return true;

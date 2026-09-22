@@ -15,14 +15,22 @@ import {
   canProxyService,
 } from '../broker/api-keys.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}`);
+  }
 }
 
-function section(name) { console.log(`\n[${name}]`); }
+function section(name) {
+  console.log(`\n[${name}]`);
+}
 
 // ============================================================
 // 1. generateMasterKey
@@ -35,10 +43,16 @@ section('generateMasterKey');
   ok('id is 16 chars hex', /^[a-f0-9]{16}$/.test(id));
   ok('is_master = true', key_obj.is_master === true);
   ok('can_create_child = true', key_obj.can_create_child === true);
-  ok('scopes only keys:issue_child', JSON.stringify(key_obj.scopes) === JSON.stringify(['keys:issue_child']));
+  ok(
+    'scopes only keys:issue_child',
+    JSON.stringify(key_obj.scopes) === JSON.stringify(['keys:issue_child']),
+  );
   ok('default_child_ttl_seconds = 3600', key_obj.default_child_ttl_seconds === 3600);
   ok('child_scopes has 2 items', key_obj.child_scopes.length === 2);
-  ok('expires_at ~30d from now', Math.abs(new Date(key_obj.expires_at).getTime() - Date.now() - 30*24*3600*1000) < 5000);
+  ok(
+    'expires_at ~30d from now',
+    Math.abs(new Date(key_obj.expires_at).getTime() - Date.now() - 30 * 24 * 3600 * 1000) < 5000,
+  );
 }
 
 // ============================================================
@@ -58,13 +72,28 @@ section('canCreateChild');
   ok('revoked denied', r3.ok === false && r3.reason === 'revoked');
   m.revoked_at = null;
 
-  const r4 = canCreateChild({ scopes: ['secrets:resolve'], is_master: true, can_create_child: true });
+  const r4 = canCreateChild({
+    expires_at: m.expires_at,
+    scopes: ['secrets:resolve'],
+    is_master: true,
+    can_create_child: true,
+  });
   ok('wrong scope denied', r4.ok === false && r4.reason === 'no_keys_scope');
 
-  const r5 = canCreateChild({ scopes: ['keys:issue_child'], is_master: false, can_create_child: true });
+  const r5 = canCreateChild({
+    expires_at: m.expires_at,
+    scopes: ['keys:issue_child'],
+    is_master: false,
+    can_create_child: true,
+  });
   ok('non-master denied', r5.ok === false && r5.reason === 'not_master');
 
-  const r6 = canCreateChild({ scopes: ['keys:issue_child'], is_master: true, can_create_child: false });
+  const r6 = canCreateChild({
+    expires_at: m.expires_at,
+    scopes: ['keys:issue_child'],
+    is_master: true,
+    can_create_child: false,
+  });
   ok('no child perm denied', r6.ok === false && r6.reason === 'no_child_perm');
 
   const m2 = { ...m, expires_at: new Date(Date.now() - 1000).toISOString() };
@@ -85,44 +114,112 @@ section('createChildKey (scope 限定)');
   });
 
   // 3a. 默认 child 用 master 的 scopes
-  cfgKeys.push(master);  // 模拟 broker 把 master 加到 cfgKeys
+  cfgKeys.push(master); // 模拟 broker 把 master 加到 cfgKeys
   const r1 = createChildKey(cfgKeys, master, 'child-default');
   ok('child create ok', r1.ok === true);
-  ok('child scopes = master child_scopes', JSON.stringify(r1.key_obj.scopes) === JSON.stringify(['secrets:resolve', 'services:proxy']));
+  ok(
+    'child scopes = master child_scopes',
+    JSON.stringify(r1.key_obj.scopes) === JSON.stringify(['secrets:resolve', 'services:proxy']),
+  );
   ok('child parent_master_id = master.id', r1.key_obj.parent_master_id === master.id);
-  ok('child expires ~1h', Math.abs(new Date(r1.key_obj.expires_at).getTime() - Date.now() - 3600*1000) < 5000);
+  ok(
+    'child expires ~1h',
+    Math.abs(new Date(r1.key_obj.expires_at).getTime() - Date.now() - 3600 * 1000) < 5000,
+  );
   ok('child is master=false', r1.key_obj.is_master === false);
   ok('child can_create_child=false', r1.key_obj.can_create_child === false);
   ok('cfgKeys now has 2 (master + child)', cfgKeys.length === 2);
 
   // 3b. 越权 scope 攻击：child 试图加 master 没限的 scope
   const r2 = createChildKey(cfgKeys, master, 'child-bad', {
-    scopes: ['admin', 'keys:issue_child', 'secrets:resolve'],  // 越权
+    scopes: ['admin', 'keys:issue_child', 'secrets:resolve'], // 越权
   });
-  ok('privilege escalation blocked', r2.ok === true && !r2.key_obj.scopes.includes('admin') && !r2.key_obj.scopes.includes('keys:issue_child'));
-  ok('only master-allowed scopes kept', JSON.stringify(r2.key_obj.scopes) === JSON.stringify(['secrets:resolve']));
+  ok(
+    'privilege escalation blocked',
+    r2.ok === true &&
+      !r2.key_obj.scopes.includes('admin') &&
+      !r2.key_obj.scopes.includes('keys:issue_child'),
+  );
+  ok(
+    'only master-allowed scopes kept',
+    JSON.stringify(r2.key_obj.scopes) === JSON.stringify(['secrets:resolve']),
+  );
 
   // 3c. 越权 allowed_secrets
   const r3 = createChildKey(cfgKeys, master, 'child-bad-secret', {
-    allowed_secrets: ['GITHUB_PAT', 'ROOT_PASSWORD'],  // ROOT_PASSWORD 不在 master
+    allowed_secrets: ['GITHUB_PAT', 'ROOT_PASSWORD'], // ROOT_PASSWORD 不在 master
   });
-  ok('bad allowed_secrets filtered', r3.ok === true && !r3.key_obj.allowed_secrets.includes('ROOT_PASSWORD'));
+  ok(
+    'bad allowed_secrets filtered',
+    r3.ok === true && !r3.key_obj.allowed_secrets.includes('ROOT_PASSWORD'),
+  );
   ok('good allowed_secrets kept', r3.key_obj.allowed_secrets.includes('GITHUB_PAT'));
 
   // 3d. 越权 allowed_services
   const r4 = createChildKey(cfgKeys, master, 'child-bad-svc', {
-    allowed_services: ['github', 'aws_prod'],  // aws_prod 不在 master
+    allowed_services: ['github', 'aws_prod'], // aws_prod 不在 master
   });
-  ok('bad allowed_services filtered', r4.ok === true && !r4.key_obj.allowed_services.includes('aws_prod'));
+  ok(
+    'bad allowed_services filtered',
+    r4.ok === true && !r4.key_obj.allowed_services.includes('aws_prod'),
+  );
 
-  // 3e. custom ttl
-  const r5 = createChildKey(cfgKeys, master, 'child-custom-ttl', { ttl_seconds: 600 });
-  ok('custom ttl 600s', Math.abs(new Date(r5.key_obj.expires_at).getTime() - Date.now() - 600*1000) < 5000);
+  // 3e. restricted parent must not turn an empty/disjoint child allowlist into unrestricted access
+  const r5 = createChildKey(cfgKeys, master, 'child-empty-svc', {
+    scopes: ['services:proxy'],
+    allowed_services: [],
+  });
+  ok(
+    'empty service allowlist cannot escape restricted master',
+    r5.ok === false && r5.reason === 'no_allowed_services',
+  );
 
-  // 3f. revoke 后拒绝
+  const r6 = createChildKey(cfgKeys, master, 'child-disjoint-secret', {
+    scopes: ['secrets:resolve'],
+    allowed_secrets: ['ROOT_PASSWORD'],
+  });
+  ok(
+    'disjoint secret allowlist cannot escape restricted master',
+    r6.ok === false && r6.reason === 'no_allowed_secrets',
+  );
+
+  // 3f. child IP policy may only inherit or narrow a restricted parent
+  const { key_obj: ipMaster } = generateMasterKey('m-ip', 'client.test', {
+    ip_whitelist: ['10.0.0.0/8'],
+  });
+  const r7 = createChildKey([], ipMaster, 'child-empty-ip', { ip_whitelist: [] });
+  ok(
+    'empty child IP allowlist cannot remove parent restriction',
+    r7.ok === false && r7.reason === 'no_allowed_ips',
+  );
+
+  // 3g. child rate limit may not be broader than the master policy
+  const r8 = createChildKey(cfgKeys, master, 'child-unlimited', { rate_limit: 'unlimited' });
+  ok(
+    'child cannot escalate finite rate limit to unlimited',
+    r8.ok === false && r8.reason === 'rate_limit_escalation',
+  );
+
+  // 3h. custom ttl works but can never outlive the master key
+  const r9 = createChildKey(cfgKeys, master, 'child-custom-ttl', { ttl_seconds: 600 });
+  ok(
+    'custom ttl 600s',
+    r9.ok === true &&
+      Math.abs(new Date(r9.key_obj.expires_at).getTime() - Date.now() - 600 * 1000) < 5000,
+  );
+
+  const { key_obj: shortMaster } = generateMasterKey('m-short', 'client.test');
+  shortMaster.expires_at = new Date(Date.now() + 30_000).toISOString();
+  const r10 = createChildKey([], shortMaster, 'child-long-request', { ttl_seconds: 3600 });
+  ok(
+    'child expiry is capped by parent expiry',
+    r10.ok === true && new Date(r10.key_obj.expires_at) <= new Date(shortMaster.expires_at),
+  );
+
+  // 3i. revoke 后拒绝
   master.revoked_at = new Date().toISOString();
-  const r6 = createChildKey(cfgKeys, master, 'child-after-revoke');
-  ok('revoked master denied', r6.ok === false && r6.reason === 'revoked');
+  const r11 = createChildKey(cfgKeys, master, 'child-after-revoke');
+  ok('revoked master denied', r11.ok === false && r11.reason === 'revoked');
 }
 
 // ============================================================
@@ -132,7 +229,10 @@ section('isChildKey');
 {
   const cfgKeys = [];
   const { key_obj: m } = generateMasterKey('m', 'admin');
-  const { key_obj: c } = generateApiKey('c', 'admin', { parent_master_id: m.id, scopes: ['secrets:resolve'] });
+  const { key_obj: c } = generateApiKey('c', 'admin', {
+    parent_master_id: m.id,
+    scopes: ['secrets:resolve'],
+  });
   ok('master is not child', isChildKey(m) === false);
   ok('child with parent is child', isChildKey(c) === true);
   ok('no parent is not child', isChildKey({ ...c, parent_master_id: null }) === false);
@@ -163,7 +263,6 @@ section('findApiKey 兼容');
   const { key_obj: m, secret: ms } = generateMasterKey('m', 'admin');
   cfgKeys.push(m);
   const r1 = createChildKey(cfgKeys, m, 'c');
-  cfgKeys.push(r1.key_obj);
 
   const found1 = findApiKey(cfgKeys, ms);
   ok('master found by secret', !!found1 && found1.id === m.id);
@@ -185,7 +284,10 @@ section('child scope 仍受 canResolveSecret / canProxyService 限制');
   const child = r1.key_obj;
   ok('child can resolve', canResolveSecret(child, 'GITHUB_PAT') === true);
   ok('child can proxy github', canProxyService(child, 'github') === true);
-  ok('child cannot resolve if no secrets:resolve', canResolveSecret({ ...child, scopes: ['services:proxy'] }, 'X') === false);
+  ok(
+    'child cannot resolve if no secrets:resolve',
+    canResolveSecret({ ...child, scopes: ['services:proxy'] }, 'X') === false,
+  );
 }
 
 console.log(`\n========================================`);

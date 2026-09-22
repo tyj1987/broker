@@ -7,7 +7,7 @@ export function signCloudflare(secret) {
     throw new Error('Cloudflare sign: secret.api_token required');
   }
   return {
-    'Authorization': `Bearer ${secret.api_token}`,
+    Authorization: `Bearer ${secret.api_token}`,
     'Content-Type': 'application/json',
   };
 }

@@ -37,12 +37,20 @@ import {
 } from '../broker/webauthn.js';
 import { createHash } from 'node:crypto';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- helpers ----------
 
@@ -60,7 +68,11 @@ function buildAttestationObject() {
 }
 
 // Always set a known origin
-configureWebAuthn({ rp_origin: 'https://broker.test', rp_id: 'broker.test', algorithms: [-7, -257] });
+configureWebAuthn({
+  rp_origin: 'https://broker.test',
+  rp_id: 'broker.test',
+  algorithms: [-7, -257],
+});
 
 // ---------- tests ----------
 
@@ -129,7 +141,10 @@ section('4. finishRegistration: wrong ceremony type');
   const r = beginRegistration('client.x');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.get', challenge, 'https://broker.test'); // WRONG type
-  const credential = { id: 'c', response: { clientDataJSON: cd, attestationObject: buildAttestationObject() } };
+  const credential = {
+    id: 'c',
+    response: { clientDataJSON: cd, attestationObject: buildAttestationObject() },
+  };
   const r2 = finishRegistration('client.x', credential, () => ({ verified: true }));
   ok('rejected', !r2.ok);
   ok('error mentions ceremony', /ceremony/.test(r2.error || ''));
@@ -138,8 +153,15 @@ section('4. finishRegistration: wrong ceremony type');
 section('5. finishRegistration: invalid challenge');
 
 {
-  const cd = buildClientData('webauthn.create', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'https://broker.test');
-  const credential = { id: 'c', response: { clientDataJSON: cd, attestationObject: buildAttestationObject() } };
+  const cd = buildClientData(
+    'webauthn.create',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'https://broker.test',
+  );
+  const credential = {
+    id: 'c',
+    response: { clientDataJSON: cd, attestationObject: buildAttestationObject() },
+  };
   const r = finishRegistration('client.y', credential, () => ({ verified: true }));
   ok('rejected', !r.ok);
   ok('error mentions challenge', /challenge/.test(r.error || ''));
@@ -151,7 +173,10 @@ section('6. finishRegistration: origin mismatch');
   const r = beginRegistration('client.z');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.create', challenge, 'https://evil.test');
-  const credential = { id: 'c', response: { clientDataJSON: cd, attestationObject: buildAttestationObject() } };
+  const credential = {
+    id: 'c',
+    response: { clientDataJSON: cd, attestationObject: buildAttestationObject() },
+  };
   const r2 = finishRegistration('client.z', credential, () => ({ verified: true }));
   ok('rejected', !r2.ok);
   ok('error mentions origin', /origin/.test(r2.error || ''));
@@ -163,7 +188,10 @@ section('7. finishRegistration: missing verifier');
   const r = beginRegistration('client.m');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.create', challenge, 'https://broker.test');
-  const credential = { id: 'c', response: { clientDataJSON: cd, attestationObject: buildAttestationObject() } };
+  const credential = {
+    id: 'c',
+    response: { clientDataJSON: cd, attestationObject: buildAttestationObject() },
+  };
   const r2 = finishRegistration('client.m', credential, null); // no verifier
   ok('rejected', !r2.ok);
   ok('error mentions attestation/verifier', /attestation|verifier/.test(r2.error || ''));
@@ -175,8 +203,14 @@ section('8. finishRegistration: verifier rejects');
   const r = beginRegistration('client.r');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.create', challenge, 'https://broker.test');
-  const credential = { id: 'c', response: { clientDataJSON: cd, attestationObject: buildAttestationObject() } };
-  const r2 = finishRegistration('client.r', credential, () => ({ verified: false, error: 'bad cert' }));
+  const credential = {
+    id: 'c',
+    response: { clientDataJSON: cd, attestationObject: buildAttestationObject() },
+  };
+  const r2 = finishRegistration('client.r', credential, () => ({
+    verified: false,
+    error: 'bad cert',
+  }));
   ok('rejected', !r2.ok);
   ok('error mentions verification', /verification/.test(r2.error || ''));
 }
@@ -189,10 +223,18 @@ section('9. finishRegistration: verifier accepts → ok');
   const cd = buildClientData('webauthn.create', challenge, 'https://broker.test');
   const credential = {
     id: 'cred-real',
-    response: { clientDataJSON: cd, attestationObject: buildAttestationObject(), transports: ['usb'] },
+    response: {
+      clientDataJSON: cd,
+      attestationObject: buildAttestationObject(),
+      transports: ['usb'],
+    },
   };
   const r2 = finishRegistration('client.ok', credential, () => ({
-    verified: true, publicKey: 'pubkey-base64', signCount: 7, aaguid: 'aaguid-x', fmt: 'none',
+    verified: true,
+    publicKey: 'pubkey-base64',
+    signCount: 7,
+    aaguid: 'aaguid-x',
+    fmt: 'none',
   }));
   ok('ok=true', r2.ok === true);
   ok('returns credential_id', r2.credential_id === 'cred-real');
@@ -205,7 +247,10 @@ section('10. finishAuthentication: wrong ceremony type');
   const r = beginAuthentication('client.a');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.create', challenge, 'https://broker.test'); // WRONG
-  const credential = { id: 'cred-real', response: { clientDataJSON: cd, authenticatorData: '', signature: '' } };
+  const credential = {
+    id: 'cred-real',
+    response: { clientDataJSON: cd, authenticatorData: '', signature: '' },
+  };
   const r2 = finishAuthentication('client.a', credential, [], () => ({ verified: true }));
   ok('rejected', !r2.ok);
 }
@@ -216,7 +261,10 @@ section('11. finishAuthentication: unknown credential');
   const r = beginAuthentication('client.a');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.get', challenge, 'https://broker.test');
-  const credential = { id: 'cred-unknown', response: { clientDataJSON: cd, authenticatorData: '', signature: '' } };
+  const credential = {
+    id: 'cred-unknown',
+    response: { clientDataJSON: cd, authenticatorData: '', signature: '' },
+  };
   const stored = [{ credential_id: 'cred-known', publicKey: 'pk', signCount: 0 }];
   const r2 = finishAuthentication('client.a', credential, stored, () => ({ verified: true }));
   ok('rejected', !r2.ok);
@@ -229,9 +277,15 @@ section('12. finishAuthentication: signCount regression (cloning)');
   const r = beginAuthentication('client.a');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.get', challenge, 'https://broker.test');
-  const credential = { id: 'cred-1', response: { clientDataJSON: cd, authenticatorData: '', signature: '' } };
+  const credential = {
+    id: 'cred-1',
+    response: { clientDataJSON: cd, authenticatorData: '', signature: '' },
+  };
   const stored = [{ credential_id: 'cred-1', publicKey: 'pk', signCount: 10 }];
-  const r2 = finishAuthentication('client.a', credential, stored, () => ({ verified: true, signCount: 5 }));
+  const r2 = finishAuthentication('client.a', credential, stored, () => ({
+    verified: true,
+    signCount: 5,
+  }));
   ok('rejected', !r2.ok);
   ok('error mentions signCount', /signCount/.test(r2.error || ''));
 }
@@ -242,9 +296,15 @@ section('13. finishAuthentication: valid');
   const r = beginAuthentication('client.a');
   const challenge = r.publicKey.challenge.toString('base64url');
   const cd = buildClientData('webauthn.get', challenge, 'https://broker.test');
-  const credential = { id: 'cred-1', response: { clientDataJSON: cd, authenticatorData: '', signature: '' } };
+  const credential = {
+    id: 'cred-1',
+    response: { clientDataJSON: cd, authenticatorData: '', signature: '' },
+  };
   const stored = [{ credential_id: 'cred-1', publicKey: 'pk', signCount: 5 }];
-  const r2 = finishAuthentication('client.a', credential, stored, () => ({ verified: true, signCount: 6 }));
+  const r2 = finishAuthentication('client.a', credential, stored, () => ({
+    verified: true,
+    signCount: 6,
+  }));
   ok('ok=true', r2.ok === true);
   ok('returns new signCount', r2.signCount === 6);
 }
@@ -265,14 +325,18 @@ section('14. ensureWebAuthnFactors initializes');
 section('15. listCredentials returns public view');
 
 {
-  const wa = { credentials: [{
-    credential_id: 'c1',
-    publicKey: 'SECRET-PRIVATE-KEY',  // should NOT be in public view
-    signCount: 3,
-    aaguid: 'aag',
-    transports: ['usb'],
-    created_at: '2026-01-01',
-  }] };
+  const wa = {
+    credentials: [
+      {
+        credential_id: 'c1',
+        publicKey: 'SECRET-PRIVATE-KEY', // should NOT be in public view
+        signCount: 3,
+        aaguid: 'aag',
+        transports: ['usb'],
+        created_at: '2026-01-01',
+      },
+    ],
+  };
   const list = listCredentials(wa);
   ok('1 credential', list.length === 1);
   ok('publicKey NOT in view', !('publicKey' in list[0]));
@@ -306,8 +370,14 @@ section('17. parseAuthenticatorData: too short throws');
 section('18. noopVerifier returns verified:false');
 
 {
-  ok('verifyRegistration returns verified:false', noopVerifier.verifyRegistration().verified === false);
-  ok('verifyAuthentication returns verified:false', noopVerifier.verifyAuthentication().verified === false);
+  ok(
+    'verifyRegistration returns verified:false',
+    noopVerifier.verifyRegistration().verified === false,
+  );
+  ok(
+    'verifyAuthentication returns verified:false',
+    noopVerifier.verifyAuthentication().verified === false,
+  );
 }
 
 section('19. configureWebAuthn overrides');

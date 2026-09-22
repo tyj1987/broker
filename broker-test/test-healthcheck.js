@@ -22,12 +22,20 @@ import { dirname } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(s) { console.log(`\n--- ${s} ---`); }
+function section(s) {
+  console.log(`\n--- ${s} ---`);
+}
 
 const hc = await import(new URL('../broker/healthcheck.js', import.meta.url).href);
 const cron = await import(new URL('../broker/cron-tasks.js', import.meta.url).href);
@@ -53,25 +61,34 @@ let lastHttpReq = null;
         return res.end('internal error');
       }
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     // override the github host to local mock
-    const _checkGithub = (pat) => new Promise((resolve) => {
-      const req = httpRequest({
-        host: '127.0.0.1', port, path: '/user', method: 'GET',
-        headers: { 'Authorization': `token ${pat}`, 'User-Agent': 'test' },
-        timeout: 5000,
-      }, res => {
-        let d = ''; res.on('data', c => d += c);
-        res.on('end', () => {
-          if (res.statusCode === 200) resolve({ status: 'ok', detail: `user=${JSON.parse(d).login}` });
-          else if (res.statusCode === 401) resolve({ status: 'expired', detail: '401' });
-          else resolve({ status: 'fail', detail: `HTTP ${res.statusCode}` });
-        });
+    const _checkGithub = (pat) =>
+      new Promise((resolve) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/user',
+            method: 'GET',
+            headers: { Authorization: `token ${pat}`, 'User-Agent': 'test' },
+            timeout: 5000,
+          },
+          (res) => {
+            let d = '';
+            res.on('data', (c) => (d += c));
+            res.on('end', () => {
+              if (res.statusCode === 200) {
+                resolve({ status: 'ok', detail: `user=${JSON.parse(d).login}` });
+              } else if (res.statusCode === 401) resolve({ status: 'expired', detail: '401' });
+              else resolve({ status: 'fail', detail: `HTTP ${res.statusCode}` });
+            });
+          },
+        );
+        req.on('error', (e) => resolve({ status: 'fail', detail: e.message }));
+        req.end();
       });
-      req.on('error', e => resolve({ status: 'fail', detail: e.message }));
-      req.end();
-    });
     const good = await _checkGithub('good-token');
     ok('good token → ok', good.status === 'ok' && good.detail.includes('octocat'));
     const expired = await _checkGithub('expired-token');
@@ -79,7 +96,10 @@ let lastHttpReq = null;
     const bad = await _checkGithub('other-token');
     ok('500 response → fail', bad.status === 'fail');
   }
-  if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  if (mockHttp) {
+    mockHttp.close();
+    mockHttp = null;
+  }
 
   // ======== 2. checkOpenAI ========
   section('healthcheck.checkOpenAI');
@@ -93,52 +113,78 @@ let lastHttpReq = null;
         return res.end(JSON.stringify({ error: { message: 'invalid_api_key' } }));
       }
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     // 模拟 checkOpenAI 但用 local
-    const _checkOpenAI = (apiKey) => new Promise((resolve) => {
-      const req = httpRequest({
-        host: '127.0.0.1', port, path: '/v1/models', method: 'GET',
-        headers: { 'Authorization': `Bearer ${apiKey}` },
-        timeout: 5000,
-      }, res => {
-        let d = ''; res.on('data', c => d += c);
-        res.on('end', () => {
-          if (res.statusCode === 200) resolve({ status: 'ok' });
-          else if (res.statusCode === 401) resolve({ status: 'expired' });
-          else resolve({ status: 'fail' });
-        });
+    const _checkOpenAI = (apiKey) =>
+      new Promise((resolve) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/v1/models',
+            method: 'GET',
+            headers: { Authorization: `Bearer ${apiKey}` },
+            timeout: 5000,
+          },
+          (res) => {
+            let d = '';
+            res.on('data', (c) => (d += c));
+            res.on('end', () => {
+              if (res.statusCode === 200) resolve({ status: 'ok' });
+              else if (res.statusCode === 401) resolve({ status: 'expired' });
+              else resolve({ status: 'fail' });
+            });
+          },
+        );
+        req.on('error', (e) => resolve({ status: 'fail', detail: e.message }));
+        req.end();
       });
-      req.on('error', e => resolve({ status: 'fail', detail: e.message }));
-      req.end();
-    });
     const good = await _checkOpenAI('sk-good');
     ok('good → ok', good.status === 'ok');
     const bad = await _checkOpenAI('sk-bad');
     ok('bad → expired', bad.status === 'expired');
   }
-  if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  if (mockHttp) {
+    mockHttp.close();
+    mockHttp = null;
+  }
 
   // ======== 3. checkSsh (mock TCP) ========
   section('healthcheck.checkSsh');
   {
-    mockTcp = createTcpServer((sock) => { sock.end(); });
-    await new Promise(r => mockTcp.listen(0, '127.0.0.1', r));
+    mockTcp = createTcpServer((sock) => {
+      sock.end();
+    });
+    await new Promise((r) => mockTcp.listen(0, '127.0.0.1', r));
     const port = mockTcp.address().port;
     // mock checkSsh (inline copy, 改 host/port) - ESM 兼容
     const _checkSsh = async (connection) => {
       const net = await import('node:net');
       return new Promise((resolve) => {
         const sock = net.connect(port, '127.0.0.1');
-        const t = setTimeout(() => { sock.destroy(); resolve({ status: 'fail' }); }, 3000);
-        sock.on('connect', () => { clearTimeout(t); sock.end(); resolve({ status: 'ok' }); });
-        sock.on('error', e => { clearTimeout(t); resolve({ status: 'fail', detail: e.message }); });
+        const t = setTimeout(() => {
+          sock.destroy();
+          resolve({ status: 'fail' });
+        }, 3000);
+        sock.on('connect', () => {
+          clearTimeout(t);
+          sock.end();
+          resolve({ status: 'ok' });
+        });
+        sock.on('error', (e) => {
+          clearTimeout(t);
+          resolve({ status: 'fail', detail: e.message });
+        });
       });
     };
     const okResult = await _checkSsh({ host: '127.0.0.1', port });
     ok('TCP reachable → ok', okResult.status === 'ok');
   }
-  if (mockTcp) { mockTcp.close(); mockTcp = null; }
+  if (mockTcp) {
+    mockTcp.close();
+    mockTcp = null;
+  }
 
   // ======== 3.5 checkCloudflare (mock https) — M4.5.1 =====
   section('healthcheck.checkCloudflare');
@@ -148,28 +194,42 @@ let lastHttpReq = null;
       lastCfReq = { url: req.url, method: req.method };
       if (req.headers.authorization?.includes('good-cf-token')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: true, result: [{ id: 'zone1', name: 'example.com' }] }));
+        return res.end(
+          JSON.stringify({ success: true, result: [{ id: 'zone1', name: 'example.com' }] }),
+        );
       }
       if (req.headers.authorization?.includes('expired-cf-token')) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: false, errors: [{ message: 'Invalid API Token' }] }));
+        return res.end(
+          JSON.stringify({ success: false, errors: [{ message: 'Invalid API Token' }] }),
+        );
       }
       res.writeHead(403);
       return res.end(JSON.stringify({ success: false, errors: [{ message: 'Forbidden' }] }));
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     process.env.CLOUDFLARE_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.CLOUDFLARE_HEALTHCHECK_PORT = String(port);
     const good = await hc.checkSecret('CF', { api_token: 'good-cf-token' }, 'cloudflare_token');
-    ok('good token → ok', good.status === 'ok' && (good.detail.includes('zones') || good.detail.includes('token=')));
+    ok(
+      'good token → ok',
+      good.status === 'ok' && (good.detail.includes('zones') || good.detail.includes('token=')),
+    );
     ok('cloudflare hits /zones', String(lastCfReq?.url || '').startsWith('/client/v4/zones'));
-    const expired = await hc.checkSecret('CF', { api_token: 'expired-cf-token' }, 'cloudflare_token');
+    const expired = await hc.checkSecret(
+      'CF',
+      { api_token: 'expired-cf-token' },
+      'cloudflare_token',
+    );
     ok('expired token → expired', expired.status === 'expired');
     delete process.env.CLOUDFLARE_HEALTHCHECK_HOST;
     delete process.env.CLOUDFLARE_HEALTHCHECK_PORT;
   }
-  if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  if (mockHttp) {
+    mockHttp.close();
+    mockHttp = null;
+  }
 
   section('healthcheck.checkAiProvider deepseek');
   {
@@ -183,7 +243,7 @@ let lastHttpReq = null;
       res.writeHead(401);
       return res.end('{}');
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     process.env.DEEPSEEK_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.DEEPSEEK_HEALTHCHECK_PORT = String(port);
@@ -195,7 +255,10 @@ let lastHttpReq = null;
     delete process.env.DEEPSEEK_HEALTHCHECK_HOST;
     delete process.env.DEEPSEEK_HEALTHCHECK_PORT;
   }
-  if (mockHttp) { mockHttp.close(); mockHttp = null; }
+  if (mockHttp) {
+    mockHttp.close();
+    mockHttp = null;
+  }
 
   // ======== 4. aliyun_ak v2 验签 (signAliyun 纯函数 + checkAliyun HTTP mock) — M5.1 =====
   section('aliyun_ak v2 验签 — signAliyun 纯函数');
@@ -209,30 +272,45 @@ let lastHttpReq = null;
       timestamp: '2026-08-15T00:00:00Z',
       nonce: 'fixed-nonce-for-test',
     });
-    ok('signAliyun.returns.query 包含 Signature=',
-       out.query.includes('Signature=') && out.query.includes('AccessKeyId=testid'));
-    ok('signAliyun.returns.query 字典序排序 (AccessKeyId < Action < Format < RegionId < SignatureMethod < SignatureNonce < SignatureVersion < Timestamp < Version)',
-       out.query.startsWith('AccessKeyId=testid&Action=DescribeRegions&Format=JSON&RegionId=cn-hangzhou&SignatureMethod=HMAC-SHA1&SignatureNonce=fixed-nonce-for-test&SignatureVersion=1.0&Timestamp=2026-08-15T00%3A00%3A00Z&Version=2014-05-26'));
-    ok('signAliyun.returns.query 包含 Version=2014-05-26',
-       out.query.includes('Version=2014-05-26'));
-    ok('signAliyun.returns.query Signature 在最后',
-       out.query.split('&').pop().startsWith('Signature='));
+    ok(
+      'signAliyun.returns.query 包含 Signature=',
+      out.query.includes('Signature=') && out.query.includes('AccessKeyId=testid'),
+    );
+    ok(
+      'signAliyun.returns.query 字典序排序 (AccessKeyId < Action < Format < RegionId < SignatureMethod < SignatureNonce < SignatureVersion < Timestamp < Version)',
+      out.query.startsWith(
+        'AccessKeyId=testid&Action=DescribeRegions&Format=JSON&RegionId=cn-hangzhou&SignatureMethod=HMAC-SHA1&SignatureNonce=fixed-nonce-for-test&SignatureVersion=1.0&Timestamp=2026-08-15T00%3A00%3A00Z&Version=2014-05-26',
+      ),
+    );
+    ok(
+      'signAliyun.returns.query 包含 Version=2014-05-26',
+      out.query.includes('Version=2014-05-26'),
+    );
+    ok(
+      'signAliyun.returns.query Signature 在最后',
+      out.query.split('&').pop().startsWith('Signature='),
+    );
     // base64 HMAC-SHA1 输出固定 28 字符 (44 base64 字符含 padding)
     ok('signAliyun.signature 是 base64', /^[A-Za-z0-9+/=]{28}$/.test(out.signature));
-    ok('signAliyun.stringToSign 以 GET&%2F& 开头',
-       out.stringToSign.startsWith('GET&%2F&'));
+    ok('signAliyun.stringToSign 以 GET&%2F& 开头', out.stringToSign.startsWith('GET&%2F&'));
     // 2) rfc3986 编码特殊字符
-    ok('rfc3986: 空格 → %20', hc.rfc3986?.('a b') === 'a%20b' || true);  // 私有不强制暴露
+    ok('rfc3986: 空格 → %20', hc.rfc3986?.('a b') === 'a%20b' || true); // 私有不强制暴露
     // 3) 同输入同输出 (确定性, 除了 nonce)
     const out2 = hc.signAliyun({
-      action: 'DescribeRegions', accessKeyId: 'testid', accessKeySecret: 'testsecret',
-      timestamp: '2026-08-15T00:00:00Z', nonce: 'fixed-nonce-for-test',
+      action: 'DescribeRegions',
+      accessKeyId: 'testid',
+      accessKeySecret: 'testsecret',
+      timestamp: '2026-08-15T00:00:00Z',
+      nonce: 'fixed-nonce-for-test',
     });
     ok('signAliyun 确定性: 同输入同 signature', out.signature === out2.signature);
     // 4) 不同 secret 签名不同
     const out3 = hc.signAliyun({
-      action: 'DescribeRegions', accessKeyId: 'testid', accessKeySecret: 'OTHERSECRET',
-      timestamp: '2026-08-15T00:00:00Z', nonce: 'fixed-nonce-for-test',
+      action: 'DescribeRegions',
+      accessKeyId: 'testid',
+      accessKeySecret: 'OTHERSECRET',
+      timestamp: '2026-08-15T00:00:00Z',
+      nonce: 'fixed-nonce-for-test',
     });
     ok('signAliyun: 不同 secret → 不同 signature', out.signature !== out3.signature);
   }
@@ -246,62 +324,109 @@ let lastHttpReq = null;
       // 验签通过: 模拟 AK 真, 返 200 + region 列表
       if (req.url.includes('AccessKeyId=LTAI_good_ak_id_test_24')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ Regions: { Region: [{ RegionId: 'cn-hangzhou' }, { RegionId: 'cn-beijing' }] } }));
+        return res.end(
+          JSON.stringify({
+            Regions: { Region: [{ RegionId: 'cn-hangzhou' }, { RegionId: 'cn-beijing' }] },
+          }),
+        );
       }
       // 签名错: 返 403 InvalidAccessKeyId
       if (req.url.includes('AccessKeyId=LTAI_bad_ak_id_test_24')) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ Code: 'InvalidAccessKeyId', Message: 'Specified access key is not valid.' }));
+        return res.end(
+          JSON.stringify({
+            Code: 'InvalidAccessKeyId',
+            Message: 'Specified access key is not valid.',
+          }),
+        );
       }
       // 401 Unauthorized (v4.2.1 覆盖认证失败但非 invalid signature 的路径)
       if (req.url.includes('AccessKeyId=LTAI_unauth_test_24')) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ Code: 'Unauthorized', Message: 'Request authentication failed.' }));
+        return res.end(
+          JSON.stringify({ Code: 'Unauthorized', Message: 'Request authentication failed.' }),
+        );
       }
       // 其它: 500
       res.writeHead(500);
       res.end('mock error');
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     // 切 host + port 到 mock
     process.env.ALIYUN_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.ALIYUN_HEALTHCHECK_PORT = String(port);
 
     // 直接调 checkSecret (内部用 checkAliyun)
-    const good = await hc.checkSecret('PROD', { access_key_id: 'LTAI_good_ak_id_test_24', access_key_secret: 'goodsecret' }, 'aliyun_ak');
+    const good = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'LTAI_good_ak_id_test_24', access_key_secret: 'goodsecret' },
+      'aliyun_ak',
+    );
     ok('aliyun_ak good → ok', good.status === 'ok' && good.detail.includes('2 regions accessible'));
     ok('aliyun_ak good 带 latency_ms', typeof good.latency_ms === 'number' && good.latency_ms >= 0);
-    ok('aliyun_ak good mock 收到真签名 query', lastAliyunReq?.url?.includes('Signature=') && lastAliyunReq?.url?.includes('Action=DescribeRegions'));
+    ok(
+      'aliyun_ak good mock 收到真签名 query',
+      lastAliyunReq?.url?.includes('Signature=') &&
+        lastAliyunReq?.url?.includes('Action=DescribeRegions'),
+    );
 
-    const bad = await hc.checkSecret('PROD', { access_key_id: 'LTAI_bad_ak_id_test_24', access_key_secret: 'badsecret' }, 'aliyun_ak');
+    const bad = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'LTAI_bad_ak_id_test_24', access_key_secret: 'badsecret' },
+      'aliyun_ak',
+    );
     ok('aliyun_ak bad signature → expired', bad.status === 'expired' && bad.detail.includes('403'));
     ok('aliyun_ak bad detail 含 InvalidAccessKeyId', bad.detail.includes('InvalidAccessKeyId'));
 
     // 缺 secret 字段 (M5.3: 缺字段是配置错, 不是 skipped)
-    const missing = await hc.checkSecret('PROD', { access_key_id: 'LTAI_x' /* no secret */ }, 'aliyun_ak');
-    ok('aliyun_ak 缺 secret → misconfigured (M5.3)', missing.status === 'misconfigured' && missing.detail.includes('access_key_secret'));
+    const missing = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'LTAI_x' /* no secret */ },
+      'aliyun_ak',
+    );
+    ok(
+      'aliyun_ak 缺 secret → misconfigured (M5.3)',
+      missing.status === 'misconfigured' && missing.detail.includes('access_key_secret'),
+    );
 
     // 完全空 (无 AK 无 secret): pickCredential 返 primary=undefined → skipped
     const noFields = await hc.checkSecret('PROD', {}, 'aliyun_ak');
-    ok('aliyun_ak 完全空 fields → skipped', noFields.status === 'skipped' && noFields.detail.includes('no extractable credential'));
+    ok(
+      'aliyun_ak 完全空 fields → skipped',
+      noFields.status === 'skipped' && noFields.detail.includes('no extractable credential'),
+    );
 
     // 只有 secret 没 AK (primary=undefined) → 同样 skipped, 不进 checkAliyun
     const noAk = await hc.checkSecret('PROD', { access_key_secret: 'foo' }, 'aliyun_ak');
-    ok('aliyun_ak 缺 access_key_id → skipped (short-circuit at pickCredential)', noAk.status === 'skipped');
+    ok(
+      'aliyun_ak 缺 access_key_id → skipped (short-circuit at pickCredential)',
+      noAk.status === 'skipped',
+    );
 
     // 401 Unauthorized → expired (v4.2.1: 覆盖除 403 之外的认证失败)
-    const unauth = await hc.checkSecret('PROD', { access_key_id: 'LTAI_unauth_test_24', access_key_secret: 'whatever' }, 'aliyun_ak');
+    const unauth = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'LTAI_unauth_test_24', access_key_secret: 'whatever' },
+      'aliyun_ak',
+    );
     ok('aliyun_ak 401 → expired', unauth.status === 'expired' && unauth.detail.includes('401'));
 
     // 5xx 服务端错误 → fail (v4.2.1: 覆盖非认证/非 2xx 的路径)
-    const srvErr = await hc.checkSecret('PROD', { access_key_id: 'LTAI_srvfail_test_24', access_key_secret: 'whatever' }, 'aliyun_ak');
+    const srvErr = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'LTAI_srvfail_test_24', access_key_secret: 'whatever' },
+      'aliyun_ak',
+    );
     ok('aliyun_ak 5xx → fail', srvErr.status === 'fail' && srvErr.detail.includes('HTTP 500'));
 
     // 清理 env
     delete process.env.ALIYUN_HEALTHCHECK_HOST;
     delete process.env.ALIYUN_HEALTHCHECK_PORT;
-    if (mockHttp) { mockHttp.close(); mockHttp = null; }
+    if (mockHttp) {
+      mockHttp.close();
+      mockHttp = null;
+    }
   }
 
   section('aliyun_ak in runAll (M5.1 真实验, 走 mcp-server upstream 路径)');
@@ -311,7 +436,10 @@ let lastHttpReq = null;
     // mcp-server 端 import 同一份 healthcheck.js 跑 mcp-server 进程内 checkSecret.
     // 这里只验证: 单元测试 broker 进程内 pickCredential 拿得到完整 pair (M5.1 关键)
     const getSecrets = () => ({
-      'ALIYUN_PROD': { type: 'aliyun_ak', fields: { access_key_id: 'LTAI', access_key_secret: 'sec' } },
+      ALIYUN_PROD: {
+        type: 'aliyun_ak',
+        fields: { access_key_id: 'LTAI', access_key_secret: 'sec' },
+      },
     });
     // 设 env 让 checkAliyun 走 mock (否则连真 ecs 失败, 但不会让 summary 崩)
     // 这里不跑真 runAll (会发网络), 只验证 pickCredential (间接走)
@@ -326,13 +454,17 @@ let lastHttpReq = null;
     })();
     // 真实跑 (用 mock host 让它不超时)
     process.env.ALIYUN_HEALTHCHECK_HOST = '127.0.0.1';
-    process.env.ALIYUN_HEALTHCHECK_PORT = '1';  // 故意连不通, 但不应 skipped
+    process.env.ALIYUN_HEALTHCHECK_PORT = '1'; // 故意连不通, 但不应 skipped
     const r = await hc.runAll(getSecrets);
-    ok('aliyun_ak 在 runAll 中不再 skipped (M5.1 落地)',
-       r.checks.ALIYUN_PROD?.status !== 'skipped');
+    ok(
+      'aliyun_ak 在 runAll 中不再 skipped (M5.1 落地)',
+      r.checks.ALIYUN_PROD?.status !== 'skipped',
+    );
     // M5.3: 连不通 mock port 1 → ECONNREFUSED → misconfigured (不是笼统 fail)
-    ok('aliyun_ak runAll → misconfigured (M5.3 ECONNREFUSED 分类)',
-       r.checks.ALIYUN_PROD?.status === 'misconfigured');
+    ok(
+      'aliyun_ak runAll → misconfigured (M5.3 ECONNREFUSED 分类)',
+      r.checks.ALIYUN_PROD?.status === 'misconfigured',
+    );
     delete process.env.ALIYUN_HEALTHCHECK_HOST;
     delete process.env.ALIYUN_HEALTHCHECK_PORT;
   }
@@ -349,29 +481,45 @@ let lastHttpReq = null;
       region: 'ap-guangzhou',
       timestamp: '2026-08-15T00:00:00Z',
     });
-    ok('signTencent.authorization 以 TC3-HMAC-SHA256 开头',
-       out.authorization.startsWith('TC3-HMAC-SHA256 Credential=AKIDtestid/'));
-    ok('signTencent.authorization 含 SignedHeaders=content-type;host',
-       out.authorization.includes('SignedHeaders=content-type;host'));
+    ok(
+      'signTencent.authorization 以 TC3-HMAC-SHA256 开头',
+      out.authorization.startsWith('TC3-HMAC-SHA256 Credential=AKIDtestid/'),
+    );
+    ok(
+      'signTencent.authorization 含 SignedHeaders=content-type;host',
+      out.authorization.includes('SignedHeaders=content-type;host'),
+    );
     ok('signTencent.signature 是 64 字符 hex (SHA256)', /^[0-9a-f]{64}$/.test(out.signature));
-    ok('signTencent.stringToSign 以 TC3-HMAC-SHA256\\n 开头',
-       out.stringToSign.startsWith('TC3-HMAC-SHA256\n'));
-    ok('signTencent.stringToSign 含 credential scope (date/service/tc3_request)',
-       out.stringToSign.includes('/cvm/tc3_request'));
-    ok('signTencent.contentType 是 application/x-www-form-urlencoded (GET)',
-       out.contentType === 'application/x-www-form-urlencoded');
+    ok(
+      'signTencent.stringToSign 以 TC3-HMAC-SHA256\\n 开头',
+      out.stringToSign.startsWith('TC3-HMAC-SHA256\n'),
+    );
+    ok(
+      'signTencent.stringToSign 含 credential scope (date/service/tc3_request)',
+      out.stringToSign.includes('/cvm/tc3_request'),
+    );
+    ok(
+      'signTencent.contentType 是 application/x-www-form-urlencoded (GET)',
+      out.contentType === 'application/x-www-form-urlencoded',
+    );
     // 2) 确定性
     const out2 = hc.signTencent({
-      action: 'DescribeRegions', version: '2017-03-12',
-      secretId: 'AKIDtestid', secretKey: 'test-secret-key',
-      region: 'ap-guangzhou', timestamp: '2026-08-15T00:00:00Z',
+      action: 'DescribeRegions',
+      version: '2017-03-12',
+      secretId: 'AKIDtestid',
+      secretKey: 'test-secret-key',
+      region: 'ap-guangzhou',
+      timestamp: '2026-08-15T00:00:00Z',
     });
     ok('signTencent 确定性: 同输入同 signature', out.signature === out2.signature);
     // 3) 不同 secretKey → 不同 sig
     const out3 = hc.signTencent({
-      action: 'DescribeRegions', version: '2017-03-12',
-      secretId: 'AKIDtestid', secretKey: 'OTHER-KEY',
-      region: 'ap-guangzhou', timestamp: '2026-08-15T00:00:00Z',
+      action: 'DescribeRegions',
+      version: '2017-03-12',
+      secretId: 'AKIDtestid',
+      secretKey: 'OTHER-KEY',
+      region: 'ap-guangzhou',
+      timestamp: '2026-08-15T00:00:00Z',
     });
     ok('signTencent: 不同 secretKey → 不同 signature', out.signature !== out3.signature);
   }
@@ -381,8 +529,11 @@ let lastHttpReq = null;
     let lastTencentReq = null;
     mockHttp = createMockServer((req, res) => {
       lastTencentReq = {
-        url: req.url, method: req.method, host: req.headers.host,
-        auth: req.headers.authorization, action: req.headers['x-tc-action'],
+        url: req.url,
+        method: req.method,
+        host: req.headers.host,
+        auth: req.headers.authorization,
+        action: req.headers['x-tc-action'],
         ts: req.headers['x-tc-timestamp'],
       };
       if (req.headers.authorization?.includes('AKIDgoodid')) {
@@ -391,32 +542,68 @@ let lastHttpReq = null;
       }
       if (req.headers.authorization?.includes('AKIDbadid')) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ Response: { Error: { Code: 'AuthFailure.SignatureFailure', Message: 'signature failed' } } }));
+        return res.end(
+          JSON.stringify({
+            Response: {
+              Error: { Code: 'AuthFailure.SignatureFailure', Message: 'signature failed' },
+            },
+          }),
+        );
       }
-      res.writeHead(500); res.end('mock error');
+      res.writeHead(500);
+      res.end('mock error');
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     process.env.TENCENT_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.TENCENT_HEALTHCHECK_PORT = String(port);
 
-    const good = await hc.checkSecret('PROD', { secret_id: 'AKIDgoodid', secret_key: 'goodsecret' }, 'tencent_sk');
-    ok('tencent_sk good → ok', good.status === 'ok' && good.detail.includes('27 regions accessible'));
-    ok('tencent_sk good mock 收到真 TC3 Authorization header',
-       lastTencentReq?.auth?.includes('TC3-HMAC-SHA256') && lastTencentReq?.auth?.includes('AKIDgoodid'));
-    ok('tencent_sk good mock 收到 X-TC-Action=DescribeRegions',
-       lastTencentReq?.action === 'DescribeRegions' && lastTencentReq?.url?.includes('Action=DescribeRegions'));
+    const good = await hc.checkSecret(
+      'PROD',
+      { secret_id: 'AKIDgoodid', secret_key: 'goodsecret' },
+      'tencent_sk',
+    );
+    ok(
+      'tencent_sk good → ok',
+      good.status === 'ok' && good.detail.includes('27 regions accessible'),
+    );
+    ok(
+      'tencent_sk good mock 收到真 TC3 Authorization header',
+      lastTencentReq?.auth?.includes('TC3-HMAC-SHA256') &&
+        lastTencentReq?.auth?.includes('AKIDgoodid'),
+    );
+    ok(
+      'tencent_sk good mock 收到 X-TC-Action=DescribeRegions',
+      lastTencentReq?.action === 'DescribeRegions' &&
+        lastTencentReq?.url?.includes('Action=DescribeRegions'),
+    );
 
-    const bad = await hc.checkSecret('PROD', { secret_id: 'AKIDbadid', secret_key: 'badsecret' }, 'tencent_sk');
-    ok('tencent_sk bad signature → expired', bad.status === 'expired' && bad.detail.includes('SignatureFailure'));
+    const bad = await hc.checkSecret(
+      'PROD',
+      { secret_id: 'AKIDbadid', secret_key: 'badsecret' },
+      'tencent_sk',
+    );
+    ok(
+      'tencent_sk bad signature → expired',
+      bad.status === 'expired' && bad.detail.includes('SignatureFailure'),
+    );
 
-    const missing = await hc.checkSecret('PROD', { secret_id: 'AKID_x' /* no key */ }, 'tencent_sk');
-    ok('tencent_sk 缺 secret_key → misconfigured (M5.3)',
-       missing.status === 'misconfigured' && missing.detail.includes('secret_key'));
+    const missing = await hc.checkSecret(
+      'PROD',
+      { secret_id: 'AKID_x' /* no key */ },
+      'tencent_sk',
+    );
+    ok(
+      'tencent_sk 缺 secret_key → misconfigured (M5.3)',
+      missing.status === 'misconfigured' && missing.detail.includes('secret_key'),
+    );
 
     delete process.env.TENCENT_HEALTHCHECK_HOST;
     delete process.env.TENCENT_HEALTHCHECK_PORT;
-    if (mockHttp) { mockHttp.close(); mockHttp = null; }
+    if (mockHttp) {
+      mockHttp.close();
+      mockHttp = null;
+    }
   }
 
   // ======== 4.5 aws_access_key SigV4 验签 (M5.2) ========
@@ -429,33 +616,52 @@ let lastHttpReq = null;
       service: 'sts',
       amzDate: '20260815T000000Z',
     });
-    ok('signAws.authorization 以 AWS4-HMAC-SHA256 开头',
-       out.authorization.startsWith('AWS4-HMAC-SHA256 Credential=AKIAtestid/'));
-    ok('signAws.authorization 含 credential scope (date/region/service/aws4_request)',
-       out.authorization.includes('/us-east-1/sts/aws4_request'));
-    ok('signAws.authorization 含 SignedHeaders=host;x-amz-date',
-       out.authorization.includes('SignedHeaders=host;x-amz-date'));
+    ok(
+      'signAws.authorization 以 AWS4-HMAC-SHA256 开头',
+      out.authorization.startsWith('AWS4-HMAC-SHA256 Credential=AKIAtestid/'),
+    );
+    ok(
+      'signAws.authorization 含 credential scope (date/region/service/aws4_request)',
+      out.authorization.includes('/us-east-1/sts/aws4_request'),
+    );
+    ok(
+      'signAws.authorization 含 SignedHeaders=host;x-amz-date',
+      out.authorization.includes('SignedHeaders=host;x-amz-date'),
+    );
     ok('signAws.signature 是 64 字符 hex (SHA256)', /^[0-9a-f]{64}$/.test(out.signature));
-    ok('signAws.stringToSign 以 AWS4-HMAC-SHA256\\n 开头',
-       out.stringToSign.startsWith('AWS4-HMAC-SHA256\n'));
-    ok('signAws.host 是 sts.us-east-1.amazonaws.com (默认)', out.host === 'sts.us-east-1.amazonaws.com');
+    ok(
+      'signAws.stringToSign 以 AWS4-HMAC-SHA256\\n 开头',
+      out.stringToSign.startsWith('AWS4-HMAC-SHA256\n'),
+    );
+    ok(
+      'signAws.host 是 sts.us-east-1.amazonaws.com (默认)',
+      out.host === 'sts.us-east-1.amazonaws.com',
+    );
     // 2) 确定性
     const out2 = hc.signAws({
-      accessKeyId: 'AKIAtestid', secretAccessKey: 'test-secret-access-key',
-      region: 'us-east-1', service: 'sts', amzDate: '20260815T000000Z',
+      accessKeyId: 'AKIAtestid',
+      secretAccessKey: 'test-secret-access-key',
+      region: 'us-east-1',
+      service: 'sts',
+      amzDate: '20260815T000000Z',
     });
     ok('signAws 确定性: 同输入同 signature', out.signature === out2.signature);
     // 3) 不同 secretAccessKey → 不同 sig
     const out3 = hc.signAws({
-      accessKeyId: 'AKIAtestid', secretAccessKey: 'OTHER-KEY',
-      region: 'us-east-1', service: 'sts', amzDate: '20260815T000000Z',
+      accessKeyId: 'AKIAtestid',
+      secretAccessKey: 'OTHER-KEY',
+      region: 'us-east-1',
+      service: 'sts',
+      amzDate: '20260815T000000Z',
     });
     ok('signAws: 不同 secretAccessKey → 不同 signature', out.signature !== out3.signature);
     // 4) canonical request 含 GET + / + sorted query + headers
     ok('signAws.canonicalRequest 第 1 行是 GET', out.canonicalRequest.startsWith('GET\n'));
     ok('signAws.canonicalRequest 第 2 行是 /', out.canonicalRequest.split('\n')[1] === '/');
-    ok('signAws.canonicalRequest 第 3 行是 sorted query (Action 在 Version 前)',
-       out.canonicalRequest.split('\n')[2] === 'Action=GetCallerIdentity&Version=2011-06-15');
+    ok(
+      'signAws.canonicalRequest 第 3 行是 sorted query (Action 在 Version 前)',
+      out.canonicalRequest.split('\n')[2] === 'Action=GetCallerIdentity&Version=2011-06-15',
+    );
   }
 
   section('aws_access_key SigV4 验签 — checkAws HTTP mock');
@@ -463,94 +669,175 @@ let lastHttpReq = null;
     let lastAwsReq = null;
     mockHttp = createMockServer((req, res) => {
       lastAwsReq = {
-        url: req.url, method: req.method, host: req.headers.host,
-        auth: req.headers.authorization, amzDate: req.headers['x-amz-date'],
+        url: req.url,
+        method: req.method,
+        host: req.headers.host,
+        auth: req.headers.authorization,
+        amzDate: req.headers['x-amz-date'],
       };
       if (req.headers.authorization?.includes('AKIAgoodid')) {
         res.writeHead(200, { 'Content-Type': 'text/xml' });
-        return res.end('<GetCallerIdentityResponse><Arn>arn:aws:iam::123:user/test</Arn></GetCallerIdentityResponse>');
+        return res.end(
+          '<GetCallerIdentityResponse><Arn>arn:aws:iam::123:user/test</Arn></GetCallerIdentityResponse>',
+        );
       }
       if (req.headers.authorization?.includes('AKIAbadid')) {
         res.writeHead(403, { 'Content-Type': 'text/xml' });
-        return res.end('<ErrorResponse><Error><Code>InvalidClientTokenId</Code></Error></ErrorResponse>');
+        return res.end(
+          '<ErrorResponse><Error><Code>InvalidClientTokenId</Code></Error></ErrorResponse>',
+        );
       }
-      res.writeHead(500); res.end('mock error');
+      res.writeHead(500);
+      res.end('mock error');
     });
-    await new Promise(r => mockHttp.listen(0, '127.0.0.1', r));
+    await new Promise((r) => mockHttp.listen(0, '127.0.0.1', r));
     const port = mockHttp.address().port;
     process.env.AWS_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.AWS_HEALTHCHECK_PORT = String(port);
 
-    const good = await hc.checkSecret('PROD', { access_key_id: 'AKIAgoodid', secret_access_key: 'goodsecret' }, 'aws_access_key');
-    ok('aws_access_key good → ok', good.status === 'ok' && good.detail.includes('arn=arn:aws:iam::123:user/test'));
-    ok('aws_access_key good mock 收到真 SigV4 Authorization header',
-       lastAwsReq?.auth?.includes('AWS4-HMAC-SHA256') && lastAwsReq?.auth?.includes('AKIAgoodid'));
-    ok('aws_access_key good mock 收到 X-Amz-Date',
-       lastAwsReq?.amzDate?.match(/^\d{8}T\d{6}Z$/));
+    const good = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'AKIAgoodid', secret_access_key: 'goodsecret' },
+      'aws_access_key',
+    );
+    ok(
+      'aws_access_key good → ok',
+      good.status === 'ok' && good.detail.includes('arn=arn:aws:iam::123:user/test'),
+    );
+    ok(
+      'aws_access_key good mock 收到真 SigV4 Authorization header',
+      lastAwsReq?.auth?.includes('AWS4-HMAC-SHA256') && lastAwsReq?.auth?.includes('AKIAgoodid'),
+    );
+    ok('aws_access_key good mock 收到 X-Amz-Date', lastAwsReq?.amzDate?.match(/^\d{8}T\d{6}Z$/));
 
-    const bad = await hc.checkSecret('PROD', { access_key_id: 'AKIAbadid', secret_access_key: 'badsecret' }, 'aws_access_key');
-    ok('aws_access_key bad signature → expired', bad.status === 'expired' && bad.detail.includes('InvalidClientTokenId'));
+    const bad = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'AKIAbadid', secret_access_key: 'badsecret' },
+      'aws_access_key',
+    );
+    ok(
+      'aws_access_key bad signature → expired',
+      bad.status === 'expired' && bad.detail.includes('InvalidClientTokenId'),
+    );
 
-    const missing = await hc.checkSecret('PROD', { access_key_id: 'AKIA_x' /* no key */ }, 'aws_access_key');
-    ok('aws_access_key 缺 secret_access_key → misconfigured (M5.3)',
-       missing.status === 'misconfigured' && missing.detail.includes('secret_access_key'));
+    const missing = await hc.checkSecret(
+      'PROD',
+      { access_key_id: 'AKIA_x' /* no key */ },
+      'aws_access_key',
+    );
+    ok(
+      'aws_access_key 缺 secret_access_key → misconfigured (M5.3)',
+      missing.status === 'misconfigured' && missing.detail.includes('secret_access_key'),
+    );
 
     delete process.env.AWS_HEALTHCHECK_HOST;
     delete process.env.AWS_HEALTHCHECK_PORT;
-    if (mockHttp) { mockHttp.close(); mockHttp = null; }
+    if (mockHttp) {
+      mockHttp.close();
+      mockHttp = null;
+    }
   }
 
   // ======== 4.6 v3.1 M5.3: classifyError 5 维分类 + 缺字段 misconfigured ========
   section('v3.1 M5.3: classifyError 5 维分类');
   {
     // 1) ENOTFOUND → unreachable
-    const r1 = hc.classifyError({ code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND api.openai.com' });
+    const r1 = hc.classifyError({
+      code: 'ENOTFOUND',
+      message: 'getaddrinfo ENOTFOUND api.openai.com',
+    });
     ok('ENOTFOUND → unreachable', r1.status === 'unreachable' && r1.detail.includes('DNS fail'));
     // 2) EAI_AGAIN / EAI_FAIL → unreachable
     ok('EAI_AGAIN → unreachable', hc.classifyError({ code: 'EAI_AGAIN' }).status === 'unreachable');
     ok('EAI_FAIL → unreachable', hc.classifyError({ code: 'EAI_FAIL' }).status === 'unreachable');
     // 3) ECONNRESET → unreachable
     const r3 = hc.classifyError({ code: 'ECONNRESET', message: 'read ECONNRESET' });
-    ok('ECONNRESET → unreachable', r3.status === 'unreachable' && r3.detail.includes('reset by peer'));
+    ok(
+      'ECONNRESET → unreachable',
+      r3.status === 'unreachable' && r3.detail.includes('reset by peer'),
+    );
     // 4) EHOSTUNREACH / ENETUNREACH → unreachable
-    ok('EHOSTUNREACH → unreachable', hc.classifyError({ code: 'EHOSTUNREACH' }).status === 'unreachable');
-    ok('ENETUNREACH → unreachable', hc.classifyError({ code: 'ENETUNREACH' }).status === 'unreachable');
+    ok(
+      'EHOSTUNREACH → unreachable',
+      hc.classifyError({ code: 'EHOSTUNREACH' }).status === 'unreachable',
+    );
+    ok(
+      'ENETUNREACH → unreachable',
+      hc.classifyError({ code: 'ENETUNREACH' }).status === 'unreachable',
+    );
     // 5) SSL_connect reset / read ECONNRESET in msg → unreachable
-    ok('SSL reset in msg → unreachable',
-       hc.classifyError({ message: 'OpenSSL SSL_connect: Connection reset by peer in connection to api.openai.com:443' }).status === 'unreachable');
+    ok(
+      'SSL reset in msg → unreachable',
+      hc.classifyError({
+        message:
+          'OpenSSL SSL_connect: Connection reset by peer in connection to api.openai.com:443',
+      }).status === 'unreachable',
+    );
     // 6) ECONNREFUSED → misconfigured
-    ok('ECONNREFUSED → misconfigured',
-       hc.classifyError({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 192.168.2.100:22' }).status === 'misconfigured'
-       && hc.classifyError({ code: 'ECONNREFUSED' }).detail.includes('refused'));
+    ok(
+      'ECONNREFUSED → misconfigured',
+      hc.classifyError({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 192.168.2.100:22' })
+        .status === 'misconfigured' &&
+        hc.classifyError({ code: 'ECONNREFUSED' }).detail.includes('refused'),
+    );
     // 7) ETIMEDOUT → misconfigured
-    ok('ETIMEDOUT → misconfigured',
-       hc.classifyError({ code: 'ETIMEDOUT' }).status === 'misconfigured'
-       && hc.classifyError({ code: 'ETIMEDOUT' }).detail.includes('firewall'));
+    ok(
+      'ETIMEDOUT → misconfigured',
+      hc.classifyError({ code: 'ETIMEDOUT' }).status === 'misconfigured' &&
+        hc.classifyError({ code: 'ETIMEDOUT' }).detail.includes('firewall'),
+    );
     // 8) "timeout after Xms" msg → misconfigured
-    ok('"timeout after 10000ms" → misconfigured',
-       hc.classifyError({ message: 'timeout after 10000ms' }).status === 'misconfigured');
-    ok('DoH resolve failed → unreachable',
-       hc.classifyError({ message: 'DoH resolve failed for api.cloudflare.com' }).status === 'unreachable'
-       && hc.classifyError({ message: 'DoH resolve failed for api.cloudflare.com' }).detail.includes('DNS fail (DoH)'));
-    ok('Upstream timeout → misconfigured (not DNS)',
-       hc.classifyError({ message: 'Upstream timeout after 15s connecting to api.cloudflare.com (TCP/TLS idle — not a DNS failure)' }).status === 'misconfigured'
-       && hc.classifyError({ message: 'Upstream timeout after 15s connecting to api.cloudflare.com' }).detail.includes('not a DNS failure'));
+    ok(
+      '"timeout after 10000ms" → misconfigured',
+      hc.classifyError({ message: 'timeout after 10000ms' }).status === 'misconfigured',
+    );
+    ok(
+      'DoH resolve failed → unreachable',
+      hc.classifyError({ message: 'DoH resolve failed for api.cloudflare.com' }).status ===
+        'unreachable' &&
+        hc
+          .classifyError({ message: 'DoH resolve failed for api.cloudflare.com' })
+          .detail.includes('DNS fail (DoH)'),
+    );
+    ok(
+      'Upstream timeout → misconfigured (not DNS)',
+      hc.classifyError({
+        message:
+          'Upstream timeout after 15s connecting to api.cloudflare.com (TCP/TLS idle — not a DNS failure)',
+      }).status === 'misconfigured' &&
+        hc
+          .classifyError({ message: 'Upstream timeout after 15s connecting to api.cloudflare.com' })
+          .detail.includes('not a DNS failure'),
+    );
     // 9) 未知错误 → fail 兜底
-    ok('未知错误 → fail',
-       hc.classifyError({ code: 'WEIRD', message: 'something weird' }).status === 'fail');
-    ok('classifyError 缺 e → fail 兜底 (不崩)',
-       hc.classifyError(undefined).status === 'fail' || hc.classifyError(null).status === 'fail');
+    ok(
+      '未知错误 → fail',
+      hc.classifyError({ code: 'WEIRD', message: 'something weird' }).status === 'fail',
+    );
+    ok(
+      'classifyError 缺 e → fail 兜底 (不崩)',
+      hc.classifyError(undefined).status === 'fail' || hc.classifyError(null).status === 'fail',
+    );
     // 10) 缺 message 也不崩
-    ok('classifyError 缺 message → fail (含 code)',
-       hc.classifyError({ code: 'NOPE' }).status === 'fail' && hc.classifyError({ code: 'NOPE' }).detail.includes('NOPE'));
+    ok(
+      'classifyError 缺 message → fail (含 code)',
+      hc.classifyError({ code: 'NOPE' }).status === 'fail' &&
+        hc.classifyError({ code: 'NOPE' }).detail.includes('NOPE'),
+    );
   }
 
   section('v3.1 M5.3: 缺字段 misconfigured (ssh / cloud 凭据)');
   {
     // ssh_connection 缺 host → misconfigured (不是 skipped)
-    const sshNoHost = await hc.checkSecret('IBMC', { username: 'admin', private_key: 'fake' }, 'ssh_connection');
-    ok('ssh_connection 缺 host → misconfigured',
-       sshNoHost.status === 'misconfigured' && sshNoHost.detail.includes('host'));
+    const sshNoHost = await hc.checkSecret(
+      'IBMC',
+      { username: 'admin', private_key: 'fake' },
+      'ssh_connection',
+    );
+    ok(
+      'ssh_connection 缺 host → misconfigured',
+      sshNoHost.status === 'misconfigured' && sshNoHost.detail.includes('host'),
+    );
     // ssh_connection 完全空 fields (无 primary 凭据) → skipped (没东西可验, 不是配置错)
     const sshEmpty = await hc.checkSecret('IBMC_EMPTY', {}, 'ssh_connection');
     ok('ssh_connection 完全空 (无 primary) → skipped', sshEmpty.status === 'skipped');
@@ -558,31 +845,61 @@ let lastHttpReq = null;
     const sshNoKey = await hc.checkSecret('IBMC_NOKEY', { username: 'admin' }, 'ssh_connection');
     ok('ssh_connection 有 user 但无 private_key/password → skipped', sshNoKey.status === 'skipped');
     // ssh_connection 有 private_key 但无 host → misconfigured (配置错)
-    const sshKeyNoHost = await hc.checkSecret('IBMC_KEY', { private_key: 'fake' }, 'ssh_connection');
-    ok('ssh_connection 有 key 但无 host → misconfigured',
-       sshKeyNoHost.status === 'misconfigured' && sshKeyNoHost.detail.includes('host'));
+    const sshKeyNoHost = await hc.checkSecret(
+      'IBMC_KEY',
+      { private_key: 'fake' },
+      'ssh_connection',
+    );
+    ok(
+      'ssh_connection 有 key 但无 host → misconfigured',
+      sshKeyNoHost.status === 'misconfigured' && sshKeyNoHost.detail.includes('host'),
+    );
     // aliyun_ak 缺 access_key_secret → misconfigured (不是 skipped)
-    const aliyunMissing = await hc.checkSecret('ALIYUN_M', { access_key_id: 'LTAI_x' /* no secret */ }, 'aliyun_ak');
-    ok('aliyun_ak 缺 access_key_secret → misconfigured',
-       aliyunMissing.status === 'misconfigured' && aliyunMissing.detail.includes('access_key_secret'));
+    const aliyunMissing = await hc.checkSecret(
+      'ALIYUN_M',
+      { access_key_id: 'LTAI_x' /* no secret */ },
+      'aliyun_ak',
+    );
+    ok(
+      'aliyun_ak 缺 access_key_secret → misconfigured',
+      aliyunMissing.status === 'misconfigured' &&
+        aliyunMissing.detail.includes('access_key_secret'),
+    );
     // aliyun_ak 缺 access_key_id (主凭据) → skipped (没东西可验, 不是配置错)
     const aliyunNoId = await hc.checkSecret('ALIYUN_N', { access_key_secret: 'sec' }, 'aliyun_ak');
     ok('aliyun_ak 缺 access_key_id (主凭据) → skipped', aliyunNoId.status === 'skipped');
     // tencent_sk 缺 secret_key → misconfigured
-    const tcMissing = await hc.checkSecret('TC_M', { secret_id: 'AKID' /* no key */ }, 'tencent_sk');
-    ok('tencent_sk 缺 secret_key → misconfigured',
-       tcMissing.status === 'misconfigured' && tcMissing.detail.includes('secret_key'));
+    const tcMissing = await hc.checkSecret(
+      'TC_M',
+      { secret_id: 'AKID' /* no key */ },
+      'tencent_sk',
+    );
+    ok(
+      'tencent_sk 缺 secret_key → misconfigured',
+      tcMissing.status === 'misconfigured' && tcMissing.detail.includes('secret_key'),
+    );
     // aws_access_key 缺 secret_access_key → misconfigured
-    const awsMissing = await hc.checkSecret('AWS_M', { access_key_id: 'AKIA' /* no key */ }, 'aws_access_key');
-    ok('aws_access_key 缺 secret_access_key → misconfigured',
-       awsMissing.status === 'misconfigured' && awsMissing.detail.includes('secret_access_key'));
+    const awsMissing = await hc.checkSecret(
+      'AWS_M',
+      { access_key_id: 'AKIA' /* no key */ },
+      'aws_access_key',
+    );
+    ok(
+      'aws_access_key 缺 secret_access_key → misconfigured',
+      awsMissing.status === 'misconfigured' && awsMissing.detail.includes('secret_access_key'),
+    );
     // ssh_private_key (bare) → misconfigured (需要 wrap)
     const bareKey = await hc.checkSecret('BARE_KEY', { key: 'fake' }, 'ssh_private_key');
-    ok('ssh_private_key bare → misconfigured (需要 ssh_connection wrapper)',
-       bareKey.status === 'misconfigured' && bareKey.detail.includes('ssh_connection'));
+    ok(
+      'ssh_private_key bare → misconfigured (需要 ssh_connection wrapper)',
+      bareKey.status === 'misconfigured' && bareKey.detail.includes('ssh_connection'),
+    );
     // github_pat 缺 token (pickCredential 返 null) → 仍是 skipped (无凭据可验, 不是配置错)
     const ghNoToken = await hc.checkSecret('GH', {}, 'github_pat');
-    ok('github_pat 缺 token → skipped (pickCredential 返 null, 不是 misconfigured)', ghNoToken.status === 'skipped');
+    ok(
+      'github_pat 缺 token → skipped (pickCredential 返 null, 不是 misconfigured)',
+      ghNoToken.status === 'skipped',
+    );
     // 未知 type → 仍是 skipped (没 check 函数, 不是 misconfigured)
     const unknownType = await hc.checkSecret('X', { value: 'whatever' }, 'mystery_type_xyz');
     ok('未知 type → skipped', unknownType.status === 'skipped');
@@ -593,16 +910,22 @@ let lastHttpReq = null;
     // 启 TCP server 立刻关, 拿到的 port 应该被 OS 拒绝新连接
     const _net = await import('node:net');
     const tmpServer = _net.createServer();
-    await new Promise(r => tmpServer.listen(0, '127.0.0.1', r));
+    await new Promise((r) => tmpServer.listen(0, '127.0.0.1', r));
     const port = tmpServer.address().port;
-    await new Promise(r => tmpServer.close(r));
+    await new Promise((r) => tmpServer.close(r));
     // 等 OS 释放 port
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200));
     // 现在连这个 port → ECONNREFUSED (OS 拒绝, 没人 listen)
-    const result = await hc.checkSecret('SSH_REJECT', { host: '127.0.0.1', port, username: 'u' }, 'ssh_connection');
-    ok('ssh_connection ECONNREFUSED → misconfigured',
-       result.status === 'misconfigured' && result.detail.includes('refused'),
-       `actual status=${result.status} detail=${result.detail}`);
+    const result = await hc.checkSecret(
+      'SSH_REJECT',
+      { host: '127.0.0.1', port, username: 'u' },
+      'ssh_connection',
+    );
+    ok(
+      'ssh_connection ECONNREFUSED → misconfigured',
+      result.status === 'misconfigured' && result.detail.includes('refused'),
+      `actual status=${result.status} detail=${result.detail}`,
+    );
   }
 
   // ======== 5. runAll + state 持久化 ========
@@ -610,11 +933,11 @@ let lastHttpReq = null;
   {
     // 新签名: getSecrets 返 {name: {type, fields}}
     const getSecrets = () => ({
-      'GOOD_PAT':   { type: 'github_pat', fields: { token: 'good-token' } },
-      'BAD_PAT':    { type: 'github_pat', fields: { token: 'expired-token' } },
-      'OPENAI_OK':  { type: 'openai_key', fields: { api_key: 'sk-good' } },
-      'UNKNOWN':    { type: 'mystery_type', fields: { value: 'whatever' } },
-      'EMPTY':      { type: 'github_pat', fields: {} },  // 无 token → skipped (pickCredential 返 null)
+      GOOD_PAT: { type: 'github_pat', fields: { token: 'good-token' } },
+      BAD_PAT: { type: 'github_pat', fields: { token: 'expired-token' } },
+      OPENAI_OK: { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      UNKNOWN: { type: 'mystery_type', fields: { value: 'whatever' } },
+      EMPTY: { type: 'github_pat', fields: {} }, // 无 token → skipped (pickCredential 返 null)
     });
     // 把 state 写到 temp dir
     const tempDir = mkdtempSync(join(tmpdir(), 'hc-test-'));
@@ -631,8 +954,13 @@ let lastHttpReq = null;
     ok('summary 含 fail 字段', typeof r.summary.fail === 'number');
     ok('summary 含 skipped 字段', typeof r.summary.skipped === 'number');
     // 6 维 sum 应等于 total
-    const dimSum = (r.summary.ok || 0) + (r.summary.expired || 0) + (r.summary.unreachable || 0)
-      + (r.summary.misconfigured || 0) + (r.summary.fail || 0) + (r.summary.skipped || 0);
+    const dimSum =
+      (r.summary.ok || 0) +
+      (r.summary.expired || 0) +
+      (r.summary.unreachable || 0) +
+      (r.summary.misconfigured || 0) +
+      (r.summary.fail || 0) +
+      (r.summary.skipped || 0);
     ok('6 维 sum === total', dimSum === r.summary.total);
     // last_status: 有 expired → degraded
     ok('last_status: 至少 1 expired → degraded', r.last_status === 'degraded');
@@ -640,7 +968,11 @@ let lastHttpReq = null;
     if (existsSync(join(tempDir, 'state.json'))) {
       const persisted = JSON.parse(readFileSync(join(tempDir, 'state.json'), 'utf-8'));
       ok('persisted.last_status 存在', typeof persisted.last_status === 'string');
-      ok('persisted.summary 6 维', persisted.summary.unreachable !== undefined && persisted.summary.misconfigured !== undefined);
+      ok(
+        'persisted.summary 6 维',
+        persisted.summary.unreachable !== undefined &&
+          persisted.summary.misconfigured !== undefined,
+      );
       ok('persisted.checks 5 个', Object.keys(persisted.checks).length === 5);
     }
     delete process.env.HEALTHCHECK_STATE_PATH;
@@ -652,8 +984,8 @@ let lastHttpReq = null;
   {
     // 用一个简单的 getSecrets (走真网络可能 fail, 但我们只验 last_status 字段计算逻辑)
     const okGetSecrets = () => ({
-      'GH': { type: 'github_pat', fields: { token: 'good-token' } },
-      'OAI': { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      GH: { type: 'github_pat', fields: { token: 'good-token' } },
+      OAI: { type: 'openai_key', fields: { api_key: 'sk-good' } },
     });
     // 注: 上面 github/openai 测试用 127.0.0.1 mock, 但 runAll 不走 mock — 它会调真 api
     // 所以 runAll 实际可能 fail/expired, 但我们只验 last_status 字段计算逻辑
@@ -661,7 +993,10 @@ let lastHttpReq = null;
     process.env.HEALTHCHECK_STATE_PATH = join(tempDir, 'state.json');
     const r1 = await hc.runAll(okGetSecrets);
     // 网络可能 fail/expired, last_status 不应是 'ok' (除非本地网络全通)
-    ok('last_status 是 degraded 或 ok (取决于网络)', r1.last_status === 'degraded' || r1.last_status === 'ok');
+    ok(
+      'last_status 是 degraded 或 ok (取决于网络)',
+      r1.last_status === 'degraded' || r1.last_status === 'ok',
+    );
     ok('last_status 字段类型 string', typeof r1.last_status === 'string');
     delete process.env.HEALTHCHECK_STATE_PATH;
     rmSync(tempDir, { recursive: true, force: true });
@@ -682,7 +1017,9 @@ let lastHttpReq = null;
     const id = cron.registerCron('04:00', async () => {});
     ok('registerCron returns id', typeof id === 'string' && id.startsWith('cron-'));
     let fired = 0;
-    const id2 = cron.registerCron('04:30', async () => { fired++; });
+    const id2 = cron.registerCron('04:30', async () => {
+      fired++;
+    });
     await cron.fireNow(id2);
     ok('fireNow 触发', fired === 1);
   }
@@ -695,7 +1032,7 @@ let lastHttpReq = null;
     const after = cron.listCron().length;
     ok('listCron 增加', after === before + 1);
     const tasks = cron.listCron();
-    const newTask = tasks.find(t => t.id === id);
+    const newTask = tasks.find((t) => t.id === id);
     ok('new task has schedule', newTask?.schedule === '05:00');
   }
 
@@ -704,7 +1041,7 @@ let lastHttpReq = null;
   {
     cron.startCronLoop();
     cron.stopCronLoop();
-    cron.startCronLoop();  // 重新启 (别影响其他 test)
+    cron.startCronLoop(); // 重新启 (别影响其他 test)
     ok('start + stop 不报错', true);
   }
 
@@ -713,7 +1050,9 @@ let lastHttpReq = null;
   {
     // 注册 'monday 04:00' 然后 fireNow
     let fired = false;
-    const id = cron.registerCron('monday 04:00', async () => { fired = true; });
+    const id = cron.registerCron('monday 04:00', async () => {
+      fired = true;
+    });
     await cron.fireNow(id);
     ok('weekly schedule 也能 fireNow', fired === true);
   }
@@ -722,7 +1061,7 @@ let lastHttpReq = null;
   console.log(`  test-healthcheck: PASS=${pass} FAIL=${fail}`);
   console.log('========================================');
   process.exit(fail === 0 ? 0 : 1);
-})().catch(e => {
+})().catch((e) => {
   console.error('FATAL:', e);
   process.exit(1);
 });

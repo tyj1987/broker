@@ -7,26 +7,42 @@
 
 import { createServer as createMockServer, request as httpRequest } from 'node:http';
 import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-let pass = 0, fail = 0;
-function ok(name, cond) { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}`); } }
-function section(name) { console.log(`\n[${name}]`); }
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const BROKER_DIR = join(__dirname, '..', 'broker');
+
+let pass = 0,
+  fail = 0;
+function ok(name, cond) {
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}`);
+  }
+}
+function section(name) {
+  console.log(`\n[${name}]`);
+}
 
 // ============================================================
 // Mock broker
 // ============================================================
 const MOCK_BROKER_PORT = 19443;
 let mockBroker;
-let apiKeyHits = [];  // 记录每次请求的 Authorization header
+const apiKeyHits = []; // 记录每次请求的 Authorization header
 let currentChildKey = null;
 let refreshCount = 0;
-let toolCalls = [];
+const toolCalls = [];
 
 async function startMockBroker() {
   return new Promise((resolve) => {
     mockBroker = createMockServer((req, res) => {
       const chunks = [];
-      req.on('data', c => chunks.push(c));
+      req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf-8');
         const auth = req.headers['authorization'] || '';
@@ -43,18 +59,20 @@ async function startMockBroker() {
           currentChildKey = `mb_test_MOCK_CHILD_${refreshCount}_${Date.now()}`;
           const expiresIn = body.includes('"ttl_seconds":60') ? 60 : 3600;
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({
-            ok: true,
-            key: {
-              id: 'mockchild' + refreshCount,
-              name: 'mock-child',
-              client: 'client.test',
-              scopes: ['secrets:resolve', 'services:proxy'],
-              expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
-              parent_master_id: 'mockmaster',
-            },
-            secret: currentChildKey,
-          }));
+          return res.end(
+            JSON.stringify({
+              ok: true,
+              key: {
+                id: 'mockchild' + refreshCount,
+                name: 'mock-child',
+                client: 'client.test',
+                scopes: ['secrets:resolve', 'services:proxy'],
+                expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+                parent_master_id: 'mockmaster',
+              },
+              secret: currentChildKey,
+            }),
+          );
         }
         // 注意: issue-child 已记录在函数顶部 push
         // 其他 endpoint：verify child key
@@ -68,27 +86,52 @@ async function startMockBroker() {
         }
         if (url === '/api/v1/secrets') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ secrets: [{ name: 'GITHUB_PAT' }, { name: 'ALIYUN_AK' }] }));
+          return res.end(
+            JSON.stringify({ secrets: [{ name: 'GITHUB_PAT' }, { name: 'ALIYUN_AK' }] }),
+          );
         }
         // POST /api/v1/secrets/resolve { name } -> { name, type, description, value }
         if (url === '/api/v1/secrets/resolve' && req.method === 'POST') {
           let rb = '';
-          chunks.push = ((orig => c => { orig.call(chunks, c); rb += c.toString(); }))(chunks.push);
+          chunks.push = ((orig) => (c) => {
+            orig.call(chunks, c);
+            rb += c.toString();
+          })(chunks.push);
           // re-collect via chunks (already concatenated above)
           const reqBodyText = Buffer.concat(chunks).toString('utf-8');
           let parsed = {};
-          try { parsed = JSON.parse(reqBodyText || '{}'); } catch {}
+          try {
+            parsed = JSON.parse(reqBodyText || '{}');
+          } catch {}
           const name = parsed.name || 'UNKNOWN';
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ name, type: 'api_key', description: `Mock ${name}`, value: 'mock-value' }));
+          return res.end(
+            JSON.stringify({
+              name,
+              type: 'api_key',
+              description: `Mock ${name}`,
+              value: 'mock-value',
+            }),
+          );
         }
         // 兼容旧 GET /api/v1/secrets/:name (M3.3 旧 mock)
         if (req.method === 'GET' && url.startsWith('/api/v1/secrets/')) {
           const name = decodeURIComponent(url.split('/').pop());
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ secret: { name, type: 'api_key', description: `Mock ${name}`, has_value: true } }));
+          return res.end(
+            JSON.stringify({
+              secret: { name, type: 'api_key', description: `Mock ${name}`, has_value: true },
+            }),
+          );
         }
         // M3.3 修复后: proxy 路径是 /api/v1/proxy/:name (不是 /api/v1/services/:name/proxy)
+        if (url === '/api/v1/proxy/large') {
+          res.writeHead(200, {
+            'Content-Type': 'text/plain',
+            'Content-Length': '5000',
+          });
+          return res.end('x'.repeat(5000));
+        }
         if (url.startsWith('/api/v1/proxy/')) {
           toolCalls.push({ url, body });
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -104,9 +147,11 @@ async function startMockBroker() {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ keys: [{ id: 'k1', name: 'k1', is_master: false }] }));
         }
-        if (url.startsWith('/api/v1/audit')) {
+        if (url.startsWith('/api/v1/audit') || url.startsWith('/api/v1/me/audit')) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ events: [{ action: 'connect', ts: new Date().toISOString() }] }));
+          return res.end(
+            JSON.stringify({ events: [{ action: 'connect', ts: new Date().toISOString() }] }),
+          );
         }
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'not_found' }));
@@ -117,9 +162,17 @@ async function startMockBroker() {
 }
 
 function stopMockBroker() {
-  return new Promise(r => {
-    const t = setTimeout(() => { try { mockBroker.closeAllConnections?.(); } catch (_) {} r(); }, 1000);
-    mockBroker.close(() => { clearTimeout(t); r(); });
+  return new Promise((r) => {
+    const t = setTimeout(() => {
+      try {
+        mockBroker.closeAllConnections?.();
+      } catch (_) {}
+      r();
+    }, 1000);
+    mockBroker.close(() => {
+      clearTimeout(t);
+      r();
+    });
   });
 }
 
@@ -130,6 +183,8 @@ function stopMockBroker() {
 // ============================================================
 process.env.BROKER_URL = `http://127.0.0.1:${MOCK_BROKER_PORT}`;
 process.env.MCP_INSECURE_TLS = '1';
+process.env.MCP_MAX_BATCH_SIZE = '50';
+process.env.MCP_MAX_BROKER_RESPONSE_BYTES = '4096';
 process.env.MCP_MASTER_KEY = 'mb_test_MOCK_MASTER_FAKE_KEY_FOR_TEST_12345';
 // 启动 MCP server 在 13901 端口 (避开 mock broker 19443 + 真实 broker 18443)
 const MCP_PORT = 13901;
@@ -137,53 +192,91 @@ process.env.MCP_PORT = String(MCP_PORT);
 
 let mcpProc;
 async function startMcpServer() {
-  // 启动子进程 (绝对路径)
-  const mcpPath = 'C:/home/my-first-app/broker/mcp-server.js';
+  // 启动当前仓库中的 MCP server，避免测试依赖某台机器的绝对路径。
+  const mcpPath = join(BROKER_DIR, 'mcp-server.js');
   return new Promise((resolve, reject) => {
     mcpProc = spawn('node', [mcpPath], {
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';
-    mcpProc.stderr.on('data', d => { stderr += d.toString(); });
+    mcpProc.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
     const timer = setTimeout(() => reject(new Error('MCP server start timeout: ' + stderr)), 3000);
     const checkReady = () => {
       httpRequest({ hostname: '127.0.0.1', port: MCP_PORT, path: '/health' }, (res) => {
-        if (res.statusCode === 200) { clearTimeout(timer); resolve(); }
-        else setTimeout(checkReady, 100);
-      }).on('error', () => setTimeout(checkReady, 100)).end();
+        if (res.statusCode === 200) {
+          clearTimeout(timer);
+          resolve();
+        } else setTimeout(checkReady, 100);
+      })
+        .on('error', () => setTimeout(checkReady, 100))
+        .end();
     };
     setTimeout(checkReady, 100);
   });
 }
 
 function stopMcpServer() {
-  return new Promise(r => {
+  return new Promise((r) => {
     if (!mcpProc) return r();
-    const t = setTimeout(() => { try { mcpProc.kill('SIGKILL'); } catch (_) {} r(); }, 1000);
-    mcpProc.on('exit', () => { clearTimeout(t); r(); });
+    const t = setTimeout(() => {
+      try {
+        mcpProc.kill('SIGKILL');
+      } catch (_) {}
+      r();
+    }, 1000);
+    mcpProc.on('exit', () => {
+      clearTimeout(t);
+      r();
+    });
     mcpProc.kill('SIGTERM');
   });
 }
 
-function mcpRpc(method, params) {
+function mcpRequest(payload, { raw = false, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({
-      hostname: '127.0.0.1', port: MCP_PORT, path: '/mcp', method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    }, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf-8');
-        if (res.statusCode === 204) return resolve(null);
-        try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('Bad JSON: ' + body)); }
-      });
-    });
+    const req = httpRequest(
+      {
+        hostname: '127.0.0.1',
+        port: MCP_PORT,
+        path: '/mcp',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf-8');
+          let body = text;
+          if (text) {
+            try {
+              body = JSON.parse(text);
+            } catch {}
+          } else {
+            body = null;
+          }
+          resolve({ status: res.statusCode, body, headers: res.headers });
+        });
+      },
+    );
     req.on('error', reject);
-    req.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: params || {} }));
+    req.write(raw ? String(payload) : JSON.stringify(payload));
     req.end();
   });
+}
+
+async function mcpRpc(method, params) {
+  const response = await mcpRequest({
+    jsonrpc: '2.0',
+    id: 1,
+    method,
+    params: params || {},
+  });
+  if (response.status === 204) return null;
+  return response.body;
 }
 
 // ============================================================
@@ -203,9 +296,57 @@ function mcpRpc(method, params) {
   }
 
   {
+    const status = await new Promise((resolve) => {
+      const q = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port: MCP_PORT,
+          path: '/health',
+          method: 'GET',
+          headers: { Origin: 'https://evil.example' },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        },
+      );
+      q.on('error', () => resolve(0));
+      q.end();
+    });
+    ok('browser Origin denied by default', status === 403);
+  }
+
+  {
+    const result = await new Promise((resolve) => {
+      const q = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port: MCP_PORT,
+          path: '/mcp',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': String(2 * 1024 * 1024),
+          },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () =>
+            resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }),
+          );
+        },
+      );
+      q.on('error', (e) => resolve({ status: 0, body: e.message }));
+      q.end();
+    });
+    ok('oversized RPC body rejected with 413', result.status === 413);
+  }
+
+  {
     const r = await mcpRpc('tools/list');
     ok('tools/list returns 8 tools', r.result.tools.length === 8);
-    const toolNames = r.result.tools.map(t => t.name).sort();
+    const toolNames = r.result.tools.map((t) => t.name).sort();
     ok('tools: list_secrets', toolNames.includes('list_secrets'));
     ok('tools: describe_secret', toolNames.includes('describe_secret'));
     ok('tools: call_service', toolNames.includes('call_service'));
@@ -222,21 +363,116 @@ function mcpRpc(method, params) {
   {
     // bad json
     const r = await new Promise((resolve) => {
-      const req = httpRequest({
-        hostname: '127.0.0.1', port: MCP_PORT, path: '/mcp', method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      }, (res) => {
-        const chunks = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => {
-          try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch (e) { resolve(null); }
-        });
-      });
+      const req = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port: MCP_PORT,
+          path: '/mcp',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString()));
+            } catch (e) {
+              resolve(null);
+            }
+          });
+        },
+      );
       req.on('error', () => resolve(null));
       req.write('not valid json{');
       req.end();
     });
     ok('bad JSON → -32700', r && r.error && r.error.code === -32700);
+  }
+
+  {
+    const response = await mcpRequest({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18' },
+    });
+    ok('RPC JSON response is non-cacheable', response.headers['cache-control'] === 'no-store');
+    ok(
+      'RPC response disables MIME sniffing',
+      response.headers['x-content-type-options'] === 'nosniff',
+    );
+    ok(
+      'RPC response has no-referrer policy',
+      response.headers['referrer-policy'] === 'no-referrer',
+    );
+  }
+
+  {
+    const response = await mcpRequest([]);
+    ok('empty JSON-RPC batch rejected with 400', response.status === 400);
+    ok('empty JSON-RPC batch → -32600', response.body?.error?.code === -32600);
+  }
+
+  {
+    const batch = Array.from({ length: 51 }, (_, index) => ({
+      jsonrpc: '2.0',
+      id: index + 1,
+      method: 'ping',
+      params: {},
+    }));
+    const response = await mcpRequest(batch);
+    ok('oversized JSON-RPC batch rejected with 400', response.status === 400);
+    ok('oversized JSON-RPC batch → -32600', response.body?.error?.code === -32600);
+    ok(
+      'batch limit is reflected without internal detail',
+      /50 items/.test(response.body?.error?.message || ''),
+    );
+  }
+
+  {
+    const batch = [
+      { jsonrpc: '2.0', id: 1, method: 'ping', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'unknown/method', params: {} },
+    ];
+    const response = await mcpRequest(batch);
+    ok('bounded JSON-RPC batch succeeds', response.status === 200 && response.body.length === 2);
+    ok(
+      'batch preserves successful result',
+      response.body[0]?.jsonrpc === '2.0' &&
+        response.body[0]?.id === 1 &&
+        response.body[0]?.result &&
+        Object.keys(response.body[0].result).length === 0,
+    );
+    ok('batch preserves per-call error', response.body[1]?.error?.code === -32601);
+  }
+
+  {
+    const guard = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [join(BROKER_DIR, 'mcp-server.js')], {
+        cwd: BROKER_DIR,
+        env: {
+          ...process.env,
+          MCP_HOST: '0.0.0.0',
+          MCP_PORT: '0',
+          MCP_AUTH_TOKEN: 'test-token',
+          MCP_ALLOW_INSECURE_REMOTE: '',
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.on('close', (code) => resolve({ code, stderr }));
+      child.on('error', (error) => resolve({ code: -1, stderr: error.message }));
+    });
+    ok('non-loopback HTTP bind fails closed', guard.code !== 0);
+    ok(
+      'non-loopback failure explains explicit override',
+      guard.stderr.includes('MCP_ALLOW_INSECURE_REMOTE=1'),
+    );
   }
 
   // ======== 2. Tool implementations — list_secrets ========
@@ -249,16 +485,22 @@ function mcpRpc(method, params) {
     ok('GITHUB_PAT in list', data.names.includes('GITHUB_PAT'));
     // 启动时 MCP server 已 refresh child key 一次（boot()）
     // list_secrets 应直接用 cached child key，不触发新 issue-child
-    const issues = apiKeyHits.filter(h => h.url === '/api/v1/api-keys/issue-child');
+    const issues = apiKeyHits.filter((h) => h.url === '/api/v1/api-keys/issue-child');
     ok('no issue-child on cached call', issues.length === 0);
-    const secretHits = apiKeyHits.filter(h => h.url === '/api/v1/secrets');
-    ok('secrets request uses child key', secretHits[0] && secretHits[0].auth.startsWith('Bearer mb_test_MOCK_CHILD_'));
+    const secretHits = apiKeyHits.filter((h) => h.url === '/api/v1/secrets');
+    ok(
+      'secrets request uses child key',
+      secretHits[0] && secretHits[0].auth.startsWith('Bearer mb_test_MOCK_CHILD_'),
+    );
   }
 
   // ======== 3. describe_secret ========
   section('tool: describe_secret');
   {
-    const r = await mcpRpc('tools/call', { name: 'describe_secret', arguments: { name: 'GITHUB_PAT' } });
+    const r = await mcpRpc('tools/call', {
+      name: 'describe_secret',
+      arguments: { name: 'GITHUB_PAT' },
+    });
     const data = JSON.parse(r.result.content[0].text);
     ok('name returned', data.name === 'GITHUB_PAT');
     ok('type returned', data.type === 'api_key');
@@ -269,14 +511,35 @@ function mcpRpc(method, params) {
   section('tool: call_service');
   toolCalls.length = 0;
   {
-    const r = await mcpRpc('tools/call', { name: 'call_service', arguments: {
-      service: 'github', method: 'GET', path: '/user/repos', query: { type: 'all' }
-    } });
+    const r = await mcpRpc('tools/call', {
+      name: 'call_service',
+      arguments: {
+        service: 'github',
+        method: 'GET',
+        path: '/user/repos',
+        query: { type: 'all' },
+      },
+    });
     const data = JSON.parse(r.result.content[0].text);
     ok('status 200', data.status === 200);
     ok('body mocked', data.json && data.json.data && data.json.data.result === 'mocked');
     ok('proxy endpoint hit', toolCalls.length === 1);
     ok('service github', toolCalls[0].url.includes('github'));
+  }
+  {
+    const r = await mcpRpc('tools/call', {
+      name: 'call_service',
+      arguments: { service: 'large', method: 'GET', path: '/' },
+    });
+    ok('oversized broker response becomes tool error', r.result.isError === true);
+    ok(
+      'oversized broker response hides internal limit detail',
+      r.result.content[0].text === 'Tool execution failed',
+    );
+    ok(
+      'oversized broker response does not leak byte limit',
+      !/4096|response exceeded/i.test(r.result.content[0].text),
+    );
   }
 
   // ======== 5. get_health ========
@@ -319,9 +582,12 @@ function mcpRpc(method, params) {
     // 真实 broker 没 mock secrets, 调 list 拿 name, 再 check
     const list = await mcpRpc('tools/call', { name: 'list_secrets', arguments: {} });
     const listData = JSON.parse(list.result.content[0].text);
-    const firstName = (listData.secrets?.[0])?.name || listData.secrets?.[0];
+    const firstName = listData.secrets?.[0]?.name || listData.secrets?.[0];
     if (firstName && typeof firstName === 'string') {
-      const r = await mcpRpc('tools/call', { name: 'check_credential', arguments: { name: firstName } });
+      const r = await mcpRpc('tools/call', {
+        name: 'check_credential',
+        arguments: { name: firstName },
+      });
       const data = JSON.parse(r.result.content[0].text);
       ok('check_credential 返 name', data.name === firstName);
       ok('check_credential 返 type', typeof data.type === 'string');
@@ -374,4 +640,7 @@ function mcpRpc(method, params) {
   console.log(`  test-mcp-server: PASS=${pass} FAIL=${fail}`);
   console.log(`========================================`);
   process.exit(fail === 0 ? 0 : 1);
-})().catch(e => { console.error('FATAL:', e); process.exit(1); });
+})().catch((e) => {
+  console.error('FATAL:', e);
+  process.exit(1);
+});

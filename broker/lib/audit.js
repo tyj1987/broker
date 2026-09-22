@@ -5,9 +5,17 @@
 // of jsonl every dashboard refresh).
 
 import { EventEmitter } from 'node:events';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { redactDeep } from './redact.js';
 
 const RING_BUFFER_MAX = 1000;
@@ -36,8 +44,6 @@ export function createAudit(auditDir, opts = {}) {
   let lastWriteError = null;
   let lastWriteErrorAt = 0;
   let consecutiveFailures = 0;
-  let lastHash = null; // for tamper-evidence chain (V4.1.1)
-
   // Ring buffer for hot reads (most recent first)
   const ring = []; // array of events, append at end
   const ringById = new Map(); // id -> event for dedupe
@@ -81,10 +87,19 @@ export function createAudit(auditDir, opts = {}) {
       lastWriteError = err;
       lastWriteErrorAt = Date.now();
       // Notify subscribers (dashboard) that audit is unhealthy
-      bus.emit('write_error', { ts: e.ts, error: err.message, mandatory, consecutive: consecutiveFailures });
+      bus.emit('write_error', {
+        ts: e.ts,
+        error: err.message,
+        mandatory,
+        consecutive: consecutiveFailures,
+      });
       // Optional callback for operator alerting
       if (typeof opts.onWriteError === 'function') {
-        try { opts.onWriteError(err, e); } catch { /* don't let alerting kill the audit */ }
+        try {
+          opts.onWriteError(err, e);
+        } catch {
+          /* don't let alerting kill the audit */
+        }
       }
       // Hard fail: if caller marked this audit as mandatory (login, secret rotate, etc.),
       // throw so the upstream HTTP handler can return 503 and the caller can retry.
@@ -125,7 +140,14 @@ export function createAudit(auditDir, opts = {}) {
   }
 
   function readAuditFiltered({
-    client, service, action, status, since, until, limit = 100, prefer = 'auto',
+    client,
+    service,
+    action,
+    status,
+    since,
+    until,
+    limit = 100,
+    prefer = 'auto',
   } = {}) {
     const maxLimit = Math.min(Math.max(1, limit), 5000);
     // If filter fits within ring buffer scope (no since/until older than ring) and
@@ -133,7 +155,7 @@ export function createAudit(auditDir, opts = {}) {
     if (prefer === 'ring') return readRing({ action, status, cn: client, limit: maxLimit });
     const out = [];
     const files = readdirSync(auditDir)
-      .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
+      .filter((f) => f.startsWith('audit-') && f.endsWith('.jsonl'))
       .sort()
       .reverse();
     const cnL = client ? String(client).toLowerCase() : null;
@@ -146,7 +168,11 @@ export function createAudit(auditDir, opts = {}) {
       for (const line of content.split('\n').reverse()) {
         if (!line) continue;
         let e;
-        try { e = JSON.parse(line); } catch { continue; }
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
         if (since && e.ts < since) continue;
         if (until && e.ts > until) continue;
         if (cnL && !(e.cn || '').toLowerCase().includes(cnL)) continue;
@@ -165,7 +191,7 @@ export function createAudit(auditDir, opts = {}) {
   }
 
   function health() {
-    const inBackoff = lastWriteError && (Date.now() - lastWriteErrorAt) < WRITE_FAILURE_BACKOFF_MS;
+    const inBackoff = lastWriteError && Date.now() - lastWriteErrorAt < WRITE_FAILURE_BACKOFF_MS;
     return {
       ok: lastWriteError === null,
       last_write_error: lastWriteError ? lastWriteError.message : null,

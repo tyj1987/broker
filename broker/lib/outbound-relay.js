@@ -33,8 +33,11 @@ export function applyRelay(upstreamUrl, headers = {}, cfg = relayConfig()) {
   // Service templates use upstream https://api.cloudflare.com/client/v4 plus
   // action path /user/tokens/verify. new URL('/user/...', that upstream) drops
   // /client/v4; put it back so the relay hits a real CF API route.
-  if (url.hostname.toLowerCase() === 'api.cloudflare.com'
-      && pathname !== '/client/v4' && !pathname.startsWith('/client/v4/')) {
+  if (
+    url.hostname.toLowerCase() === 'api.cloudflare.com' &&
+    pathname !== '/client/v4' &&
+    !pathname.startsWith('/client/v4/')
+  ) {
     pathname = '/client/v4' + (pathname.startsWith('/') ? pathname : `/${pathname}`);
   }
   const relayed = new URL(pathname.replace(/^\//, '') + url.search, base);

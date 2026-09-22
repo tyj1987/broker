@@ -91,40 +91,37 @@ nav:
     - API Calling Standards: DESIGN-V4-API-CALLING-STANDARDS.md
     - Roadmap: DESIGN-V4-ROADMAP.md
   - Guides:
-    - Getting Started:
-      - Quickstart: QUICKSTART.md
-      - Installation: guides/installation.md
-      - First Secret: guides/first-secret.md
-    - Use Cases:
-      - AI Agents: guides/ai-agents.md
-      - Workload Identity: guides/workload-identity.md
-      - SSH Proxy: guides/ssh-proxy.md
-      - WebSocket Events: guides/websocket.md
-    - Operations:
-      - Auto-Rotation: guides/auto-rotation.md
-      - Backups: guides/backups.md
-      - Monitoring: guides/monitoring.md
-      - Multi-Tenant: guides/multi-tenant.md
+    - AI Agents: QUICKSTART.md
+    - Workload Identity: WORKLOAD-IDENTITY.md
+    - SSH Proxy: SSH-PROXY.md
+    - WebSocket Events: WEBSOCKET.md
+    - Adding Secret Types: EXTENDING.md
+    - Threat Model: THREAT-MODEL.md
+    - Security Audit (2026-09-23): SECURITY-AUDIT-2026-09-23.md
+    - Historical Audit (2026-09-05): SECURITY-AUDIT-2026-09-05.md
+    - FAQ: FAQ.md
   - API Reference:
-    - OpenAPI Spec: api/openapi.md
-    - Error Codes: api/errors.md
-    - Rate Limits: api/rate-limits.md
-  - SDKs:
-    - Node: sdk/node.md
-    - Python: sdk/python.md
-    - Go: sdk/go.md
-    - VS Code: sdk/vscode.md
+    - SDK Reference (covers all 4 SDKs): SDK-REFERENCE.md
   - Deployment:
-    - Helm: deploy/helm.md
-    - Terraform: deploy/terraform.md
-    - Grafana: deploy/grafana.md
+    - Helm: README.md
+    - Terraform: README.md
+    - 52trz-specific Deploy: DEPLOY-52TRZ.md
+    - Upgrade: 52TRZ-UPGRADE-1PAGE.md
   - Operations:
     - Runbook: RUNBOOK.md
-    - Security: security.md
+    - Post-Deploy Checklist: POST-DEPLOY-CHECKLIST.md
+    - Verify: VERIFY.md
+    - Security: SECURITY.md
+    - Status: STATUS.md
+    - Commercial: COMMERCIAL.md
+    - Support: SUPPORT.md
   - Reference:
+    - Code Review: ../REVIEW.md
     - Changelog: CHANGELOG.md
-    - Roadmap: roadmap.md
-    - Contributing: contributing.md
+    - Roadmap: ../ROADMAP-post-1.0.md
+    - Contributing: CONTRIBUTING.md
+    - v4.1 Release Notes: RELEASE-NOTES-v4.1.0.md
+    - v4.1 Complete: V4.1-COMPLETE.md
 
 extra:
   social:

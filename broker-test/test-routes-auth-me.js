@@ -5,12 +5,24 @@
 // broker/routes/_legacy/。生产请求管线不经过这里;测试仅做单元覆盖。
 import { handleAuth } from '../broker/routes/_legacy/auth.js';
 import { handleMe } from '../broker/routes/_legacy/me.js';
-import { createMfaPending, getMfaPending, consumeMfaPending, isMfaRequired, MFA_TOKEN_TTL_MS } from '../broker/auth-flow.js';
+import {
+  createMfaPending,
+  getMfaPending,
+  consumeMfaPending,
+  isMfaRequired,
+  MFA_TOKEN_TTL_MS,
+} from '../broker/auth-flow.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 function mockRes() {
@@ -19,20 +31,32 @@ function mockRes() {
     status: 0,
     body: null,
     headers,
-    setHeader(k, v) { headers[k] = v; },
+    setHeader(k, v) {
+      headers[k] = v;
+    },
     writeHead() {},
-    end(b) { this.body = b; },
+    end(b) {
+      this.body = b;
+    },
   };
 }
 
 function baseDeps(over = {}) {
   const sessions = new Map();
   return {
-    send: (res, status, body) => { res.status = status; res.body = body; },
-    jsonError: (res, status, msg) => { res.status = status; res.body = { error: msg, status }; },
+    send: (res, status, body) => {
+      res.status = status;
+      res.body = body;
+    },
+    jsonError: (res, status, msg) => {
+      res.status = status;
+      res.body = { error: msg, status };
+    },
     readBody: async () => ({}),
     audit: () => {},
-    config: { clients: { alice: { role: 'developer', password: 'scrypt$x', allow_password_login: true } } },
+    config: {
+      clients: { alice: { role: 'developer', password: 'scrypt$x', allow_password_login: true } },
+    },
     getIdentity: () => null,
     verifyClientPassword: async () => true,
     isMfaRequired: () => false,
@@ -98,8 +122,14 @@ console.log('=== handleMe profile ===');
 {
   const res = mockRes();
   const deps = {
-    send: (r, s, b) => { r.status = s; r.body = b; },
-    jsonError: (r, s, m) => { r.status = s; r.body = { error: m }; },
+    send: (r, s, b) => {
+      r.status = s;
+      r.body = b;
+    },
+    jsonError: (r, s, m) => {
+      r.status = s;
+      r.body = { error: m };
+    },
     ctx: {
       clientName: 'alice',
       cn: 'alice',

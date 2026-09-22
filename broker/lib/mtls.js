@@ -1,31 +1,38 @@
-// broker/lib/mtls.js — V4.1.1 extraction of identity resolution.
-//
-// Three auth sources, in priority order:
-//   1. API Key Bearer  (browser / web AI client; no mTLS)
-//   2. Session cookie  (dashboard login)
-//   3. mTLS client cert (CLI / scripts / direct TLS) — two flavors:
-//        3a. nginx forward via X-SSL-Client-Verify (when request comes via loopback)
-//        3b. direct peer-cert via Node TLS API
-//
-// This module is a factory that returns { getIdentity, getApiKeyIdentity } and
-// takes all dependencies via a single `deps` object so it's trivially testable
-// and reusable outside of server.js.
-
+// Explicit identity order: delegated API key, session, forwarded mTLS, direct mTLS.
+// A transport proxy is trusted only by an exact address AND certificate binding.
 import { X509Certificate } from 'node:crypto';
+import {
+  authorizedPeerCertificate,
+  normalizeFingerprint,
+  isTrustedForwardingPeer,
+  isForwardingCertificate,
+  hasForwardedCertificateHeaders,
+  clientIpFromRequest,
+} from './trusted-proxy.js';
 
-/**
- * @param {object} deps
- * @param {object} deps.config                - broker config (CONFIG.clients, CONFIG.api_keys)
- * @param {Function} deps.getSession          - (req) => session | null
- * @param {Function} deps.parseBearer         - (authHeader) => token | null
- * @param {Function} deps.findApiKey          - (apiKeys, token) => key | null
- * @param {Function} deps.isClientIpAllowed   - (apiKey, remoteIp) => boolean
- * @param {Function} deps.rateLimitApiKey     - (apiKey) => boolean
- * @param {Function} deps.recordUse           - (apiKey) => void
- * @param {Function} deps.recordClientSeen    - (clientName) => void
- * @param {Function} deps.audit               - (event) => void
- * @param {Function} [deps.requireNodeCrypto] - override for tests; defaults to node:crypto X509Certificate
- */
+function matchClientByFingerprint(clients, value) {
+  const fingerprint = normalizeFingerprint(value);
+  if (!fingerprint || !clients) return null;
+  for (const [name, cfg] of Object.entries(clients)) {
+    if (normalizeFingerprint(cfg?.cert_fingerprint_sha256) === fingerprint) return { name, cfg };
+  }
+  return null;
+}
+
+function forwardingBoundaryAllowed(req, config) {
+  const forwarded = hasForwardedCertificateHeaders(req);
+  const proxy = isTrustedForwardingPeer(req, config);
+  if (forwarded && !proxy) return false;
+  if (isForwardingCertificate(req, config) && !proxy) return false;
+  if (!proxy) return true;
+  // Missing forwarding metadata must not turn a proxy certificate into a user.
+  const verified = req.headers?.['x-ssl-client-verify'];
+  const cert = req.headers?.['x-ssl-client-cert'];
+  return (
+    (verified === 'NONE' && !cert) || (verified === 'SUCCESS' && typeof cert === 'string' && !!cert)
+  );
+}
+
 export function createIdentityResolver(deps) {
   const {
     config,
@@ -39,157 +46,130 @@ export function createIdentityResolver(deps) {
     audit,
     requireNodeCrypto,
   } = deps;
-
-  if (typeof getSession !== 'function') throw new Error('mtls: getSession required');
-  if (typeof parseBearer !== 'function') throw new Error('mtls: parseBearer required');
-  if (typeof findApiKey !== 'function') throw new Error('mtls: findApiKey required');
-  if (typeof isClientIpAllowed !== 'function') throw new Error('mtls: isClientIpAllowed required');
-  if (typeof rateLimitApiKey !== 'function') throw new Error('mtls: rateLimitApiKey required');
-  if (typeof recordUse !== 'function') throw new Error('mtls: recordUse required');
-  if (typeof recordClientSeen !== 'function') throw new Error('mtls: recordClientSeen required');
-  if (typeof audit !== 'function') throw new Error('mtls: audit required');
-
-  // config may be a getter (so we read it lazily on each request) or a static object.
-  // The original server.js reads CONFIG at module-load time (line 3050) but CONFIG is
-  // a `let` that is assigned later by loadConfig(). To handle both shapes, accept
-  // either an object or a function returning an object.
-  const getConfig = typeof config === 'function'
-    ? config
-    : () => config;
-  // Validate lazily on first request (don't throw at construction if config is async).
-  function effectiveConfig() {
-    const c = getConfig();
-    if (!c || typeof c !== 'object') return null;
-    return c;
+  for (const [name, fn] of Object.entries({
+    getSession,
+    parseBearer,
+    findApiKey,
+    isClientIpAllowed,
+    rateLimitApiKey,
+    recordUse,
+    recordClientSeen,
+    audit,
+  })) {
+    if (typeof fn !== 'function') throw new Error(`mtls: ${name} required`);
   }
+  const getConfig = typeof config === 'function' ? config : () => config;
 
   function getApiKeyIdentity(req) {
-    const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-    const secret = parseBearer(authHeader);
+    const cfg = getConfig();
+    if (!cfg || !forwardingBoundaryAllowed(req, cfg)) return null;
+    const secret = parseBearer(req.headers?.authorization || req.headers?.Authorization);
     if (!secret) return null;
-    const config = effectiveConfig();
-    if (!config) return null;
-    const k = findApiKey(config.api_keys, secret);
-    if (!k) return null;
-    // v3.2: enforce ip_whitelist when set
-    const remoteIp = req.socket?.remoteAddress
-      || req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()
-      || '';
-    if (!isClientIpAllowed(k, remoteIp)) {
+    const key = findApiKey(cfg.api_keys, secret);
+    if (!key) return null;
+    const remoteIp = clientIpFromRequest(req, cfg);
+    if (!isClientIpAllowed(key, remoteIp)) {
       audit({
         action: 'connect',
         status: 'denied',
         reason: 'api_key_ip_denied',
-        cn: k.client,
+        cn: key.client,
         remote: remoteIp,
       });
       return null;
     }
-    const owner = config.clients[k.client];
+    const owner = cfg.clients?.[key.client];
     if (!owner) return null;
-    if (!rateLimitApiKey(k)) {
-      return { apiKey: k, client: owner, clientName: k.client, via: 'api_key', rate_limited: true };
-    }
-    recordUse(k);
-    return { apiKey: k, client: owner, clientName: k.client, via: 'api_key' };
+    const result = { apiKey: key, client: owner, clientName: key.client, via: 'api_key' };
+    if (!rateLimitApiKey(key)) return { ...result, rate_limited: true };
+    recordUse(key);
+    return result;
   }
 
-  /**
-   * Resolve identity from a request. Returns null if no valid auth source.
-   * Synchronous (matches inline behavior in server.js).
-   * @param {import('node:http').IncomingMessage} req
-   * @returns {null | {
-   *   cn: string, fp: string, client: object, clientName: string,
-   *   certSubject: object, via: 'api_key'|'session'|'mtls-header'|'mtls',
-   *   apiKey?: object,
-   * }}
-   */
   function getIdentity(req) {
-    // 0. API Key Bearer (priority over session because browser may set both)
-    const apiKeyCtx = getApiKeyIdentity(req);
-    if (apiKeyCtx) {
-      if (apiKeyCtx.rate_limited) {
-        audit({ action: 'connect', status: 'denied', reason: 'api_key_rate_limit', cn: apiKeyCtx.clientName });
+    const cfg = getConfig();
+    if (!cfg || !forwardingBoundaryAllowed(req, cfg)) return null;
+    const api = getApiKeyIdentity(req);
+    if (api) {
+      if (api.rate_limited) {
+        audit({
+          action: 'connect',
+          status: 'denied',
+          reason: 'api_key_rate_limit',
+          cn: api.clientName,
+        });
         return null;
       }
       return {
-        cn: `apikey:${apiKeyCtx.apiKey.id}`,
-        fp: apiKeyCtx.apiKey.id,
-        client: apiKeyCtx.client,
-        clientName: apiKeyCtx.clientName,
-        certSubject: { CN: `apikey:${apiKeyCtx.apiKey.id}`, O: 'api_key' },
+        cn: `apikey:${api.apiKey.id}`,
+        fp: api.apiKey.id,
+        client: { ...api.client, role: 'api_key' },
+        ownerRole: api.client.role,
+        clientName: api.clientName,
+        certSubject: { CN: `apikey:${api.apiKey.id}`, O: 'api_key' },
         via: 'api_key',
-        apiKey: apiKeyCtx.apiKey,
+        apiKey: api.apiKey,
       };
     }
-    // 1. session token
+    // Explicit but rejected credentials cannot silently fall back to a more
+    // privileged cookie or client certificate.
+    if (req.headers?.authorization || req.headers?.Authorization) return null;
     const session = getSession(req);
     if (session) {
+      const live = cfg.clients?.[session.clientName];
+      if (!live) return null;
+      if (
+        session.fp &&
+        normalizeFingerprint(session.fp) !== normalizeFingerprint(live.cert_fingerprint_sha256)
+      )
+        return null;
       return {
         cn: session.cn,
         fp: session.fp,
-        client: session.client,
+        client: live,
         clientName: session.clientName,
         certSubject: session.cert?.subject || { CN: session.cn },
         via: 'session',
       };
     }
-    // 2a. nginx-forwarded mTLS (X-SSL-Client-Verify header from loopback)
-    const remote = req.socket?.remoteAddress || '';
-    const fromLocalProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-    if (fromLocalProxy && req.headers['x-ssl-client-verify'] !== undefined) {
-      const verify = String(req.headers['x-ssl-client-verify'] || '');
-      const escaped = req.headers['x-ssl-client-cert'];
-      if (verify !== 'SUCCESS' || !escaped) return null;
+    if (req.headers?.['x-auth-token']) return null;
+
+    if (isTrustedForwardingPeer(req, cfg)) {
+      if (req.headers?.['x-ssl-client-verify'] !== 'SUCCESS') return null;
       try {
-        const config = effectiveConfig();
-        if (!config) return null;
-        const pem = decodeURIComponent(String(escaped));
         const X509 = requireNodeCrypto?.X509Certificate || X509Certificate;
-        const x509 = new X509(pem);
-        const fp = x509.fingerprint256;
-        const cnMatch = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '');
-        const cn = cnMatch ? cnMatch[1] : (x509.subject || '');
-        if (!fp) return null;
-        const matched = matchClientByFingerprint(config.clients, fp);
+        const x509 = new X509(decodeURIComponent(req.headers['x-ssl-client-cert']));
+        const now = Date.now();
+        if (!(Date.parse(x509.validFrom) <= now && now < Date.parse(x509.validTo))) return null;
+        const matched = matchClientByFingerprint(cfg.clients, x509.fingerprint256);
         if (!matched) return null;
+        const cn = /(?:^|\n)CN=([^\n]+)/.exec(x509.subject || '')?.[1] || matched.name;
         recordClientSeen(matched.name);
-        return { cn: cn || matched.name, fp, client: matched.cfg, clientName: matched.name, certSubject: { CN: cn || matched.name }, via: 'mtls-header' };
-      } catch (e) {
+        return {
+          cn,
+          fp: x509.fingerprint256,
+          client: matched.cfg,
+          clientName: matched.name,
+          certSubject: { CN: cn },
+          via: 'mtls-header',
+        };
+      } catch {
         return null;
       }
     }
-    // 2b. Direct mTLS (peer-cert)
-    let cert = null;
-    if (typeof req.socket.getPeerCertificate === 'function') {
-      try { cert = req.socket.getPeerCertificate(true); } catch { cert = null; }
-    }
-    if (!cert || !cert.subject) return null;
-    const cn = cert.subject.CN;
-    const fp = cert.fingerprint256;
-    if (!cn || !fp) return null;
-    const config = effectiveConfig();
-    if (!config) return null;
-    const matched = matchClientByFingerprint(config.clients, fp);
+    const cert = authorizedPeerCertificate(req);
+    if (!cert?.subject?.CN || isForwardingCertificate(req, cfg)) return null;
+    const matched = matchClientByFingerprint(cfg.clients, cert.fingerprint256);
     if (!matched) return null;
     recordClientSeen(matched.name);
     return {
-      cn, fp, client: matched.cfg, clientName: matched.name,
+      cn: cert.subject.CN,
+      fp: cert.fingerprint256,
+      client: matched.cfg,
+      clientName: matched.name,
       certSubject: cert.subject,
       via: 'mtls',
     };
   }
-
   return { getIdentity, getApiKeyIdentity };
-}
-
-function matchClientByFingerprint(clients, fp) {
-  if (!clients) return null;
-  const fpU = fp.toUpperCase();
-  for (const [name, c] of Object.entries(clients)) {
-    if (c.cert_fingerprint_sha256 && c.cert_fingerprint_sha256.toUpperCase() === fpU) {
-      return { name, cfg: c };
-    }
-  }
-  return null;
 }

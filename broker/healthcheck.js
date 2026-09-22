@@ -46,12 +46,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // 默认放 /opt/secret-broker/secrets/healthcheck-state.json (ReadWritePaths)
 // 也可用 env 覆盖. 每次 load/save 重新读 env, 方便测试动态切换
 function resolveStatePath() {
-  return process.env.HEALTHCHECK_STATE_PATH
-    || join(__dirname, '..', 'secrets', 'healthcheck-state.json');
+  return (
+    process.env.HEALTHCHECK_STATE_PATH || join(__dirname, '..', 'secrets', 'healthcheck-state.json')
+  );
 }
 
 const TIMEOUT_MS = 10_000;
-const MAX_STATE_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
 
 // ============================================================
 // Event bus (server.js 已有 ALERT_BUS, 这里 emit 后 server.js bridge)
@@ -67,7 +67,11 @@ let state = { last_run_at: null, last_status: 'unknown', checks: {} };
 function loadState() {
   const p = resolveStatePath();
   if (existsSync(p)) {
-    try { state = JSON.parse(readFileSync(p, 'utf-8')); } catch { /* ignore */ }
+    try {
+      state = JSON.parse(readFileSync(p, 'utf-8'));
+    } catch {
+      /* ignore */
+    }
   }
   return state;
 }
@@ -86,20 +90,19 @@ function saveState() {
 // 也用于 SSE 推 status_change 事件 (M5.6 dashboard 实时告警)
 // ============================================================
 function resolveAlertHistoryPath() {
-  return process.env.ALERT_HISTORY_PATH
-    || join(__dirname, '..', 'secrets', 'alert-history.jsonl');
+  return process.env.ALERT_HISTORY_PATH || join(__dirname, '..', 'secrets', 'alert-history.jsonl');
 }
 
 const ALERT_HISTORY_MAX = 1000;
-let alertHistory = [];       // 内存 [{ ts, summary, changes: { name: { from, to, ts } } }]
-let lastChecks = {};         // name -> status (上次 run 后的状态, 启动时从 alert_history load)
+let alertHistory = []; // 内存 [{ ts, summary, changes: { name: { from, to, ts } } }]
+let lastChecks = {}; // name -> status (上次 run 后的状态, 启动时从 alert_history load)
 
 function loadAlertHistory() {
   const p = resolveAlertHistoryPath();
   if (existsSync(p)) {
     try {
       const lines = readFileSync(p, 'utf-8').split('\n').filter(Boolean);
-      alertHistory = lines.map(l => JSON.parse(l));
+      alertHistory = lines.map((l) => JSON.parse(l));
       // 同步 lastChecks 为最新一条的状态 (last entry wins)
       for (const entry of alertHistory) {
         for (const [name, change] of Object.entries(entry.changes || {})) {
@@ -119,7 +122,7 @@ function saveAlertHistory() {
     alertHistory = alertHistory.slice(-ALERT_HISTORY_MAX);
   }
   try {
-    const lines = alertHistory.map(e => JSON.stringify(e)).join('\n') + '\n';
+    const lines = alertHistory.map((e) => JSON.stringify(e)).join('\n') + '\n';
     writeFileSync(resolveAlertHistoryPath(), lines);
   } catch (e) {
     console.error('[healthcheck] alert_history save failed:', e.message);
@@ -133,7 +136,11 @@ function detectChanges(currentChecks) {
     const prevStatus = lastChecks[name];
     const newStatus = c.status;
     if (prevStatus !== newStatus) {
-      changes[name] = { from: prevStatus || 'unknown', to: newStatus, ts: c.ts || new Date().toISOString() };
+      changes[name] = {
+        from: prevStatus || 'unknown',
+        to: newStatus,
+        ts: c.ts || new Date().toISOString(),
+      };
       lastChecks[name] = newStatus;
     }
   }
@@ -155,7 +162,9 @@ export function clearLastChecks() {
   try {
     const p = resolveAlertHistoryPath();
     if (existsSync(p)) {
-      try { unlinkSync(p); } catch (e) {
+      try {
+        unlinkSync(p);
+      } catch (e) {
         console.error('[healthcheck] clearLastChecks unlink failed:', e.message, 'path=', p);
       }
     }
@@ -186,17 +195,20 @@ function pickCredential(type, fields) {
     case 'aliyun_ak':
       return {
         primary: fields.access_key_id,
-        meta: { access_key_secret: fields.access_key_secret, region: fields.region || 'cn-hangzhou' }
+        meta: {
+          access_key_secret: fields.access_key_secret,
+          region: fields.region || 'cn-hangzhou',
+        },
       };
     case 'tencent_sk':
       return {
         primary: fields.secret_id,
-        meta: { secret_key: fields.secret_key, region: fields.region || 'ap-guangzhou' }
+        meta: { secret_key: fields.secret_key, region: fields.region || 'ap-guangzhou' },
       };
     case 'aws_access_key':
       return {
         primary: fields.access_key_id,
-        meta: { secret_access_key: fields.secret_access_key, region: fields.region || 'us-east-1' }
+        meta: { secret_access_key: fields.secret_access_key, region: fields.region || 'us-east-1' },
       };
     case 'ssh_connection':
       // healthcheck 只测 TCP 可达性, 不需要凭据值. 但 meta.host 是关键.
@@ -204,7 +216,12 @@ function pickCredential(type, fields) {
       if (!fields.host && !fields.private_key && !fields.password) return null;
       return {
         primary: fields.private_key || fields.password || 'tcp-only',
-        meta: { host: fields.host, port: fields.port || 22, user: fields.username, auth: fields.auth_method }
+        meta: {
+          host: fields.host,
+          port: fields.port || 22,
+          user: fields.username,
+          auth: fields.auth_method,
+        },
       };
     case 'ssh_private_key':
       return { primary: fields.key, meta: { auth: 'private_key' } };
@@ -250,7 +267,10 @@ export function classifyError(e) {
     return { status: 'unreachable', detail: `DNS fail (DoH): ${msg.slice(0, 80)}` };
   }
   if (code === 'ECONNRESET') {
-    return { status: 'unreachable', detail: `connection reset by peer (${code}) — service may block this IP range` };
+    return {
+      status: 'unreachable',
+      detail: `connection reset by peer (${code}) — service may block this IP range`,
+    };
   }
   if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
     return { status: 'unreachable', detail: `network unreachable (${code})` };
@@ -261,13 +281,27 @@ export function classifyError(e) {
 
   // misconfigured: 配置错 / 空闲超时 (不是 DNS)
   if (code === 'ECONNREFUSED') {
-    return { status: 'misconfigured', detail: `connection refused (port may be closed or target wrong): ${msg.slice(0, 80)}` };
+    return {
+      status: 'misconfigured',
+      detail: `connection refused (port may be closed or target wrong): ${msg.slice(0, 80)}`,
+    };
   }
   if (code === 'ETIMEDOUT') {
-    return { status: 'misconfigured', detail: `connect timeout — target may be unreachable or behind firewall: ${msg.slice(0, 80)}` };
+    return {
+      status: 'misconfigured',
+      detail: `connect timeout — target may be unreachable or behind firewall: ${msg.slice(0, 80)}`,
+    };
   }
-  if (/timeout after \d+ms/i.test(msg) || /Upstream timeout/i.test(msg) || /^timeout$/i.test(msg) || /DoH timeout/i.test(msg)) {
-    return { status: 'misconfigured', detail: `upstream timeout (TCP/TLS idle — not a DNS failure): ${msg.slice(0, 80)}` };
+  if (
+    /timeout after \d+ms/i.test(msg) ||
+    /Upstream timeout/i.test(msg) ||
+    /^timeout$/i.test(msg) ||
+    /DoH timeout/i.test(msg)
+  ) {
+    return {
+      status: 'misconfigured',
+      detail: `upstream timeout (TCP/TLS idle — not a DNS failure): ${msg.slice(0, 80)}`,
+    };
   }
 
   // 兜底
@@ -285,7 +319,11 @@ export async function checkSecret(secretName, fields, secretType) {
   if (!cred || !cred.primary) {
     // pickCredential 返 null: type 不支持 或 fields 全空 (无任何凭据值)
     // 这是 "没有可检查的东西", 不是配置错. 保持 skipped
-    return { status: 'skipped', detail: `no extractable credential for type=${secretType}`, latency_ms: 0 };
+    return {
+      status: 'skipped',
+      detail: `no extractable credential for type=${secretType}`,
+      latency_ms: 0,
+    };
   }
   try {
     switch (secretType) {
@@ -313,7 +351,11 @@ export async function checkSecret(secretName, fields, secretType) {
       case 'ssh_private_key':
         // ssh_private_key 是 bare 凭据 (无 host), 需要 wrap 成 ssh_connection 才能验.
         // 如果用户只配 ssh_private_key 没配 ssh_connection, 是配置错不是 skipped.
-        return { status: 'misconfigured', detail: 'ssh_private_key (bare) needs ssh_connection host/port wrapper', latency_ms: 0 };
+        return {
+          status: 'misconfigured',
+          detail: 'ssh_private_key (bare) needs ssh_connection host/port wrapper',
+          latency_ms: 0,
+        };
       default:
         // type 不在支持列表, 不要假装能查. skipped.
         return { status: 'skipped', detail: 'no check for type=' + secretType, latency_ms: 0 };
@@ -334,23 +376,33 @@ async function outboundRequest({ host, port, path, method = 'GET', headers = {},
     return { ...classifyError(e), latency_ms: Date.now() - t0 };
   }
   return new Promise((resolve) => {
-    const req = httpLib({
-      hostname: conn.hostname,
-      port,
-      path,
-      method,
-      ...(useTls ? { servername: conn.servername } : {}),
-      headers: { ...headers, Host: host },
-      timeout: TIMEOUT_MS,
-    }, (res) => {
-      let d = '';
-      res.on('data', (c) => { d += c; });
-      res.on('end', () => {
-        try { resolve(onResponse(res, d, Date.now() - t0)); }
-        catch (e) { resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }); }
-      });
+    const req = httpLib(
+      {
+        hostname: conn.hostname,
+        port,
+        path,
+        method,
+        ...(useTls ? { servername: conn.servername } : {}),
+        headers: { ...headers, Host: host },
+        timeout: TIMEOUT_MS,
+      },
+      (res) => {
+        let d = '';
+        res.on('data', (c) => {
+          d += c;
+        });
+        res.on('end', () => {
+          try {
+            resolve(onResponse(res, d, Date.now() - t0));
+          } catch (e) {
+            resolve({ ...classifyError(e), latency_ms: Date.now() - t0 });
+          }
+        });
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms'));
     });
-    req.on('timeout', () => { req.destroy(new Error('timeout after ' + TIMEOUT_MS + 'ms')); });
     req.on('error', (e) => resolve({ ...classifyError(e), latency_ms: Date.now() - t0 }));
     req.end();
   });
@@ -358,28 +410,53 @@ async function outboundRequest({ host, port, path, method = 'GET', headers = {},
 
 function checkGithubLike(token, type, t0) {
   // github / gitlab.com / gitee 都接受 token 鉴权的 /user 端点
-  const hostMap = { github_pat: 'api.github.com', gitlab_pat: 'gitlab.com', gitee_pat: 'gitee.com' };
+  const hostMap = {
+    github_pat: 'api.github.com',
+    gitlab_pat: 'gitlab.com',
+    gitee_pat: 'gitee.com',
+  };
   const pathMap = { github_pat: '/user', gitlab_pat: '/api/v4/user', gitee_pat: '/api/v5/user' };
   const headerMap = {
-    github_pat: { 'Authorization': `token ${token}`, 'User-Agent': 'secret-broker-healthcheck' },
+    github_pat: { Authorization: `token ${token}`, 'User-Agent': 'secret-broker-healthcheck' },
     gitlab_pat: { 'PRIVATE-TOKEN': token },
-    gitee_pat:  { 'Authorization': `token ${token}` },
+    gitee_pat: { Authorization: `token ${token}` },
   };
   const host = process.env.GITHUB_HEALTHCHECK_HOST || hostMap[type] || 'api.github.com';
   const port = Number(process.env.GITHUB_HEALTHCHECK_PORT) || 443;
   const path = pathMap[type] || '/user';
-  const headers = headerMap[type] || { 'Authorization': `token ${token}` };
+  const headers = headerMap[type] || { Authorization: `token ${token}` };
   return outboundRequest({
-    host, port, path, method: 'GET', headers, t0,
+    host,
+    port,
+    path,
+    method: 'GET',
+    headers,
+    t0,
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {
         let id = null;
-        try { id = JSON.parse(d).login || JSON.parse(d).username || JSON.parse(d).name; } catch { /* ignore */ }
+        try {
+          id = JSON.parse(d).login || JSON.parse(d).username || JSON.parse(d).name;
+        } catch {
+          /* ignore */
+        }
         return { status: 'ok', detail: `user=${id || '?'}`, latency_ms: latency };
       }
-      if (res.statusCode === 401) return { status: 'expired', detail: '401 Bad credentials', latency_ms: latency };
-      if (res.statusCode === 403) return { status: 'expired', detail: '403 Forbidden (token may be expired or scope insufficient)', latency_ms: latency };
-      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+      if (res.statusCode === 401) {
+        return { status: 'expired', detail: '401 Bad credentials', latency_ms: latency };
+      }
+      if (res.statusCode === 403) {
+        return {
+          status: 'expired',
+          detail: '403 Forbidden (token may be expired or scope insufficient)',
+          latency_ms: latency,
+        };
+      }
+      return {
+        status: 'fail',
+        detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`,
+        latency_ms: latency,
+      };
     },
   });
 }
@@ -409,13 +486,26 @@ function checkAiProvider(type, apiKey, t0) {
   const host = process.env[`${prefix}_HEALTHCHECK_HOST`] || spec.host;
   const port = Number(process.env[`${prefix}_HEALTHCHECK_PORT`]) || 443;
   return outboundRequest({
-    host, port, path: spec.path, method: 'GET',
+    host,
+    port,
+    path: spec.path,
+    method: 'GET',
     headers: aiAuthHeaders(type, apiKey),
     t0,
     onResponse(res, d, latency) {
-      if (res.statusCode === 200) return { status: 'ok', detail: 'models accessible', latency_ms: latency };
-      if (res.statusCode === 401) return { status: 'expired', detail: '401 invalid_api_key', latency_ms: latency };
-      if (res.statusCode === 403) return { status: 'expired', detail: '403 forbidden (key may be expired or scope insufficient)', latency_ms: latency };
+      if (res.statusCode === 200) {
+        return { status: 'ok', detail: 'models accessible', latency_ms: latency };
+      }
+      if (res.statusCode === 401) {
+        return { status: 'expired', detail: '401 invalid_api_key', latency_ms: latency };
+      }
+      if (res.statusCode === 403) {
+        return {
+          status: 'expired',
+          detail: '403 forbidden (key may be expired or scope insufficient)',
+          latency_ms: latency,
+        };
+      }
       return { status: 'fail', detail: `HTTP ${res.statusCode}`, latency_ms: latency };
     },
   });
@@ -442,12 +532,20 @@ async function checkSsh(meta, t0) {
     const sock = netConnect(port, dest);
     const timer = setTimeout(() => {
       sock.destroy();
-      resolve({ status: 'misconfigured', detail: `connect timeout ${where} — target may be unreachable or behind firewall`, latency_ms: Date.now() - t0 });
+      resolve({
+        status: 'misconfigured',
+        detail: `connect timeout ${where} — target may be unreachable or behind firewall`,
+        latency_ms: Date.now() - t0,
+      });
     }, TIMEOUT_MS);
     sock.on('connect', () => {
       clearTimeout(timer);
       sock.end();
-      resolve({ status: 'ok', detail: `tcp ${where} reachable (auth=${meta.auth || '?'})`, latency_ms: Date.now() - t0 });
+      resolve({
+        status: 'ok',
+        detail: `tcp ${where} reachable (auth=${meta.auth || '?'})`,
+        latency_ms: Date.now() - t0,
+      });
     });
     sock.on('error', (e) => {
       clearTimeout(timer);
@@ -462,7 +560,7 @@ function checkCloudflare(apiToken, t0) {
   // Account-scoped tokens 401 on /user/tokens/verify; GET /zones is a
   // no-side-effect check that works with typical Zone tokens.
   const path = '/client/v4/zones?per_page=1';
-  const headers = { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' };
+  const headers = { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' };
   const overrideHost = process.env.CLOUDFLARE_HEALTHCHECK_HOST;
   let host = overrideHost || 'api.cloudflare.com';
   let port = Number(process.env.CLOUDFLARE_HEALTHCHECK_PORT) || 443;
@@ -479,27 +577,45 @@ function checkCloudflare(apiToken, t0) {
     }
   }
   return outboundRequest({
-    host, port, path: reqPath, method: 'GET',
+    host,
+    port,
+    path: reqPath,
+    method: 'GET',
     headers: reqHeaders,
     t0,
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {
-        let tokenStatus = null;
         let n = 0;
         try {
           const j = JSON.parse(d);
           n = Array.isArray(j.result) ? j.result.length : 0;
-          if (j.result?.status) return { status: 'ok', detail: `token=${j.result.status}`, latency_ms: latency };
-        } catch { /* ignore */ }
+          if (j.result?.status) {
+            return { status: 'ok', detail: `token=${j.result.status}`, latency_ms: latency };
+          }
+        } catch {
+          /* ignore */
+        }
         return { status: 'ok', detail: `zones accessible (${n})`, latency_ms: latency };
       }
       if (res.statusCode === 401 || res.statusCode === 403) {
-        return { status: 'expired', detail: `${res.statusCode} ${res.statusCode === 401 ? 'unauthorized' : 'forbidden'} (token may be expired or scope insufficient)`, latency_ms: latency };
+        return {
+          status: 'expired',
+          detail: `${res.statusCode} ${res.statusCode === 401 ? 'unauthorized' : 'forbidden'} (token may be expired or scope insufficient)`,
+          latency_ms: latency,
+        };
       }
       if (res.statusCode >= 300 && res.statusCode < 400) {
-        return { status: 'fail', detail: `upstream redirected (${res.statusCode}) — expected /client/v4/zones`, latency_ms: latency };
+        return {
+          status: 'fail',
+          detail: `upstream redirected (${res.statusCode}) — expected /client/v4/zones`,
+          latency_ms: latency,
+        };
       }
-      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+      return {
+        status: 'fail',
+        detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`,
+        latency_ms: latency,
+      };
     },
   });
 }
@@ -524,7 +640,14 @@ function rfc3986(s) {
 // 纯函数: 给一组公共+业务参数, 计算 aliyun v2 signature + 完整 query string
 // 入参: { action, accessKeyId, accessKeySecret, region?, timestamp?, nonce? }
 // 返: { query: 'k1=v1&...&Signature=xxx', signature, stringToSign, canonical }
-export function signAliyun({ action, accessKeyId, accessKeySecret, region = 'cn-hangzhou', timestamp, nonce }) {
+export function signAliyun({
+  action,
+  accessKeyId,
+  accessKeySecret,
+  region = 'cn-hangzhou',
+  timestamp,
+  nonce,
+}) {
   // 公共参数 + 业务参数
   const params = {
     AccessKeyId: accessKeyId,
@@ -532,17 +655,19 @@ export function signAliyun({ action, accessKeyId, accessKeySecret, region = 'cn-
     Format: 'JSON',
     RegionId: region,
     SignatureMethod: 'HMAC-SHA1',
-    SignatureNonce: nonce || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now()),
+    SignatureNonce:
+      nonce ||
+      (globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : Math.random().toString(36).slice(2) + Date.now()),
     SignatureVersion: '1.0',
-    Timestamp: timestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),  // ISO 8601 UTC, 截 ms
+    Timestamp: timestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), // ISO 8601 UTC, 截 ms
     Version: '2014-05-26',
   };
   // 字典序排序
   const sortedKeys = Object.keys(params).sort();
   // 拼 canonicalized query string
-  const canonical = sortedKeys
-    .map(k => `${rfc3986(k)}=${rfc3986(params[k])}`)
-    .join('&');
+  const canonical = sortedKeys.map((k) => `${rfc3986(k)}=${rfc3986(params[k])}`).join('&');
   // StringToSign: METHOD&%2F&URL-encoded-canonical
   const stringToSign = `GET&${rfc3986('/')}&${rfc3986(canonical)}`;
   // HMAC-SHA1(key = accessKeySecret + "&", data = stringToSign)
@@ -573,19 +698,38 @@ async function checkAliyun(accessKeyId, meta, t0) {
   const host = process.env.ALIYUN_HEALTHCHECK_HOST || 'ecs.aliyuncs.com';
   const port = Number(process.env.ALIYUN_HEALTHCHECK_PORT) || 443;
   return outboundRequest({
-    host, port, path, method: 'GET',
+    host,
+    port,
+    path,
+    method: 'GET',
     headers: { 'User-Agent': 'secret-broker-healthcheck' },
     t0,
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {
         let regionCount = 0;
-        try { regionCount = JSON.parse(d).Regions?.Region?.length || 0; } catch { /* ignore */ }
-        return { status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency };
+        try {
+          regionCount = JSON.parse(d).Regions?.Region?.length || 0;
+        } catch {
+          /* ignore */
+        }
+        return {
+          status: 'ok',
+          detail: `DescribeRegions ok (${regionCount} regions accessible)`,
+          latency_ms: latency,
+        };
       }
       if (res.statusCode === 401 || res.statusCode === 403) {
-        return { status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency };
+        return {
+          status: 'expired',
+          detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`,
+          latency_ms: latency,
+        };
       }
-      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+      return {
+        status: 'fail',
+        detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`,
+        latency_ms: latency,
+      };
     },
   });
 }
@@ -605,24 +749,44 @@ function hmacSha256(key, data) {
 // 纯函数: tencent TC3-HMAC-SHA256 签名
 // 入参: { action, version, secretId, secretKey, region?, host?, payload?, timestamp? }
 // 返: { authorization, timestamp, canonicalRequest, stringToSign, signature }
-export function signTencent({ action, version, secretId, secretKey, region = 'ap-guangzhou', host = 'cvm.tencentcloudapi.com', payload = '', timestamp }) {
+export function signTencent({
+  action,
+  version,
+  secretId,
+  secretKey,
+  region: _region = 'ap-guangzhou',
+  host = 'cvm.tencentcloudapi.com',
+  payload = '',
+  timestamp,
+}) {
   // 1. 时间戳 + 日期
-  const ts = timestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');  // YYYY-MM-DDTHH:mm:ssZ
-  const date = ts.split('T')[0];  // YYYY-MM-DD
+  const ts = timestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'); // YYYY-MM-DDTHH:mm:ssZ
+  const date = ts.split('T')[0]; // YYYY-MM-DD
   const service = 'cvm';
   // 2. Canonical request = HTTP method + URI + sorted query + headers + signed headers
   // 这里只验 GET (DescribeRegions), body=空. payload 留给 POST/PUT
   const httpRequestMethod = payload ? 'POST' : 'GET';
   const canonicalUri = '/';
   const canonicalQueryString = `Action=${encodeURIComponent(action)}&Version=${encodeURIComponent(version)}`;
-  const contentType = payload ? 'application/json; charset=utf-8' : 'application/x-www-form-urlencoded';
+  const contentType = payload
+    ? 'application/json; charset=utf-8'
+    : 'application/x-www-form-urlencoded';
   const canonicalHeaders = `content-type:${contentType}\nhost:${host}\n`;
   const signedHeaders = 'content-type;host';
   const hashedRequestPayload = sha256Hex(payload);
-  const canonicalRequest = [httpRequestMethod, canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, hashedRequestPayload].join('\n');
+  const canonicalRequest = [
+    httpRequestMethod,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    hashedRequestPayload,
+  ].join('\n');
   // 3. String to sign
   const credentialScope = `${date}/${service}/tc3_request`;
-  const stringToSign = ['TC3-HMAC-SHA256', ts, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+  const stringToSign = ['TC3-HMAC-SHA256', ts, credentialScope, sha256Hex(canonicalRequest)].join(
+    '\n',
+  );
   // 4. 计算 signature (3 步 HMAC chain)
   const secretDate = hmacSha256('TC3' + secretKey, date);
   const secretService = hmacSha256(secretDate, service);
@@ -651,10 +815,13 @@ async function checkTencent(secretId, meta, t0) {
   const host = process.env.TENCENT_HEALTHCHECK_HOST || 'cvm.tencentcloudapi.com';
   const port = Number(process.env.TENCENT_HEALTHCHECK_PORT) || 443;
   return outboundRequest({
-    host, port, path, method: 'GET',
+    host,
+    port,
+    path,
+    method: 'GET',
     headers: {
       'Content-Type': contentType,
-      'Authorization': authorization,
+      Authorization: authorization,
       'X-TC-Action': 'DescribeRegions',
       'X-TC-Version': '2017-03-12',
       'X-TC-Timestamp': new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
@@ -665,13 +832,29 @@ async function checkTencent(secretId, meta, t0) {
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {
         let regionCount = 0;
-        try { regionCount = JSON.parse(d).Response?.TotalCount || 0; } catch { /* ignore */ }
-        return { status: 'ok', detail: `DescribeRegions ok (${regionCount} regions accessible)`, latency_ms: latency };
+        try {
+          regionCount = JSON.parse(d).Response?.TotalCount || 0;
+        } catch {
+          /* ignore */
+        }
+        return {
+          status: 'ok',
+          detail: `DescribeRegions ok (${regionCount} regions accessible)`,
+          latency_ms: latency,
+        };
       }
       if (res.statusCode === 401 || res.statusCode === 403) {
-        return { status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency };
+        return {
+          status: 'expired',
+          detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`,
+          latency_ms: latency,
+        };
       }
-      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+      return {
+        status: 'fail',
+        detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`,
+        latency_ms: latency,
+      };
     },
   });
 }
@@ -684,9 +867,22 @@ async function checkTencent(secretId, meta, t0) {
 // 纯函数: aws SigV4 签名 (GET, 无 body, 单一 query Action=GetCallerIdentity)
 // 入参: { accessKeyId, secretAccessKey, region, service, host, query?, amzDate? }
 // 返: { authorization, amzDate, canonicalRequest, stringToSign, signature, signedHeaders }
-export function signAws({ accessKeyId, secretAccessKey, region = 'us-east-1', service = 'sts', host, query = 'Action=GetCallerIdentity&Version=2011-06-15', amzDate }) {
-  const _amzDate = amzDate || new Date().toISOString().replace(/[\-:]/g, '').replace(/\.\d{3}Z$/, 'Z');  // YYYYMMDDTHHmmssZ
-  const dateStamp = _amzDate.split('T')[0];  // YYYYMMDD
+export function signAws({
+  accessKeyId,
+  secretAccessKey,
+  region = 'us-east-1',
+  service = 'sts',
+  host,
+  query = 'Action=GetCallerIdentity&Version=2011-06-15',
+  amzDate,
+}) {
+  const _amzDate =
+    amzDate ||
+    new Date()
+      .toISOString()
+      .replace(/[\-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z'); // YYYYMMDDTHHmmssZ
+  const dateStamp = _amzDate.split('T')[0]; // YYYYMMDD
   const _host = host || `${service}.${region}.amazonaws.com`;
   // 1. Canonical request
   const httpRequestMethod = 'GET';
@@ -695,11 +891,23 @@ export function signAws({ accessKeyId, secretAccessKey, region = 'us-east-1', se
   const canonicalQueryString = query.split('&').sort().join('&');
   const canonicalHeaders = `host:${_host}\nx-amz-date:${_amzDate}\n`;
   const signedHeaders = 'host;x-amz-date';
-  const payloadHash = sha256Hex('');  // GET 无 body
-  const canonicalRequest = [httpRequestMethod, canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const payloadHash = sha256Hex(''); // GET 无 body
+  const canonicalRequest = [
+    httpRequestMethod,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
   // 2. String to sign
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-  const stringToSign = ['AWS4-HMAC-SHA256', _amzDate, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    _amzDate,
+    credentialScope,
+    sha256Hex(canonicalRequest),
+  ].join('\n');
   // 3. 计算 signature (4 步 HMAC chain)
   const kDate = hmacSha256('AWS4' + secretAccessKey, dateStamp);
   const kRegion = hmacSha256(kDate, region);
@@ -708,7 +916,15 @@ export function signAws({ accessKeyId, secretAccessKey, region = 'us-east-1', se
   const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
   // 4. Authorization header
   const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  return { authorization, amzDate: _amzDate, canonicalRequest, stringToSign, signature, signedHeaders, host: _host };
+  return {
+    authorization,
+    amzDate: _amzDate,
+    canonicalRequest,
+    stringToSign,
+    signature,
+    signedHeaders,
+    host: _host,
+  };
 }
 
 async function checkAws(accessKeyId, meta, t0) {
@@ -718,7 +934,7 @@ async function checkAws(accessKeyId, meta, t0) {
     const missing = !accessKeyId ? 'access_key_id' : 'secret_access_key';
     return { status: 'misconfigured', detail: `aws_access_key missing ${missing}`, latency_ms: 0 };
   }
-  const { authorization, amzDate, host, signedHeaders } = signAws({
+  const { authorization, amzDate, host } = signAws({
     accessKeyId,
     secretAccessKey: meta.secret_access_key,
     region: meta.region || 'us-east-1',
@@ -728,9 +944,12 @@ async function checkAws(accessKeyId, meta, t0) {
   const _host = process.env.AWS_HEALTHCHECK_HOST || host;
   const port = Number(process.env.AWS_HEALTHCHECK_PORT) || 443;
   return outboundRequest({
-    host: _host, port, path, method: 'GET',
+    host: _host,
+    port,
+    path,
+    method: 'GET',
     headers: {
-      'Authorization': authorization,
+      Authorization: authorization,
       'X-Amz-Date': amzDate,
       'User-Agent': 'secret-broker-healthcheck',
     },
@@ -738,13 +957,29 @@ async function checkAws(accessKeyId, meta, t0) {
     onResponse(res, d, latency) {
       if (res.statusCode === 200) {
         let arn = null;
-        try { arn = d.match(/<Arn>(.*?)<\/Arn>/)?.[1]; } catch { /* ignore */ }
-        return { status: 'ok', detail: `GetCallerIdentity ok (arn=${arn || '?'})`, latency_ms: latency };
+        try {
+          arn = d.match(/<Arn>(.*?)<\/Arn>/)?.[1];
+        } catch {
+          /* ignore */
+        }
+        return {
+          status: 'ok',
+          detail: `GetCallerIdentity ok (arn=${arn || '?'})`,
+          latency_ms: latency,
+        };
       }
       if (res.statusCode === 401 || res.statusCode === 403) {
-        return { status: 'expired', detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`, latency_ms: latency };
+        return {
+          status: 'expired',
+          detail: `${res.statusCode} ${d.slice(0, 150).replace(/\s+/g, ' ').trim()}`,
+          latency_ms: latency,
+        };
       }
-      return { status: 'fail', detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`, latency_ms: latency };
+      return {
+        status: 'fail',
+        detail: `HTTP ${res.statusCode}: ${d.slice(0, 100)}`,
+        latency_ms: latency,
+      };
     },
   });
 }
@@ -758,7 +993,15 @@ export async function runAll(getSecrets) {
   loadAlertHistory();
   const t0 = Date.now();
   // v3.1 M5.3: 5 维 status (M4 4 维 + unreachable / misconfigured)
-  const summary = { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 };
+  const summary = {
+    ok: 0,
+    expired: 0,
+    unreachable: 0,
+    misconfigured: 0,
+    fail: 0,
+    skipped: 0,
+    total: 0,
+  };
   const checks = {};
   for (const [name, entry] of Object.entries(getSecrets())) {
     summary.total++;
@@ -767,8 +1010,11 @@ export async function runAll(getSecrets) {
     summary[r.status] = (summary[r.status] || 0) + 1;
   }
   // last_status: ok 当且仅当 5 个非 ok 维度全为 0
-  const allPass = summary.expired === 0 && summary.unreachable === 0
-    && summary.misconfigured === 0 && summary.fail === 0;
+  const allPass =
+    summary.expired === 0 &&
+    summary.unreachable === 0 &&
+    summary.misconfigured === 0 &&
+    summary.fail === 0;
   // v3.1.1 M5.6: 检测状态变化 (跟上次 status 比)
   const changes = detectChanges(checks);
   const newState = {
@@ -810,32 +1056,42 @@ export async function runAllViaMcp(mcpServerUrl) {
   // mcp-server 在 localhost, 用 http (不走 mTLS, 不暴露外网)
   const url = new URL('/mcp', mcpServerUrl);
   const body = JSON.stringify({
-    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
     params: { name: 'run_healthcheck', arguments: {} },
   });
   const result = await new Promise((resolve, reject) => {
-    const r = req.request({
-      host: url.hostname,
-      port: url.port || 3001,
-      path: url.pathname,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      timeout: 60_000,  // healthcheck 跑 5 secrets ~12s, 给 60s
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          return reject(new Error(`mcp-server HTTP ${res.statusCode}: ${d.slice(0, 200)}`));
-        }
-        try {
-          const json = JSON.parse(d);
-          if (json.error) return reject(new Error(`mcp-server RPC error: ${json.error.message}`));
-          const text = json.result?.content?.[0]?.text;
-          if (!text) return reject(new Error('mcp-server 返空 result'));
-          resolve(JSON.parse(text));
-        } catch (e) { reject(new Error(`mcp-server 返非 JSON: ${e.message}`)); }
-      });
-    });
+    const r = req.request(
+      {
+        host: url.hostname,
+        port: url.port || 3001,
+        path: url.pathname,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 60_000, // healthcheck 跑 5 secrets ~12s, 给 60s
+      },
+      (res) => {
+        let d = '';
+        res.on('data', (c) => {
+          d += c;
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            return reject(new Error(`mcp-server HTTP ${res.statusCode}: ${d.slice(0, 200)}`));
+          }
+          try {
+            const json = JSON.parse(d);
+            if (json.error) return reject(new Error(`mcp-server RPC error: ${json.error.message}`));
+            const text = json.result?.content?.[0]?.text;
+            if (!text) return reject(new Error('mcp-server 返空 result'));
+            resolve(JSON.parse(text));
+          } catch (e) {
+            reject(new Error(`mcp-server 返非 JSON: ${e.message}`));
+          }
+        });
+      },
+    );
     r.on('timeout', () => r.destroy(new Error('mcp-server timeout 60s')));
     r.on('error', reject);
     r.write(body);
@@ -845,11 +1101,19 @@ export async function runAllViaMcp(mcpServerUrl) {
   const newState = {
     last_run_at: new Date().toISOString(),
     last_status: result.last_status || 'unknown',
-    duration_ms: result.duration_ms || (Date.now() - t0),
+    duration_ms: result.duration_ms || Date.now() - t0,
     // v3.1 M5.3: summary 5 维兜底 (M4 4 维 + unreachable / misconfigured)
-    summary: result.summary || { ok: 0, expired: 0, unreachable: 0, misconfigured: 0, fail: 0, skipped: 0, total: 0 },
+    summary: result.summary || {
+      ok: 0,
+      expired: 0,
+      unreachable: 0,
+      misconfigured: 0,
+      fail: 0,
+      skipped: 0,
+      total: 0,
+    },
     checks: result.checks || {},
-    _source: 'mcp_server',  // 标记这次跑来自 mcp-server
+    _source: 'mcp_server', // 标记这次跑来自 mcp-server
   };
   // M5.6: 状态变化检测
   const changes = detectChanges(newState.checks);

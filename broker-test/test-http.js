@@ -1,15 +1,31 @@
 // broker-test/test-http.js — V4.7.0 lib/http.js 单元测试
 // 覆盖 send / readBody / jsonError
 
+import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { send, readBody, jsonError } from '../broker/lib/http.js';
+import {
+  send,
+  sendBuffer,
+  readBody,
+  jsonError,
+  wrapAsyncRequestHandler,
+  RequestBodyTooLargeError,
+} from '../broker/lib/http.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 function mockRes() {
   const headers = {};
@@ -17,12 +33,18 @@ function mockRes() {
     statusCode: 0,
     body: null,
     headers,
-    setHeader(k, v) { headers[k.toLowerCase()] = v; },
+    setHeader(k, v) {
+      headers[k.toLowerCase()] = v;
+    },
     writeHead(code, hdrs) {
       this.statusCode = code;
-      Object.entries(hdrs).forEach(([k, v]) => { headers[k.toLowerCase()] = v; });
+      Object.entries(hdrs).forEach(([k, v]) => {
+        headers[k.toLowerCase()] = v;
+      });
     },
-    end(payload) { this.body = payload; },
+    end(payload) {
+      this.body = payload;
+    },
   };
 }
 
@@ -38,9 +60,14 @@ section('send');
   ok('content-type json', res.headers['content-type'] === 'application/json; charset=utf-8');
   // Node's http module accepts both string and number for Content-Length;
   // mockRes stores the raw value. Verify the numeric value matches.
-  ok('content-length matches body size', Number(res.headers['content-length']) === Buffer.byteLength('{"ok":true}', 'utf8'));
+  ok(
+    'content-length matches body size',
+    Number(res.headers['content-length']) === Buffer.byteLength('{"ok":true}', 'utf8'),
+  );
   ok('security headers merged (CSP)', res.headers['content-security-policy'] !== undefined);
   ok('security headers merged (X-Frame-Options)', res.headers['x-frame-options'] === 'DENY');
+  ok('JSON responses are non-cacheable', res.headers['cache-control'] === 'no-store');
+  ok('JSON responses include legacy no-cache directive', res.headers.pragma === 'no-cache');
 }
 {
   const res = mockRes();
@@ -64,10 +91,14 @@ section('send');
   ok('X-Broker-Version when exposeVersion=true', res2.headers['x-broker-version'] !== undefined);
 }
 {
-  // extra headers merged
+  // extra headers merged and may intentionally override defaults.
   const res = mockRes();
-  send(res, 200, {}, { 'X-Custom': 'val' });
+  send(res, 200, {}, { 'X-Custom': 'val', 'Cache-Control': 'private, max-age=60' });
   ok('extra header merged', res.headers['x-custom'] === 'val');
+  ok(
+    'explicit cache policy overrides default',
+    res.headers['cache-control'] === 'private, max-age=60',
+  );
 }
 {
   // _kind hint switches CSP profile
@@ -85,6 +116,58 @@ section('send');
   send(res, 404, { error: 'not found' });
   ok('404 status', res.statusCode === 404);
   ok('404 body', res.body === '{"error":"not found"}');
+}
+{
+  // Never overwrite a response that another route already completed.
+  const res = mockRes();
+  res.headersSent = true;
+  send(res, 500, { error: 'late write' });
+  ok('already-sent response is not overwritten', res.statusCode === 0 && res.body === null);
+}
+
+// ============================================================
+// sendBuffer
+// ============================================================
+section('sendBuffer');
+{
+  const res = mockRes();
+  const payload = Buffer.from([0, 1, 2, 255]);
+  sendBuffer(res, 200, payload, 'application/zip', {
+    'Content-Disposition': 'attachment; filename="bundle.zip"',
+    exposeVersion: true,
+  });
+  ok('binary status 200', res.statusCode === 200);
+  ok('binary payload is preserved', Buffer.isBuffer(res.body) && res.body.equals(payload));
+  ok('binary content type is explicit', res.headers['content-type'] === 'application/zip');
+  ok('binary content length is exact', Number(res.headers['content-length']) === payload.length);
+  ok('binary response is non-cacheable', res.headers['cache-control'] === 'no-store');
+  ok('binary response includes security headers', res.headers['x-frame-options'] === 'DENY');
+  ok('binary response exposes version only when requested', !!res.headers['x-broker-version']);
+  ok(
+    'binary content disposition is preserved',
+    res.headers['content-disposition'] === 'attachment; filename="bundle.zip"',
+  );
+}
+{
+  const res = mockRes();
+  res.writableEnded = true;
+  sendBuffer(res, 200, Buffer.from('late'));
+  ok('binary helper does not write after response end', res.statusCode === 0 && res.body === null);
+}
+{
+  // The main HTTPS server must delegate to the same hardened response helper.
+  const serverSource = readFileSync(new URL('../broker/server.js', import.meta.url), 'utf8');
+  ok('server imports shared hardened send helper', serverSource.includes('send as sendSafe'));
+  ok(
+    'server delegates ordinary API responses to hardened send helper',
+    /return sendSafe\(res, status, body, \{/.test(serverSource),
+  );
+  ok(
+    'plain HTTP local-health listener explicitly opts out of HTTPS-only headers',
+    /sendSafe\(response, status, body, \{ \.\.\.extraHeaders, noSecurityHeaders: true \}\)/.test(
+      serverSource,
+    ),
+  );
 }
 
 // ============================================================
@@ -114,7 +197,11 @@ section('readBody');
   const big = 'x'.repeat(1024 * 1024 + 1);
   const req = Readable.from([Buffer.from(big)]);
   let threw = false;
-  try { await readBody(req); } catch (e) { threw = /too large/.test(e.message); }
+  try {
+    await readBody(req);
+  } catch (e) {
+    threw = /too large/.test(e.message);
+  }
   ok('body > 1MB rejected', threw);
 }
 {
@@ -122,6 +209,51 @@ section('readBody');
   const req = Readable.from([Buffer.from('{not json}')]);
   const body = await readBody(req);
   ok('malformed JSON → _raw', body && body._raw === '{not json}');
+}
+{
+  // Reject from Content-Length before buffering the body.
+  const req = Readable.from([Buffer.from('{}')]);
+  req.headers = { 'content-length': String(2 * 1024 * 1024) };
+  let err = null;
+  try {
+    await readBody(req);
+  } catch (e) {
+    err = e;
+  }
+  ok(
+    'oversized Content-Length rejected',
+    err instanceof RequestBodyTooLargeError && err.statusCode === 413,
+  );
+}
+
+// ============================================================
+// async request listener safety
+// ============================================================
+section('wrapAsyncRequestHandler');
+{
+  const res = mockRes();
+  const listener = wrapAsyncRequestHandler(async () => {
+    throw new RequestBodyTooLargeError();
+  });
+  listener({}, res);
+  await new Promise((resolve) => setImmediate(resolve));
+  ok('body-limit rejection becomes 413', res.statusCode === 413);
+  ok('413 response hides internal detail', res.body.includes('Request body too large'));
+  ok('413 disables keep-alive', res.shouldKeepAlive === false);
+  ok('413 explicitly closes the connection', res.headers.connection === 'close');
+}
+{
+  const res = mockRes();
+  const listener = wrapAsyncRequestHandler(async () => {
+    throw new Error('sensitive internal detail');
+  });
+  listener({}, res);
+  await new Promise((resolve) => setImmediate(resolve));
+  ok('unexpected async rejection becomes 500', res.statusCode === 500);
+  ok(
+    '500 response does not leak exception detail',
+    !res.body.includes('sensitive internal detail'),
+  );
 }
 
 // ============================================================

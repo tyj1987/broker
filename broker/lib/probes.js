@@ -43,7 +43,7 @@ export function probeHttp(url, opts = {}) {
     let u;
     try {
       u = new URL(url);
-    } catch (e) {
+    } catch {
       resolve({ ok: false, ms: 0, error: 'invalid url' });
       return;
     }

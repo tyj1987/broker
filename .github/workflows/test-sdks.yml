@@ -15,6 +15,9 @@ on:
     paths:
       - 'sdk/**'
 
+permissions:
+  contents: read
+
 jobs:
   # ============================================================
   # Python SDK
@@ -31,10 +34,10 @@ jobs:
       run:
         working-directory: sdk/python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -56,17 +59,17 @@ jobs:
       - name: Verify zero runtime deps
         shell: bash
         run: |
-          # The SDK's pyproject.toml must list zero runtime dependencies.
-          python -c "import tomllib, sys; d = tomllib.loads(open('pyproject.toml').read().split('[project]',1)[1].split('dependencies',1)[0] + '0'); print('runtime deps:', d.get('dependencies', []))"
-          if python -c "import tomli; t = tomli.loads(open('pyproject.toml').read()); assert t['project'].get('dependencies', []) == [], 'SDK must remain zero-dep'" 2>/dev/null; then :; else
-            python -c "
-import re
-txt = open('pyproject.toml').read()
-# crude: ensure 'dependencies = []' line exists under [project]
-assert re.search(r'\[project\].*?dependencies\s*=\s*\[\s*\]', txt, re.S), 'SDK must remain zero-dep (dependencies = [])'
-print('zero-dep OK')
-"
-          fi
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          text = Path('pyproject.toml').read_text(encoding='utf-8')
+          project = text.split('[project]', 1)[1].split('\n[', 1)[0]
+          assert re.search(r'(?ms)^dependencies\s*=\s*\[\s*\]\s*$', project), (
+              'SDK must remain zero-dep (dependencies = [])'
+          )
+          print('zero-dep OK')
+          PY
 
   # ============================================================
   # Go SDK
@@ -83,10 +86,10 @@ print('zero-dep OK')
       run:
         working-directory: sdk/go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
@@ -124,12 +127,12 @@ print('zero-dep OK')
       run:
         working-directory: sdk/vscode
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: sdk/vscode/package.json
 

@@ -1,12 +1,41 @@
-# sops-age-template / SOPS+age 密钥模板
+# Secret Broker — mTLS credential proxy for AI clients
 
-> **v4.1 GA (2026-09-01)** — 23 任务全部交付,1027 测试 100% 通过,`v4.1.0` tag 已打。
+> **Current codebase: v4.9.0 (2026-09-12)** — Dual-licensed (MIT open-source + commercial).
+> **Production mTLS credential proxy** that lets AI agents call GitHub / Aliyun /
+> Cloudflare / AWS / 48+ other APIs without ever seeing plaintext secrets.
+>
+> **Quick links**: [Architecture](ARCHITECTURE.md) ·
+> [Quickstart](docs/QUICKSTART.md) ·
+> [Verification](VERIFY.md) ·
+> [2026-09-23 Security Audit](docs/SECURITY-AUDIT-2026-09-23.md) ·
+> [CHANGELOG](CHANGELOG.md) ·
+> [Security Policy](SECURITY.md) (Bug Bounty $5000) ·
+> [Commercial License](docs/COMMERCIAL.md) ·
+> [Support](docs/SUPPORT.md)
+>
+> **TL;DR**: AI never touches the key. Broker holds the key. mTLS authn.
+> Zero plaintext secret leakage to AI agents.
+
+## Licensing
+
+v4.5.0+ is dual-licensed:
+
+- **MIT** — open-source use (personal, learning, research, OSS projects,
+  non-profits). See [`LICENSE`](LICENSE).
+- **Commercial** — required for revenue-generating, multi-tenant, embedded,
+  or managed-service use. See [`docs/COMMERCIAL.md`](docs/COMMERCIAL.md) for
+  tier pricing, SaaS/OEM rules, and how to obtain a license.
+
+The open-source bug-bounty program ($5,000 for critical findings) covers
+both license paths.
+
+> **历史里程碑：v4.1 GA (2026-09-01)**。当前代码与发布门禁以 v4.9.0 和 [VERIFY.md](VERIFY.md) 为准；不要使用历史固定测试数量代替当前 `npm run quality:gate`。
 >
 > 🎯 **V4.1 GA Quick Links**:
 > - [ARCHITECTURE.md](ARCHITECTURE.md) — one-page overview (start here)
 > - [V4.1-COMPLETE.md](V4.1-COMPLETE.md) — per-task plan vs actual + §14 验收清单
 > - [RELEASE-NOTES-v4.1.0.md](RELEASE-NOTES-v4.1.0.md) — high-level release notes
-> - [VERIFY.md](VERIFY.md) — 1-line verify recipe (`npm run test:verify-all` = 647/0)
+> - [VERIFY.md](VERIFY.md) — 1-line verification recipe (`npm run test:verify-all`)
 > - [CHANGELOG.md](CHANGELOG.md) — full version history
 > - [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) (Bug Bounty $5000)
 >
@@ -54,7 +83,7 @@ push to **dual container registries**, ship via **GitHub Actions**.
 ### 基础设施（沿用 v1.x）
 
 - **多云** — Aliyun ECS + Tencent CVM 镜像双活（broker 主备）
-- **零明文** — GitHub Secrets 全部通过 OIDC 临时令牌
+- **最小长期凭据** — 阿里云控制面使用 OIDC；registry/腾讯云凭据使用 GitHub 加密 Secrets
 - **多钥匙冗余** — 主 age key + 备份 key，SOPS 双重加密
 - **本地一键** — `bootstrap.ps1` idempotent 引导
 - **完整 CI** — gitleaks 扫密 + Node test + Terraform validate + Docker build
@@ -67,7 +96,7 @@ push to **dual container registries**, ship via **GitHub Actions**.
 
 ```powershell
 # 一次性：克隆仓库
-git clone https://github.com/tyj1987/sops-age-template.git C:\home\broker-server
+git clone https://github.com/tyj1987/broker.git C:\home\broker-server
 cd C:\home\broker-server
 
 # 引导 SOPS+age
@@ -92,9 +121,9 @@ docker compose up -d broker
 ### 2. 在 AI 客户端（你的笔记本）使用
 
 ```powershell
-# 把客户端证书从 broker 服务器 scp 过来
-scp broker:~/pki/clients/client.laptop.{crt,key} C:\Users\User\.broker\
-scp broker:~/pki/ca/ca.crt C:\Users\User\.broker\
+# 在 Dashboard 中为客户端执行签发，并立即下载一次性 ZIP。
+# 安全默认下 Broker 不长期保留客户端私钥，不能稍后再从服务器 scp 私钥。
+# 将 ZIP 解压到 C:\Users\User\.broker\，并限制私钥仅当前用户可读。
 
 # 写客户端配置
 @"
@@ -133,7 +162,7 @@ node secret-broker.js exec --env "GH_TOKEN" -- git push origin main
 │  ┌──────────────────────────────────────────┐      │
 │  │ Docker                                    │      │
 │  │  ┌─────────────────────────────────────┐ │      │
-│  │  │ secret-broker (Node 20, mTLS HTTPS) │ │      │
+│  │  │ secret-broker (Node 24, mTLS HTTPS) │ │      │
 │  │  │  :8443                               │ │      │
 │  │  │                                     │ │      │
 │  │  │  /health, /api/v1/identity          │ │      │
@@ -174,7 +203,6 @@ sops-age-template/
 ├── broker/                          # 🆕 Secret Broker 服务端
 │   ├── server.js                    # mTLS HTTPS + 路由 + 代理
 │   ├── package.json
-│   ├── Dockerfile
 │   └── dashboard/                   # 静态 Dashboard
 │       ├── index.html
 │       ├── app.js
@@ -223,7 +251,7 @@ sops-age-template/
 │   ├── ci.yml                       # 🆕 broker-test + image-build
 │   └── deploy.yml                   # 🆕 推送双云 + 双 Terraform apply
 ├── docker-compose.yml               # 🆕 broker 主 + 可选 app
-├── Dockerfile                       # demo app
+├── Dockerfile                       # Broker dev/production 多阶段镜像（唯一来源）
 ├── bootstrap.ps1
 ├── .sops.yaml
 ├── .envrc
@@ -306,8 +334,8 @@ task --list
 #    TENCENT_TCR_USERNAME, TENCENT_TCR_PASSWORD
 
 # 2. 推 tag 触发自动部署
-git tag v2.0.0
-git push origin v2.0.0
+git tag v4.9.0
+git push origin v4.9.0
 
 # 3. GitHub Actions 自动：
 #    - build broker 镜像

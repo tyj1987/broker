@@ -8,10 +8,9 @@
 
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
-import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 // v3.0: 强认证 (TOTP + MFA 状态机)
 import {
@@ -19,12 +18,16 @@ import {
   getMfaPending,
   consumeMfaPending,
   verifyMfaCode,
+  verifyStepUp,
+  restoreConsumedRecoveryCode,
   isMfaRequired,
   MFA_TOKEN_TTL_MS,
+  mfaClientBinding,
 } from './auth-flow.js';
+import { createMutationGate } from './lib/mutation-gate.js';
 // v3.0: 密码 hash + TOTP + 恢复码
 import {
-  verifyPassword as totpVerifyPassword,
+  verifyPasswordCompat,
   verify as verifyTotpFn,
   generateSecret,
   generateRecoveryCodes,
@@ -41,9 +44,7 @@ import {
   getAlertHistory as healthcheckGetAlertHistory,
   HEALTHCHECK_BUS,
 } from './healthcheck.js';
-import {
-  registerCron, startCronLoop, stopCronLoop, listCron, fireNow as cronFireNow,
-} from './cron-tasks.js';
+import { registerCron, startCronLoop, stopCronLoop } from './cron-tasks.js';
 import {
   createApiKey as createApiKeyFn,
   revokeApiKey as revokeApiKeyFn,
@@ -54,17 +55,33 @@ import {
   canResolveSecret,
   canProxyService,
   recordUse,
-  DEFAULT_TTL_MS as API_KEY_DEFAULT_TTL_MS,
   generateMasterKey,
   createChildKey,
   canCreateChild,
   isClientIpAllowed,
+  createApiKeyRateLimiter,
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
+import {
+  sopsDecrypt as sopsDecryptSafe,
+  sopsEncryptAtomic as sopsEncryptAtomicSafe,
+} from './lib/sops.js';
+import { createClientBundle } from './lib/client-bundle.js';
+import { normalizeClientConfig, clientSecurityConfigChanged } from './lib/client-config.js';
+import {
+  checkTrustedBrowserMutation,
+  isBrowserRequest,
+  isCookieSessionRequest,
+} from './lib/browser-request.js';
 import { aliyunRpcVersion, mergeAliyunQuery } from './lib/aliyun-rpc.js';
 import { dohConnect } from './lib/doh.js';
 import { defaultServiceTest, describeUpstreamStatus } from './lib/service-test.js';
 import { relayConfig, shouldRelay, applyRelay } from './lib/outbound-relay.js';
+import { resolveUpstreamUrl, validateConfiguredUpstream } from './lib/upstream-url.js';
+import { buildProxyRequestHeaders, sanitizeProxyResponseHeaders } from './lib/proxy-headers.js';
+import { readLimitedResponseBody, maxUpstreamResponseBytes } from './lib/proxy-body.js';
+import { filteredHealthStatus } from './lib/health-visibility.js';
+import { isApiKeyRouteAllowed } from './lib/api-key-route-policy.js';
 import { handleHealth, buildOpsHealth } from './routes/health.js';
 import { handleStatic } from './routes/static.js';
 import { handleMetrics } from './routes/metrics.js';
@@ -80,7 +97,6 @@ import {
   validateBrokerConfig,
   formatValidationReport,
   preflightPaths,
-  withAuditSampling,
   pruneAuditFiles,
   auditPolicyFromEnv,
   runWithRequestContext,
@@ -90,26 +106,45 @@ import {
   outboundTraceHeaders,
   inc,
   observeMs,
-  log,
   runProbes,
   probesFromConfig,
-  buildBackupManifest,
   redactDeep,
+  send as sendSafe,
+  sendBuffer as sendBufferSafe,
   securityHeaders,
   createIdentityResolver,
   createSessionStore,
+  createPendingTotp,
+  isPendingTotpExpired,
+  readBody as readBodySafe,
+  wrapAsyncRequestHandler,
+  createRateLimiter,
+  rateLimitKey,
+  SESSION_TTL_MS,
+  SESSION_HEADER,
 } from './lib/index.js';
 // v3.0: schema migration (in start())
-import { setServers as dnsSetServers, lookup as dnsLookup, resolve4 as dnsResolve4 } from 'node:dns';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { TYPE_SCHEMAS, getTypeSchema, defaultFieldsFor, validateFields } from './type-schemas.js';
-import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
+import { TYPE_SCHEMAS, validateFields } from './type-schemas.js';
+import { publicTemplateList } from './service-templates.js';
 import {
-  checkPathAllowed, canProxy, isServiceAllowed, clientNamesAllowedFor,
+  checkPathAllowed,
+  checkMethodAllowed,
+  normalizeProxyMethod,
+  canProxy as canProxyClient,
+  isServiceAllowed as isServiceAllowedClient,
+  clientNamesAllowedFor,
 } from './can-proxy.js';
 import {
-  issueClientCert, certFingerprint, readClientCertPem, readClientKeyPem,
-  deleteClientCertFiles, readCaCertPem, paths as certPaths,
+  issueClientCert,
+  readClientCertPem,
+  readClientKeyPem,
+  snapshotClientCertFiles,
+  restoreClientCertFiles,
+  deleteClientKeyFile,
+  deleteClientCertFiles,
+  readCaCertPem,
+  paths as certPaths,
 } from './cert-issuer.js';
 
 // Re-export the clients dir for the writable-probe helper.
@@ -120,21 +155,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ============================================================
 // Config & env
 // ============================================================
-const PORT           = parseInt(process.env.PORT || '8443', 10);
-const HOST           = process.env.HOST || process.env.BROKER_BIND || '127.0.0.1';
-const CONFIG_PATH    = process.env.CONFIG_PATH || resolvePath(__dirname, '../secrets/broker.yaml');
-const SECRETS_PATH   = process.env.SECRETS_PATH || resolvePath(__dirname, '../secrets/common.env');
+const PORT = parseInt(process.env.PORT || '8443', 10);
+const HOST = process.env.HOST || process.env.BROKER_BIND || '127.0.0.1';
+const CONFIG_PATH = process.env.CONFIG_PATH || resolvePath(__dirname, '../secrets/broker.yaml');
+const SECRETS_PATH = process.env.SECRETS_PATH || resolvePath(__dirname, '../secrets/common.env');
 // Phase 1.1.1: structured secrets (multi-field support). If this file doesn't
 // exist, broker auto-migrates from common.env on first start and writes here.
-const SECRETS_DETAIL_PATH = process.env.SECRETS_DETAIL_PATH || resolvePath(__dirname, '../secrets/secrets-detail.json');
-const PKI_DIR        = process.env.PKI_DIR || resolvePath(__dirname, '../pki');
-const AGE_KEY_FILE   = process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE;
-const AUDIT_DIR      = process.env.AUDIT_DIR || resolvePath(__dirname, '../audit');
-const TLS_CERT       = process.env.TLS_CERT || join(PKI_DIR, 'server/server.crt');
-const TLS_KEY        = process.env.TLS_KEY  || join(PKI_DIR, 'server/server.key');
-const TLS_CA         = process.env.TLS_CA   || join(PKI_DIR, 'ca/ca.crt');
-const TLS_CRL        = process.env.TLS_CRL  || join(PKI_DIR, 'ca/crl.pem');
-const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
+const SECRETS_DETAIL_PATH =
+  process.env.SECRETS_DETAIL_PATH || resolvePath(__dirname, '../secrets/secrets-detail.json');
+const PKI_DIR = process.env.PKI_DIR || resolvePath(__dirname, '../pki');
+const AGE_KEY_FILE = process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE;
+const AUDIT_DIR = process.env.AUDIT_DIR || resolvePath(__dirname, '../audit');
+const TLS_CERT = process.env.TLS_CERT || join(PKI_DIR, 'server/server.crt');
+const TLS_KEY = process.env.TLS_KEY || join(PKI_DIR, 'server/server.key');
+const TLS_CA = process.env.TLS_CA || join(PKI_DIR, 'ca/ca.crt');
+const TLS_CRL = process.env.TLS_CRL || join(PKI_DIR, 'ca/crl.pem');
+const RELOAD_TOKEN = process.env.RELOAD_TOKEN || randomUUID();
+// Secure default: private keys are returned once by enrollment/rotation and
+// immediately removed from the broker host. Compatibility retention must be
+// explicitly enabled and is surfaced to administrators.
+const RETAIN_CLIENT_PRIVATE_KEYS = process.env.BROKER_RETAIN_CLIENT_PRIVATE_KEYS === '1';
 
 console.log('============================================');
 console.log(`  Secret Broker v${BROKER_VERSION}`);
@@ -150,97 +190,13 @@ console.log(`  Audit dir:      ${AUDIT_DIR}`);
 console.log(`  Age key:        ${AGE_KEY_FILE || '(not set)'}`);
 console.log('============================================');
 
-// ============================================================
-// Sops loader: spawn sops --decrypt
-// ============================================================
+// Keep environment-specific wiring here; the implementation lives in lib/sops.js.
 function sopsDecrypt(filePath) {
-  return new Promise((resolve, reject) => {
-    if (!existsSync(filePath)) {
-      return reject(new Error(`File not found: ${filePath}`));
-    }
-    const env = { ...process.env };
-    if (AGE_KEY_FILE) env.SOPS_AGE_KEY_FILE = AGE_KEY_FILE;
-
-    // If a .sops.yaml is co-located, sops will use it. Otherwise we pass --age explicitly.
-    // Detect by looking for .sops.yaml in the file's directory or parents (up to repo root).
-    let dir = dirname(filePath);
-    const stops = [resolvePath(__dirname, '..'), resolvePath('/')];
-    let sopsConfigExists = false;
-    while (true) {
-      if (existsSync(join(dir, '.sops.yaml'))) { sopsConfigExists = true; break; }
-      if (stops.includes(dir) || dir === dirname(dir)) break;
-      dir = dirname(dir);
-    }
-
-    const args = ['--decrypt'];
-    // Always pass --age public key for resilience. SOPS will use whichever
-    // private key in SOPS_AGE_KEY_FILE matches. This avoids depending on
-    // .sops.yaml path_regex matching broker.yaml.
-    if (existsSync(AGE_KEY_FILE)) {
-      const pub = readFileSync(AGE_KEY_FILE, 'utf8').match(/public key: (\S+)/)?.[1];
-      if (pub) args.push('--age', pub);
-    }
-    args.push(filePath);
-
-    const child = spawn('sops', args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    let out = '', err = '';
-    child.stdout.on('data', d => out += d.toString());
-    child.stderr.on('data', d => err += d.toString());
-    child.on('error', e => reject(new Error(`sops spawn failed: ${e.message}. Is sops installed?`)));
-    child.on('close', code => {
-      if (code !== 0) return reject(new Error(`sops decrypt failed (code ${code}): ${err}`));
-      resolve(out);
-    });
-  });
+  return sopsDecryptSafe(filePath, { ageKeyFile: AGE_KEY_FILE });
 }
 
-// Atomic SOPS encrypt: write plaintext to .tmp, sops --encrypt --in-place, then rename.
-// Returns when the file is durably encrypted. If any step fails, the .tmp is left
-// on disk for forensics and the original file is untouched.
-//
-// IMPORTANT: tmp file must keep the same extension as the target (.env, .yaml, .json)
-// so .sops.yaml path_regex rules still match during the sops encrypt call.
 function sopsEncryptAtomic(targetPath, plaintext) {
-  return new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    if (AGE_KEY_FILE) env.SOPS_AGE_KEY_FILE = AGE_KEY_FILE;
-    // Build tmp path: /opt/x/common.env  ->  /opt/x/.common.env.tmp.123.456
-    // (dot-prefix + insert before extension so SOPS still sees the same extension)
-    const dir = dirname(targetPath);
-    const base = targetPath.slice(dir.length + 1);  // e.g. "common.env"
-    const dot = base.lastIndexOf('.');
-    const stem = dot > 0 ? base.slice(0, dot) : base;
-    const ext = dot > 0 ? base.slice(dot) : '';
-    const tmpPath = join(dir, `.${stem}.tmp.${process.pid}.${Date.now()}${ext}`);
-    try {
-      writeFileSync(tmpPath, plaintext, { encoding: 'utf8', mode: 0o600 });
-    } catch (e) {
-      return reject(new Error(`write tmp failed: ${e.message}`));
-    }
-    const args = ['--encrypt', '--in-place', tmpPath];
-    if (existsSync(AGE_KEY_FILE)) {
-      const pub = readFileSync(AGE_KEY_FILE, 'utf8').match(/public key: (\S+)/)?.[1];
-      if (pub) args.unshift('--age', pub);
-    }
-    const child = spawn('sops', args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    let err = '';
-    child.stderr.on('data', d => err += d.toString());
-    child.on('error', e => reject(new Error(`sops spawn failed: ${e.message}. Is sops installed?`)));
-    child.on('close', code => {
-      if (code !== 0) {
-        // leave tmp for forensics, but DON'T touch the original file
-        try { unlinkSync(tmpPath); } catch {}
-        return reject(new Error(`sops encrypt failed (code ${code}): ${err}; tmp cleaned at ${tmpPath}`));
-      }
-      try {
-        renameSync(tmpPath, targetPath);
-        resolve();
-      } catch (e) {
-        try { unlinkSync(tmpPath); } catch {}
-        reject(new Error(`rename tmp to target failed: ${e.message}; tmp cleaned`));
-      }
-    });
-  });
+  return sopsEncryptAtomicSafe(targetPath, plaintext, { ageKeyFile: AGE_KEY_FILE });
 }
 
 // ============================================================
@@ -251,7 +207,7 @@ let CONFIG = null;
 //   { type, description, fields: { [fieldName]: value }, created_at, updated_at, updated_by }
 // `type` is a key in type-schemas.js. `fields` is dynamic per type.
 // The legacy `common.env` is read-only on startup; writes go to secrets-detail.json.
-let SECRET_CACHE = new Map();
+const SECRET_CACHE = new Map();
 
 // Lazy factory: build read-api routes on first dispatch. The factory closes
 // over the live module state (CONFIG, SECRET_CACHE) so a config reload is
@@ -260,7 +216,7 @@ let _readApi = null;
 function readApiRoutes() {
   if (_readApi) return _readApi;
   _readApi = createReadApiRoutes({
-    config: CONFIG,
+    config: () => CONFIG,
     SECRET_CACHE,
     audit,
     canResolve,
@@ -281,15 +237,17 @@ async function loadConfig() {
   } else {
     console.log('[config] Decrypting broker.yaml via SOPS...');
   }
-  const yamlText = skipSops
-    ? readFileSync(CONFIG_PATH, 'utf8')
-    : await sopsDecrypt(CONFIG_PATH);
+  const yamlText = skipSops ? readFileSync(CONFIG_PATH, 'utf8') : await sopsDecrypt(CONFIG_PATH);
   const cfg = parseYaml(yamlText);
   if (!cfg || typeof cfg !== 'object') throw new Error('Invalid broker.yaml');
   cfg.services = cfg.services || {};
   cfg.clients = cfg.clients || {};
+  const validation = validateBrokerConfig(cfg);
+  if (!validation.ok) throw new Error('Broker configuration validation failed');
   CONFIG = cfg;
-  console.log(`[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`);
+  console.log(
+    `[config] Loaded: ${Object.keys(CONFIG.services).length} services, ${Object.keys(CONFIG.clients).length} clients`,
+  );
 }
 
 async function loadSecrets() {
@@ -305,11 +263,14 @@ async function loadSecrets() {
       for (const [name, entry] of Object.entries(obj.secrets || {})) {
         SECRET_CACHE.set(name, normalizeSecretEntry(name, entry));
       }
-      console.log(`[secrets] Loaded ${SECRET_CACHE.size} structured secrets from ${SECRETS_DETAIL_PATH}`);
+      console.log(
+        `[secrets] Loaded ${SECRET_CACHE.size} structured secrets from ${SECRETS_DETAIL_PATH}`,
+      );
       return;
     } catch (e) {
-      console.error(`[secrets] Failed to load ${SECRETS_DETAIL_PATH}: ${e.message}`);
-      // fall through to migration
+      console.error('[secrets] Existing structured store could not be loaded');
+      // Never replace a corrupt or encryption-failed existing store with empty state.
+      throw new Error('Structured secret store could not be loaded', { cause: e });
     }
   }
   // 2. Migrate from legacy common.env (one-time)
@@ -320,7 +281,9 @@ async function loadSecrets() {
     for (const [name, entry] of Object.entries(migrated)) {
       SECRET_CACHE.set(name, entry);
     }
-    console.log(`[secrets] Migrated ${SECRET_CACHE.size} secrets; persisting to ${SECRETS_DETAIL_PATH}`);
+    console.log(
+      `[secrets] Migrated ${SECRET_CACHE.size} secrets; persisting to ${SECRETS_DETAIL_PATH}`,
+    );
     await persistSecretsDetail();
     return;
   }
@@ -382,15 +345,21 @@ async function migrateFromCommonEnv() {
           type: 'aliyun_ak',
           description: '(migrated from common.env; please review)',
           fields: { access_key_id: entries[name], access_key_secret: entries[skName] },
-          created_at: now, updated_at: now, updated_by: 'migration',
+          created_at: now,
+          updated_at: now,
+          updated_by: 'migration',
         };
-        consumed.add(name); consumed.add(skName);
+        consumed.add(name);
+        consumed.add(skName);
       } else if (name === 'ALIYUN_ACCESS_KEY_ID' || name.endsWith('_ACCESS_KEY_ID')) {
         // ID without paired SECRET — treat as plain custom
         secrets[name] = {
-          type: 'custom', description: '(migrated)',
+          type: 'custom',
+          description: '(migrated)',
           fields: { value: entries[name] },
-          created_at: now, updated_at: now, updated_by: 'migration',
+          created_at: now,
+          updated_at: now,
+          updated_by: 'migration',
         };
         consumed.add(name);
       }
@@ -399,21 +368,34 @@ async function migrateFromCommonEnv() {
   // 2) Other keys: best-effort type guess
   for (const name of Object.keys(entries)) {
     if (consumed.has(name)) continue;
-    let type = 'custom', fieldKey = 'value';
-    if (/GITHUB/.test(name) || /_PAT$/.test(name)) { type = 'github_pat'; fieldKey = 'token'; }
-    else if (/OPENAI/.test(name)) { type = 'openai_key'; fieldKey = 'api_key'; }
-    else if (/JWT_SECRET$/.test(name)) { type = 'jwt_secret'; fieldKey = 'value'; }
-    else if (/_WEBHOOK$/.test(name)) {
+    let type = 'custom',
+      fieldKey = 'value';
+    if (/GITHUB/.test(name) || /_PAT$/.test(name)) {
+      type = 'github_pat';
+      fieldKey = 'token';
+    } else if (/OPENAI/.test(name)) {
+      type = 'openai_key';
+      fieldKey = 'api_key';
+    } else if (/JWT_SECRET$/.test(name)) {
+      type = 'jwt_secret';
+      fieldKey = 'value';
+    } else if (/_WEBHOOK$/.test(name)) {
       if (/SLACK/.test(name)) type = 'slack_webhook';
       else if (/DISCORD/.test(name)) type = 'discord_webhook';
       else if (/FEISHU|LARK/.test(name)) type = 'feishu_webhook';
       else if (/DINGTALK/.test(name)) type = 'dingtalk_webhook';
       fieldKey = 'url';
-    } else if (/SENTRY/.test(name)) { type = 'sentry_dsn'; fieldKey = 'dsn'; }
+    } else if (/SENTRY/.test(name)) {
+      type = 'sentry_dsn';
+      fieldKey = 'dsn';
+    }
     secrets[name] = {
-      type, description: '(migrated; please re-categorize via admin UI)',
+      type,
+      description: '(migrated; please re-categorize via admin UI)',
       fields: { [fieldKey]: entries[name] },
-      created_at: now, updated_at: now, updated_by: 'migration',
+      created_at: now,
+      updated_at: now,
+      updated_by: 'migration',
     };
   }
   return secrets;
@@ -434,7 +416,13 @@ async function persistConfig() {
   // the operator may have set by hand. Order: services, clients.
   const out = {};
   if (CONFIG.services) out.services = CONFIG.services;
-  if (CONFIG.clients)  out.clients  = CONFIG.clients;
+  if (CONFIG.clients)
+    out.clients = Object.fromEntries(
+      Object.entries(CONFIG.clients).map(([name, client]) => [
+        name,
+        Object.fromEntries(Object.entries(client).filter(([key]) => key !== '_pending_totp')),
+      ]),
+    );
   // Carry through any other top-level keys (version, etc.)
   for (const k of Object.keys(CONFIG)) {
     if (k === 'services' || k === 'clients') continue;
@@ -451,13 +439,18 @@ async function persistConfig() {
 // keep the round-trip stable without forcing every string to be quoted (which
 // would make broker.yaml unreadable to humans).
 function quoteYamlAmbiguousScalars(text) {
-  return text
-    // `key: 2025-08-12` (bare date) → `key: "2025-08-12"`
-    .replace(/^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2})(\s*$)/gm, '$1"$2"$3')
-    // `key: 12:34:56` (bare time) → `key: "12:34:56"`
-    .replace(/^(\s*[\w.-]+\s*:\s+)(\d{1,2}:\d{2}:\d{2})(\s*$)/gm, '$1"$2"$3')
-    // `key: 2025-08-12T10:00:00Z` (timestamp) → `key: "..."`
-    .replace(/^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(\s*$)/gm, '$1"$2"$3');
+  return (
+    text
+      // `key: 2025-08-12` (bare date) → `key: "2025-08-12"`
+      .replace(/^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2})(\s*$)/gm, '$1"$2"$3')
+      // `key: 12:34:56` (bare time) → `key: "12:34:56"`
+      .replace(/^(\s*[\w.-]+\s*:\s+)(\d{1,2}:\d{2}:\d{2})(\s*$)/gm, '$1"$2"$3')
+      // `key: 2025-08-12T10:00:00Z` (timestamp) → `key: "..."`
+      .replace(
+        /^(\s*[\w.-]+\s*:\s+)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(\s*$)/gm,
+        '$1"$2"$3',
+      )
+  );
 }
 
 // ============================================================
@@ -473,39 +466,11 @@ function quoteYamlAmbiguousScalars(text) {
 //       but is more complex; for now we ship (a) only and keep the door open
 //       for (b) via a future /:name/sign-csr endpoint.
 
-const ENROLLMENT_TTL_MS = 5 * 60 * 1000;  // 5 min
-const ENROLLMENTS = new Map();  // token -> { clientName, expiresAt, signed? }
-
 // Client name rule: same shape as services (URL path component) but allow
 // dots for legacy `client.foo` style names.
 const CLIENT_NAME_RE = /^[a-z][a-z0-9_.-]{0,63}$/;
 function isValidClientName(name) {
   return typeof name === 'string' && CLIENT_NAME_RE.test(name);
-}
-
-// Whitelist of client config fields the admin can set via the API. Cert
-// fingerprint is set by the enrollment flow, never by the API.
-function normalizeClientConfig(body) {
-  if (!body || typeof body !== 'object') return null;
-  const out = {};
-  if (body.password !== undefined) out.password = String(body.password);
-  if (body.password === null || body.password === '') delete out.password;  // explicit clear
-  if (body.allow_password_login !== undefined) out.allow_password_login = !!body.allow_password_login;
-  if (body.role !== undefined) {
-    if (!['admin', 'developer', 'readonly'].includes(String(body.role))) {
-      throw new Error(`Invalid role: ${body.role}`);
-    }
-    out.role = String(body.role);
-  }
-  if (body.allowed_resolve !== undefined) {
-    out.allowed_resolve = Array.isArray(body.allowed_resolve) ? body.allowed_resolve.map(String) : [];
-  }
-  if (body.allowed_proxy !== undefined) {
-    out.allowed_proxy = Array.isArray(body.allowed_proxy) ? body.allowed_proxy : [];
-  }
-  if (body.rate_limit !== undefined) out.rate_limit = String(body.rate_limit);
-  if (body.description !== undefined) out.description = String(body.description);
-  return out;
 }
 
 // Server-side last-seen timestamps. Not part of broker.yaml because it
@@ -541,6 +506,9 @@ function normalizeServiceConfig(body) {
   // Required
   if (body.type) out.type = String(body.type);
   if (body.upstream !== undefined) out.upstream = String(body.upstream);
+  if (body.allow_insecure_http !== undefined) {
+    out.allow_insecure_http = body.allow_insecure_http === true;
+  }
   // Optional metadata
   if (body.description !== undefined) out.description = String(body.description);
   if (body.region !== undefined) out.region = String(body.region);
@@ -562,16 +530,25 @@ function normalizeServiceConfig(body) {
   }
   // For type: header — extra fields
   if (body.header_name !== undefined) out.header_name = String(body.header_name);
-  if (body.header_value_template !== undefined) out.header_value_template = String(body.header_value_template);
+  if (body.header_value_template !== undefined) {
+    out.header_value_template = String(body.header_value_template);
+  }
+  // Method restrictions must survive the administrative API boundary.
+  // Preserve invalid shapes for validation rather than silently widening access.
+  if (body.allow_methods !== undefined) {
+    out.allow_methods = Array.isArray(body.allow_methods)
+      ? [...new Set(body.allow_methods.map((m) => (typeof m === 'string' ? m.toUpperCase() : m)))]
+      : body.allow_methods;
+  }
   // allow_paths: array of regex strings
   if (Array.isArray(body.allow_paths)) {
-    out.allow_paths = body.allow_paths.map(s => String(s));
+    out.allow_paths = body.allow_paths.map((s) => String(s));
   }
   // dashboard_actions: array of {label, method, path, query?}
   if (Array.isArray(body.dashboard_actions)) {
     out.dashboard_actions = body.dashboard_actions
-      .filter(a => a && typeof a === 'object' && a.label && a.method && a.path)
-      .map(a => ({
+      .filter((a) => a && typeof a === 'object' && a.label && a.method && a.path)
+      .map((a) => ({
         label: String(a.label),
         method: String(a.method).toUpperCase(),
         path: String(a.path),
@@ -588,7 +565,10 @@ function validateServiceConfig(name, cfg) {
   if (!isValidServiceName(name)) {
     errs.push('Invalid service name. Use [a-z][a-z0-9_-]{0,63}.');
   }
-  if (!cfg) { errs.push('Missing config body'); return errs; }
+  if (!cfg) {
+    errs.push('Missing config body');
+    return errs;
+  }
   if (!cfg.type) errs.push('Missing type');
   else {
     // Allow any type we have callUpstream support for. (We don't restrict to
@@ -598,7 +578,13 @@ function validateServiceConfig(name, cfg) {
   }
   if (!cfg.upstream && cfg.type !== 'ssh_proxy') errs.push('Missing upstream URL');
   if (cfg.upstream) {
-    try { new URL(cfg.upstream); } catch (e) { errs.push('upstream is not a valid URL'); }
+    try {
+      validateConfiguredUpstream(cfg.upstream, {
+        allowInsecureHttp: cfg.allow_insecure_http === true,
+      });
+    } catch (e) {
+      errs.push(`unsafe upstream: ${e.message}`);
+    }
   }
   if (cfg.type === 'header' && !cfg.header_value_template) {
     errs.push('type=header requires header_value_template (e.g. "Bearer {{secret.X.value}}")');
@@ -608,6 +594,16 @@ function validateServiceConfig(name, cfg) {
   }
   if (cfg.token_secret && !isValidSecretName(cfg.token_secret)) {
     errs.push(`token_secret "${cfg.token_secret}" is not a valid secret name`);
+  }
+  if (
+    cfg.allow_methods !== undefined &&
+    (!Array.isArray(cfg.allow_methods) ||
+      cfg.allow_methods.length === 0 ||
+      cfg.allow_methods.some(
+        (method) => typeof method !== 'string' || !normalizeProxyMethod(method),
+      ))
+  ) {
+    errs.push('allow_methods must be a non-empty array of supported HTTP methods');
   }
   return errs;
 }
@@ -637,11 +633,7 @@ function getSecretField(name, fieldName) {
 // v3.1 M5.5: Service ↔ Secret 联动 — call_service 前置检查
 // 单独模块 broker/service-secret-guard.js, 方便测试 + 复用
 // ============================================================
-import {
-  checkSecretForService,
-  clearSecretGuardCache,
-  guardHint,
-} from './service-secret-guard.js';
+import { checkSecretForService, guardHint } from './service-secret-guard.js';
 
 // ============================================================
 // Secret name validation
@@ -681,6 +673,8 @@ const {
   makeSession,
   getSession,
   deleteSession,
+  deleteSessionsForClient,
+  deleteSessionsForFingerprint,
   checkLoginLock,
   recordLoginFail,
   clearLoginLock,
@@ -692,68 +686,48 @@ const {
 // ============================================================
 const { adminSseKey, tryAcquireSseSlot, releaseSseSlot } = createSseCap();
 
-function getClientContext(socket) {
-  // Kept for back-compat with places that still pass req.socket.
-  // New code should use getIdentity(req) which handles both mTLS and session.
-  return getIdentity({ socket });
-}
-
 function canResolve(ctx, secretName) {
-  if (!ctx.client) return false;
-  if (ctx.client.role === 'admin') return true;
+  if (!ctx?.client) return false;
+  // API keys are delegated capabilities: key scope/allowlist is always the
+  // first boundary, even when the owning client is an admin.
+  if (ctx.apiKey && !canResolveSecret(ctx.apiKey, secretName)) return false;
+  if (ctx.client.role === 'admin' || (ctx.via === 'api_key' && ctx.ownerRole === 'admin')) {
+    return true;
+  }
   const allow = ctx.client.allowed_resolve || [];
   return checkPathAllowed(allow, secretName);
 }
 
-// ============================================================
-// Rate limit (in-memory, per-fingerprint)
-// ============================================================
-const RATE_BUCKETS = new Map();
-
-// timing-safe string compare (for password check)
-async function timingSafeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  if (a.length !== b.length) {
-    // still consume time on the longest length to avoid early-reject timing leak
-    let dummy = 0;
-    for (let i = 0; i < Math.max(a.length, b.length); i++) dummy |= 0;
-    return false;
-  }
-  let r = 0;
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return r === 0;
+function canProxy(ctx, serviceName, path, method = 'GET') {
+  if (!ctx?.client) return false;
+  if (ctx.apiKey && !canProxyService(ctx.apiKey, serviceName)) return false;
+  if (ctx.via === 'api_key' && ctx.ownerRole === 'admin') return true;
+  return canProxyClient(ctx, serviceName, path, method);
 }
 
+function isServiceAllowed(ctx, serviceName) {
+  if (!ctx?.client) return false;
+  if (ctx.apiKey && !canProxyService(ctx.apiKey, serviceName)) return false;
+  if (ctx.via === 'api_key' && ctx.ownerRole === 'admin') return true;
+  return isServiceAllowedClient(ctx, serviceName);
+}
+
+// ============================================================
+// Rate limit (in-memory, per identity)
+// ============================================================
+const checkClientRateLimit = createRateLimiter({ defaultLimit: '100/hour' });
+
 // v3.0: 密码验证智能 wrapper — 检测 stored 是否 hash，自动选 verify 函数
-// 兼容：plaintext / scrypt$... 两种格式
+// 兼容：plaintext / scrypt$... 两种格式。始终同步返回 boolean，避免调用方把
+// Promise 误当作认证成功（尤其是证书轮换 / TOTP / API Key 等敏感操作）。
 function verifyClientPassword(plaintext, stored) {
-  if (!stored) return false;
-  if (stored.startsWith('scrypt$')) {
-    return totpVerifyPassword(plaintext, stored);
-  }
-  // legacy: plaintext (v2.x 兼容)
-  return timingSafeEqual(plaintext, stored);
+  return verifyPasswordCompat(plaintext, stored);
 }
 
 function rateLimit(ctx) {
-  if (!ctx.client) return true;  // fail at canResolve/canProxy later
+  if (!ctx.client) return true; // fail at canResolve/canProxy later
   const limit = ctx.client.rate_limit || '100/hour';
-  if (limit === 'unlimited') return true;
-  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return true;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
-  const key = ctx.fp;
-  const now = Date.now();
-  const bucket = RATE_BUCKETS.get(key) || [];
-  const fresh = bucket.filter(t => now - t < windowMs);
-  if (fresh.length >= max) {
-    RATE_BUCKETS.set(key, fresh);
-    return false;
-  }
-  fresh.push(now);
-  RATE_BUCKETS.set(key, fresh);
-  return true;
+  return checkClientRateLimit(rateLimitKey(ctx), limit);
 }
 
 // ============================================================
@@ -779,43 +753,17 @@ function sessionCookieHeader(token, { clear = false } = {}) {
 }
 
 function send(res, status, body, extraHeaders = {}) {
-  if (res.headersSent || res.writableEnded) return;
-  const isJson = typeof body === 'object';
-  const payload = isJson ? JSON.stringify(body) : body;
-  const headers = {
-    'Content-Type': isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload, 'utf8'),
+  return sendSafe(res, status, body, {
     ...extraHeaders,
-  };
-  if (res.__exposeBrokerVersion && headers['X-Broker-Version'] === undefined) {
-    headers['X-Broker-Version'] = BROKER_VERSION;
-  }
-  res.writeHead(status, headers);
-  res.end(payload);
+    exposeVersion: extraHeaders.exposeVersion === true || res.__exposeBrokerVersion === true,
+  });
 }
 
+const bufferedMutationBodies = new WeakMap();
 function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    const MAX = 1024 * 1024;  // 1MB
-    req.on('data', c => {
-      size += c.length;
-      if (size > MAX) {
-        reject(new Error('Request body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      const buf = Buffer.concat(chunks).toString('utf8');
-      if (!buf) return resolve(null);
-      try { resolve(JSON.parse(buf)); }
-      catch { resolve({ _raw: buf }); }
-    });
-    req.on('error', reject);
-  });
+  return bufferedMutationBodies.has(req)
+    ? Promise.resolve(bufferedMutationBodies.get(req))
+    : readBodySafe(req);
 }
 
 function jsonError(res, status, msg) {
@@ -823,95 +771,20 @@ function jsonError(res, status, msg) {
   return send(res, status, { error: msg, status });
 }
 
-// Phase 1.3: minimal store-only zip writer (no compression). Used for the
-// client cert bundle. Avoids pulling in archiver / jszip as a new dep.
-// Format reference: https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
-//   local file header: 30 bytes + name + extra
-//   central dir entry: 46 bytes + name + extra + comment
-//   EOCD record:       22 bytes + comment
-function buildZip(files) {
-  const enc = (s) => Buffer.from(s, 'binary');
-  const now = new Date();
-  const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | (Math.floor(now.getSeconds() / 2) & 0x1f);
-  const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0xf) << 5) | (now.getDate() & 0x1f);
-  let offset = 0;
-  const localParts = [];
-  const centralParts = [];
-  for (const f of files) {
-    const nameBuf = enc(f.name);
-    const dataBuf = Buffer.from(f.data, 'utf8');
-    const crc = computeCrc32(dataBuf);
-    // Local file header (30 bytes)
-    const lh = Buffer.alloc(30);
-    lh.writeUInt32LE(0x04034b50, 0);   // signature
-    lh.writeUInt16LE(20, 4);           // version needed
-    lh.writeUInt16LE(0, 6);            // flags
-    lh.writeUInt16LE(0, 8);            // method (0 = stored)
-    lh.writeUInt16LE(dosTime, 10);
-    lh.writeUInt16LE(dosDate, 12);
-    lh.writeUInt32LE(crc, 14);
-    lh.writeUInt32LE(dataBuf.length, 18);  // compressed size
-    lh.writeUInt32LE(dataBuf.length, 22);  // uncompressed size
-    lh.writeUInt16LE(nameBuf.length, 26);
-    lh.writeUInt16LE(0, 28);           // extra
-    localParts.push(lh, nameBuf, dataBuf);
-    // Central dir entry (46 bytes)
-    const cd = Buffer.alloc(46);
-    cd.writeUInt32LE(0x02014b50, 0);   // signature
-    cd.writeUInt16LE(20, 4);           // version made by
-    cd.writeUInt16LE(20, 6);           // version needed
-    cd.writeUInt16LE(0, 8);            // flags
-    cd.writeUInt16LE(0, 10);           // method
-    cd.writeUInt16LE(dosTime, 12);
-    cd.writeUInt16LE(dosDate, 14);
-    cd.writeUInt32LE(crc, 16);
-    cd.writeUInt32LE(dataBuf.length, 20);
-    cd.writeUInt32LE(dataBuf.length, 24);
-    cd.writeUInt16LE(nameBuf.length, 28);
-    cd.writeUInt16LE(0, 30);           // extra
-    cd.writeUInt16LE(0, 32);           // comment
-    cd.writeUInt16LE(0, 34);           // disk
-    cd.writeUInt16LE(0, 36);           // internal attrs
-    cd.writeUInt32LE(0o100644, 38);   // external attrs (regular file, 0644)
-    cd.writeUInt32LE(offset, 42);      // local header offset
-    centralParts.push(cd, nameBuf);
-    offset += lh.length + nameBuf.length + dataBuf.length;
-  }
-  const local = Buffer.concat(localParts);
-  const central = Buffer.concat(centralParts);
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(0, 4);
-  eocd.writeUInt16LE(0, 6);
-  eocd.writeUInt16LE(files.length, 8);
-  eocd.writeUInt16LE(files.length, 10);
-  eocd.writeUInt32LE(central.length, 12);
-  eocd.writeUInt32LE(local.length, 16);
-  eocd.writeUInt16LE(0, 20);
-  return Buffer.concat([local, central, eocd]);
+function persistenceError(res) {
+  return jsonError(res, 500, 'Unable to persist configuration');
 }
 
-// Manual CRC32 (small tables; zlib.crc32 is in 22+). Only used as fallback.
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-function computeCrc32(buf) {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
+function restorePlainObject(target, snapshot) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, structuredClone(snapshot));
 }
 
 // ============================================================
 // Aliyun / Tencent IMDS + STS token (no long-lived AK needed)
 // ============================================================
 const IMDS_TIMEOUT_MS = 2000;
-const STS_CACHE = new Map();  // roleName -> { token, expiresAt }
+const STS_CACHE = new Map(); // roleName -> { token, expiresAt }
 
 async function _imdsFetch(url) {
   const ctl = new AbortController();
@@ -920,7 +793,9 @@ async function _imdsFetch(url) {
     const r = await fetch(url, { signal: ctl.signal });
     if (!r.ok) throw new Error(`IMDS ${r.status}`);
     return r;
-  } finally { clearTimeout(t); }
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 // Try to get the instance-attached RAM role name. Returns null if not on ECS.
@@ -931,7 +806,7 @@ async function getAliyunRamRole() {
     if (!txt || txt === 'Not Found' || txt.startsWith('<!')) return null;
     // IMDS sometimes returns the role name directly, sometimes JSON-wrapped.
     return txt.replace(/^"|"$/g, '');
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -940,7 +815,9 @@ async function getAliyunRamRole() {
 async function getAliyunStsToken(roleName) {
   const cached = STS_CACHE.get(roleName);
   if (cached && Date.now() < cached.expiresAt - 60_000) return cached;
-  const r = await _imdsFetch(`http://100.100.100.200/latest/meta-data/ram/security-credentials/${encodeURIComponent(roleName)}`);
+  const r = await _imdsFetch(
+    `http://100.100.100.200/latest/meta-data/ram/security-credentials/${encodeURIComponent(roleName)}`,
+  );
   const j = await r.json();
   if (j.Code && j.Code !== 'Success') throw new Error(`STS failed: ${j.Code} ${j.Message}`);
   const token = {
@@ -958,11 +835,15 @@ async function getAliyunCreds(credentialSource) {
   // credentialSource: "imds" | "sops" (default sops)
   if (credentialSource === 'imds') {
     const role = await getAliyunRamRole();
-    if (!role) throw new Error('IMDS: no RAM role attached to this instance. Run on ECS with instance profile.');
+    if (!role) {
+      throw new Error(
+        'IMDS: no RAM role attached to this instance. Run on ECS with instance profile.',
+      );
+    }
     return await getAliyunStsToken(role);
   }
   // SOPS-based: just return the AK/SK from the secret cache
-  return null;  // caller will fall back to getSecret()
+  return null; // caller will fall back to getSecret()
 }
 
 // ============================================================
@@ -973,10 +854,7 @@ import { createHmac } from 'node:crypto';
 
 function aliyunPercentEncode(s) {
   // Aliyun encoding: encodeURIComponent then replace !*()' with their hex
-  return encodeURIComponent(s)
-    .replace(/\+/g, '%20')
-    .replace(/\*/g, '%2A')
-    .replace(/%7E/g, '~');  // ~ 已经是 %7E 了，encodeURIComponent 会编码为 %7E
+  return encodeURIComponent(s).replace(/\+/g, '%20').replace(/\*/g, '%2A').replace(/%7E/g, '~'); // ~ 已经是 %7E 了，encodeURIComponent 会编码为 %7E
 }
 
 function aliyunV2Sign(method, params, accessKeySecret) {
@@ -984,14 +862,12 @@ function aliyunV2Sign(method, params, accessKeySecret) {
   const sortedKeys = Object.keys(params).sort();
   // 2. Build canonicalized query string
   const canonical = sortedKeys
-    .map(k => `${aliyunPercentEncode(k)}=${aliyunPercentEncode(params[k])}`)
+    .map((k) => `${aliyunPercentEncode(k)}=${aliyunPercentEncode(params[k])}`)
     .join('&');
   // 3. StringToSign
   const stringToSign = `${method}&${aliyunPercentEncode('/')}&${aliyunPercentEncode(canonical)}`;
   // 4. Sign
-  const signature = createHmac('sha1', `${accessKeySecret}&`)
-    .update(stringToSign)
-    .digest('base64');
+  const signature = createHmac('sha1', `${accessKeySecret}&`).update(stringToSign).digest('base64');
   return signature;
 }
 
@@ -1043,20 +919,38 @@ function getAliyunAction(path, serviceCfg, query) {
   return null;
 }
 
-
 async function callUpstream(serviceCfg, method, path, query, headers, body, opts = {}) {
+  const normalizedMethod = normalizeProxyMethod(method || 'GET');
+  if (!normalizedMethod) throw new Error(`Unsupported proxy HTTP method: ${String(method)}`);
+  if (!checkMethodAllowed(serviceCfg.allow_methods, normalizedMethod)) {
+    throw new Error(`HTTP method ${normalizedMethod} is not allowed for this service`);
+  }
+  method = normalizedMethod;
+
+  const upstreamBase = validateConfiguredUpstream(serviceCfg.upstream, {
+    allowInsecureHttp: serviceCfg.allow_insecure_http === true,
+  });
+
   // Resolve all secrets used by this service
   const injectHeaders = { ...(serviceCfg.inject_headers || {}) };
   let url = null;
 
-  if (serviceCfg.type === 'bearer' || serviceCfg.type === 'github_token' || serviceCfg.type === 'header') {
+  if (
+    serviceCfg.type === 'bearer' ||
+    serviceCfg.type === 'github_token' ||
+    serviceCfg.type === 'header'
+  ) {
     // Simple bearer/header auth: resolve a single secret and inject as header.
     // `name` is added by the admin service test endpoint; fall back to the
     // route-level name (passed via opts) for clarity in error messages.
     const svcNameForErr = serviceCfg.name || opts?.serviceName || '?';
     if (!serviceCfg.token_secret) throw new Error(`Service ${svcNameForErr} missing token_secret`);
     const token = getSecretField(serviceCfg.token_secret, serviceCfg.token_field);
-    if (!token) throw new Error(`Secret ${serviceCfg.token_secret} field=${serviceCfg.token_field || '(default)'} not loaded`);
+    if (!token) {
+      throw new Error(
+        `Secret ${serviceCfg.token_secret} field=${serviceCfg.token_field || '(default)'} not loaded`,
+      );
+    }
     if (serviceCfg.type === 'bearer') {
       injectHeaders['Authorization'] = `Bearer ${token}`;
     } else if (serviceCfg.type === 'github_token') {
@@ -1066,7 +960,9 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
       injectHeaders[serviceCfg.header_name || 'Authorization'] = tpl.replace('{{secret}}', token);
     }
     // Build URL: caller-provided path + query against upstream
-    url = new URL(path, serviceCfg.upstream);
+    url = resolveUpstreamUrl(upstreamBase.href, path, {
+      allowInsecureHttp: serviceCfg.allow_insecure_http === true,
+    });
     if (query && typeof query === 'object') {
       for (const [k, v] of Object.entries(query)) {
         if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
@@ -1082,8 +978,13 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
       // fall back to two separate legacy secrets (access_key_secret + access_secret_secret).
       if (serviceCfg.ak_secret) {
         const ak = getSecretField(serviceCfg.ak_secret, serviceCfg.ak_id_field || 'access_key_id');
-        const sk = getSecretField(serviceCfg.ak_secret, serviceCfg.ak_secret_field || 'access_key_secret');
-        if (!ak || !sk) throw new Error(`Aliyun secret ${serviceCfg.ak_secret} missing required fields`);
+        const sk = getSecretField(
+          serviceCfg.ak_secret,
+          serviceCfg.ak_secret_field || 'access_key_secret',
+        );
+        if (!ak || !sk) {
+          throw new Error(`Aliyun secret ${serviceCfg.ak_secret} missing required fields`);
+        }
         creds = { accessKeyId: ak, accessKeySecret: sk };
       } else {
         const ak = getSecretField(serviceCfg.access_key_secret, 'value');
@@ -1093,28 +994,47 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
       }
     }
     const action = getAliyunAction(path, serviceCfg, query);
-    if (!action) throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
+    if (!action) {
+      throw new Error('aliyun_v2 requires Action (set serviceCfg.action or pass ?Action=...)');
+    }
     const merged = mergeAliyunQuery(path, query);
     delete merged.Action;
     const apiVersion = aliyunRpcVersion({
-      serviceCfg, upstream: serviceCfg.upstream, path, query: merged,
+      serviceCfg,
+      upstream: serviceCfg.upstream,
+      path,
+      query: merged,
     });
     delete merged.Version;
-    url = buildAliyunSignedUrl(serviceCfg.upstream, action, merged, serviceCfg.region, creds, apiVersion);
+    url = buildAliyunSignedUrl(
+      upstreamBase.href,
+      action,
+      merged,
+      serviceCfg.region,
+      creds,
+      apiVersion,
+    );
   } else {
     throw new Error(`Unsupported service type: ${serviceCfg.type}`);
   }
 
+  // Also enforce service ACLs for administrative test/dashboard helpers.
+  if (!checkPathAllowed(serviceCfg.allow_paths, url.pathname)) {
+    throw new Error('Upstream path is not allowed for this service');
+  }
   // Build outgoing request
-  const outHeaders = {
+  const baseHeaders = {
     'User-Agent': `secret-broker/${BROKER_VERSION}`,
     ...outboundTraceHeaders({
       traceparent: typeof getTraceparent === 'function' ? getTraceparent() : undefined,
       requestId: typeof getRequestId === 'function' ? getRequestId() : undefined,
     }),
-    ...injectHeaders,
-    ...(headers || {}),
   };
+  const outHeaders = buildProxyRequestHeaders({
+    baseHeaders,
+    userHeaders: headers,
+    injectHeaders,
+  });
   // Host header 必须用 upstream 的 host，否则 upstream 验签会失败
   outHeaders['Host'] = url.host;
 
@@ -1152,44 +1072,48 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   } catch (e) {
     throw new Error(`${e.message} (UDP/53 blocked on this host; DoH over TCP/443 also failed)`);
   }
-  const timeoutHost = connectUrl.hostname === url.hostname
-    ? url.hostname
-    : `${url.hostname} via ${connectUrl.hostname}`;
+  const timeoutHost =
+    connectUrl.hostname === url.hostname
+      ? url.hostname
+      : `${url.hostname} via ${connectUrl.hostname}`;
   const upstreamResp = await new Promise((resolve, reject) => {
-    const req = requestLib({
-      protocol: connectUrl.protocol,
-      hostname: conn.hostname,
-      port: connectUrl.port || (isHttps ? 443 : 80),
-      method: method || 'GET',
-      path: connectUrl.pathname + connectUrl.search,
-      headers: outHeaders,
-      timeout: 15000,
-      ...(isHttps ? { servername: conn.servername } : {}),
-    }, resolve);
+    const req = requestLib(
+      {
+        protocol: connectUrl.protocol,
+        hostname: conn.hostname,
+        port: connectUrl.port || (isHttps ? 443 : 80),
+        method: method || 'GET',
+        path: connectUrl.pathname + connectUrl.search,
+        headers: outHeaders,
+        timeout: 15000,
+        ...(isHttps ? { servername: conn.servername } : {}),
+      },
+      resolve,
+    );
     req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error(
-      `Upstream timeout after 15s connecting to ${timeoutHost} (TCP/TLS idle — not a DNS failure)`,
-    )));
+    req.on('timeout', () =>
+      req.destroy(
+        new Error(
+          `Upstream timeout after 15s connecting to ${timeoutHost} (TCP/TLS idle — not a DNS failure)`,
+        ),
+      ),
+    );
     if (fetchOpts.body) req.write(fetchOpts.body);
     req.end();
   });
   const latency = Date.now() - start;
 
-  // Read response (https.request returns IncomingMessage with plain headers object)
-  const respHeaders = {};
-  for (const [k, v] of Object.entries(upstreamResp.headers)) {
-    respHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
-  }
-  // strip hop-by-hop
-  delete respHeaders['transfer-encoding'];
-  delete respHeaders['connection'];
-  delete respHeaders['keep-alive'];
-  delete respHeaders['content-encoding'];  // 避免 content-length mismatch
+  // Read response headers through the proxy boundary sanitizer. The response
+  // body is not auto-decompressed by https.request, so Content-Encoding and
+  // Content-Length remain valid and must be preserved.
+  const respHeaders = sanitizeProxyResponseHeaders(upstreamResp.headers);
 
-  // IncomingMessage has no .arrayBuffer(); collect from 'data' events.
-  const chunks = [];
-  for await (const chunk of upstreamResp) chunks.push(chunk);
-  const respBuf = Buffer.concat(chunks);
+  // Bound response buffering so a misbehaving or malicious upstream cannot
+  // exhaust broker memory. The limit is configurable but hard-capped.
+  const respBuf = await readLimitedResponseBody(
+    upstreamResp,
+    maxUpstreamResponseBytes(process.env),
+  );
   return {
     status: upstreamResp.statusCode,
     headers: respHeaders,
@@ -1201,881 +1125,1411 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
 // ============================================================
 // Route handler
 // ============================================================
+const configTransactions = createMutationGate();
 async function handle(req, res) {
+  const pathname = new URL(req.url || '/', 'https://broker.invalid').pathname;
+  const mutates =
+    !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
+    /^\/api\/v1\/(login|logout|me|api-keys|admin|reload|rotate)(?:\/|$)/.test(pathname) &&
+    !pathname.endsWith('/test') &&
+    pathname !== '/api/v1/healthcheck/run';
+  if (mutates) {
+    // Read bounded input before taking the transaction gate; slow uploaders
+    // must not hold the configuration lock.
+    bufferedMutationBodies.set(req, await readBodySafe(req));
+    return configTransactions.run(() => handleRequest(req, res));
+  }
+  await configTransactions.idle();
+  return handleRequest(req, res);
+}
+
+async function handleRequest(req, res) {
   return runWithRequestContext(req.headers || {}, async () => {
-  setResponseTraceHeaders(res);
-  if (rejectIfShuttingDown(globalThis.__brokerShuttingDown || (() => false), res, jsonError)) return;
-
-  const url = new URL(req.url, `https://${req.headers.host}`);
-  const m = req.method;
-  const p = url.pathname;
-  const t0 = Date.now();
-  const route = { method: m, pathname: p };
-
-  // Phase AF: modular request pipeline (public routes)
-  {
-    const publicDeps = {
-      send,
-      jsonError,
-      readBody,
-      version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : 'unknown',
-      secretCache: SECRET_CACHE,
-      config: CONFIG,
-      dashboardDir: join(__dirname, 'dashboard'),
-      requireSops: true,
-      runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
-      surface: 'public',
-      isLocal: isDirectLocalRequest(req),
-      ctx: getIdentity(req),
-    };
-    if (await handleHealth(req, res, route, publicDeps)) {
-      observeMs('broker_http_request_duration_ms', Date.now() - t0);
-      inc('broker_http_requests_total', 1, { route: p });
+    setResponseTraceHeaders(res);
+    if (rejectIfShuttingDown(globalThis.__brokerShuttingDown || (() => false), res, jsonError)) {
       return;
     }
-    if (handleStatic(req, res, route, publicDeps)) {
-      observeMs('broker_http_request_duration_ms', Date.now() - t0);
-      inc('broker_http_requests_total', 1, { route: p });
-      return;
-    }
-    if (handleMetrics(req, res, route, publicDeps)) {
-      observeMs('broker_http_request_duration_ms', Date.now() - t0);
-      return;
-    }
-  }
 
-  // Public /health + dashboard static are handled by the modular pipeline above.
-
-  // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
-  // Login must work from a browser that may not have a client cert installed.
-  // Security: password-only login requires the client to be explicitly marked
-  // `allow_password_login: true` in broker.yaml AND is protected by a
-  // per-client lockout (5 fails -> 15 min). mTLS remains the strong default.
-  if (m === 'POST' && p === '/api/v1/login') {
-    const body = await readBody(req) || {};
-    const password = body.password;
-    if (!password) return jsonError(res, 400, 'Missing {password}');
-    const ctx0 = getIdentity(req);
-    let targetClient = null, targetName = null, lockKey = null, via = 'mtls';
-    if (ctx0 && ctx0.via === 'mtls') {
-      if (!ctx0.client.password) return jsonError(res, 403, 'No password configured for this client');
-      targetClient = ctx0.client;
-      targetName = ctx0.clientName;
-      lockKey = `${targetName}|mtls`;
-    } else {
-      // password-only login: client name is required and must opt in
-      const clientName = (body.client || '').trim();
-      const c = clientName ? CONFIG.clients[clientName] : null;
-      if (!c || !c.allow_password_login) {
-        audit({ action: 'login', status: 'denied', reason: 'password_login_not_allowed', client: clientName || '(none)' });
-        return jsonError(res, 401, 'mTLS client certificate required; or pass {client} with allow_password_login: true');
-      }
-      targetClient = c;
-      targetName = clientName;
-      lockKey = `${clientName}|pw`;
-      via = 'password';
-    }
-    if (!checkLoginLock(lockKey)) {
-      audit({ action: 'login', status: 'denied', reason: 'lockout', client: lockKey });
-      return jsonError(res, 429, 'Too many failed login attempts. Locked until later.');
-    }
-    const ok = await verifyClientPassword(password, targetClient.password);
-    if (!ok) {
-      recordLoginFail(lockKey);
-      audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
-      return jsonError(res, 401, 'Bad password');
-    }
-    clearLoginLock(lockKey);
-
-    // v3.0: MFA 状态机 — 启 TOTP 的 client 必须二次验证
-    const fp = ctx0 ? ctx0.fp : null;
-    if (isMfaRequired(targetClient, via)) {
-      const mfaToken = createMfaPending(targetName, fp);
-      audit({ action: 'login', status: 'mfa_required', client: targetName, via });
-      return send(res, 200, {
-        ok: false,
-        mfa_required: true,
-        mfa_token: mfaToken,
-        expires_in: MFA_TOKEN_TTL_MS / 1000,
-        method: via,
+    const url = new URL(req.url, `https://${req.headers.host}`);
+    const m = req.method;
+    const p = url.pathname;
+    const t0 = Date.now();
+    const route = { method: m, pathname: p };
+    const rejectBrowserMutation = (action, { ctx = null, requireOrigin = false } = {}) => {
+      const browserCheck = checkTrustedBrowserMutation(req, { requireOrigin });
+      if (browserCheck.ok) return false;
+      audit({
+        action,
+        status: 'denied',
+        reason: browserCheck.reason,
+        cn: ctx?.cn,
+        fp: ctx?.fp,
+        method: m,
+        path: p,
+        origin: browserCheck.origin || '(missing)',
       });
-    }
-
-    const cn = ctx0 ? ctx0.cn : `${targetName}@web`;
-    const token = makeSession({ cn, fp, role: targetClient.role, clientName: targetName, cert: { subject: { CN: cn } }, client: targetClient });
-    audit({ action: 'login', status: 'ok', cn, client: targetName, via });
-    res.setHeader('Set-Cookie', sessionCookieHeader(token));
-    return send(res, 200, {
-      token,
-      expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-      cn,
-      role: targetClient.role,
-      via,
-    });
-  }
-
-  // ----- POST /api/v1/login/mfa: 提交 TOTP code 完成登录 -----
-  if (m === 'POST' && p === '/api/v1/login/mfa') {
-    const body = await readBody(req) || {};
-    const { mfa_token: mfaToken, code } = body;
-    if (!mfaToken || !code) return jsonError(res, 400, 'Missing {mfa_token, code}');
-    const pending = getMfaPending(mfaToken);
-    if (!pending) {
-      audit({ action: 'login_mfa', status: 'denied', reason: 'invalid_token' });
-      return jsonError(res, 401, 'Invalid or expired mfa_token');
-    }
-    const targetClient = CONFIG.clients[pending.clientName];
-    if (!targetClient) {
-      consumeMfaPending(mfaToken);
-      audit({ action: 'login_mfa', status: 'denied', reason: 'client_gone', client: pending.clientName });
-      return jsonError(res, 404, 'Client no longer exists');
-    }
-    const mfaResult = verifyMfaCode(targetClient, code);
-    if (!mfaResult.ok) {
-      audit({ action: 'login_mfa', status: 'denied', reason: 'bad_code', client: pending.clientName });
-      return jsonError(res, 401, 'Bad TOTP code or recovery code');
-    }
-    consumeMfaPending(mfaToken);
-    const cn = pending.fp ? `${pending.clientName}@mtls` : `${pending.clientName}@web`;
-    const token = makeSession({ cn, fp: pending.fp, role: targetClient.role, clientName: pending.clientName, cert: { subject: { CN: cn } }, client: targetClient });
-    audit({ action: 'login', status: 'ok', cn, client: pending.clientName, via: 'mfa', mfa_method: mfaResult.method });
-    res.setHeader('Set-Cookie', sessionCookieHeader(token));
-    return send(res, 200, {
-      token,
-      expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-      cn,
-      role: targetClient.role,
-      via: 'mfa',
-      mfa_method: mfaResult.method,
-    });
-  }
-
-  // ----- POST /api/v1/logout (drop session token) -----
-  if (m === 'POST' && p === '/api/v1/logout') {
-    const token = req.headers[SESSION_HEADER] || (req.headers.cookie || '').match(/broker_session=([^;]+)/)?.[1];
-    if (token) {
-      const s = SESSIONS.get(token);
-      if (s) audit({ action: 'logout', cn: s.cn, fp: s.fp, status: 'ok' });
-      deleteSession(token);
-    }
-    res.setHeader('Set-Cookie', sessionCookieHeader('', { clear: true }));
-    return send(res, 200, { logged_out: true });
-  }
-
-  // ----- Everything below needs auth (mTLS cert or session token) -----
-  const ctx = getIdentity(req);
-  if (!ctx || !ctx.certSubject) {
-    audit({ action: 'connect', status: 'denied', reason: 'no_client_cert', remote: req.socket.remoteAddress });
-    return jsonError(res, 401, 'mTLS client certificate required');
-  }
-  if (!ctx.client) {
-    audit({ action: 'connect', status: 'denied', reason: 'cert_not_registered', cn: ctx.cn, fp: ctx.fp, remote: req.socket.remoteAddress });
-    return jsonError(res, 403, `Client certificate not registered. CN=${ctx.cn} fp=${ctx.fp}`);
-  }
-  if (!rateLimit(ctx)) {
-    audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });
-    return jsonError(res, 429, 'Rate limit exceeded');
-  }
-  res.__exposeBrokerVersion = true;
-
-  // Authenticated ops health (version / sops / counts). Public GET /health is {status:ok} only.
-  if (m === 'GET' && p === '/api/v1/health') {
-    return send(res, 200, buildOpsHealth({
-      version: BROKER_VERSION,
-      secretCache: SECRET_CACHE,
-      config: CONFIG,
-    }));
-  }
-
-  // ============================================================
-  // v3.0: Self-service (我的资料) — 任何已登录 client 都能用
-  // ============================================================
-  // GET    /api/v1/me                      — 我的资料
-  // POST   /api/v1/me/change-password     — 改密码
-  // POST   /api/v1/me/rotate-cert          — 重发我的 cert
-  // GET    /api/v1/me/audit                — 我的活动 (audit log)
-  // POST   /api/v1/me/totp/setup           — 启 TOTP, 返回 otpauth + 10 个恢复码
-  // POST   /api/v1/me/totp/verify          — 验证 TOTP 正确性（setup 完必走）
-  // POST   /api/v1/me/totp/disable         — 关 TOTP
-  // GET    /api/v1/me/recovery-codes/remaining — 看还剩几个恢复码
-
-  // ----- GET /api/v1/me -----
-  if (m === 'GET' && p === '/api/v1/me') {
-    const c = ctx.client;
-    const cp = certPaths.clientPaths(ctx.clientName);
-    const certOnDisk = existsSync(cp.crt) && existsSync(cp.key);
-    return send(res, 200, {
-      name: ctx.clientName,
-      cn: ctx.cn,
-      role: c.role,
-      description: c.description || '',
-      allow_password_login: !!c.allow_password_login,
-      has_password: !!c.password,
-      password_set_at: c.password_set_at || null,
-      password_expires_at: c.password_expires_at || null,
-      totp_enabled: !!c.totp_secret,
-      totp_enabled_at: c.totp_enabled_at || null,
-      totp_recovery_codes_remaining: (c.totp_recovery_codes_hash || []).length,
-      preferred_2fa: c.preferred_2fa || (c.totp_secret ? 'totp' : 'none'),
-      cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
-      cert_present_on_disk: certOnDisk,
-      cert_expires_at: c.cert_expires_at || null,
-      last_password_change: c.last_password_change || null,
-      last_cert_rotation: c.last_cert_rotation || null,
-      rate_limit: c.rate_limit || '100/hour',
-    });
-  }
-
-  // ----- POST /api/v1/me/change-password -----
-  if (m === 'POST' && p === '/api/v1/me/change-password') {
-    const body = await readBody(req) || {};
-    const { old_password: oldPwd, new_password: newPwd } = body;
-    if (!oldPwd || !newPwd) return jsonError(res, 400, 'Missing {old_password, new_password}');
-    if (newPwd.length < 12) return jsonError(res, 400, 'new_password too short (min 12 chars)');
-    const c = ctx.client;
-    if (!c.password) return jsonError(res, 400, 'No password set for this client');
-    const oldOk = verifyClientPassword(oldPwd, c.password);
-    if (!oldOk) {
-      audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_old' });
-      return jsonError(res, 401, 'Old password incorrect');
-    }
-    c.password = hashPassword(newPwd);
-    c.password_set_at = new Date().toISOString();
-    c.last_password_change = c.password_set_at;
-    try {
-      await persistConfig();
-    } catch (e) {
-      audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'me_change_password', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
-    return send(res, 200, { ok: true, password_set_at: c.password_set_at });
-  }
-
-  // ----- POST /api/v1/me/rotate-cert -----
-  // v3.0: 重发自己的 cert（要当前 TOTP 验证或密码）
-  if (m === 'POST' && p === '/api/v1/me/rotate-cert') {
-    const body = await readBody(req) || {};
-    const verify = body.verify;  // TOTP code 或 密码
-    if (!verify) return jsonError(res, 400, 'Missing {verify}');
-    const c = ctx.client;
-    // 验证：TOTP 优先，fallback 密码
-    let verified = false;
-    if (/^\d{6}$/.test(verify) && c.totp_secret) {
-      const mfaResult = verifyMfaCode(c, verify);
-      if (mfaResult.ok) verified = true;
-    }
-    if (!verified && c.password) {
-      verified = verifyClientPassword(verify, c.password);
-    }
-    if (!verified) {
-      audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_verify' });
-      return jsonError(res, 401, 'Invalid TOTP code or password');
-    }
-    if (!clientsDirWritable()) {
-      return jsonError(res, 503, 'pki/clients/ is not writable; issue cert out-of-band');
-    }
-    let cert;
-    try { cert = await issueAndPersist(ctx.clientName); }
-    catch (e) {
-      audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Issue failed: ${e.message}`);
-    }
-    c.cert_expires_at = new Date(Date.now() + 90 * 86400 * 1000).toISOString();  // 90 天
-    c.last_cert_rotation = c.cert_expires_at;
-    try { await persistConfig(); } catch (e) { /* cert 已在 issueAndPersist 持久化了 */ }
-    audit({ action: 'me_rotate_cert', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
-    return send(res, 200, {
-      ok: true,
-      name: ctx.clientName,
-      fingerprint_sha256: cert.fingerprint_sha256,
-      cert_pem: cert.cert_pem,
-      key_pem: cert.key_pem,
-      cert_expires_at: c.cert_expires_at,
-      warning: 'key_pem is a SECRET. Save it now — broker will not return it again.',
-    });
-  }
-
-  // ----- GET /api/v1/me/audit -----
-  if (m === 'GET' && p === '/api/v1/me/audit') {
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 1000);
-    const since = url.searchParams.get('since');
-    const lines = readAuditFiltered({ fp: ctx.fp, since, limit });
-    return send(res, 200, { events: lines, count: lines.length, fp: ctx.fp });
-  }
-
-  // ----- POST /api/v1/me/totp/setup -----
-  // 启 TOTP: 要当前密码 (一次性验证)，返 otpauth URL + 10 个恢复码
-  // 进入"待激活"状态，必须 /totp/verify 一次正确码才正式启用
-  if (m === 'POST' && p === '/api/v1/me/totp/setup') {
-    const body = await readBody(req) || {};
-    const { password } = body;
-    if (!password) return jsonError(res, 400, 'Missing {password}');
-    const c = ctx.client;
-    if (!c.password) return jsonError(res, 400, 'No password set; cannot setup TOTP');
-    if (!verifyClientPassword(password, c.password)) {
-      audit({ action: 'me_totp_setup', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_password' });
-      return jsonError(res, 401, 'Password incorrect');
-    }
-    if (c.totp_secret) {
-      return jsonError(res, 409, 'TOTP already enabled; disable first');
-    }
-    const secret = generateSecret();
-    const recoveryCodes = generateRecoveryCodes();
-    const recoveryHashes = recoveryCodes.map(hashRecoveryCode);
-    // 暂存到"待激活"字段（不写入 totp_secret 主字段，直到 verify 成功）
-    c._pending_totp = {
-      secret,
-      recovery_hashes: recoveryHashes,
-      recovery_codes_plain: recoveryCodes,  // 只这一次返给用户
-      setup_at: new Date().toISOString(),
+      jsonError(res, 403, 'Browser request origin is not trusted');
+      return true;
     };
-    audit({ action: 'me_totp_setup', cn: ctx.cn, fp: ctx.fp, status: 'pending' });
-    return send(res, 200, {
-      ok: true,
-      otpauth_url: buildOtpauthURL(ctx.clientName, 'SecretBroker', secret),
-      secret,  // 让用户能手动输入 (无 App 也能登)
-      recovery_codes: recoveryCodes,  // 仅此一次
-      recovery_codes_remaining: recoveryCodes.length,
-      next_step: 'POST /api/v1/me/totp/verify with a TOTP code to activate',
-    });
-  }
 
-  // ----- POST /api/v1/me/totp/verify -----
-  // setup 后必须 verify 一次才正式启用
-  if (m === 'POST' && p === '/api/v1/me/totp/verify') {
-    const body = await readBody(req) || {};
-    const { code } = body;
-    if (!code) return jsonError(res, 400, 'Missing {code}');
-    const c = ctx.client;
-    if (!c._pending_totp) return jsonError(res, 400, 'No pending TOTP setup; call /totp/setup first');
-    const ok = verifyTotpFn(c._pending_totp.secret, code);
-    if (!ok) {
-      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_code' });
-      return jsonError(res, 401, 'TOTP code does not match');
-    }
-    // 激活：pending → 正式字段
-    c.totp_secret = c._pending_totp.secret;
-    c.totp_enabled_at = new Date().toISOString();
-    c.totp_recovery_codes_hash = c._pending_totp.recovery_hashes;
-    c.preferred_2fa = 'totp';
-    delete c._pending_totp;
-    try { await persistConfig(); }
-    catch (e) {
-      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
-    return send(res, 200, {
-      ok: true,
-      totp_enabled_at: c.totp_enabled_at,
-      recovery_codes_remaining: c.totp_recovery_codes_hash.length,
-    });
-  }
-
-  // ----- POST /api/v1/me/totp/disable -----
-  // 关 TOTP 要当前 TOTP code 或 恢复码
-  if (m === 'POST' && p === '/api/v1/me/totp/disable') {
-    const body = await readBody(req) || {};
-    const { code } = body;
-    if (!code) return jsonError(res, 400, 'Missing {code}');
-    const c = ctx.client;
-    if (!c.totp_secret) return jsonError(res, 400, 'TOTP not enabled');
-    const mfaResult = verifyMfaCode(c, code);
-    if (!mfaResult.ok) {
-      audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_code' });
-      return jsonError(res, 401, 'TOTP code or recovery code invalid');
-    }
-    delete c.totp_secret;
-    delete c.totp_enabled_at;
-    delete c.totp_recovery_codes_hash;
-    c.preferred_2fa = 'none';
-    try { await persistConfig(); }
-    catch (e) {
-      audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'me_totp_disable', cn: ctx.cn, fp: ctx.fp, status: 'ok', mfa_method: mfaResult.method });
-    return send(res, 200, { ok: true, totp_disabled: true });
-  }
-
-  // ----- GET /api/v1/me/recovery-codes/remaining -----
-  if (m === 'GET' && p === '/api/v1/me/recovery-codes/remaining') {
-    const c = ctx.client;
-    return send(res, 200, {
-      remaining: (c.totp_recovery_codes_hash || []).length,
-      warning: c.totp_recovery_codes_hash && c.totp_recovery_codes_hash.length < 3
-        ? 'Few recovery codes left. Consider re-setup.'
-        : undefined,
-    });
-  }
-
-  // ============================================================
-  // v3.0 M2: API Key 管理 (admin + self)
-  // ============================================================
-  // GET    /api/v1/api-keys                 — 列表 (admin: 全部; self: 自己的)
-  // POST   /api/v1/api-keys                 — 创建 (需 TOTP, admin 或 self)
-  // GET    /api/v1/api-keys/:id             — 详情
-  // DELETE /api/v1/api-keys/:id            — 撤销 (需 TOTP)
-  // GET    /api/v1/api-keys/:id/usage       — 最近 100 次使用 (admin only)
-  //
-  // 静态路由必须先于动态路由
-
-  // ----- GET /api/v1/api-keys -----
-  if (m === 'GET' && p === '/api/v1/api-keys') {
-    const opts = ctx.client.role === 'admin' ? {} : { clientOnly: ctx.clientName };
-    return send(res, 200, { keys: listApiKeysFn(CONFIG.api_keys, opts) });
-  }
-
-  // ----- POST /api/v1/api-keys -----
-  if (m === 'POST' && p === '/api/v1/api-keys') {
-    const body = await readBody(req) || {};
-    const name = (body.name || '').trim();
-    if (!name) return jsonError(res, 400, 'Missing {name}');
-    // 创建者 = 自己 (admin 可指定 client)
-    const targetClient = body.client && ctx.client.role === 'admin'
-      ? body.client : ctx.clientName;
-    if (!CONFIG.clients[targetClient]) {
-      return jsonError(res, 400, `Unknown client: ${targetClient}`);
-    }
-    // 二次验证: 当前 TOTP code (强制)
-    const verifyCode = body.verify;
-    if (!verifyCode) return jsonError(res, 400, 'Missing {verify} (TOTP code)');
-    // self 验证: 自己的 totp
-    let verified = false;
-    if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
-      const mfaR = verifyMfaCode(ctx.client, verifyCode);
-      if (mfaR.ok) verified = true;
-    }
-    // admin 没 TOTP 时允许用密码
-    if (!verified && ctx.client.role === 'admin' && ctx.client.password) {
-      verified = verifyClientPassword(verifyCode, ctx.client.password);
-    }
-    if (!verified) {
-      audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_verify' });
-      return jsonError(res, 401, 'Invalid TOTP code or password');
-    }
-    const opts = {
-      scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
-      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
-      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
-      rate_limit: body.rate_limit,
-      ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
-      ttl_ms: body.ttl_seconds ? body.ttl_seconds * 1000 : undefined,
-      created_by: ctx.clientName,
-    };
-    const r = createApiKeyFn(CONFIG.api_keys, name, targetClient, opts);
-    try { await persistConfig(); } catch (e) {
-      // 回滚
-      const idx = CONFIG.api_keys.findIndex(k => k.id === r.key_obj.id);
-      if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
-      audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, name, client: targetClient, status: 'ok' });
-    return send(res, 200, {
-      ok: true,
-      key: r.key_obj,    // public view
-      secret: r.secret,  // 仅此一次返回
-      warning: 'secret will not be shown again. Save it now.',
-    });
-  }
-
-  // ----- GET /api/v1/api-keys/:id (静态优先, 必须在 :id/usage 之前) -----
-  const apiKeyMatch = p.match(/^\/api\/v1\/api-keys\/([a-z0-9]{16})$/);
-  const apiKeyUsageMatch = p.match(/^\/api\/v1\/api-keys\/([a-z0-9]{16})\/usage$/);
-  if (m === 'GET' && apiKeyMatch && apiKeyMatch[1]) {
-    const id = apiKeyMatch[1];
-    const k = CONFIG.api_keys.find(x => x.id === id);
-    if (!k) return jsonError(res, 404, `API key ${id} not found`);
-    if (ctx.client.role !== 'admin' && k.client !== ctx.clientName) {
-      return jsonError(res, 403, 'Not your API key');
-    }
-    return send(res, 200, { key: publicViewFn(k) });
-  }
-
-  // ----- DELETE /api/v1/api-keys/:id -----
-  if (m === 'DELETE' && apiKeyMatch && apiKeyMatch[1]) {
-    const id = apiKeyMatch[1];
-    const k = CONFIG.api_keys.find(x => x.id === id);
-    if (!k) return jsonError(res, 404, `API key ${id} not found`);
-    if (ctx.client.role !== 'admin' && k.client !== ctx.clientName) {
-      return jsonError(res, 403, 'Not your API key');
-    }
-    const body = await readBody(req) || {};
-    const verifyCode = body.verify;
-    if (!verifyCode) return jsonError(res, 400, 'Missing {verify}');
-    let verified = false;
-    if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
-      const mfaR = verifyMfaCode(ctx.client, verifyCode);
-      if (mfaR.ok) verified = true;
-    }
-    if (!verified && ctx.client.role === 'admin' && ctx.client.password) {
-      verified = verifyClientPassword(verifyCode, ctx.client.password);
-    }
-    if (!verified) {
-      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'denied', reason: 'bad_verify' });
-      return jsonError(res, 401, 'Invalid TOTP code or password');
-    }
-    const r = revokeApiKeyFn(CONFIG.api_keys, id, ctx.clientName);
-    if (!r.ok) {
-      return jsonError(res, 400, r.reason);
-    }
-    try { await persistConfig(); } catch (e) {
-      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'ok' });
-    return send(res, 200, { ok: true, id, revoked_at: k.revoked_at });
-  }
-
-  // ----- GET /api/v1/api-keys/:id/usage -----
-  if (m === 'GET' && apiKeyUsageMatch && apiKeyUsageMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const id = apiKeyUsageMatch[1];
-    const k = CONFIG.api_keys.find(x => x.id === id);
-    if (!k) return jsonError(res, 404, `API key ${id} not found`);
-    // 查 audit log 按 cn=clientName + action=proxy 过滤
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 1000);
-    const lines = readAuditFiltered({ fp: k.id ? `apikey:${k.id}` : null, since: null, limit });
-    return send(res, 200, { id, name: k.name, use_count: k.use_count, last_used_at: k.last_used_at, events: lines });
-  }
-
-  // ============================================================
-  // v3.0 M3.3: Master Key (给 MCP Server / OpenClaw auto-refresh 用)
-  // ============================================================
-  // POST /api/v1/api-keys/master          — 创建 master key (admin + TOTP)
-  // GET  /api/v1/api-keys/master          — 列出所有 master key (admin)
-  // POST /api/v1/api-keys/issue-child     — 用 master key 创建子 key (api_key with can_create_child)
-
-  // ----- POST /api/v1/api-keys/master -----
-  if (m === 'POST' && p === '/api/v1/api-keys/master') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const body = await readBody(req) || {};
-    const name = (body.name || '').trim();
-    if (!name) return jsonError(res, 400, 'Missing {name}');
-    // TOTP 强制
-    const verifyCode = body.verify;
-    if (!verifyCode) return jsonError(res, 400, 'Missing {verify} (TOTP code)');
-    let verified = false;
-    if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
-      if (verifyMfaCode(ctx.client, verifyCode).ok) verified = true;
-    }
-    if (!verified && ctx.client.password) {
-      verified = verifyClientPassword(verifyCode, ctx.client.password);
-    }
-    if (!verified) {
-      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'bad_verify' });
-      return jsonError(res, 401, 'Invalid TOTP code or password');
-    }
-    const { id, secret, key_obj } = generateMasterKey(name, ctx.clientName, {
-      default_child_ttl_seconds: body.default_child_ttl_seconds,
-      child_scopes: Array.isArray(body.child_scopes) ? body.child_scopes : undefined,
-      rate_limit: body.rate_limit,
-      ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
-      ttl_ms: body.ttl_ms,
-      created_by: ctx.clientName,
-    });
-    CONFIG.api_keys.push(key_obj);
-    try { await persistConfig(); } catch (e) {
-      const idx = CONFIG.api_keys.findIndex(x => x.id === id);
-      if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
-      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'ok', id });
-    return send(res, 200, {
-      ok: true,
-      key: publicViewFn(key_obj),
-      secret,
-      warning: 'Master key will not be shown again. Save it now. Use POST /api/v1/api-keys/issue-child to mint short-lived child keys.',
-    });
-  }
-
-  // ----- GET /api/v1/api-keys/master -----
-  if (m === 'GET' && p === '/api/v1/api-keys/master') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const masters = (CONFIG.api_keys || []).filter(k => k.is_master);
-    return send(res, 200, { keys: masters.map(publicViewFn) });
-  }
-
-  // ----- POST /api/v1/api-keys/issue-child -----
-  if (m === 'POST' && p === '/api/v1/api-keys/issue-child') {
-    // 必须用 API Key (Bearer) + is_master + can_create_child
-    if (ctx.via !== 'api_key') {
-      return jsonError(res, 401, 'This endpoint requires Master API Key (Authorization: Bearer ...)');
-    }
-    const master = ctx.apiKey;
-    const check = canCreateChild(master);
-    if (!check.ok) {
-      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: check.reason });
-      return jsonError(res, 403, `Master key cannot create child: ${check.reason}`);
-    }
-    const body = await readBody(req) || {};
-    const name = (body.name || '').trim() || `child-${Date.now()}`;
-    const r = createChildKey(CONFIG.api_keys, master, name, {
-      scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
-      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
-      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
-      rate_limit: body.rate_limit,
-      ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : undefined,
-      ttl_seconds: body.ttl_seconds ? parseInt(body.ttl_seconds, 10) : undefined,
-    });
-    if (!r.ok) {
-      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, status: 'error', reason: r.reason });
-      return jsonError(res, 400, `Cannot create child: ${r.reason}`);
-    }
-    try { await persistConfig(); } catch (e) {
-      const idx = CONFIG.api_keys.findIndex(x => x.id === r.key_obj.id);
-      if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
-      audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'issue_child', cn: ctx.cn, fp: ctx.fp, name, child_id: r.key_obj.id, status: 'ok' });
-    return send(res, 200, {
-      ok: true,
-      key: r.key_obj,
-      secret: r.secret,
-      warning: 'Child key will not be shown again. It will expire in ttl_seconds.',
-      parent_master_id: master.id,
-    });
-  }
-
-  // V4.1.1: Read-only API routes (identity, services, secrets, secrets/resolve)
-  // extracted to broker/routes/read-api.js for testability.
-  // The routes are constructed lazily on first use because they close over
-  // module-level state (CONFIG, SECRET_CACHE, audit, ...) that may be reloaded.
-  if (m === 'GET' || (m === 'POST' && p === '/api/v1/secrets/resolve')) {
-    if (await readApiRoutes().dispatch(req, res, { method: m, pathname: p }, ctx)) return;
-  }
-
-  // ============================================================
-  // Admin: Secrets CRUD (Phase 1.1.1)
-  // All endpoints below require admin role.
-  // Storage: secrets-detail.json (SOPS-encrypted JSON, structured per-type)
-  // Body shapes:
-  //   POST: { name, type, description?, fields: { ... } }
-  //   PUT:  { type?, description?, fields?: { ... } }
-  //   GET:  returns full entry { name, type, description, fields, created_at, ... }
-  // ============================================================
-
-  // ============================================================
-  // v3.0 M4: 凭据自检与告警
-  // ============================================================
-  // GET  /api/v1/healthcheck/status    — 看最新一次自检结果
-  // POST /api/v1/healthcheck/run       — 手动触发 (admin)
-  // ============================================================
-
-  // ----- GET /api/v1/healthcheck/status -----
-  if (m === 'GET' && p === '/api/v1/healthcheck/status') {
-    const s = healthcheckGetStatus();
-    return send(res, 200, s);
-  }
-
-  // ----- POST /api/v1/healthcheck/run (admin) -----
-  if (m === 'POST' && p === '/api/v1/healthcheck/run') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    // v3.0 M5: upstream 模式决定走 broker 本地 (默认) 或 mcp-server (出网绕过)
-    // 配置: broker.yaml healthcheck: { upstream: 'mcp_server'|'local', mcp_server_url: 'http://127.0.0.1:3001' }
-    const hcCfg = CONFIG.healthcheck || {};
-    const upstream = hcCfg.upstream || 'local';
-    const mcpUrl = hcCfg.mcp_server_url || 'http://127.0.0.1:3001';
-    try {
-      let r;
-      if (upstream === 'mcp_server') {
-        r = await healthcheckRunAllViaMcp(mcpUrl);
-      } else {
-        // local: 返 entry 完整 (type + fields + description), 让 healthcheck 按 type-schemas 抽字段
-        const getSecrets = () => {
-          const out = {};
-          for (const [name, entry] of SECRET_CACHE) {
-            out[name] = { type: entry.type, fields: entry.fields || {}, description: entry.description || '' };
-          }
-          return out;
-        };
-        r = await healthcheckRunAll(getSecrets);
+    // Phase AF: modular request pipeline (public routes)
+    {
+      const publicDeps = {
+        send,
+        jsonError,
+        readBody,
+        version: typeof BROKER_VERSION !== 'undefined' ? BROKER_VERSION : 'unknown',
+        secretCache: SECRET_CACHE,
+        config: CONFIG,
+        dashboardDir: join(__dirname, 'dashboard'),
+        requireSops: true,
+        runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
+        surface: 'public',
+        isLocal: isDirectLocalRequest(req),
+        ctx: getIdentity(req),
+      };
+      if (await handleHealth(req, res, route, publicDeps)) {
+        observeMs('broker_http_request_duration_ms', Date.now() - t0);
+        inc('broker_http_requests_total', 1, { route: p });
+        return;
       }
-      // 同步写 audit
-      for (const [name, c] of Object.entries(r.checks)) {
-        audit({
-          action: 'healthcheck',
-          cn: ctx.cn,
-          fp: ctx.fp,
-          secret: name,
-          status: c.status,
-          detail: c.detail,
-          latency_ms: c.latency_ms,
+      if (handleStatic(req, res, route, publicDeps)) {
+        observeMs('broker_http_request_duration_ms', Date.now() - t0);
+        inc('broker_http_requests_total', 1, { route: p });
+        return;
+      }
+      if (handleMetrics(req, res, route, publicDeps)) {
+        observeMs('broker_http_request_duration_ms', Date.now() - t0);
+        return;
+      }
+    }
+
+    // Public /health + dashboard static are handled by the modular pipeline above.
+
+    // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
+    // Login must work from a browser that may not have a client cert installed.
+    // Security: password-only login requires the client to be explicitly marked
+    // `allow_password_login: true` in broker.yaml AND is protected by a
+    // per-client lockout (5 fails -> 15 min). mTLS remains the strong default.
+    if (m === 'POST' && p === '/api/v1/login') {
+      if (rejectBrowserMutation('login_origin')) return;
+      const body = (await readBody(req)) || {};
+      const password = body.password;
+      if (!password) return jsonError(res, 400, 'Missing {password}');
+      const ctx0 = getIdentity(req);
+      let targetClient = null,
+        targetName = null,
+        lockKey = null,
+        via = 'mtls';
+      if (ctx0 && (ctx0.via === 'mtls' || ctx0.via === 'mtls-header')) {
+        if (!ctx0.client.password) {
+          return jsonError(res, 403, 'No password configured for this client');
+        }
+        targetClient = ctx0.client;
+        targetName = ctx0.clientName;
+        lockKey = `${targetName}|mtls`;
+      } else {
+        // password-only login: client name is required and must opt in
+        const clientName = (body.client || '').trim();
+        const c = clientName ? CONFIG.clients[clientName] : null;
+        if (!c || !c.allow_password_login) {
+          audit({
+            action: 'login',
+            status: 'denied',
+            reason: 'password_login_not_allowed',
+            client: clientName || '(none)',
+          });
+          return jsonError(
+            res,
+            401,
+            'mTLS client certificate required; or pass {client} with allow_password_login: true',
+          );
+        }
+        targetClient = c;
+        targetName = clientName;
+        lockKey = `${clientName}|pw`;
+        via = 'password';
+      }
+      if (!checkLoginLock(lockKey)) {
+        audit({ action: 'login', status: 'denied', reason: 'lockout', client: lockKey });
+        return jsonError(res, 429, 'Too many failed login attempts. Locked until later.');
+      }
+      const ok = await verifyClientPassword(password, targetClient.password);
+      if (!ok) {
+        recordLoginFail(lockKey);
+        audit({ action: 'login', status: 'denied', reason: 'bad_password', client: lockKey });
+        return jsonError(res, 401, 'Bad password');
+      }
+      clearLoginLock(lockKey);
+
+      // v3.0: MFA 状态机 — 启 TOTP 的 client 必须二次验证
+      const fp = via === 'mtls' ? ctx0.fp : null;
+      if (isMfaRequired(targetClient, via)) {
+        const mfaToken = createMfaPending(targetName, fp, {
+          securityBinding: mfaClientBinding(targetClient),
+        });
+        audit({ action: 'login', status: 'mfa_required', client: targetName, via });
+        return send(res, 200, {
+          ok: false,
+          mfa_required: true,
+          mfa_token: mfaToken,
+          expires_in: MFA_TOKEN_TTL_MS / 1000,
+          method: via,
         });
       }
-      return send(res, 200, r);
-    } catch (e) {
-      return jsonError(res, 500, `healthcheck failed: ${e.message}`);
-    }
-  }
 
-  // ----- GET /api/v1/admin/secrets -----
-  if (m === 'GET' && p === '/api/v1/admin/secrets') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const out = [];
-    for (const [name, entry] of SECRET_CACHE.entries()) {
-      out.push({
-        name,
-        type: entry.type || 'custom',
-        description: entry.description || '',
-        fields: entry.fields || {},
-        created_at: entry.created_at || null,
-        updated_at: entry.updated_at || null,
-        updated_by: entry.updated_by || null,
-        last_rotated_at: entry.last_rotated_at || entry.updated_at || null,
-        rotation_policy_days: entry.rotation_policy_days || null,
-        // v3.1.1 M5.9: 轮换历史 (前 10 条, 倒序 — 最新在前)
-        rotation_history: Array.isArray(entry.rotation_history) ? entry.rotation_history.slice(0, 10) : [],
+      const cn = via === 'mtls' ? ctx0.cn : `${targetName}@web`;
+      const token = makeSession({
+        cn,
+        fp,
+        role: targetClient.role,
+        clientName: targetName,
+        cert: { subject: { CN: cn } },
+        client: targetClient,
+      });
+      audit({ action: 'login', status: 'ok', cn, client: targetName, via });
+      res.setHeader('Set-Cookie', sessionCookieHeader(token));
+      return send(res, 200, {
+        ...(isBrowserRequest(req) ? {} : { token }),
+        expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+        cn,
+        role: targetClient.role,
+        via,
       });
     }
-    out.sort((a, b) => a.name.localeCompare(b.name));
-    audit({ action: 'admin_secrets_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
-    return send(res, 200, { secrets: out });
-  }
 
-  // ----- GET /api/v1/admin/types : return type schemas (so UI can render form dynamically) -----
-  if (m === 'GET' && p === '/api/v1/admin/types') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const out = {};
-    for (const [id, schema] of Object.entries(TYPE_SCHEMAS)) {
-      out[id] = { label: schema.label, description: schema.description, fields: schema.fields };
+    // ----- POST /api/v1/login/mfa: 提交 TOTP code 完成登录 -----
+    if (m === 'POST' && p === '/api/v1/login/mfa') {
+      if (rejectBrowserMutation('login_mfa_origin')) return;
+      const body = (await readBody(req)) || {};
+      const { mfa_token: mfaToken, code } = body;
+      if (!mfaToken || !code) return jsonError(res, 400, 'Missing {mfa_token, code}');
+      const pending = getMfaPending(mfaToken);
+      if (!pending) {
+        audit({ action: 'login_mfa', status: 'denied', reason: 'invalid_token' });
+        return jsonError(res, 401, 'Invalid or expired mfa_token');
+      }
+      const targetClient = CONFIG.clients[pending.clientName];
+      if (!targetClient) {
+        consumeMfaPending(mfaToken);
+        audit({
+          action: 'login_mfa',
+          status: 'denied',
+          reason: 'client_gone',
+          client: pending.clientName,
+        });
+        return jsonError(res, 404, 'Client no longer exists');
+      }
+      if (pending.securityBinding !== mfaClientBinding(targetClient)) {
+        consumeMfaPending(mfaToken);
+        return jsonError(res, 401, 'Authentication state changed; log in again');
+      }
+      const mfaLock = `mfa:${pending.clientName}`;
+      if (!checkLoginLock(mfaLock)) return jsonError(res, 429, 'Too many MFA attempts');
+      const mfaResult = verifyMfaCode(targetClient, code);
+      if (!mfaResult.ok) {
+        recordLoginFail(mfaLock);
+        audit({
+          action: 'login_mfa',
+          status: 'denied',
+          reason: 'bad_code',
+          client: pending.clientName,
+        });
+        return jsonError(res, 401, 'Bad TOTP code or recovery code');
+      }
+      if (mfaResult.method === 'recovery') {
+        try {
+          await persistConfig();
+        } catch (e) {
+          restoreConsumedRecoveryCode(targetClient, mfaResult);
+          audit({
+            action: 'login_mfa',
+            status: 'error',
+            reason: 'recovery_code_persist_failed',
+            client: pending.clientName,
+            error: e.message,
+          });
+          return persistenceError(res);
+        }
+      }
+      clearLoginLock(mfaLock);
+      consumeMfaPending(mfaToken);
+      const cn = pending.fp ? `${pending.clientName}@mtls` : `${pending.clientName}@web`;
+      const token = makeSession({
+        cn,
+        fp: pending.fp,
+        role: targetClient.role,
+        clientName: pending.clientName,
+        cert: { subject: { CN: cn } },
+        client: targetClient,
+      });
+      audit({
+        action: 'login',
+        status: 'ok',
+        cn,
+        client: pending.clientName,
+        via: 'mfa',
+        mfa_method: mfaResult.method,
+      });
+      res.setHeader('Set-Cookie', sessionCookieHeader(token));
+      return send(res, 200, {
+        ...(isBrowserRequest(req) ? {} : { token }),
+        expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+        cn,
+        role: targetClient.role,
+        via: 'mfa',
+        mfa_method: mfaResult.method,
+      });
     }
-    return send(res, 200, { types: out });
-  }
 
-  // ----- POST /api/v1/admin/secrets (create) -----
-  if (m === 'POST' && p === '/api/v1/admin/secrets') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const body = await readBody(req) || {};
-    const { name, type, description, fields } = body;
-    if (!isValidSecretName(name)) {
-      return jsonError(res, 400, 'Invalid secret name. Use [A-Za-z0-9_.-], must start with letter/digit/underscore, max 128 chars.');
+    // ----- POST /api/v1/logout (drop session token) -----
+    if (m === 'POST' && p === '/api/v1/logout') {
+      if (
+        isCookieSessionRequest(req) &&
+        rejectBrowserMutation('logout_origin', { requireOrigin: true })
+      ) {
+        return;
+      }
+      const token =
+        req.headers[SESSION_HEADER] ||
+        (req.headers.cookie || '').match(/broker_session=([^;]+)/)?.[1];
+      if (token) {
+        const s = SESSIONS.get(token);
+        if (s) audit({ action: 'logout', cn: s.cn, fp: s.fp, status: 'ok' });
+        deleteSession(token);
+      }
+      res.setHeader('Set-Cookie', sessionCookieHeader('', { clear: true }));
+      return send(res, 200, { logged_out: true });
     }
-    if (!type || !ALLOWED_SECRET_TYPES.has(type)) {
-      return jsonError(res, 400, `Unknown type: ${type}`);
+
+    // ----- Everything below needs auth (mTLS cert or session token) -----
+    const ctx = getIdentity(req);
+    if (!ctx || !ctx.certSubject) {
+      audit({
+        action: 'connect',
+        status: 'denied',
+        reason: 'no_client_cert',
+        remote: req.socket.remoteAddress,
+      });
+      return jsonError(res, 401, 'mTLS client certificate required');
     }
-    if (!fields || typeof fields !== 'object') {
-      return jsonError(res, 400, 'Missing {fields: object}');
+    if (!ctx.client) {
+      audit({
+        action: 'connect',
+        status: 'denied',
+        reason: 'cert_not_registered',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        remote: req.socket.remoteAddress,
+      });
+      return jsonError(res, 403, `Client certificate not registered. CN=${ctx.cn} fp=${ctx.fp}`);
     }
-    const errs = validateFields(type, fields);
-    if (errs.length > 0) {
-      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    if (!rateLimit(ctx)) {
+      audit({ action: 'connect', status: 'denied', reason: 'rate_limit', cn: ctx.cn, fp: ctx.fp });
+      return jsonError(res, 429, 'Rate limit exceeded');
     }
-    if (SECRET_CACHE.has(name)) {
-      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
-      return jsonError(res, 409, `Secret ${name} already exists. Use PUT to update.`);
+    if (ctx.via === 'api_key' && !isApiKeyRouteAllowed(m, p)) {
+      audit({
+        action: 'connect',
+        status: 'denied',
+        reason: 'api_key_route_denied',
+        cn: ctx.cn,
+        path: p,
+        method: m,
+      });
+      return jsonError(res, 403, 'API key is not allowed to manage the owning account');
     }
-    const now = new Date().toISOString();
-    const who = ctx.cn || 'admin';
-    SECRET_CACHE.set(name, {
-      type, description: description || '', fields,
-      created_at: now, updated_at: now, updated_by: who,
-    });
-    try {
-      await persistSecretsDetail();
-    } catch (e) {
+    if (
+      ((ctx.via === 'session' && isCookieSessionRequest(req)) ||
+        (['mtls', 'mtls-header'].includes(ctx.via) && isBrowserRequest(req))) &&
+      rejectBrowserMutation('session_origin', { ctx, requireOrigin: true })
+    ) {
+      return;
+    }
+    res.__exposeBrokerVersion = true;
+
+    const requireStepUp = async (code, action, subject = null) => {
+      if (!code || typeof code !== 'string') {
+        audit({
+          action,
+          status: 'denied',
+          reason: 'missing_verify',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          subject,
+        });
+        jsonError(res, 400, 'Missing {verify}');
+        return null;
+      }
+      const verification = verifyStepUp(ctx.client, code);
+      if (!verification.ok) {
+        audit({
+          action,
+          status: 'denied',
+          reason: 'bad_verify',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          subject,
+        });
+        jsonError(res, 401, 'Invalid verification code or password');
+        return null;
+      }
+      if (verification.method === 'recovery') {
+        try {
+          await persistConfig();
+        } catch (error) {
+          restoreConsumedRecoveryCode(ctx.client, verification);
+          audit({
+            action,
+            status: 'error',
+            reason: 'recovery_code_persist_failed',
+            cn: ctx.cn,
+            fp: ctx.fp,
+            subject,
+            error: error.message,
+          });
+          persistenceError(res);
+          return null;
+        }
+      }
+      return verification;
+    };
+
+    // Authenticated ops health (version / sops / counts). Public GET /health is {status:ok} only.
+    if (m === 'GET' && p === '/api/v1/health') {
+      return send(
+        res,
+        200,
+        buildOpsHealth({
+          version: BROKER_VERSION,
+          secretCache: SECRET_CACHE,
+          config: CONFIG,
+        }),
+      );
+    }
+
+    // ============================================================
+    // v3.0: Self-service (我的资料) — 任何已登录 client 都能用
+    // ============================================================
+    // GET    /api/v1/me                      — 我的资料
+    // POST   /api/v1/me/change-password     — 改密码
+    // POST   /api/v1/me/rotate-cert          — 重发我的 cert
+    // GET    /api/v1/me/audit                — 我的活动 (audit log)
+    // POST   /api/v1/me/totp/setup           — 启 TOTP, 返回 otpauth + 10 个恢复码
+    // POST   /api/v1/me/totp/verify          — 验证 TOTP 正确性（setup 完必走）
+    // POST   /api/v1/me/totp/disable         — 关 TOTP
+    // GET    /api/v1/me/recovery-codes/remaining — 看还剩几个恢复码
+
+    // ----- GET /api/v1/me -----
+    if (m === 'GET' && p === '/api/v1/me') {
+      const c = ctx.client;
+      const cp = certPaths.clientPaths(ctx.clientName);
+      const certOnDisk = existsSync(cp.crt);
+      const privateKeyOnDisk = existsSync(cp.key);
+      return send(res, 200, {
+        name: ctx.clientName,
+        cn: ctx.cn,
+        role: c.role,
+        description: c.description || '',
+        allow_password_login: !!c.allow_password_login,
+        has_password: !!c.password,
+        password_set_at: c.password_set_at || null,
+        password_expires_at: c.password_expires_at || null,
+        totp_enabled: !!c.totp_secret,
+        totp_enabled_at: c.totp_enabled_at || null,
+        totp_recovery_codes_remaining: (c.totp_recovery_codes_hash || []).length,
+        preferred_2fa: c.preferred_2fa || (c.totp_secret ? 'totp' : 'none'),
+        cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
+        cert_present_on_disk: certOnDisk,
+        cert_key_present_on_disk: privateKeyOnDisk,
+        private_key_retention_enabled: RETAIN_CLIENT_PRIVATE_KEYS,
+        cert_expires_at: c.cert_expires_at || null,
+        last_password_change: c.last_password_change || null,
+        last_cert_rotation: c.last_cert_rotation || null,
+        rate_limit: c.rate_limit || '100/hour',
+      });
+    }
+
+    // ----- POST /api/v1/me/change-password -----
+    if (m === 'POST' && p === '/api/v1/me/change-password') {
+      const body = (await readBody(req)) || {};
+      const { old_password: oldPwd, new_password: newPwd } = body;
+      if (!oldPwd || !newPwd) return jsonError(res, 400, 'Missing {old_password, new_password}');
+      if (newPwd.length < 12) return jsonError(res, 400, 'new_password too short (min 12 chars)');
+      const c = ctx.client;
+      if (!c.password) return jsonError(res, 400, 'No password set for this client');
+      const oldOk = verifyClientPassword(oldPwd, c.password);
+      if (!oldOk) {
+        audit({
+          action: 'me_change_password',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'bad_old',
+        });
+        return jsonError(res, 401, 'Old password incorrect');
+      }
+      if (verifyClientPassword(newPwd, c.password)) {
+        return jsonError(res, 400, 'New password must differ from the current password');
+      }
+
+      const previous = {
+        password: c.password,
+        password_set_at: c.password_set_at,
+        last_password_change: c.last_password_change,
+      };
+      const passwordSetAt = new Date().toISOString();
+      c.password = hashPassword(newPwd);
+      c.password_set_at = passwordSetAt;
+      c.last_password_change = passwordSetAt;
+      try {
+        await persistConfig();
+      } catch (e) {
+        c.password = previous.password;
+        c.password_set_at = previous.password_set_at;
+        c.last_password_change = previous.last_password_change;
+        audit({
+          action: 'me_change_password',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'error',
+          error: e.message,
+        });
+        return jsonError(res, 500, 'Unable to persist password change');
+      }
+
+      const sessionsRevoked = deleteSessionsForClient(ctx.clientName);
+      res.setHeader('Set-Cookie', sessionCookieHeader('', { clear: true }));
+      audit({
+        action: 'me_change_password',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        status: 'ok',
+        sessions_revoked: sessionsRevoked,
+      });
+      return send(res, 200, {
+        ok: true,
+        password_set_at: passwordSetAt,
+        sessions_revoked: sessionsRevoked,
+        reauthentication_required: true,
+      });
+    }
+
+    // ----- POST /api/v1/me/rotate-cert -----
+    // v3.0: 重发自己的 cert（要当前 TOTP 验证或密码）
+    if (m === 'POST' && p === '/api/v1/me/rotate-cert') {
+      const body = (await readBody(req)) || {};
+      const verify = body.verify; // TOTP code 或 密码
+      if (!verify) return jsonError(res, 400, 'Missing {verify}');
+      const c = ctx.client;
+      const verification = verifyStepUp(c, verify);
+      if (!verification.ok) {
+        audit({
+          action: 'me_rotate_cert',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'bad_verify',
+        });
+        return jsonError(res, 401, 'Invalid TOTP code or password');
+      }
+      if (!clientsDirWritable()) {
+        restoreConsumedRecoveryCode(c, verification);
+        return jsonError(res, 503, 'pki/clients/ is not writable; issue cert out-of-band');
+      }
+      let issuance;
+      try {
+        issuance = await issueAndPersist(ctx.clientName);
+      } catch (e) {
+        restoreConsumedRecoveryCode(c, verification);
+        audit({
+          action: 'me_rotate_cert',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'error',
+          error: e.message,
+        });
+        return jsonError(res, 500, 'Unable to rotate client certificate');
+      }
+      const sessionsRevoked = deleteSessionsForFingerprint(issuance.previousFingerprint);
+      audit({
+        action: 'me_rotate_cert',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        status: 'ok',
+        mfa_method: verification.method,
+        sessions_revoked: sessionsRevoked,
+      });
+      return send(res, 200, {
+        ok: true,
+        name: ctx.clientName,
+        fingerprint_sha256: issuance.cert.fingerprint_sha256,
+        cert_pem: issuance.cert.cert_pem,
+        key_pem: issuance.cert.key_pem,
+        bundle_base64: issuance.bundle.toString('base64'),
+        cert_expires_at: c.cert_expires_at,
+        sessions_revoked: sessionsRevoked,
+        private_key_retained: issuance.privateKeyRetained,
+        warning: issuance.privateKeyRetained
+          ? 'key_pem is a SECRET. Compatibility retention is enabled; disable BROKER_RETAIN_CLIENT_PRIVATE_KEYS after migration.'
+          : 'key_pem and bundle_base64 are one-time secrets. Save one now; the broker has removed the private-key file.',
+      });
+    }
+
+    // ----- GET /api/v1/me/audit -----
+    if (m === 'GET' && p === '/api/v1/me/audit') {
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 1000);
+      const since = url.searchParams.get('since');
+      const lines = readAuditFiltered({ cn: ctx.cn, since, limit });
+      return send(res, 200, { events: lines, count: lines.length, fp: ctx.fp });
+    }
+
+    // ----- POST /api/v1/me/totp/setup -----
+    // 启 TOTP: 要当前密码 (一次性验证)，返 otpauth URL + 10 个恢复码
+    // 进入"待激活"状态，必须 /totp/verify 一次正确码才正式启用
+    if (m === 'POST' && p === '/api/v1/me/totp/setup') {
+      const body = (await readBody(req)) || {};
+      const { password } = body;
+      if (!password) return jsonError(res, 400, 'Missing {password}');
+      const c = ctx.client;
+      if (!c.password) return jsonError(res, 400, 'No password set; cannot setup TOTP');
+      if (!verifyClientPassword(password, c.password)) {
+        audit({
+          action: 'me_totp_setup',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'bad_password',
+        });
+        return jsonError(res, 401, 'Password incorrect');
+      }
+      if (c.totp_secret) {
+        return jsonError(res, 409, 'TOTP already enabled; disable first');
+      }
+      const secret = generateSecret();
+      const recoveryCodes = generateRecoveryCodes();
+      const recoveryHashes = recoveryCodes.map(hashRecoveryCode);
+      // 暂存到"待激活"字段（不写入 totp_secret 主字段，直到 verify 成功）。
+      // 明文恢复码仅存在于本次响应变量中，不进入 client 状态。
+      c._pending_totp = createPendingTotp(secret, recoveryHashes);
+      audit({ action: 'me_totp_setup', cn: ctx.cn, fp: ctx.fp, status: 'pending' });
+      return send(res, 200, {
+        ok: true,
+        otpauth_url: buildOtpauthURL(ctx.clientName, 'SecretBroker', secret),
+        secret, // 让用户能手动输入 (无 App 也能登)
+        recovery_codes: recoveryCodes, // 仅此一次
+        recovery_codes_remaining: recoveryCodes.length,
+        expires_at: c._pending_totp.expires_at,
+        next_step: 'POST /api/v1/me/totp/verify with a TOTP code to activate',
+      });
+    }
+
+    // ----- POST /api/v1/me/totp/verify -----
+    // setup 后必须 verify 一次才正式启用
+    if (m === 'POST' && p === '/api/v1/me/totp/verify') {
+      const body = (await readBody(req)) || {};
+      const { code } = body;
+      if (!code) return jsonError(res, 400, 'Missing {code}');
+      const c = ctx.client;
+      if (!c._pending_totp) {
+        return jsonError(res, 400, 'No pending TOTP setup; call /totp/setup first');
+      }
+      if (isPendingTotpExpired(c._pending_totp)) {
+        delete c._pending_totp;
+        audit({
+          action: 'me_totp_verify',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'setup_expired',
+        });
+        return jsonError(res, 410, 'Pending TOTP setup expired; start again');
+      }
+      const ok = verifyTotpFn(c._pending_totp.secret, code);
+      if (!ok) {
+        audit({
+          action: 'me_totp_verify',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'bad_code',
+        });
+        return jsonError(res, 401, 'TOTP code does not match');
+      }
+      const clientSnapshot = structuredClone(c);
+      // 激活：pending → 正式字段
+      c.totp_secret = c._pending_totp.secret;
+      c.totp_enabled_at = new Date().toISOString();
+      c.totp_recovery_codes_hash = c._pending_totp.recovery_hashes;
+      c.preferred_2fa = 'totp';
+      delete c._pending_totp;
+      try {
+        await persistConfig();
+      } catch (e) {
+        restorePlainObject(c, clientSnapshot);
+        audit({
+          action: 'me_totp_verify',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'me_totp_verify', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
+      return send(res, 200, {
+        ok: true,
+        totp_enabled_at: c.totp_enabled_at,
+        recovery_codes_remaining: c.totp_recovery_codes_hash.length,
+      });
+    }
+
+    // ----- POST /api/v1/me/totp/disable -----
+    // 关 TOTP 要当前 TOTP code 或 恢复码
+    if (m === 'POST' && p === '/api/v1/me/totp/disable') {
+      const body = (await readBody(req)) || {};
+      const { code } = body;
+      if (!code) return jsonError(res, 400, 'Missing {code}');
+      const c = ctx.client;
+      if (!c.totp_secret) return jsonError(res, 400, 'TOTP not enabled');
+      const clientSnapshot = structuredClone(c);
+      const mfaResult = verifyMfaCode(c, code);
+      if (!mfaResult.ok) {
+        audit({
+          action: 'me_totp_disable',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'bad_code',
+        });
+        return jsonError(res, 401, 'TOTP code or recovery code invalid');
+      }
+      delete c.totp_secret;
+      delete c.totp_enabled_at;
+      delete c.totp_recovery_codes_hash;
+      c.preferred_2fa = 'none';
+      try {
+        await persistConfig();
+      } catch (e) {
+        restorePlainObject(c, clientSnapshot);
+        audit({
+          action: 'me_totp_disable',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({
+        action: 'me_totp_disable',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        status: 'ok',
+        mfa_method: mfaResult.method,
+      });
+      return send(res, 200, { ok: true, totp_disabled: true });
+    }
+
+    // ----- GET /api/v1/me/recovery-codes/remaining -----
+    if (m === 'GET' && p === '/api/v1/me/recovery-codes/remaining') {
+      const c = ctx.client;
+      return send(res, 200, {
+        remaining: (c.totp_recovery_codes_hash || []).length,
+        warning:
+          c.totp_recovery_codes_hash && c.totp_recovery_codes_hash.length < 3
+            ? 'Few recovery codes left. Consider re-setup.'
+            : undefined,
+      });
+    }
+
+    // ============================================================
+    // v3.0 M2: API Key 管理 (admin + self)
+    // ============================================================
+    // GET    /api/v1/api-keys                 — 列表 (admin: 全部; self: 自己的)
+    // POST   /api/v1/api-keys                 — 创建 (需 TOTP, admin 或 self)
+    // GET    /api/v1/api-keys/:id             — 详情
+    // DELETE /api/v1/api-keys/:id            — 撤销 (需 TOTP)
+    // GET    /api/v1/api-keys/:id/usage       — 最近 100 次使用 (admin only)
+    //
+    // 静态路由必须先于动态路由
+
+    // ----- GET /api/v1/api-keys -----
+    if (m === 'GET' && p === '/api/v1/api-keys') {
+      const opts = ctx.client.role === 'admin' ? {} : { clientOnly: ctx.clientName };
+      return send(res, 200, { keys: listApiKeysFn(CONFIG.api_keys, opts) });
+    }
+
+    // ----- POST /api/v1/api-keys -----
+    if (m === 'POST' && p === '/api/v1/api-keys') {
+      const body = (await readBody(req)) || {};
+      const name = (body.name || '').trim();
+      if (!name) return jsonError(res, 400, 'Missing {name}');
+      // 创建者 = 自己 (admin 可指定 client)
+      const targetClient =
+        body.client && ctx.client.role === 'admin' ? body.client : ctx.clientName;
+      if (!CONFIG.clients[targetClient]) {
+        return jsonError(res, 400, `Unknown client: ${targetClient}`);
+      }
+      // 二次验证: 当前 TOTP code (强制)
+      const verifyCode = body.verify;
+      if (!verifyCode) return jsonError(res, 400, 'Missing {verify} (TOTP code)');
+      // self 验证: 自己的 TOTP / 恢复码；admin 可 fallback 密码
+      let verification = null;
+      if (ctx.client.totp_secret || ctx.client.totp_recovery_codes_hash?.length) {
+        const mfaR = verifyMfaCode(ctx.client, verifyCode);
+        if (mfaR.ok) verification = mfaR;
+      }
+      if (
+        !verification &&
+        ctx.client.role === 'admin' &&
+        !ctx.client.totp_secret &&
+        !ctx.client.totp_recovery_codes_hash?.length &&
+        ctx.client.password &&
+        verifyClientPassword(verifyCode, ctx.client.password)
+      ) {
+        verification = { ok: true, method: 'password' };
+      }
+      if (!verification) {
+        audit({
+          action: 'api_key_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: 'bad_verify',
+        });
+        return jsonError(res, 401, 'Invalid TOTP code or password');
+      }
+      const opts = {
+        scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
+        allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+        allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+        rate_limit: body.rate_limit,
+        ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
+        ttl_ms: body.ttl_seconds ? body.ttl_seconds * 1000 : undefined,
+        created_by: ctx.clientName,
+      };
+      const r = createApiKeyFn(CONFIG.api_keys, name, targetClient, opts);
+      try {
+        await persistConfig();
+      } catch (e) {
+        // 回滚 key 与可能已消费的恢复码
+        const idx = CONFIG.api_keys.findIndex((k) => k.id === r.key_obj.id);
+        if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
+        restoreConsumedRecoveryCode(ctx.client, verification);
+        audit({
+          action: 'api_key_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({
+        action: 'api_key_create',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        client: targetClient,
+        status: 'ok',
+      });
+      return send(res, 200, {
+        ok: true,
+        key: r.key_obj, // public view
+        secret: r.secret, // 仅此一次返回
+        warning: 'secret will not be shown again. Save it now.',
+      });
+    }
+
+    // ----- GET /api/v1/api-keys/:id (静态优先, 必须在 :id/usage 之前) -----
+    const apiKeyMatch = p.match(/^\/api\/v1\/api-keys\/([a-z0-9]{16})$/);
+    const apiKeyUsageMatch = p.match(/^\/api\/v1\/api-keys\/([a-z0-9]{16})\/usage$/);
+    if (m === 'GET' && apiKeyMatch && apiKeyMatch[1]) {
+      const id = apiKeyMatch[1];
+      const k = CONFIG.api_keys.find((x) => x.id === id);
+      if (!k) return jsonError(res, 404, `API key ${id} not found`);
+      if (ctx.client.role !== 'admin' && k.client !== ctx.clientName) {
+        return jsonError(res, 403, 'Not your API key');
+      }
+      return send(res, 200, { key: publicViewFn(k) });
+    }
+
+    // ----- DELETE /api/v1/api-keys/:id -----
+    if (m === 'DELETE' && apiKeyMatch && apiKeyMatch[1]) {
+      const id = apiKeyMatch[1];
+      const k = CONFIG.api_keys.find((x) => x.id === id);
+      if (!k) return jsonError(res, 404, `API key ${id} not found`);
+      if (ctx.client.role !== 'admin' && k.client !== ctx.clientName) {
+        return jsonError(res, 403, 'Not your API key');
+      }
+      const body = (await readBody(req)) || {};
+      const verifyCode = body.verify;
+      if (!verifyCode) return jsonError(res, 400, 'Missing {verify}');
+      let verification = null;
+      if (ctx.client.totp_secret || ctx.client.totp_recovery_codes_hash?.length) {
+        const mfaR = verifyMfaCode(ctx.client, verifyCode);
+        if (mfaR.ok) verification = mfaR;
+      }
+      if (
+        !verification &&
+        ctx.client.role === 'admin' &&
+        !ctx.client.totp_secret &&
+        !ctx.client.totp_recovery_codes_hash?.length &&
+        ctx.client.password &&
+        verifyClientPassword(verifyCode, ctx.client.password)
+      ) {
+        verification = { ok: true, method: 'password' };
+      }
+      if (!verification) {
+        audit({
+          action: 'api_key_revoke',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name: k.name,
+          status: 'denied',
+          reason: 'bad_verify',
+        });
+        return jsonError(res, 401, 'Invalid TOTP code or password');
+      }
+      const keySnapshot = structuredClone(k);
+      const r = revokeApiKeyFn(CONFIG.api_keys, id, ctx.clientName);
+      if (!r.ok) {
+        return jsonError(res, 400, r.reason);
+      }
+      try {
+        await persistConfig();
+      } catch (e) {
+        restorePlainObject(k, keySnapshot);
+        restoreConsumedRecoveryCode(ctx.client, verification);
+        audit({
+          action: 'api_key_revoke',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name: k.name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'api_key_revoke', cn: ctx.cn, fp: ctx.fp, name: k.name, status: 'ok' });
+      return send(res, 200, { ok: true, id, revoked_at: k.revoked_at });
+    }
+
+    // ----- GET /api/v1/api-keys/:id/usage -----
+    if (m === 'GET' && apiKeyUsageMatch && apiKeyUsageMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const id = apiKeyUsageMatch[1];
+      const k = CONFIG.api_keys.find((x) => x.id === id);
+      if (!k) return jsonError(res, 404, `API key ${id} not found`);
+      // API key identities are audited as cn=apikey:<id>; filter exactly so
+      // usage for one key can never include another client's audit events.
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 1000);
+      const lines = readAuditFiltered({ cn: `apikey:${k.id}`, since: null, limit });
+      return send(res, 200, {
+        id,
+        name: k.name,
+        use_count: k.use_count,
+        last_used_at: k.last_used_at,
+        events: lines,
+      });
+    }
+
+    // ============================================================
+    // v3.0 M3.3: Master Key (给 MCP Server / OpenClaw auto-refresh 用)
+    // ============================================================
+    // POST /api/v1/api-keys/master          — 创建 master key (admin + TOTP)
+    // GET  /api/v1/api-keys/master          — 列出所有 master key (admin)
+    // POST /api/v1/api-keys/issue-child     — 用 master key 创建子 key (api_key with can_create_child)
+
+    // ----- POST /api/v1/api-keys/master -----
+    if (m === 'POST' && p === '/api/v1/api-keys/master') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const body = (await readBody(req)) || {};
+      const name = (body.name || '').trim();
+      if (!name) return jsonError(res, 400, 'Missing {name}');
+      for (const field of ['child_scopes', 'allowed_secrets', 'allowed_services', 'ip_whitelist']) {
+        if (body[field] !== undefined && !Array.isArray(body[field])) {
+          return jsonError(res, 400, `${field} must be an array`);
+        }
+      }
+      // TOTP / 恢复码强制；admin password 可作 fallback
+      const verifyCode = body.verify;
+      if (!verifyCode) return jsonError(res, 400, 'Missing {verify}');
+      let verification = null;
+      if (ctx.client.totp_secret || ctx.client.totp_recovery_codes_hash?.length) {
+        const mfaR = verifyMfaCode(ctx.client, verifyCode);
+        if (mfaR.ok) verification = mfaR;
+      }
+      if (
+        !verification &&
+        !ctx.client.totp_secret &&
+        !ctx.client.totp_recovery_codes_hash?.length &&
+        ctx.client.password &&
+        verifyClientPassword(verifyCode, ctx.client.password)
+      ) {
+        verification = { ok: true, method: 'password' };
+      }
+      if (!verification) {
+        audit({
+          action: 'master_key_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'denied',
+          reason: 'bad_verify',
+        });
+        return jsonError(res, 401, 'Invalid TOTP code or password');
+      }
+      const { id, secret, key_obj } = generateMasterKey(name, ctx.clientName, {
+        default_child_ttl_seconds: body.default_child_ttl_seconds,
+        child_scopes: Array.isArray(body.child_scopes) ? body.child_scopes : undefined,
+        allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+        allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+        rate_limit: body.rate_limit,
+        ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
+        ttl_ms: body.ttl_ms,
+        created_by: ctx.clientName,
+      });
+      CONFIG.api_keys.push(key_obj);
+      try {
+        await persistConfig();
+      } catch (e) {
+        const idx = CONFIG.api_keys.findIndex((x) => x.id === id);
+        if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
+        restoreConsumedRecoveryCode(ctx.client, verification);
+        audit({
+          action: 'master_key_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'master_key_create', cn: ctx.cn, fp: ctx.fp, name, status: 'ok', id });
+      return send(res, 200, {
+        ok: true,
+        key: publicViewFn(key_obj),
+        secret,
+        warning:
+          'Master key will not be shown again. Save it now. Use POST /api/v1/api-keys/issue-child to mint short-lived child keys.',
+      });
+    }
+
+    // ----- GET /api/v1/api-keys/master -----
+    if (m === 'GET' && p === '/api/v1/api-keys/master') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const masters = (CONFIG.api_keys || []).filter((k) => k.is_master);
+      return send(res, 200, { keys: masters.map(publicViewFn) });
+    }
+
+    // ----- POST /api/v1/api-keys/issue-child -----
+    if (m === 'POST' && p === '/api/v1/api-keys/issue-child') {
+      // 必须用 API Key (Bearer) + is_master + can_create_child
+      if (ctx.via !== 'api_key') {
+        return jsonError(
+          res,
+          401,
+          'This endpoint requires Master API Key (Authorization: Bearer ...)',
+        );
+      }
+      const master = ctx.apiKey;
+      const check = canCreateChild(master);
+      if (!check.ok) {
+        audit({
+          action: 'issue_child',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'denied',
+          reason: check.reason,
+        });
+        return jsonError(res, 403, `Master key cannot create child: ${check.reason}`);
+      }
+      const body = (await readBody(req)) || {};
+      const name = (body.name || '').trim() || `child-${Date.now()}`;
+      const r = createChildKey(CONFIG.api_keys, master, name, {
+        scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
+        allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
+        allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
+        rate_limit: body.rate_limit,
+        ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : undefined,
+        ttl_seconds: body.ttl_seconds ? parseInt(body.ttl_seconds, 10) : undefined,
+      });
+      if (!r.ok) {
+        audit({
+          action: 'issue_child',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          reason: r.reason,
+        });
+        return jsonError(res, 400, `Cannot create child: ${r.reason}`);
+      }
+      try {
+        await persistConfig();
+      } catch (e) {
+        const idx = CONFIG.api_keys.findIndex((x) => x.id === r.key_obj.id);
+        if (idx >= 0) CONFIG.api_keys.splice(idx, 1);
+        audit({
+          action: 'issue_child',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({
+        action: 'issue_child',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        child_id: r.key_obj.id,
+        status: 'ok',
+      });
+      return send(res, 200, {
+        ok: true,
+        key: r.key_obj,
+        secret: r.secret,
+        warning: 'Child key will not be shown again. It will expire in ttl_seconds.',
+        parent_master_id: master.id,
+      });
+    }
+
+    // V4.1.1: Read-only API routes (identity, services, secrets, secrets/resolve)
+    // extracted to broker/routes/read-api.js for testability.
+    // The routes are constructed lazily on first use because they close over
+    // module-level state (CONFIG, SECRET_CACHE, audit, ...) that may be reloaded.
+    if (m === 'GET' || (m === 'POST' && p === '/api/v1/secrets/resolve')) {
+      if (await readApiRoutes().dispatch(req, res, { method: m, pathname: p }, ctx)) return;
+    }
+
+    // ============================================================
+    // Admin: Secrets CRUD (Phase 1.1.1)
+    // All endpoints below require admin role.
+    // Storage: secrets-detail.json (SOPS-encrypted JSON, structured per-type)
+    // Body shapes:
+    //   POST: { name, type, description?, fields: { ... } }
+    //   PUT:  { type?, description?, fields?: { ... } }
+    //   GET:  returns full entry { name, type, description, fields, created_at, ... }
+    // ============================================================
+
+    // ============================================================
+    // v3.0 M4: 凭据自检与告警
+    // ============================================================
+    // GET  /api/v1/healthcheck/status    — 看最新一次自检结果
+    // POST /api/v1/healthcheck/run       — 手动触发 (admin)
+    // ============================================================
+
+    // ----- GET /api/v1/healthcheck/status -----
+    if (m === 'GET' && p === '/api/v1/healthcheck/status') {
+      const s = healthcheckGetStatus();
+      const visible = filteredHealthStatus(s, (name) => canResolve(ctx, name), {
+        admin: ctx.client.role === 'admin',
+      });
+      return send(res, 200, visible);
+    }
+
+    // ----- POST /api/v1/healthcheck/run (admin) -----
+    if (m === 'POST' && p === '/api/v1/healthcheck/run') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      // v3.0 M5: upstream 模式决定走 broker 本地 (默认) 或 mcp-server (出网绕过)
+      // 配置: broker.yaml healthcheck: { upstream: 'mcp_server'|'local', mcp_server_url: 'http://127.0.0.1:3001' }
+      const hcCfg = CONFIG.healthcheck || {};
+      const upstream = hcCfg.upstream || 'local';
+      const mcpUrl = hcCfg.mcp_server_url || 'http://127.0.0.1:3001';
+      try {
+        let r;
+        if (upstream === 'mcp_server') {
+          r = await healthcheckRunAllViaMcp(mcpUrl);
+        } else {
+          // local: 返 entry 完整 (type + fields + description), 让 healthcheck 按 type-schemas 抽字段
+          const getSecrets = () => {
+            const out = {};
+            for (const [name, entry] of SECRET_CACHE) {
+              out[name] = {
+                type: entry.type,
+                fields: entry.fields || {},
+                description: entry.description || '',
+              };
+            }
+            return out;
+          };
+          r = await healthcheckRunAll(getSecrets);
+        }
+        // 同步写 audit
+        for (const [name, c] of Object.entries(r.checks)) {
+          audit({
+            action: 'healthcheck',
+            cn: ctx.cn,
+            fp: ctx.fp,
+            secret: name,
+            status: c.status,
+            detail: c.detail,
+            latency_ms: c.latency_ms,
+          });
+        }
+        return send(res, 200, r);
+      } catch (e) {
+        audit({
+          action: 'healthcheck_run',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          status: 'error',
+          error: e.message,
+        });
+        return jsonError(res, 500, 'Healthcheck run failed');
+      }
+    }
+
+    // ----- GET /api/v1/admin/secrets -----
+    if (m === 'GET' && p === '/api/v1/admin/secrets') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const out = [];
+      for (const [name, entry] of SECRET_CACHE.entries()) {
+        out.push({
+          name,
+          type: entry.type || 'custom',
+          description: entry.description || '',
+          fields: entry.fields || {},
+          created_at: entry.created_at || null,
+          updated_at: entry.updated_at || null,
+          updated_by: entry.updated_by || null,
+          last_rotated_at: entry.last_rotated_at || entry.updated_at || null,
+          rotation_policy_days: entry.rotation_policy_days || null,
+          // v3.1.1 M5.9: 轮换历史 (前 10 条, 倒序 — 最新在前)
+          rotation_history: Array.isArray(entry.rotation_history)
+            ? entry.rotation_history.slice(0, 10)
+            : [],
+        });
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      audit({ action: 'admin_secrets_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
+      return send(res, 200, { secrets: out });
+    }
+
+    // ----- GET /api/v1/admin/types : return type schemas (so UI can render form dynamically) -----
+    if (m === 'GET' && p === '/api/v1/admin/types') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const out = {};
+      for (const [id, schema] of Object.entries(TYPE_SCHEMAS)) {
+        out[id] = { label: schema.label, description: schema.description, fields: schema.fields };
+      }
+      return send(res, 200, { types: out });
+    }
+
+    // ----- POST /api/v1/admin/secrets (create) -----
+    if (m === 'POST' && p === '/api/v1/admin/secrets') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const body = (await readBody(req)) || {};
+      const { name, type, description, fields } = body;
+      if (!isValidSecretName(name)) {
+        return jsonError(
+          res,
+          400,
+          'Invalid secret name. Use [A-Za-z0-9_.-], must start with letter/digit/underscore, max 128 chars.',
+        );
+      }
+      if (!type || !ALLOWED_SECRET_TYPES.has(type)) {
+        return jsonError(res, 400, `Unknown type: ${type}`);
+      }
+      if (!fields || typeof fields !== 'object') {
+        return jsonError(res, 400, 'Missing {fields: object}');
+      }
+      const errs = validateFields(type, fields);
+      if (errs.length > 0) {
+        return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+      }
+      if (SECRET_CACHE.has(name)) {
+        audit({
+          action: 'admin_secrets_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'denied',
+          reason: 'already_exists',
+        });
+        return jsonError(res, 409, `Secret ${name} already exists. Use PUT to update.`);
+      }
+      const now = new Date().toISOString();
+      const who = ctx.cn || 'admin';
+      SECRET_CACHE.set(name, {
+        type,
+        description: description || '',
+        fields,
+        created_at: now,
+        updated_at: now,
+        updated_by: who,
+      });
+      try {
+        await persistSecretsDetail();
+      } catch (e) {
+        SECRET_CACHE.delete(name);
+        audit({
+          action: 'admin_secrets_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, type, status: 'ok' });
+      return send(res, 200, { ok: true, name, type });
+    }
+
+    // ----- PUT /api/v1/admin/secrets/:name (update) -----
+    // Match the create endpoint's SECRET_NAME_RE exactly, so any name POST accepts
+    // is also routable via PUT/DELETE. The previous hard-coded `[A-Za-z0-9_.]+`
+    // silently 404'd for names containing hyphens (e.g. `aliyun-1786567607488`).
+    const updateMatch = p.match(
+      /^\/api\/v1\/admin\/secrets\/([A-Za-z0-9_][A-Za-z0-9_.\-]{0,127})$/,
+    );
+    if (m === 'PUT' && updateMatch && updateMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = updateMatch[1];
+      const existing = SECRET_CACHE.get(name);
+      if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const updated = { ...existing };
+      if (body.type !== undefined) {
+        if (!ALLOWED_SECRET_TYPES.has(body.type)) {
+          return jsonError(res, 400, `Unknown type: ${body.type}`);
+        }
+        updated.type = body.type;
+      }
+      if (body.description !== undefined) {
+        updated.description = String(body.description);
+      }
+      if (body.fields !== undefined) {
+        if (typeof body.fields !== 'object') {
+          return jsonError(res, 400, '{fields} must be an object');
+        }
+        // Merge: client may send partial fields (e.g. only one field in a multi-field secret)
+        updated.fields = { ...existing.fields, ...body.fields };
+      }
+      // Re-validate after merge
+      const errs = validateFields(updated.type, updated.fields);
+      if (errs.length > 0) {
+        return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+      }
+      updated.updated_at = new Date().toISOString();
+      updated.updated_by = ctx.cn || 'admin';
+      const prevSnapshot = JSON.parse(JSON.stringify(existing));
+      SECRET_CACHE.set(name, updated);
+      try {
+        await persistSecretsDetail();
+      } catch (e) {
+        SECRET_CACHE.set(name, prevSnapshot);
+        audit({
+          action: 'admin_secrets_update',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+      return send(res, 200, { ok: true, name });
+    }
+
+    // ----- DELETE /api/v1/admin/secrets/:name -----
+    if (m === 'DELETE' && updateMatch && updateMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = updateMatch[1];
+      const existing = SECRET_CACHE.get(name);
+      if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
       SECRET_CACHE.delete(name);
-      audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      try {
+        await persistSecretsDetail();
+      } catch (e) {
+        // best-effort rollback
+        SECRET_CACHE.set(name, existing);
+        audit({
+          action: 'admin_secrets_delete',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+      return send(res, 200, { ok: true, name });
     }
-    audit({ action: 'admin_secrets_create', cn: ctx.cn, fp: ctx.fp, name, type, status: 'ok' });
-    return send(res, 200, { ok: true, name, type });
-  }
 
-  // ----- PUT /api/v1/admin/secrets/:name (update) -----
-  // Match the create endpoint's SECRET_NAME_RE exactly, so any name POST accepts
-  // is also routable via PUT/DELETE. The previous hard-coded `[A-Za-z0-9_.]+`
-  // silently 404'd for names containing hyphens (e.g. `aliyun-1786567607488`).
-  const updateMatch = p.match(/^\/api\/v1\/admin\/secrets\/([A-Za-z0-9_][A-Za-z0-9_.\-]{0,127})$/);
-  if (m === 'PUT' && updateMatch && updateMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = updateMatch[1];
-    const existing = SECRET_CACHE.get(name);
-    if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
-    const body = await readBody(req) || {};
-    const updated = { ...existing };
-    if (body.type !== undefined) {
-      if (!ALLOWED_SECRET_TYPES.has(body.type)) return jsonError(res, 400, `Unknown type: ${body.type}`);
-      updated.type = body.type;
-    }
-    if (body.description !== undefined) {
-      updated.description = String(body.description);
-    }
-    if (body.fields !== undefined) {
-      if (typeof body.fields !== 'object') return jsonError(res, 400, '{fields} must be an object');
-      // Merge: client may send partial fields (e.g. only one field in a multi-field secret)
-      updated.fields = { ...existing.fields, ...body.fields };
-    }
-    // Re-validate after merge
-    const errs = validateFields(updated.type, updated.fields);
-    if (errs.length > 0) {
-      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
-    }
-    updated.updated_at = new Date().toISOString();
-    updated.updated_by = ctx.cn || 'admin';
-    const prevSnapshot = JSON.parse(JSON.stringify(existing));
-    SECRET_CACHE.set(name, updated);
-    try {
-      await persistSecretsDetail();
-    } catch (e) {
-      SECRET_CACHE.set(name, prevSnapshot);
-      audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'admin_secrets_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
+    // ============================================================
+    // Phase 1.2: Services CRUD (admin only)
+    // ============================================================
+    // GET    /api/v1/admin/services             — list all (admin)
+    // GET    /api/v1/admin/services/:name       — read one (admin)
+    // POST   /api/v1/admin/services             — create
+    // PUT    /api/v1/admin/services/:name       — update (full replace of mutable fields)
+    // DELETE /api/v1/admin/services/:name       — delete
+    // POST   /api/v1/admin/services/:name/test  — trigger one call to verify wiring
+    // GET    /api/v1/admin/service-templates    — list 6 built-in templates
 
-  // ----- DELETE /api/v1/admin/secrets/:name -----
-  if (m === 'DELETE' && updateMatch && updateMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = updateMatch[1];
-    const existing = SECRET_CACHE.get(name);
-    if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
-    SECRET_CACHE.delete(name);
-    try {
-      await persistSecretsDetail();
-    } catch (e) {
-      // best-effort rollback
-      SECRET_CACHE.set(name, existing);
-      audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    // ----- GET /api/v1/admin/service-templates -----
+    if (m === 'GET' && p === '/api/v1/admin/service-templates') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      return send(res, 200, { templates: publicTemplateList() });
     }
-    audit({ action: 'admin_secrets_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
 
-  // ============================================================
-  // Phase 1.2: Services CRUD (admin only)
-  // ============================================================
-  // GET    /api/v1/admin/services             — list all (admin)
-  // GET    /api/v1/admin/services/:name       — read one (admin)
-  // POST   /api/v1/admin/services             — create
-  // PUT    /api/v1/admin/services/:name       — update (full replace of mutable fields)
-  // DELETE /api/v1/admin/services/:name       — delete
-  // POST   /api/v1/admin/services/:name/test  — trigger one call to verify wiring
-  // GET    /api/v1/admin/service-templates    — list 6 built-in templates
+    // ----- GET /api/v1/admin/services -----
+    if (m === 'GET' && p === '/api/v1/admin/services') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const out = [];
+      for (const [name, svc] of Object.entries(CONFIG.services || {})) {
+        out.push({
+          name,
+          type: svc.type || 'unknown',
+          description: svc.description || '',
+          upstream: svc.upstream || '',
+          allow_insecure_http: svc.allow_insecure_http === true,
+          region: svc.region || '',
+          action: svc.action || '',
+          token_secret: svc.token_secret || null,
+          inject_headers: svc.inject_headers || {},
+          header_name: svc.header_name || null,
+          header_value_template: svc.header_value_template || null,
+          allow_paths: svc.allow_paths || null,
+          allow_methods: svc.allow_methods || null,
+          dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+          allowed_clients: clientNamesAllowedFor(CONFIG.clients, name),
+          action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
+        });
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      audit({ action: 'admin_services_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
+      return send(res, 200, { services: out });
+    }
 
-  // ----- GET /api/v1/admin/service-templates -----
-  if (m === 'GET' && p === '/api/v1/admin/service-templates') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    return send(res, 200, { templates: publicTemplateList() });
-  }
+    // ----- /api/v1/admin/services/:name + /test routing -----
+    // Note: /test has a sub-path, so we match it first. We accept the same
+    // SERVICE_NAME_RE for the name segment to stay consistent with POST.
+    const svcTestMatch = p.match(/^\/api\/v1\/admin\/services\/([a-z][a-z0-9_-]{0,63})\/test$/);
+    const svcMatch = p.match(/^\/api\/v1\/admin\/services\/([a-z][a-z0-9_-]{0,63})$/);
 
-  // ----- GET /api/v1/admin/services -----
-  if (m === 'GET' && p === '/api/v1/admin/services') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const out = [];
-    for (const [name, svc] of Object.entries(CONFIG.services || {})) {
-      out.push({
+    // ----- GET /api/v1/admin/services/:name -----
+    if (m === 'GET' && svcMatch && svcMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = svcMatch[1];
+      const svc = CONFIG.services[name];
+      if (!svc) return jsonError(res, 404, `Service ${name} not found`);
+      return send(res, 200, {
         name,
         type: svc.type || 'unknown',
         description: svc.description || '',
         upstream: svc.upstream || '',
+        allow_insecure_http: svc.allow_insecure_http === true,
         region: svc.region || '',
         action: svc.action || '',
         token_secret: svc.token_secret || null,
@@ -2083,192 +2537,292 @@ async function handle(req, res) {
         header_name: svc.header_name || null,
         header_value_template: svc.header_value_template || null,
         allow_paths: svc.allow_paths || null,
+        allow_methods: svc.allow_methods || null,
         dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
-        allowed_clients: clientNamesAllowedFor(name),
-        action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
+        allowed_clients: clientNamesAllowedFor(CONFIG.clients, name),
       });
     }
-    out.sort((a, b) => a.name.localeCompare(b.name));
-    audit({ action: 'admin_services_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
-    return send(res, 200, { services: out });
-  }
 
-  // ----- /api/v1/admin/services/:name + /test routing -----
-  // Note: /test has a sub-path, so we match it first. We accept the same
-  // SERVICE_NAME_RE for the name segment to stay consistent with POST.
-  const svcTestMatch = p.match(/^\/api\/v1\/admin\/services\/([a-z][a-z0-9_-]{0,63})\/test$/);
-  const svcMatch     = p.match(/^\/api\/v1\/admin\/services\/([a-z][a-z0-9_-]{0,63})$/);
-
-  // ----- GET /api/v1/admin/services/:name -----
-  if (m === 'GET' && svcMatch && svcMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = svcMatch[1];
-    const svc = CONFIG.services[name];
-    if (!svc) return jsonError(res, 404, `Service ${name} not found`);
-    return send(res, 200, {
-      name,
-      type: svc.type || 'unknown',
-      description: svc.description || '',
-      upstream: svc.upstream || '',
-      region: svc.region || '',
-      action: svc.action || '',
-      token_secret: svc.token_secret || null,
-      inject_headers: svc.inject_headers || {},
-      header_name: svc.header_name || null,
-      header_value_template: svc.header_value_template || null,
-      allow_paths: svc.allow_paths || null,
-      dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
-      allowed_clients: clientNamesAllowedFor(name),
-    });
-  }
-
-  // ----- POST /api/v1/admin/services (create) -----
-  if (m === 'POST' && p === '/api/v1/admin/services') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const body = await readBody(req) || {};
-    const name = body.name;
-    const cfg = normalizeServiceConfig(body);
-    const errs = validateServiceConfig(name, cfg);
-    if (errs.length > 0) {
-      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
-      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    // ----- POST /api/v1/admin/services (create) -----
+    if (m === 'POST' && p === '/api/v1/admin/services') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const body = (await readBody(req)) || {};
+      const name = body.name;
+      const cfg = normalizeServiceConfig(body);
+      const errs = validateServiceConfig(name, cfg);
+      if (errs.length > 0) {
+        audit({
+          action: 'admin_services_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'denied',
+          reason: 'validation',
+          errs,
+        });
+        return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+      }
+      if (CONFIG.services[name]) {
+        audit({
+          action: 'admin_services_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'denied',
+          reason: 'already_exists',
+        });
+        return jsonError(res, 409, `Service ${name} already exists. Use PUT to update.`);
+      }
+      CONFIG.services[name] = cfg;
+      try {
+        await persistConfig();
+      } catch (e) {
+        delete CONFIG.services[name];
+        audit({
+          action: 'admin_services_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({
+        action: 'admin_services_create',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        type: cfg.type,
+        status: 'ok',
+      });
+      return send(res, 200, { ok: true, name, type: cfg.type });
     }
-    if (CONFIG.services[name]) {
-      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'already_exists' });
-      return jsonError(res, 409, `Service ${name} already exists. Use PUT to update.`);
+
+    // ----- PUT /api/v1/admin/services/:name (update, PARTIAL) -----
+    // PUT semantics here: client sends only the fields they want to change.
+    // Fields NOT in the body are preserved from `existing`. This matches the
+    // PATCH-like behavior the UI relies on (e.g. "edit description" sends only
+    // {description, type, upstream} and expects token_secret / inject_headers
+    // to be kept as-is).
+    if (m === 'PUT' && svcMatch && svcMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = svcMatch[1];
+      const existing = CONFIG.services[name];
+      if (!existing) return jsonError(res, 404, `Service ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const patch = normalizeServiceConfig(body);
+      // Build the next config: existing first, then patch overrides. For
+      // array fields, if the client sent an array (even empty), use it as-is;
+      // if they sent nothing, preserve the existing array.
+      const next = { ...existing, ...patch };
+      // Special case: allow_resolve / allowed_proxy as arrays
+      if (body.allowed_resolve !== undefined) next.allowed_resolve = patch.allowed_resolve || [];
+      if (body.allowed_proxy !== undefined) next.allowed_proxy = patch.allowed_proxy || [];
+      if (body.dashboard_actions !== undefined) {
+        next.dashboard_actions = patch.dashboard_actions || [];
+      }
+      if (body.inject_headers !== undefined) next.inject_headers = patch.inject_headers || {};
+      // Name is immutable via PUT — keep the URL's name.
+      const errs = validateServiceConfig(name, next);
+      if (errs.length > 0) {
+        audit({
+          action: 'admin_services_update',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'denied',
+          reason: 'validation',
+          errs,
+        });
+        return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+      }
+      const prev = { ...existing };
+      CONFIG.services[name] = next;
+      try {
+        await persistConfig();
+      } catch (e) {
+        CONFIG.services[name] = prev;
+        audit({
+          action: 'admin_services_update',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+      return send(res, 200, { ok: true, name });
     }
-    CONFIG.services[name] = cfg;
-    try {
-      await persistConfig();
-    } catch (e) {
+
+    // ----- DELETE /api/v1/admin/services/:name -----
+    if (m === 'DELETE' && svcMatch && svcMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = svcMatch[1];
+      const existing = CONFIG.services[name];
+      if (!existing) return jsonError(res, 404, `Service ${name} not found`);
       delete CONFIG.services[name];
-      audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+      try {
+        await persistConfig();
+      } catch (e) {
+        CONFIG.services[name] = existing;
+        audit({
+          action: 'admin_services_delete',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
+      return send(res, 200, { ok: true, name });
     }
-    audit({ action: 'admin_services_create', cn: ctx.cn, fp: ctx.fp, name, type: cfg.type, status: 'ok' });
-    return send(res, 200, { ok: true, name, type: cfg.type });
-  }
 
-  // ----- PUT /api/v1/admin/services/:name (update, PARTIAL) -----
-  // PUT semantics here: client sends only the fields they want to change.
-  // Fields NOT in the body are preserved from `existing`. This matches the
-  // PATCH-like behavior the UI relies on (e.g. "edit description" sends only
-  // {description, type, upstream} and expects token_secret / inject_headers
-  // to be kept as-is).
-  if (m === 'PUT' && svcMatch && svcMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = svcMatch[1];
-    const existing = CONFIG.services[name];
-    if (!existing) return jsonError(res, 404, `Service ${name} not found`);
-    const body = await readBody(req) || {};
-    const patch = normalizeServiceConfig(body);
-    // Build the next config: existing first, then patch overrides. For
-    // array fields, if the client sent an array (even empty), use it as-is;
-    // if they sent nothing, preserve the existing array.
-    const next = { ...existing, ...patch };
-    // Special case: allow_resolve / allowed_proxy as arrays
-    if (body.allowed_resolve !== undefined) next.allowed_resolve = patch.allowed_resolve || [];
-    if (body.allowed_proxy !== undefined) next.allowed_proxy = patch.allowed_proxy || [];
-    if (body.dashboard_actions !== undefined) next.dashboard_actions = patch.dashboard_actions || [];
-    if (body.inject_headers !== undefined) next.inject_headers = patch.inject_headers || {};
-    // Name is immutable via PUT — keep the URL's name.
-    const errs = validateServiceConfig(name, next);
-    if (errs.length > 0) {
-      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'denied', reason: 'validation', errs });
-      return jsonError(res, 400, 'Validation failed: ' + errs.join('; '));
+    // ----- POST /api/v1/admin/services/:name/test -----
+    // Triggers one read-only call to verify the wiring (upstream reachable,
+    // secret loaded, headers injected). Never mutates state.
+    if (m === 'POST' && svcTestMatch && svcTestMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = svcTestMatch[1];
+      const svc = CONFIG.services[name];
+      if (!svc) return jsonError(res, 404, `Service ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const picked = defaultServiceTest({ ...svc, name });
+      const method = body.method || picked.method || 'GET';
+      const path = body.path || picked.path || '/';
+      const query = body.query !== undefined ? body.query : picked.query;
+      const start = Date.now();
+      try {
+        // Pass the service name so callUpstream's error messages are useful.
+        const r = await callUpstream(
+          { ...svc, name },
+          method,
+          path,
+          query,
+          body.headers,
+          body.body,
+          { serviceName: name },
+        );
+        const classified = describeUpstreamStatus(r.status, {
+          path,
+          hostname: (() => {
+            try {
+              return new URL(svc.upstream).hostname;
+            } catch {
+              return '';
+            }
+          })(),
+        });
+        const ok = classified.ok === true;
+        audit({
+          action: 'admin_services_test',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: name,
+          method,
+          path,
+          upstream_status: r.status,
+          latency_ms: r.latency,
+          status: ok ? 'ok' : 'error',
+        });
+        return send(res, 200, {
+          ok,
+          method,
+          path,
+          upstream_status: r.status,
+          latency_ms: r.latency,
+          body_preview: r.body ? r.body.toString('utf8').slice(0, 500) : '',
+          ...(classified.error ? { error: classified.error } : {}),
+        });
+      } catch (err) {
+        audit({
+          action: 'admin_services_test',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: name,
+          method,
+          path,
+          status: 'error',
+          error: err.message,
+        });
+        return send(res, 502, {
+          ok: false,
+          error: err.message,
+          method,
+          path,
+          latency_ms: Date.now() - start,
+        });
+      }
     }
-    const prev = { ...existing };
-    CONFIG.services[name] = next;
-    try {
-      await persistConfig();
-    } catch (e) {
-      CONFIG.services[name] = prev;
-      audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'admin_services_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
 
-  // ----- DELETE /api/v1/admin/services/:name -----
-  if (m === 'DELETE' && svcMatch && svcMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = svcMatch[1];
-    const existing = CONFIG.services[name];
-    if (!existing) return jsonError(res, 404, `Service ${name} not found`);
-    delete CONFIG.services[name];
-    try {
-      await persistConfig();
-    } catch (e) {
-      CONFIG.services[name] = existing;
-      audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'admin_services_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
+    // ============================================================
+    // Phase 1.3: Clients CRUD + certificate lifecycle
+    // ============================================================
+    // GET    /api/v1/admin/clients             — list all
+    // GET    /api/v1/admin/clients/:name       — read one
+    // POST   /api/v1/admin/clients             — create (no cert yet)
+    // PUT    /api/v1/admin/clients/:name       — update config
+    // DELETE /api/v1/admin/clients/:name       — delete client (also cert files)
+    // POST   /api/v1/admin/clients/:name/enrollment — issue cert, return cert+key
+    // POST   /api/v1/admin/clients/:name/rotate     — re-issue cert, return new cert+key
+    // POST   /api/v1/admin/clients/:name/revoke    — remove fingerprint from config
+    // GET    /api/v1/admin/clients/:name/bundle     — download zip (cert+key+ca+install)
 
-  // ----- POST /api/v1/admin/services/:name/test -----
-  // Triggers one read-only call to verify the wiring (upstream reachable,
-  // secret loaded, headers injected). Never mutates state.
-  if (m === 'POST' && svcTestMatch && svcTestMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = svcTestMatch[1];
-    const svc = CONFIG.services[name];
-    if (!svc) return jsonError(res, 404, `Service ${name} not found`);
-    const body = await readBody(req) || {};
-    const picked = defaultServiceTest({ ...svc, name });
-    const method = (body.method || picked.method || 'GET');
-    const path = (body.path || picked.path || '/');
-    const query = body.query !== undefined ? body.query : picked.query;
-    const start = Date.now();
-    try {
-      // Pass the service name so callUpstream's error messages are useful.
-      const r = await callUpstream({ ...svc, name }, method, path, query, body.headers, body.body, { serviceName: name });
-      const classified = describeUpstreamStatus(r.status, { path, hostname: (() => { try { return new URL(svc.upstream).hostname; } catch { return ''; } })() });
-      const ok = classified.ok === true;
-      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, upstream_status: r.status, latency_ms: r.latency, status: ok ? 'ok' : 'error' });
+    const clientMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})$/);
+    const clientEnrollMatch = p.match(
+      /^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/enrollment$/,
+    );
+    const clientRotateMatch = p.match(
+      /^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/rotate$/,
+    );
+    const clientRevokeMatch = p.match(
+      /^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/revoke$/,
+    );
+    const clientBundleMatch = p.match(
+      /^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/bundle$/,
+    );
+
+    // ----- GET /api/v1/admin/clients -----
+    if (m === 'GET' && p === '/api/v1/admin/clients') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const writable = clientsDirWritable(); // probe once per list
+      const out = [];
+      for (const [name, c] of Object.entries(CONFIG.clients || {})) {
+        out.push({
+          name,
+          role: c.role || 'developer',
+          description: c.description || '',
+          allow_password_login: !!c.allow_password_login,
+          has_password: !!c.password,
+          cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
+          cert_present_on_disk: existsSync(certPaths.clientPaths(name).crt),
+          cert_key_present_on_disk: existsSync(certPaths.clientPaths(name).key),
+          rate_limit: c.rate_limit || '100/hour',
+          allowed_resolve: c.allowed_resolve || [],
+          allowed_proxy: c.allowed_proxy || [],
+          last_seen_ms_ago: lastSeenAgo(name),
+        });
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      audit({ action: 'admin_clients_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
       return send(res, 200, {
-        ok,
-        method,
-        path,
-        upstream_status: r.status,
-        latency_ms: r.latency,
-        body_preview: r.body ? r.body.toString('utf8').slice(0, 500) : '',
-        ...(classified.error ? { error: classified.error } : {}),
+        clients: out,
+        pki_writable: writable,
+        private_key_retention_enabled: RETAIN_CLIENT_PRIVATE_KEYS,
       });
-    } catch (err) {
-      audit({ action: 'admin_services_test', cn: ctx.cn, fp: ctx.fp, service: name, method, path, status: 'error', error: err.message });
-      return send(res, 502, { ok: false, error: err.message, method, path, latency_ms: Date.now() - start });
     }
-  }
 
-  // ============================================================
-  // Phase 1.3: Clients CRUD + certificate lifecycle
-  // ============================================================
-  // GET    /api/v1/admin/clients             — list all
-  // GET    /api/v1/admin/clients/:name       — read one
-  // POST   /api/v1/admin/clients             — create (no cert yet)
-  // PUT    /api/v1/admin/clients/:name       — update config
-  // DELETE /api/v1/admin/clients/:name       — delete client (also cert files)
-  // POST   /api/v1/admin/clients/:name/enrollment — issue cert, return cert+key
-  // POST   /api/v1/admin/clients/:name/rotate     — re-issue cert, return new cert+key
-  // POST   /api/v1/admin/clients/:name/revoke    — remove fingerprint from config
-  // GET    /api/v1/admin/clients/:name/bundle     — download zip (cert+key+ca+install)
-
-  const clientMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})$/);
-  const clientEnrollMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/enrollment$/);
-  const clientRotateMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/rotate$/);
-  const clientRevokeMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/revoke$/);
-  const clientBundleMatch = p.match(/^\/api\/v1\/admin\/clients\/([a-z][a-z0-9_.-]{0,63})\/bundle$/);
-
-  // ----- GET /api/v1/admin/clients -----
-  if (m === 'GET' && p === '/api/v1/admin/clients') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const writable = clientsDirWritable();  // probe once per list
-    const out = [];
-    for (const [name, c] of Object.entries(CONFIG.clients || {})) {
-      out.push({
+    // ----- GET /api/v1/admin/clients/:name -----
+    if (m === 'GET' && clientMatch && clientMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientMatch[1];
+      const c = CONFIG.clients[name];
+      if (!c) return jsonError(res, 404, `Client ${name} not found`);
+      return send(res, 200, {
         name,
         role: c.role || 'developer',
         description: c.description || '',
@@ -2277,639 +2831,979 @@ async function handle(req, res) {
         cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
         cert_present_on_disk: existsSync(certPaths.clientPaths(name).crt),
         cert_key_present_on_disk: existsSync(certPaths.clientPaths(name).key),
+        private_key_retention_enabled: RETAIN_CLIENT_PRIVATE_KEYS,
         rate_limit: c.rate_limit || '100/hour',
         allowed_resolve: c.allowed_resolve || [],
         allowed_proxy: c.allowed_proxy || [],
         last_seen_ms_ago: lastSeenAgo(name),
       });
     }
-    out.sort((a, b) => a.name.localeCompare(b.name));
-    audit({ action: 'admin_clients_list', cn: ctx.cn, fp: ctx.fp, count: out.length });
-    return send(res, 200, { clients: out, pki_writable: writable });
-  }
 
-  // ----- GET /api/v1/admin/clients/:name -----
-  if (m === 'GET' && clientMatch && clientMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientMatch[1];
-    const c = CONFIG.clients[name];
-    if (!c) return jsonError(res, 404, `Client ${name} not found`);
-    return send(res, 200, {
-      name,
-      role: c.role || 'developer',
-      description: c.description || '',
-      allow_password_login: !!c.allow_password_login,
-      has_password: !!c.password,
-      cert_fingerprint_sha256: c.cert_fingerprint_sha256 || null,
-      cert_present_on_disk: existsSync(certPaths.clientPaths(name).crt),
-      cert_key_present_on_disk: existsSync(certPaths.clientPaths(name).key),
-      rate_limit: c.rate_limit || '100/hour',
-      allowed_resolve: c.allowed_resolve || [],
-      allowed_proxy: c.allowed_proxy || [],
-      last_seen_ms_ago: lastSeenAgo(name),
-    });
-  }
-
-  // ----- POST /api/v1/admin/clients (create) -----
-  if (m === 'POST' && p === '/api/v1/admin/clients') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const body = await readBody(req) || {};
-    const name = body.name;
-    if (!isValidClientName(name)) {
-      return jsonError(res, 400, 'Invalid client name. Use [a-z][a-z0-9_.-]{0,63}.');
-    }
-    if (CONFIG.clients[name]) {
-      return jsonError(res, 409, `Client ${name} already exists.`);
-    }
-    let cfg;
-    try { cfg = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
-    const prev = CONFIG.clients[name];
-    CONFIG.clients[name] = cfg;
-    try {
-      await persistConfig();
-    } catch (e) {
-      delete CONFIG.clients[name];
-      audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'admin_clients_create', cn: ctx.cn, fp: ctx.fp, name, role: cfg.role, status: 'ok' });
-    return send(res, 200, { ok: true, name, role: cfg.role });
-  }
-
-  // ----- PUT /api/v1/admin/clients/:name (update) -----
-  if (m === 'PUT' && clientMatch && clientMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientMatch[1];
-    const existing = CONFIG.clients[name];
-    if (!existing) return jsonError(res, 404, `Client ${name} not found`);
-    const body = await readBody(req) || {};
-    let patch;
-    try { patch = normalizeClientConfig(body); } catch (e) { return jsonError(res, 400, e.message); }
-    // Apply patch over existing (don't touch cert_fingerprint_sha256; that's
-    // owned by the enrollment flow).
-    const prev = { ...existing };
-    const next = { ...existing, ...patch };
-    if (patch && Object.prototype.hasOwnProperty.call(patch, 'password') && !patch.password) {
-      delete next.password;
-    }
-    CONFIG.clients[name] = next;
-    try {
-      await persistConfig();
-    } catch (e) {
-      CONFIG.clients[name] = prev;
-      audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'admin_clients_update', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
-
-  // ----- DELETE /api/v1/admin/clients/:name -----
-  if (m === 'DELETE' && clientMatch && clientMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientMatch[1];
-    const existing = CONFIG.clients[name];
-    if (!existing) return jsonError(res, 404, `Client ${name} not found`);
-    delete CONFIG.clients[name];
-    // Best-effort: also remove cert files (revoke the cert material).
-    try { deleteClientCertFiles(name); } catch {}
-    try {
-      await persistConfig();
-    } catch (e) {
-      CONFIG.clients[name] = existing;
-      audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
-    }
-    audit({ action: 'admin_clients_delete', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
-
-  // Helper: issue a cert, persist fingerprint, return cert+key.
-  async function issueAndPersist(name) {
-    const cert = await issueClientCert(name); // DEFAULT_CERT_DAYS = 90
-    const c = CONFIG.clients[name];
-    if (!c) throw new Error(`Client ${name} disappeared mid-enrollment`);
-    const prev = { ...c };
-    c.cert_fingerprint_sha256 = cert.fingerprint_sha256;
-    try {
-      await persistConfig();
-    } catch (e) {
-      // Roll back the in-memory change; cert files stay (operator can re-try).
-      CONFIG.clients[name] = prev;
-      throw e;
-    }
-    return cert;
-  }
-
-  // Helper: is the clients dir writable? On most prod setups pki/ is mounted
-  // read-only (cert files are pre-issued and distributed out-of-band via
-  // scripts/issue-client-cert.sh). We probe once per request — cheap.
-  function clientsDirWritable() {
-    try {
-      const probe = join(CLIENTS_DIR, `.write-probe-${randomUUID()}`);
-      writeFileSync(probe, 'ok');
-      unlinkSync(probe);
-      return true;
-    } catch (e) { return false; }
-  }
-  // ----- POST /api/v1/admin/clients/:name/enrollment -----
-  // Issue a fresh cert for the client. Returns the cert PEM and key PEM
-  // directly in the response (one-time). For a real production system
-  // you'd want an out-of-band delivery channel (e.g. the user polls
-  // /enrollment?token=xxx). For Phase 1.3 we keep it simple.
-  if (m === 'POST' && clientEnrollMatch && clientEnrollMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientEnrollMatch[1];
-    if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
-    if (!clientsDirWritable()) {
-      return jsonError(res, 503, 'pki/clients/ is not writable on this server. ' +
-        'On production setups the PKI dir is mounted read-only; issue certs out-of-band via scripts/issue-client-cert.sh.');
-    }
-    let cert;
-    try { cert = await issueAndPersist(name); } catch (e) {
-      audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Issue failed: ${e.message}`);
-    }
-    audit({ action: 'admin_clients_enroll', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, {
-      ok: true,
-      name,
-      fingerprint_sha256: cert.fingerprint_sha256,
-      cert_pem: cert.cert_pem,
-      key_pem: cert.key_pem,
-      warning: 'key_pem is a SECRET. Deliver it to the client device out-of-band; do not paste it into chat or commit it to git.',
-    });
-  }
-
-  // ----- POST /api/v1/admin/clients/:name/rotate -----
-  if (m === 'POST' && clientRotateMatch && clientRotateMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientRotateMatch[1];
-    if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
-    if (!clientsDirWritable()) {
-      return jsonError(res, 503, 'pki/clients/ is not writable on this server. ' +
-        'On production setups the PKI dir is mounted read-only; issue certs out-of-band via scripts/issue-client-cert.sh.');
-    }
-    let cert;
-    try { cert = await issueAndPersist(name); } catch (e) {
-      audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Rotate failed: ${e.message}`);
-    }
-    audit({ action: 'admin_clients_rotate', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, {
-      ok: true,
-      name,
-      fingerprint_sha256: cert.fingerprint_sha256,
-      cert_pem: cert.cert_pem,
-      key_pem: cert.key_pem,
-      warning: 'key_pem is a SECRET. The OLD cert is still on disk but its fingerprint has been replaced; broker will accept only the new one.',
-    });
-  }
-
-  // ----- POST /api/v1/admin/clients/:name/revoke -----
-  // Removes the fingerprint from broker.yaml so the cert is no longer
-  // accepted (broker rejects on next connect). Cert files are kept on disk
-  // for forensics; /delete wipes them.
-  if (m === 'POST' && clientRevokeMatch && clientRevokeMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientRevokeMatch[1];
-    const c = CONFIG.clients[name];
-    if (!c) return jsonError(res, 404, `Client ${name} not found`);
-    if (!c.cert_fingerprint_sha256) {
-      return send(res, 200, { ok: true, name, already_revoked: true });
-    }
-    const prev = { ...c };
-    delete c.cert_fingerprint_sha256;
-    try {
-      await persistConfig();
-    } catch (e) {
-      CONFIG.clients[name] = prev;
-      audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Revoke failed: ${e.message}`);
-    }
-    audit({ action: 'admin_clients_revoke', cn: ctx.cn, fp: ctx.fp, name, status: 'ok' });
-    return send(res, 200, { ok: true, name });
-  }
-
-  // ----- GET /api/v1/admin/clients/:name/bundle -----
-  // Returns a zip with ca.crt, client.crt, client.key, and a tiny
-  // connect-client.sh helper. Note: contains the SECRET key, so the
-  // zip itself must be delivered out-of-band.
-  if (m === 'GET' && clientBundleMatch && clientBundleMatch[1]) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const name = clientBundleMatch[1];
-    const c = CONFIG.clients[name];
-    if (!c) return jsonError(res, 404, `Client ${name} not found`);
-    let certPem, keyPem, caPem;
-    try {
-      certPem = readClientCertPem(name);
-      keyPem  = readClientKeyPem(name);
-      caPem   = readCaCertPem();
-    } catch (e) {
-      return jsonError(res, 409, `Cert files missing for ${name}: ${e.message}. Run /enrollment first.`);
-    }
-    const installSh = [
-      '#!/bin/sh',
-      `# install.sh for ${name} — Secret Broker client bundle`,
-      '# Usage:  sh install.sh /opt/secret-broker/pki/clients',
-      '#         (creates ${name}.crt ${name}.key ca.crt with 0600 perms)',
-      '',
-      'set -e',
-      'DEST="${1:-/opt/secret-broker/pki/clients}"',
-      'mkdir -p "$DEST"',
-      `cat > "$DEST/${name}.crt" <<'CERT_EOF'`,
-      certPem,
-      'CERT_EOF',
-      `cat > "$DEST/${name}.key" <<'KEY_EOF'`,
-      keyPem,
-      'KEY_EOF',
-      'cat > "$DEST/ca.crt" <<\'CA_EOF\'',
-      caPem,
-      'CA_EOF',
-      `chmod 600 "$DEST/${name}.key"`,
-      'echo "Installed to $DEST"',
-      '',
-    ].join('\n');
-    // Build a minimal in-memory zip (no extra deps). Each entry: local
-    // file header (0x04034b50) + data + central dir + EOCD.
-    const files = [
-      { name: `${name}.crt`, data: certPem },
-      { name: `${name}.key`, data: keyPem },
-      { name: 'ca.crt',      data: caPem },
-      { name: 'install.sh',  data: installSh },
-    ];
-    const zip = buildZip(files);
-    res.writeHead(200, {
-      'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="${name}-bundle.zip"`,
-      'X-Broker-Version': BROKER_VERSION,
-    });
-    return res.end(zip);
-  }
-
-  // ----- POST /api/v1/proxy/:service -----
-  const proxyMatch = p.match(/^\/api\/v1\/proxy\/([a-z0-9_-]+)$/);
-  if (m === 'POST' && proxyMatch) {
-    const serviceName = proxyMatch[1];
-    const svc = CONFIG.services[serviceName];
-    if (!svc) {
-      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, status: 'unknown_service' });
-      return jsonError(res, 404, `Unknown service: ${serviceName}`);
-    }
-    const body = await readBody(req) || {};
-    const method = body.method || 'GET';
-    const path = body.path || '/';
-    if (!canProxy(ctx, serviceName, path)) {
-      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'denied' });
-      return jsonError(res, 403, `Not allowed to proxy ${serviceName}${path}`);
-    }
-    // v3.1 M5.5: Service ↔ Secret 联动 — 前置检查 token_secret 健康度
-    // 当 secret 处于 expired / unreachable / misconfigured / fail 时, 提前 503 阻断
-    const guard = checkSecretForService(svc.token_secret, healthcheckGetSecretStatus);
-    if (!guard.allowed) {
-      audit({
-        action: 'proxy_blocked',
-        cn: ctx.cn,
-        fp: ctx.fp,
-        service: serviceName,
-        method,
-        path,
-        secret: svc.token_secret || null,
-        secret_status: guard.status,
-        status: 'denied',
-      });
-      // 不同 status 给不同提示, 让用户知道改什么
-      const hint = guardHint(guard.status);
-      return jsonError(res, 503,
-        `Service ${serviceName} blocked: secret "${svc.token_secret}" is ${guard.status} (${guard.detail}). ` +
-        `Action: ${hint}. Run "Run Now" healthcheck to refresh.`);
-    }
-    try {
-      // Pass the service name so callUpstream's error messages are useful.
-      const r = await callUpstream({ ...svc, name: serviceName }, method, path, body.query, body.headers, body.body, { serviceName });
-      audit({
-        action: 'proxy',
-        cn: ctx.cn,
-        fp: ctx.fp,
-        service: serviceName,
-        method,
-        path,
-        upstream_status: r.status,
-        latency_ms: r.latency,
-        secret_status: guard.status,  // v3.1 M5.5: 记录当时 secret 健康度
-        status: r.status >= 200 && r.status < 400 ? 'ok' : 'error',
-      });
-      // forward response
-      res.writeHead(r.status, { ...r.headers, 'X-Broker-Latency-Ms': String(r.latency), 'X-Broker-Version': BROKER_VERSION });
-      return res.end(r.body);
-    } catch (err) {
-      audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'error', error: err.message });
-      return jsonError(res, 502, `Upstream error: ${err.message}`);
-    }
-  }
-
-  // ----- GET /api/v1/audit -----
-  if (m === 'GET' && p === '/api/v1/audit') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const since = url.searchParams.get('since');
-    const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-    return send(res, 200, { events: readAudit({ since, limit }) });
-  }
-
-  // ============================================================
-  // Phase 1.4: Audit enhancements
-  //   - filtered list (client/service/action/status/since/until)
-  //   - SSE real-time stream
-  //   - JSON / CSV export
-  // ============================================================
-  const auditFilterMatch = p.match(/^\/api\/v1\/admin\/audit\/export\.(json|csv)$/);
-  if (m === 'GET' && auditFilterMatch) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const fmt = auditFilterMatch[1];
-    const params = {
-      client:  url.searchParams.get('client'),
-      service: url.searchParams.get('service'),
-      action:  url.searchParams.get('action'),
-      status:  url.searchParams.get('status'),
-      since:   url.searchParams.get('since'),
-      until:   url.searchParams.get('until'),
-      limit:   parseInt(url.searchParams.get('limit') || '5000', 10),
-    };
-    const events = readAuditFiltered(params);
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    if (fmt === 'json') {
-      const body = JSON.stringify({ exported_at: new Date().toISOString(), count: events.length, events }, null, 2);
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Content-Disposition': `attachment; filename="audit-${stamp}.json"`,
-        'X-Broker-Version': BROKER_VERSION,
-        ...securityHeaders({ kind: 'json' }),
-      });
-      return res.end(body);
-    } else { // csv
-      // Columns: ts, action, status, cn, fp, service, method, path, error, name, field, reason
-      const cols = ['ts','action','status','cn','fp','service','method','path','error','name','field','reason','latency_ms','upstream_status'];
-      const escape = (v) => {
-        if (v == null) return '';
-        const s = String(v);
-        return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-      };
-      const lines = [cols.join(',')];
-      for (const e of events) lines.push(cols.map(c => escape(e[c])).join(','));
-      const body = lines.join('\n') + '\n';
-      res.writeHead(200, {
-        'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="audit-${stamp}.csv"`,
-        'X-Broker-Version': BROKER_VERSION,
-        ...securityHeaders({ kind: 'json' }),
-      });
-      return res.end(body);
-    }
-  }
-
-  // ----- GET /api/v1/admin/audit (filtered list) -----
-  if (m === 'GET' && p === '/api/v1/admin/audit') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const params = {
-      client:  url.searchParams.get('client'),
-      service: url.searchParams.get('service'),
-      action:  url.searchParams.get('action'),
-      status:  url.searchParams.get('status'),
-      since:   url.searchParams.get('since'),
-      until:   url.searchParams.get('until'),
-      limit:   parseInt(url.searchParams.get('limit') || '200', 10),
-    };
-    const events = readAuditFiltered(params);
-    return send(res, 200, { events });
-  }
-
-  // ----- GET /api/v1/admin/audit/facets (dropdown options from live config + logs) -----
-  if (m === 'GET' && p === '/api/v1/admin/audit/facets') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    return send(res, 200, collectAuditFacets());
-  }
-
-  // ----- DELETE /api/v1/admin/audit (wipe jsonl files; writes one audit_cleared event) -----
-  if (m === 'DELETE' && p === '/api/v1/admin/audit') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
-    const body = await readBody(req) || {};
-    if (body.confirm !== true && url.searchParams.get('confirm') !== 'true') {
-      return jsonError(res, 400, 'Pass {confirm:true} to clear audit logs');
-    }
-    const deleted = clearAuditLogs();
-    audit({ action: 'audit_cleared', cn: ctx.cn, fp: ctx.fp, status: 'ok', deleted: deleted.length });
-    return send(res, 200, { ok: true, deleted });
-  }
-
-  // ----- GET /api/v1/ws-stats (v4.4.0: admin inspect of WS subscribers) -----
-  // Returns subscriber count + per-event count + (admin only) full subscriber list.
-  // docs/WEBSOCKET.md:150 — was a documented-but-unimplemented endpoint.
-  if (m === 'GET' && p === '/api/v1/ws-stats') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const stats = getStats();
-    // 也返回每事件订阅计数,便于 dashboard 看 alert 流是否有人在听
-    const eventCounts = {};
-    for (const e of stats.events) {
-      eventCounts[e] = (SUBS_BY_EVENT.get(e) || new Set()).size;
-    }
-    return send(res, 200, {
-      subscriber_count: stats.subscriberCount,
-      events: stats.events,
-      event_counts: eventCounts,
-      subscribers: listSubscribers(),
-      version: BROKER_VERSION,
-    });
-  }
-
-  // ----- GET /api/v1/admin/audit/stream (SSE) -----
-  // Server-Sent Events: streams new audit events to the admin UI live.
-  // Browser opens via `new EventSource('/api/v1/admin/audit/stream')`.
-  // Sends a hello ping, then `event: <name>\ndata: <json>\n\n` for each event.
-  // Closes after 30 minutes (clients can reconnect).
-  // V4.8.0: 同一 admin 客户端最多 3 个并发 SSE 连接,超过返回 429 (REVIEW.md P6)。
-  if (m === 'GET' && p === '/api/v1/admin/audit/stream') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    // V4.8.0: 并发上限 (REVIEW.md P6)
-    const adminKey = adminSseKey(ctx.clientName || ctx.cn);
-    const slot = tryAcquireSseSlot(adminKey);
-    if (!slot.acquired) {
-      audit({ action: 'sse_open', status: 'denied', reason: 'too_many_concurrent', client: ctx.clientName, current: slot.current, limit: slot.limit });
-      return jsonError(res, 429, `Too many concurrent SSE connections for ${ctx.clientName} (limit ${slot.limit})`);
-    }
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',  // disable buffering under nginx
-      'X-Broker-Version': BROKER_VERSION,
-      ...securityHeaders({ kind: 'sse' }),
-    });
-    res.write(': hello\n\n');
-    res.write('event: ready\ndata: {"ok":true}\n\n');
-    const onEvent = (e) => {
+    // ----- POST /api/v1/admin/clients (create) -----
+    if (m === 'POST' && p === '/api/v1/admin/clients') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const body = (await readBody(req)) || {};
+      const name = body.name;
+      if (!isValidClientName(name)) {
+        return jsonError(res, 400, 'Invalid client name. Use [a-z][a-z0-9_.-]{0,63}.');
+      }
+      if (CONFIG.clients[name]) {
+        return jsonError(res, 409, `Client ${name} already exists.`);
+      }
+      let cfg;
       try {
-        res.write(`event: audit\ndata: ${JSON.stringify(e)}\n\n`);
-      } catch (e) { /* socket closed */ }
-    };
-    AUDIT_BUS.on('event', onEvent);
-    // Keep-alive comment every 25s (so proxies don't kill idle conns)
-    const ka = setInterval(() => { try { res.write(': ka\n\n'); } catch {} }, 25_000);
-    // Auto-close after 30 min
-    const closeTimer = setTimeout(() => { try { res.end(); } catch {} }, 30 * 60 * 1000);
-    req.on('close', () => {
-      clearInterval(ka);
-      clearTimeout(closeTimer);
-      AUDIT_BUS.off('event', onEvent);
-      releaseSseSlot(adminKey);  // V4.8.0
-    });
-    return;  // keep connection open
-  }
-
-  // ----- GET /api/v1/admin/healthcheck/stream (SSE) -----
-  // v3.1.1 M5.6: 实时推送 healthcheck 状态
-  //   event: run_complete    — 每次 healthcheck 跑完 (full state)
-  //   event: status_change   — 状态变化 (alert history entry)
-  //   event: ready           — 初次连接
-  // Closes after 30 minutes (clients can reconnect).
-  if (m === 'GET' && p === '/api/v1/admin/healthcheck/stream') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'X-Broker-Version': BROKER_VERSION,
-      ...securityHeaders({ kind: 'sse' }),
-    });
-    res.write(': hello\n\n');
-    res.write('event: ready\ndata: {"ok":true}\n\n');
-    const onComplete = (state) => {
-      try { res.write(`event: run_complete\ndata: ${JSON.stringify(state)}\n\n`); } catch (e) { /* socket closed */ }
-    };
-    const onChange = (change) => {
-      try { res.write(`event: status_change\ndata: ${JSON.stringify(change)}\n\n`); } catch (e) { /* socket closed */ }
-    };
-    HEALTHCHECK_BUS.on('run_complete', onComplete);
-    HEALTHCHECK_BUS.on('status_change', onChange);
-    // 启动时立即推一次当前 state
-    try {
-      const currentState = healthcheckGetStatus();
-      res.write(`event: run_complete\ndata: ${JSON.stringify(currentState)}\n\n`);
-    } catch (e) { /* state not loaded yet */ }
-    const ka = setInterval(() => { try { res.write(': ka\n\n'); } catch {} }, 25_000);
-    const closeTimer = setTimeout(() => { try { res.end(); } catch {} }, 30 * 60 * 1000);
-    req.on('close', () => {
-      clearInterval(ka);
-      clearTimeout(closeTimer);
-      HEALTHCHECK_BUS.off('run_complete', onComplete);
-      HEALTHCHECK_BUS.off('status_change', onChange);
-    });
-    return;
-  }
-
-  // ----- GET /api/v1/admin/alerts/history -----
-  // v3.1.1 M5.6: 返 alert_history (状态变化时间线)
-  if (m === 'GET' && p === '/api/v1/admin/alerts/history') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const limit = parseInt(url.searchParams.get('limit') || '50', 10);
-    const events = healthcheckGetAlertHistory(limit);
-    return send(res, 200, { events, count: events.length });
-  }
-
-  // ----- POST /api/v1/reload (admin only) -----
-  if (m === 'POST' && p === '/api/v1/reload') {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const tok = url.searchParams.get('token') || req.headers['x-reload-token'];
-    if (tok !== RELOAD_TOKEN) return jsonError(res, 401, 'Bad reload token');
-    try {
-      await loadConfig();
-      await loadSecrets();
-      audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
-      return send(res, 200, { reloaded: true, services: Object.keys(CONFIG.services), secrets: SECRET_CACHE.size });
-    } catch (err) {
-      audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'error', error: err.message });
-      return jsonError(res, 500, err.message);
+        cfg = normalizeClientConfig(body);
+      } catch (e) {
+        return jsonError(res, 400, e.message);
+      }
+      if (cfg.password === null) delete cfg.password;
+      if (cfg.allow_password_login && !cfg.password) {
+        return jsonError(res, 400, 'A password is required when password login is enabled');
+      }
+      const verification = await requireStepUp(body.verify, 'admin_clients_create', name);
+      if (!verification) return;
+      CONFIG.clients[name] = cfg;
+      try {
+        await persistConfig();
+      } catch (e) {
+        delete CONFIG.clients[name];
+        audit({
+          action: 'admin_clients_create',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({
+        action: 'admin_clients_create',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        role: cfg.role,
+        status: 'ok',
+        mfa_method: verification.method,
+      });
+      return send(res, 200, { ok: true, name, role: cfg.role });
     }
-  }
 
-  // ----- POST /api/v1/rotate/:name -----
-  // v3.1.1 M5.9: 实际记录轮换时间戳 + rotation_history (凭据零接触: 不接受 value, 只标 "我刚轮换了 X")
-  // 凭据值的实际修改走 /api/v1/admin/secrets/:name (PUT), 那里有完整的值更新逻辑
-  // 此端点用于"我刚在外部 (GitHub/CF/...) 轮换了, 告诉 broker 一下" — 写 last_rotated_at + history
-  const rotMatch = p.match(/^\/api\/v1\/rotate\/([a-zA-Z0-9_.-]+)$/);
-  if (m === 'POST' && rotMatch) {
-    if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
-    const name = rotMatch[1];
-    const existing = SECRET_CACHE.get(name);
-    if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
-    const body = await readBody(req) || {};
-    const now = new Date().toISOString();
-    const who = ctx.cn || 'admin';
-    const note = (body.note && typeof body.note === 'string') ? body.note.slice(0, 200) : '';
-    const source = (body.source && typeof body.source === 'string') ? body.source.slice(0, 50) : 'manual';
-    // rotation_history: unshift 最新, cap 50 entries
-    const history = Array.isArray(existing.rotation_history) ? existing.rotation_history.slice() : [];
-    history.unshift({ ts: now, by: who, note, source });
-    if (history.length > 50) history.length = 50;
-    const updated = { ...existing, last_rotated_at: now, rotation_history: history };
-    const prevSnapshot = JSON.parse(JSON.stringify(existing));
-    SECRET_CACHE.set(name, updated);
-    try {
-      await persistSecretsDetail();
-    } catch (e) {
-      SECRET_CACHE.set(name, prevSnapshot);
-      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'error', error: e.message });
-      return jsonError(res, 500, `Persist failed: ${e.message}`);
+    // ----- PUT /api/v1/admin/clients/:name (update) -----
+    if (m === 'PUT' && clientMatch && clientMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientMatch[1];
+      const existing = CONFIG.clients[name];
+      if (!existing) return jsonError(res, 404, `Client ${name} not found`);
+      const body = (await readBody(req)) || {};
+      let patch;
+      try {
+        patch = normalizeClientConfig(body);
+      } catch (e) {
+        return jsonError(res, 400, e.message);
+      }
+      // Apply patch over existing (don't touch cert_fingerprint_sha256; that's
+      // owned by the enrollment flow).
+      const previous = existing;
+      const next = { ...existing, ...patch };
+      if (Object.prototype.hasOwnProperty.call(patch, 'password') && patch.password === null) {
+        delete next.password;
+        delete next.password_set_at;
+        delete next.last_password_change;
+      }
+      if (next.allow_password_login && !next.password) {
+        return jsonError(res, 400, 'A password is required when password login is enabled');
+      }
+      const securityChanged = clientSecurityConfigChanged(existing, next);
+      let verification = null;
+      if (securityChanged) {
+        verification = await requireStepUp(body.verify, 'admin_clients_update', name);
+        if (!verification) return;
+      }
+      CONFIG.clients[name] = next;
+      try {
+        await persistConfig();
+      } catch (e) {
+        CONFIG.clients[name] = previous;
+        audit({
+          action: 'admin_clients_update',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      const sessionsRevoked = securityChanged ? deleteSessionsForClient(name) : 0;
+      audit({
+        action: 'admin_clients_update',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        status: 'ok',
+        security_changed: securityChanged,
+        sessions_revoked: sessionsRevoked,
+        mfa_method: verification?.method || null,
+      });
+      return send(res, 200, {
+        ok: true,
+        name,
+        security_changed: securityChanged,
+        sessions_revoked: sessionsRevoked,
+        reauthentication_required: sessionsRevoked > 0,
+      });
     }
-    audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'ok', source, note });
-    return send(res, 200, {
-      rotated: name,
-      last_rotated_at: now,
-      rotation_count: history.length,
-      // 凭据零接触: 不返 value, 只返 metadata
-      note: 'Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or scripts/rotate-secret-ecs.sh).',
-    });
-  }
 
-  // ----- SSH proxy (was in API_HANDLERS but never dispatched) -----
-  if (p.startsWith('/api/v1/ssh')) {
-    const sshDeps = {
-      send,
-      jsonError,
-      readBody,
-      audit,
-      ctx,
-      config: CONFIG,
-      rateLimit: (c, _bucket) => rateLimit(c),
-      getSecret: async (name, c) => {
-        if (!canResolve(c, name)) {
-          throw new Error('secret not accessible');
+    // ----- DELETE /api/v1/admin/clients/:name -----
+    if (m === 'DELETE' && clientMatch && clientMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientMatch[1];
+      const existing = CONFIG.clients[name];
+      if (!existing) return jsonError(res, 404, `Client ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const verification = await requireStepUp(body.verify, 'admin_clients_delete', name);
+      if (!verification) return;
+      const previousApiKeys = CONFIG.api_keys;
+      const apiKeysRemoved = (CONFIG.api_keys || []).filter((key) => key.client === name).length;
+      delete CONFIG.clients[name];
+      CONFIG.api_keys = (CONFIG.api_keys || []).filter((key) => key.client !== name);
+      try {
+        await persistConfig();
+      } catch (e) {
+        CONFIG.clients[name] = existing;
+        CONFIG.api_keys = previousApiKeys;
+        audit({
+          action: 'admin_clients_delete',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+
+      const sessionsRevoked = deleteSessionsForClient(name);
+      // Config is already durable, so a leftover cert file cannot authenticate;
+      // remove the material best-effort after the irreversible boundary.
+      deleteClientCertFiles(name);
+      audit({
+        action: 'admin_clients_delete',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        status: 'ok',
+        sessions_revoked: sessionsRevoked,
+        api_keys_removed: apiKeysRemoved,
+        mfa_method: verification.method,
+      });
+      return send(res, 200, {
+        ok: true,
+        name,
+        sessions_revoked: sessionsRevoked,
+        api_keys_removed: apiKeysRemoved,
+      });
+    }
+
+    // Issue a cert and make the filesystem/config transition transactional.
+    // OpenSSL replaces the final files before broker.yaml is persisted, so keep
+    // in-memory copies of the previous material and restore both sides on error.
+    async function issueAndPersist(name) {
+      const c = CONFIG.clients[name];
+      if (!c) throw new Error(`Client ${name} disappeared mid-enrollment`);
+      const clientSnapshot = structuredClone(c);
+      const fileSnapshot = snapshotClientCertFiles(name);
+      try {
+        const cert = await issueClientCert(name); // DEFAULT_CERT_DAYS = 90
+        const bundle = createClientBundle({
+          name,
+          certPem: cert.cert_pem,
+          keyPem: cert.key_pem,
+          caPem: readCaCertPem(),
+        });
+        if (!RETAIN_CLIENT_PRIVATE_KEYS) {
+          deleteClientKeyFile(name, { strict: true });
         }
-        const entry = getSecret(name);
-        if (!entry) throw new Error('secret not loaded');
-        const fields = entry.fields || {};
+        const rotatedAt = new Date();
+        c.cert_fingerprint_sha256 = cert.fingerprint_sha256;
+        c.last_cert_rotation = rotatedAt.toISOString();
+        c.cert_expires_at = new Date(rotatedAt.getTime() + cert.days * 86_400_000).toISOString();
+        await persistConfig();
         return {
-          ...fields,
-          private_key: fields.private_key || fields.key || '',
-          type: entry.type,
-          name: entry.name || name,
+          cert,
+          bundle,
+          previousFingerprint: clientSnapshot.cert_fingerprint_sha256 || null,
+          privateKeyRetained: RETAIN_CLIENT_PRIVATE_KEYS,
         };
-      },
-    };
-    const sshHandled = await handleSshProxy(req, res, route, sshDeps);
-    // handleSshProxy historically returned undefined after send(); treat headersSent as handled
-    if (sshHandled || res.headersSent) {
-      observeMs('broker_http_request_duration_ms', Date.now() - t0);
-      inc('broker_http_requests_total', 1, { route: p });
+      } catch (error) {
+        restorePlainObject(c, clientSnapshot);
+        try {
+          restoreClientCertFiles(name, fileSnapshot);
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Certificate issuance failed and filesystem rollback was incomplete',
+          );
+        }
+        throw error;
+      }
+    }
+
+    // Helper: is the clients dir writable? On most prod setups pki/ is mounted
+    // read-only (cert files are pre-issued and distributed out-of-band via
+    // scripts/issue-client-cert.sh). We probe once per request — cheap.
+    function clientsDirWritable() {
+      try {
+        const probe = join(CLIENTS_DIR, `.write-probe-${randomUUID()}`);
+        writeFileSync(probe, 'ok');
+        unlinkSync(probe);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    // ----- POST /api/v1/admin/clients/:name/enrollment -----
+    // Issue a fresh cert for the client. Returns the cert PEM and key PEM
+    // directly in the response (one-time). For a real production system
+    // you'd want an out-of-band delivery channel (e.g. the user polls
+    // /enrollment?token=xxx). For Phase 1.3 we keep it simple.
+    if (m === 'POST' && clientEnrollMatch && clientEnrollMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientEnrollMatch[1];
+      if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const verification = await requireStepUp(body.verify, 'admin_clients_enroll', name);
+      if (!verification) return;
+      if (!clientsDirWritable()) {
+        return jsonError(res, 503, 'Certificate issuance is unavailable on this server');
+      }
+      let issuance;
+      try {
+        issuance = await issueAndPersist(name);
+      } catch (e) {
+        audit({
+          action: 'admin_clients_enroll',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return jsonError(res, 500, 'Unable to issue client certificate');
+      }
+      const sessionsRevoked = deleteSessionsForFingerprint(issuance.previousFingerprint);
+      audit({
+        action: 'admin_clients_enroll',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        status: 'ok',
+        sessions_revoked: sessionsRevoked,
+        mfa_method: verification.method,
+      });
+      return send(res, 200, {
+        ok: true,
+        name,
+        fingerprint_sha256: issuance.cert.fingerprint_sha256,
+        cert_pem: issuance.cert.cert_pem,
+        key_pem: issuance.cert.key_pem,
+        bundle_base64: issuance.bundle.toString('base64'),
+        cert_expires_at: CONFIG.clients[name].cert_expires_at,
+        sessions_revoked: sessionsRevoked,
+        private_key_retained: issuance.privateKeyRetained,
+        warning: issuance.privateKeyRetained
+          ? 'key_pem is a SECRET. Compatibility retention is enabled; disable BROKER_RETAIN_CLIENT_PRIVATE_KEYS after migration.'
+          : 'key_pem and bundle_base64 are one-time secrets. Deliver one out-of-band; the broker has removed the private-key file.',
+      });
+    }
+
+    // ----- POST /api/v1/admin/clients/:name/rotate -----
+    if (m === 'POST' && clientRotateMatch && clientRotateMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientRotateMatch[1];
+      if (!CONFIG.clients[name]) return jsonError(res, 404, `Client ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const verification = await requireStepUp(body.verify, 'admin_clients_rotate', name);
+      if (!verification) return;
+      if (!clientsDirWritable()) {
+        return jsonError(res, 503, 'Certificate rotation is unavailable on this server');
+      }
+      let issuance;
+      try {
+        issuance = await issueAndPersist(name);
+      } catch (e) {
+        audit({
+          action: 'admin_clients_rotate',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return jsonError(res, 500, 'Unable to rotate client certificate');
+      }
+      const sessionsRevoked = deleteSessionsForFingerprint(issuance.previousFingerprint);
+      audit({
+        action: 'admin_clients_rotate',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        status: 'ok',
+        sessions_revoked: sessionsRevoked,
+        mfa_method: verification.method,
+      });
+      return send(res, 200, {
+        ok: true,
+        name,
+        fingerprint_sha256: issuance.cert.fingerprint_sha256,
+        cert_pem: issuance.cert.cert_pem,
+        key_pem: issuance.cert.key_pem,
+        bundle_base64: issuance.bundle.toString('base64'),
+        cert_expires_at: CONFIG.clients[name].cert_expires_at,
+        sessions_revoked: sessionsRevoked,
+        private_key_retained: issuance.privateKeyRetained,
+        warning: issuance.privateKeyRetained
+          ? 'key_pem is a SECRET. The previous fingerprint and sessions are revoked, but compatibility retention remains enabled.'
+          : 'key_pem and bundle_base64 are one-time secrets. The previous fingerprint and sessions are revoked; the new private-key file was removed.',
+      });
+    }
+
+    // ----- POST /api/v1/admin/clients/:name/revoke -----
+    // Removes the fingerprint from broker.yaml so the cert is no longer
+    // accepted (broker rejects on next connect). Cert files are kept on disk
+    // for forensics; /delete wipes them.
+    if (m === 'POST' && clientRevokeMatch && clientRevokeMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientRevokeMatch[1];
+      const c = CONFIG.clients[name];
+      if (!c) return jsonError(res, 404, `Client ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const verification = await requireStepUp(body.verify, 'admin_clients_revoke', name);
+      if (!verification) return;
+      if (!c.cert_fingerprint_sha256) {
+        return send(res, 200, { ok: true, name, already_revoked: true });
+      }
+      const clientSnapshot = structuredClone(c);
+      const previousFingerprint = c.cert_fingerprint_sha256;
+      delete c.cert_fingerprint_sha256;
+      c.cert_revoked_at = new Date().toISOString();
+      try {
+        await persistConfig();
+      } catch (e) {
+        restorePlainObject(c, clientSnapshot);
+        audit({
+          action: 'admin_clients_revoke',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      const sessionsRevoked = deleteSessionsForFingerprint(previousFingerprint);
+      audit({
+        action: 'admin_clients_revoke',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        status: 'ok',
+        sessions_revoked: sessionsRevoked,
+        mfa_method: verification.method,
+      });
+      return send(res, 200, { ok: true, name, sessions_revoked: sessionsRevoked });
+    }
+
+    // ----- POST /api/v1/admin/clients/:name/bundle -----
+    // Legacy compatibility only. Secure-default enrollment/rotation returns an
+    // in-memory one-time bundle and deletes the private-key file immediately.
+    if (clientBundleMatch && clientBundleMatch[1]) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const name = clientBundleMatch[1];
+      const c = CONFIG.clients[name];
+      if (!c) return jsonError(res, 404, `Client ${name} not found`);
+      if (!RETAIN_CLIENT_PRIVATE_KEYS) {
+        return jsonError(
+          res,
+          410,
+          'Client private keys are not retained; issue or rotate the certificate to obtain a new one-time bundle',
+        );
+      }
+      if (m !== 'POST') {
+        return send(
+          res,
+          405,
+          {
+            error: 'Use POST with {verify} to retrieve a retained compatibility bundle',
+            status: 405,
+          },
+          { Allow: 'POST' },
+        );
+      }
+
+      const body = (await readBody(req)) || {};
+      const verification = await requireStepUp(body.verify, 'admin_clients_bundle', name);
+      if (!verification) return;
+
+      let bundle;
+      try {
+        bundle = createClientBundle({
+          name,
+          certPem: readClientCertPem(name),
+          keyPem: readClientKeyPem(name),
+          caPem: readCaCertPem(),
+        });
+      } catch (error) {
+        audit({
+          action: 'admin_clients_bundle',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          name,
+          status: 'error',
+          error: error.message,
+        });
+        return jsonError(res, 409, `Client certificate bundle is unavailable for ${name}`);
+      }
+      audit({
+        action: 'admin_clients_bundle',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        name,
+        status: 'ok',
+        mfa_method: verification.method,
+      });
+      return sendBufferSafe(res, 200, bundle, 'application/zip', {
+        'Content-Disposition': `attachment; filename="${name}-bundle.zip"`,
+        exposeVersion: true,
+      });
+    }
+
+    // ----- POST /api/v1/proxy/:service -----
+    const proxyMatch = p.match(/^\/api\/v1\/proxy\/([a-z0-9_-]+)$/);
+    if (m === 'POST' && proxyMatch) {
+      const serviceName = proxyMatch[1];
+      const svc = CONFIG.services[serviceName];
+      if (!svc) {
+        audit({
+          action: 'proxy',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: serviceName,
+          status: 'unknown_service',
+        });
+        return jsonError(res, 404, `Unknown service: ${serviceName}`);
+      }
+      const body = (await readBody(req)) || {};
+      const method = normalizeProxyMethod(body.method || 'GET');
+      let path;
+      try {
+        const resolved = resolveUpstreamUrl(svc.upstream, body.path || '/', {
+          allowInsecureHttp: svc.allow_insecure_http === true,
+        });
+        path = resolved.pathname + resolved.search;
+      } catch {
+        return jsonError(res, 400, 'Invalid proxy path');
+      }
+      if (!method) {
+        audit({
+          action: 'proxy',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: serviceName,
+          method: body.method,
+          path,
+          status: 'denied',
+          reason: 'invalid_method',
+        });
+        return jsonError(res, 400, `Unsupported proxy HTTP method: ${String(body.method)}`);
+      }
+      const authorizationPath = new URL(path, 'https://broker.invalid').pathname;
+      if (
+        !checkMethodAllowed(svc.allow_methods, method) ||
+        !checkPathAllowed(svc.allow_paths, authorizationPath) ||
+        !canProxy(ctx, serviceName, authorizationPath, method)
+      ) {
+        audit({
+          action: 'proxy',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: serviceName,
+          method,
+          path,
+          status: 'denied',
+        });
+        return jsonError(res, 403, `Not allowed to proxy ${serviceName}${path}`);
+      }
+      // v3.1 M5.5: Service ↔ Secret 联动 — 前置检查 token_secret 健康度
+      // 当 secret 处于 expired / unreachable / misconfigured / fail 时, 提前 503 阻断
+      const guard = checkSecretForService(svc.token_secret, healthcheckGetSecretStatus);
+      if (!guard.allowed) {
+        audit({
+          action: 'proxy_blocked',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: serviceName,
+          method,
+          path,
+          secret: svc.token_secret || null,
+          secret_status: guard.status,
+          status: 'denied',
+        });
+        // 不同 status 给不同提示。只有管理员获得内部 secret 名称/detail；
+        // 普通调用方只需要知道 service 当前凭据不可用，避免泄露凭据目录元数据。
+        const hint = guardHint(guard.status);
+        const message =
+          ctx.client.role === 'admin'
+            ? `Service ${serviceName} blocked: secret "${svc.token_secret}" is ${guard.status} (${guard.detail}). Action: ${hint}. Run "Run Now" healthcheck to refresh.`
+            : `Service ${serviceName} is temporarily unavailable because its credential is ${guard.status}. Action: ${hint}.`;
+        return jsonError(res, 503, message);
+      }
+      try {
+        // Pass the service name so callUpstream's error messages are useful.
+        const r = await callUpstream(
+          { ...svc, name: serviceName },
+          method,
+          path,
+          body.query,
+          body.headers,
+          body.body,
+          { serviceName },
+        );
+        audit({
+          action: 'proxy',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: serviceName,
+          method,
+          path,
+          upstream_status: r.status,
+          latency_ms: r.latency,
+          secret_status: guard.status, // v3.1 M5.5: 记录当时 secret 健康度
+          status: r.status >= 200 && r.status < 400 ? 'ok' : 'error',
+        });
+        // forward response
+        res.writeHead(r.status, {
+          ...r.headers,
+          ...securityHeaders({ kind: 'json' }),
+          'Content-Security-Policy': "sandbox; default-src 'none'; frame-ancestors 'none'",
+          'X-Broker-Latency-Ms': String(r.latency),
+          'X-Broker-Version': BROKER_VERSION,
+        });
+        return res.end(r.body);
+      } catch (err) {
+        audit({
+          action: 'proxy',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          service: serviceName,
+          method,
+          path,
+          status: 'error',
+          error: err.message,
+        });
+        const message =
+          ctx.client.role === 'admin'
+            ? `Upstream error: ${err.message}`
+            : 'Upstream request failed';
+        return jsonError(res, 502, message);
+      }
+    }
+
+    // ----- GET /api/v1/audit -----
+    if (m === 'GET' && p === '/api/v1/audit') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const since = url.searchParams.get('since');
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+      return send(res, 200, { events: readAudit({ since, limit }) });
+    }
+
+    // ============================================================
+    // Phase 1.4: Audit enhancements
+    //   - filtered list (client/service/action/status/since/until)
+    //   - SSE real-time stream
+    //   - JSON / CSV export
+    // ============================================================
+    const auditFilterMatch = p.match(/^\/api\/v1\/admin\/audit\/export\.(json|csv)$/);
+    if (m === 'GET' && auditFilterMatch) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const fmt = auditFilterMatch[1];
+      const params = {
+        client: url.searchParams.get('client'),
+        service: url.searchParams.get('service'),
+        action: url.searchParams.get('action'),
+        status: url.searchParams.get('status'),
+        since: url.searchParams.get('since'),
+        until: url.searchParams.get('until'),
+        limit: parseInt(url.searchParams.get('limit') || '5000', 10),
+      };
+      const events = readAuditFiltered(params);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      if (fmt === 'json') {
+        const body = JSON.stringify(
+          { exported_at: new Date().toISOString(), count: events.length, events },
+          null,
+          2,
+        );
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="audit-${stamp}.json"`,
+          'X-Broker-Version': BROKER_VERSION,
+          ...securityHeaders({ kind: 'json' }),
+        });
+        return res.end(body);
+      } else {
+        // csv
+        // Columns: ts, action, status, cn, fp, service, method, path, error, name, field, reason
+        const cols = [
+          'ts',
+          'action',
+          'status',
+          'cn',
+          'fp',
+          'service',
+          'method',
+          'path',
+          'error',
+          'name',
+          'field',
+          'reason',
+          'latency_ms',
+          'upstream_status',
+        ];
+        const escape = (v) => {
+          if (v == null) return '';
+          const s = String(v);
+          return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        };
+        const lines = [cols.join(',')];
+        for (const e of events) lines.push(cols.map((c) => escape(e[c])).join(','));
+        const body = lines.join('\n') + '\n';
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="audit-${stamp}.csv"`,
+          'X-Broker-Version': BROKER_VERSION,
+          ...securityHeaders({ kind: 'json' }),
+        });
+        return res.end(body);
+      }
+    }
+
+    // ----- GET /api/v1/admin/audit (filtered list) -----
+    if (m === 'GET' && p === '/api/v1/admin/audit') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const params = {
+        client: url.searchParams.get('client'),
+        service: url.searchParams.get('service'),
+        action: url.searchParams.get('action'),
+        status: url.searchParams.get('status'),
+        since: url.searchParams.get('since'),
+        until: url.searchParams.get('until'),
+        limit: parseInt(url.searchParams.get('limit') || '200', 10),
+      };
+      const events = readAuditFiltered(params);
+      return send(res, 200, { events });
+    }
+
+    // ----- GET /api/v1/admin/audit/facets (dropdown options from live config + logs) -----
+    if (m === 'GET' && p === '/api/v1/admin/audit/facets') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      return send(res, 200, collectAuditFacets());
+    }
+
+    // ----- DELETE /api/v1/admin/audit (wipe jsonl files; writes one audit_cleared event) -----
+    if (m === 'DELETE' && p === '/api/v1/admin/audit') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only / 需要管理员');
+      const body = (await readBody(req)) || {};
+      if (body.confirm !== true && url.searchParams.get('confirm') !== 'true') {
+        return jsonError(res, 400, 'Pass {confirm:true} to clear audit logs');
+      }
+      const deleted = clearAuditLogs();
+      audit({
+        action: 'audit_cleared',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        status: 'ok',
+        deleted: deleted.length,
+      });
+      return send(res, 200, { ok: true, deleted });
+    }
+
+    // ----- GET /api/v1/ws-stats (v4.4.0: admin inspect of WS subscribers) -----
+    // Returns subscriber count + per-event count + (admin only) full subscriber list.
+    // docs/WEBSOCKET.md:150 — was a documented-but-unimplemented endpoint.
+    if (m === 'GET' && p === '/api/v1/ws-stats') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const stats = getStats();
+      const subscribers = listSubscribers();
+      // 也返回每事件订阅计数,便于 dashboard 看 alert 流是否有人在听。
+      // SUBS_BY_EVENT 是 ws 模块私有实现细节，这里只基于公开快照统计。
+      const eventCounts = {};
+      for (const e of stats.events) {
+        eventCounts[e] = subscribers.filter((sub) => sub.events.includes(e)).length;
+      }
+      return send(res, 200, {
+        subscriber_count: stats.subscriberCount,
+        events: stats.events,
+        event_counts: eventCounts,
+        subscribers,
+        version: BROKER_VERSION,
+      });
+    }
+
+    // ----- GET /api/v1/admin/audit/stream (SSE) -----
+    // Server-Sent Events: streams new audit events to the admin UI live.
+    // Browser opens via `new EventSource('/api/v1/admin/audit/stream')`.
+    // Sends a hello ping, then `event: <name>\ndata: <json>\n\n` for each event.
+    // Closes after 30 minutes (clients can reconnect).
+    // V4.8.0: 同一 admin 客户端最多 3 个并发 SSE 连接,超过返回 429 (REVIEW.md P6)。
+    if (m === 'GET' && p === '/api/v1/admin/audit/stream') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      // V4.8.0: 并发上限 (REVIEW.md P6)
+      const adminKey = adminSseKey(ctx.clientName || ctx.cn);
+      const slot = tryAcquireSseSlot(adminKey);
+      if (!slot.acquired) {
+        audit({
+          action: 'sse_open',
+          status: 'denied',
+          reason: 'too_many_concurrent',
+          client: ctx.clientName,
+          current: slot.current,
+          limit: slot.limit,
+        });
+        return jsonError(
+          res,
+          429,
+          `Too many concurrent SSE connections for ${ctx.clientName} (limit ${slot.limit})`,
+        );
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no', // disable buffering under nginx
+        'X-Broker-Version': BROKER_VERSION,
+        ...securityHeaders({ kind: 'sse' }),
+      });
+      res.write(': hello\n\n');
+      res.write('event: ready\ndata: {"ok":true}\n\n');
+      const onEvent = (e) => {
+        try {
+          res.write(`event: audit\ndata: ${JSON.stringify(e)}\n\n`);
+        } catch {
+          /* socket closed */
+        }
+      };
+      AUDIT_BUS.on('event', onEvent);
+      // Keep-alive comment every 25s (so proxies don't kill idle conns)
+      const ka = setInterval(() => {
+        try {
+          res.write(': ka\n\n');
+        } catch {}
+      }, 25_000);
+      // Auto-close after 30 min
+      const closeTimer = setTimeout(
+        () => {
+          try {
+            res.end();
+          } catch {}
+        },
+        30 * 60 * 1000,
+      );
+      req.on('close', () => {
+        clearInterval(ka);
+        clearTimeout(closeTimer);
+        AUDIT_BUS.off('event', onEvent);
+        releaseSseSlot(adminKey); // V4.8.0
+      });
+      return; // keep connection open
+    }
+
+    // ----- GET /api/v1/admin/healthcheck/stream (SSE) -----
+    // v3.1.1 M5.6: 实时推送 healthcheck 状态
+    //   event: run_complete    — 每次 healthcheck 跑完 (full state)
+    //   event: status_change   — 状态变化 (alert history entry)
+    //   event: ready           — 初次连接
+    // Closes after 30 minutes (clients can reconnect).
+    if (m === 'GET' && p === '/api/v1/admin/healthcheck/stream') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'X-Broker-Version': BROKER_VERSION,
+        ...securityHeaders({ kind: 'sse' }),
+      });
+      res.write(': hello\n\n');
+      res.write('event: ready\ndata: {"ok":true}\n\n');
+      const onComplete = (state) => {
+        try {
+          res.write(`event: run_complete\ndata: ${JSON.stringify(state)}\n\n`);
+        } catch {
+          /* socket closed */
+        }
+      };
+      const onChange = (change) => {
+        try {
+          res.write(`event: status_change\ndata: ${JSON.stringify(change)}\n\n`);
+        } catch {
+          /* socket closed */
+        }
+      };
+      HEALTHCHECK_BUS.on('run_complete', onComplete);
+      HEALTHCHECK_BUS.on('status_change', onChange);
+      // 启动时立即推一次当前 state
+      try {
+        const currentState = healthcheckGetStatus();
+        res.write(`event: run_complete\ndata: ${JSON.stringify(currentState)}\n\n`);
+      } catch {
+        /* state not loaded yet */
+      }
+      const ka = setInterval(() => {
+        try {
+          res.write(': ka\n\n');
+        } catch {}
+      }, 25_000);
+      const closeTimer = setTimeout(
+        () => {
+          try {
+            res.end();
+          } catch {}
+        },
+        30 * 60 * 1000,
+      );
+      req.on('close', () => {
+        clearInterval(ka);
+        clearTimeout(closeTimer);
+        HEALTHCHECK_BUS.off('run_complete', onComplete);
+        HEALTHCHECK_BUS.off('status_change', onChange);
+      });
       return;
     }
-  }
 
-  // 404
-  audit({ action: 'unknown', cn: ctx.cn, fp: ctx.fp, method: m, path: p, status: '404' });
-  observeMs('broker_http_request_duration_ms', Date.now() - t0);
-  inc('broker_http_requests_total', 1, { route: p });
-  return jsonError(res, 404, `Not found: ${m} ${p}`);
+    // ----- GET /api/v1/admin/alerts/history -----
+    // v3.1.1 M5.6: 返 alert_history (状态变化时间线)
+    if (m === 'GET' && p === '/api/v1/admin/alerts/history') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const events = healthcheckGetAlertHistory(limit);
+      return send(res, 200, { events, count: events.length });
+    }
+
+    // ----- POST /api/v1/reload (admin only) -----
+    if (m === 'POST' && p === '/api/v1/reload') {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const tok = url.searchParams.get('token') || req.headers['x-reload-token'];
+      if (tok !== RELOAD_TOKEN) return jsonError(res, 401, 'Bad reload token');
+      const previousConfig = CONFIG;
+      const previousSecrets = new Map(SECRET_CACHE);
+      try {
+        await loadConfig();
+        await loadSecrets();
+        audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'ok' });
+        return send(res, 200, {
+          reloaded: true,
+          services: Object.keys(CONFIG.services),
+          secrets: SECRET_CACHE.size,
+        });
+      } catch (err) {
+        CONFIG = previousConfig;
+        SECRET_CACHE.clear();
+        for (const [name, value] of previousSecrets) SECRET_CACHE.set(name, value);
+        audit({ action: 'reload', cn: ctx.cn, fp: ctx.fp, status: 'error', error: err.message });
+        return jsonError(res, 503, 'Broker reload rejected; previous state retained');
+      }
+    }
+
+    // ----- POST /api/v1/rotate/:name -----
+    // v3.1.1 M5.9: 实际记录轮换时间戳 + rotation_history (凭据零接触: 不接受 value, 只标 "我刚轮换了 X")
+    // 凭据值的实际修改走 /api/v1/admin/secrets/:name (PUT), 那里有完整的值更新逻辑
+    // 此端点用于"我刚在外部 (GitHub/CF/...) 轮换了, 告诉 broker 一下" — 写 last_rotated_at + history
+    const rotMatch = p.match(/^\/api\/v1\/rotate\/([a-zA-Z0-9_.-]+)$/);
+    if (m === 'POST' && rotMatch) {
+      if (ctx.client.role !== 'admin') return jsonError(res, 403, 'Admin only');
+      const name = rotMatch[1];
+      const existing = SECRET_CACHE.get(name);
+      if (!existing) return jsonError(res, 404, `Secret ${name} not found`);
+      const body = (await readBody(req)) || {};
+      const now = new Date().toISOString();
+      const who = ctx.cn || 'admin';
+      const note = body.note && typeof body.note === 'string' ? body.note.slice(0, 200) : '';
+      const source =
+        body.source && typeof body.source === 'string' ? body.source.slice(0, 50) : 'manual';
+      // rotation_history: unshift 最新, cap 50 entries
+      const history = Array.isArray(existing.rotation_history)
+        ? existing.rotation_history.slice()
+        : [];
+      history.unshift({ ts: now, by: who, note, source });
+      if (history.length > 50) history.length = 50;
+      const updated = { ...existing, last_rotated_at: now, rotation_history: history };
+      const prevSnapshot = JSON.parse(JSON.stringify(existing));
+      SECRET_CACHE.set(name, updated);
+      try {
+        await persistSecretsDetail();
+      } catch (e) {
+        SECRET_CACHE.set(name, prevSnapshot);
+        audit({
+          action: 'rotate',
+          cn: ctx.cn,
+          fp: ctx.fp,
+          secret: name,
+          status: 'error',
+          error: e.message,
+        });
+        return persistenceError(res);
+      }
+      audit({ action: 'rotate', cn: ctx.cn, fp: ctx.fp, secret: name, status: 'ok', source, note });
+      return send(res, 200, {
+        rotated: name,
+        last_rotated_at: now,
+        rotation_count: history.length,
+        // 凭据零接触: 不返 value, 只返 metadata
+        note: 'Rotation recorded. To update the value, use PUT /api/v1/admin/secrets/:name (or scripts/rotate-secret-ecs.sh).',
+      });
+    }
+
+    // ----- SSH proxy (was in API_HANDLERS but never dispatched) -----
+    if (p.startsWith('/api/v1/ssh')) {
+      const sshDeps = {
+        send,
+        jsonError,
+        readBody,
+        audit,
+        ctx,
+        config: CONFIG,
+        rateLimit: (c, _bucket) => rateLimit(c),
+        getSecret: async (name, c) => {
+          if (!canResolve(c, name)) {
+            throw new Error('secret not accessible');
+          }
+          const entry = getSecret(name);
+          if (!entry) throw new Error('secret not loaded');
+          const fields = entry.fields || {};
+          return {
+            ...fields,
+            private_key: fields.private_key || fields.key || '',
+            type: entry.type,
+            name: entry.name || name,
+          };
+        },
+      };
+      const sshHandled = await handleSshProxy(req, res, route, sshDeps);
+      // handleSshProxy historically returned undefined after send(); treat headersSent as handled
+      if (sshHandled || res.headersSent) {
+        observeMs('broker_http_request_duration_ms', Date.now() - t0);
+        inc('broker_http_requests_total', 1, { route: p });
+        return;
+      }
+    }
+
+    // 404
+    audit({ action: 'unknown', cn: ctx.cn, fp: ctx.fp, method: m, path: p, status: '404' });
+    observeMs('broker_http_request_duration_ms', Date.now() - t0);
+    inc('broker_http_requests_total', 1, { route: p });
+    return jsonError(res, 404, `Not found: ${m} ${p}`);
   }); // Phase AF: end request pipeline (runWithRequestContext)
 }
 
@@ -2919,6 +3813,9 @@ async function handle(req, res) {
 // V4.1.1: Identity resolution extracted to broker/lib/mtls.js for testability.
 // We keep the inline thin wrappers here so the rest of server.js doesn't change.
 // All actual logic now lives in createIdentityResolver() from lib/index.js.
+
+// Initialize before the resolver captures this dependency (no TDZ at startup).
+const rateLimitApiKey = createApiKeyRateLimiter({ defaultLimit: '100/hour' });
 
 const identityResolver = createIdentityResolver({
   config: () => CONFIG,
@@ -2932,34 +3829,12 @@ const identityResolver = createIdentityResolver({
   audit,
 });
 
+// Public dispatch and authenticated dispatch share one decision per request:
+// repeated lookups must not debit API-key rate limits or use counters twice.
+const requestIdentities = new WeakMap();
 function getIdentity(req) {
-  return identityResolver.getIdentity(req);
-}
-function getApiKeyIdentity(req) {
-  return identityResolver.getApiKeyIdentity(req);
-}
-
-// v3.0 M2: API Key 限速 (用 k.id 作 bucket key)
-const API_KEY_BUCKETS = new Map();
-function rateLimitApiKey(k) {
-  if (!k) return true;
-  const limit = k.rate_limit || '100/hour';
-  if (limit === 'unlimited') return true;
-  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return true;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
-  const key = 'apikey:' + k.id;
-  const now = Date.now();
-  const bucket = API_KEY_BUCKETS.get(key) || [];
-  const fresh = bucket.filter(t => now - t < windowMs);
-  if (fresh.length >= max) {
-    API_KEY_BUCKETS.set(key, fresh);
-    return false;
-  }
-  fresh.push(now);
-  API_KEY_BUCKETS.set(key, fresh);
-  return true;
+  if (!requestIdentities.has(req)) requestIdentities.set(req, identityResolver.getIdentity(req));
+  return requestIdentities.get(req);
 }
 
 // ============================================================
@@ -2981,7 +3856,19 @@ function start() {
     tlsOpts.crl = readFileSync(TLS_CRL);
   }
 
-  const server = createHttpsServer(tlsOpts, handle);
+  const server = createHttpsServer(
+    tlsOpts,
+    wrapAsyncRequestHandler(handle, {
+      errorResponder: jsonError,
+      onError: (err, req) => {
+        if (err?.statusCode === 413) {
+          console.warn('[http] request body rejected as too large:', req?.method, req?.url);
+          return;
+        }
+        console.error('[http] unhandled request error:', err?.message || String(err));
+      },
+    }),
+  );
 
   server.on('tlsClientError', (err, tlsSocket) => {
     console.warn('[tls] client error:', err.message, 'from', tlsSocket.remoteAddress);
@@ -2997,7 +3884,7 @@ function start() {
   });
 
   server.listen(PORT, HOST, () => {
-    console.log(`[broker] mTLS HTTPS listening on https://${HOST}:${PORT}`);
+    console.log(`[broker] mTLS HTTPS listening on https://${HOST}:${server.address().port}`);
     console.log('[broker] reload token loaded (not printed)');
     if (process.env.BROKER_HEALTH_DISABLE !== '1') {
       startLocalHealthServer({
@@ -3006,9 +3893,13 @@ function start() {
         onRequest: async (req, res) => {
           const url = new URL(req.url || '/', 'http://127.0.0.1');
           const route = { method: req.method || 'GET', pathname: url.pathname };
+          const localSend = (response, status, body, extraHeaders = {}) =>
+            sendSafe(response, status, body, { ...extraHeaders, noSecurityHeaders: true });
+          const localJsonError = (response, status, message) =>
+            localSend(response, status, { error: message, status });
           const handled = await handleHealth(req, res, route, {
-            send,
-            jsonError,
+            send: localSend,
+            jsonError: localJsonError,
             version: BROKER_VERSION,
             secretCache: SECRET_CACHE,
             config: CONFIG,
@@ -3017,7 +3908,7 @@ function start() {
             runReadyProbes: () => runProbes(probesFromConfig(CONFIG || {})),
           });
           if (!handled && !res.headersSent) {
-            jsonError(res, 404, `Not found: ${route.method} ${route.pathname}`);
+            localJsonError(res, 404, `Not found: ${route.method} ${route.pathname}`);
           }
         },
       }).catch((e) => {
@@ -3036,18 +3927,25 @@ function start() {
       const getSecrets = () => {
         const out = {};
         for (const [name, entry] of SECRET_CACHE) {
-          out[name] = { type: entry.type, fields: entry.fields || {}, description: entry.description || '' };
+          out[name] = {
+            type: entry.type,
+            fields: entry.fields || {},
+            description: entry.description || '',
+          };
         }
         return out;
       };
       registerCron(schedule, async () => {
         console.log(`[cron] running healthcheck (${schedule}, upstream=${cronUpstream})`);
         try {
-          const r = cronUpstream === 'mcp_server'
-            ? await healthcheckRunAllViaMcp(cronMcpUrl)
-            : await healthcheckRunAll(getSecrets);
+          const r =
+            cronUpstream === 'mcp_server'
+              ? await healthcheckRunAllViaMcp(cronMcpUrl)
+              : await healthcheckRunAll(getSecrets);
           const summary = r.summary;
-          console.log(`[cron] healthcheck done: ${summary.ok} ok / ${summary.expired} expired / ${summary.fail} fail / ${summary.skipped} skipped`);
+          console.log(
+            `[cron] healthcheck done: ${summary.ok} ok / ${summary.expired} expired / ${summary.fail} fail / ${summary.skipped} skipped`,
+          );
           // 写 audit (每个 check 一条)
           for (const [name, c] of Object.entries(r.checks)) {
             audit({
@@ -3105,48 +4003,40 @@ function start() {
     // we route to, then re-issue the call. See `resolveHostname()` below.
     await loadConfig();
     await loadSecrets();
-    // Phase E: config validation
-    try {
-      const vr = validateBrokerConfig(CONFIG);
-      if (!vr.ok) {
-        console.error('[config] validation failed:\n' + formatValidationReport(vr));
-        process.exit(1);
-      }
-      for (const w of vr.warnings || []) console.warn('[config]', w.path, w.message);
-    } catch (e) {
-      console.warn('[config] validate skipped:', e.message);
+    // Phase E: configuration and filesystem preflight are security gates.
+    // Never continue booting when a validator or required-path check itself fails:
+    // "warn and continue" can turn a validator regression into an insecure startup.
+    const vr = validateBrokerConfig(CONFIG);
+    if (!vr.ok) {
+      throw new Error('config validation failed:\n' + formatValidationReport(vr));
     }
-    try {
-      const pf = preflightPaths({
+    for (const w of vr.warnings || []) console.warn('[config]', w.path, w.message);
+
+    const pf = preflightPaths(
+      {
         configPath: CONFIG_PATH,
         ageKey: AGE_KEY_FILE,
         caCert: TLS_CA,
         serverCert: TLS_CERT,
         serverKey: TLS_KEY,
-      }, { existsSync });
-      if (!pf.ok) {
-        console.error('[preflight] failed:\n' + formatValidationReport(pf));
-        process.exit(1);
-      }
-    } catch (e) {
-      console.warn('[preflight] skipped:', e.message);
+      },
+      { existsSync },
+    );
+    if (!pf.ok) {
+      throw new Error('preflight failed:\n' + formatValidationReport(pf));
     }
-    // v3.0: 启动时跑一次 schema 迁移（幂等）
-    try {
-      const { migrateV2ToV3 } = await import('./migrate-v2-to-v3.js');
-      const migPath = dirname(fileURLToPath(import.meta.url));
-      const clientsDir = join(migPath, '..', 'pki', 'clients');
-      const { changed, changes } = await migrateV2ToV3(
-        CONFIG, clientsDir, audit, persistConfig
-      );
-      if (changed) {
-        console.log(`[migrate v2->v3] applied ${changes.length} change(s):`);
-        changes.forEach(c => console.log('  -', c));
-      } else {
-        console.log('[migrate v2->v3] already at v3, no changes');
-      }
-    } catch (e) {
-      console.warn('[migrate v2->v3] skipped:', e.message);
+
+    // v3.0: startup schema migration is also required. If encrypted persistence
+    // fails, do not serve traffic with a partially migrated in-memory config.
+    const { migrateV2ToV3 } = await import('./migrate-v2-to-v3.js');
+    const migPath = dirname(fileURLToPath(import.meta.url));
+    const clientsDir = CLIENTS_DIR || join(migPath, '..', 'pki', 'clients');
+    const { changed, changes } = await migrateV2ToV3(CONFIG, clientsDir, audit, persistConfig);
+    if (changed) {
+      console.log(`[migrate v2->v3] applied ${changes.length} change(s):`);
+      changes.forEach((c) => console.log('  -', c));
+    } else {
+      console.log('[migrate v2->v3] already at v3, no changes');
     }
     start();
   } catch (err) {

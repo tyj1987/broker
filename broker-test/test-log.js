@@ -13,13 +13,23 @@ import {
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { createSocket } from 'node:dgram';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- tests ----------
 
@@ -30,7 +40,12 @@ section('1. StdoutSink');
   const captured = [];
   console.log = (l) => captured.push(l);
   const s = new StdoutSink();
-  s.write('info', 'test', { foo: 'bar' }, JSON.stringify({ ts: 'x', level: 'info', msg: 'test', foo: 'bar' }));
+  s.write(
+    'info',
+    'test',
+    { foo: 'bar' },
+    JSON.stringify({ ts: 'x', level: 'info', msg: 'test', foo: 'bar' }),
+  );
   console.log = orig;
   ok('captured one line', captured.length === 1);
   ok('line is the JSON', captured[0]?.includes('"msg":"test"'));
@@ -43,7 +58,12 @@ section('2. FileSink writes + persists');
   try {
     const f = join(WORK, 'broker.log');
     const s = new FileSink(f);
-    s.write('info', 'hello', { n: 1 }, JSON.stringify({ ts: 't', level: 'info', msg: 'hello', n: 1 }));
+    s.write(
+      'info',
+      'hello',
+      { n: 1 },
+      JSON.stringify({ ts: 't', level: 'info', msg: 'hello', n: 1 }),
+    );
     s.write('warn', 'careful', {}, JSON.stringify({ ts: 't', level: 'warn', msg: 'careful' }));
     ok('file exists', existsSync(f));
     const content = readFileSync(f, 'utf8');
@@ -54,24 +74,58 @@ section('2. FileSink writes + persists');
   }
 }
 
-section('3. HttpSink does not throw (best-effort)');
+section('3. HttpSink sends over ESM-safe HTTP transport');
 
 {
-  const s = new HttpSink('http://127.0.0.1:1/never-listens'); // connection refused
-  let threw = false;
-  try { s.write('info', 'test', {}, '{}'); }
-  catch (e) { threw = true; }
-  ok('does not throw', !threw);
+  let received = '';
+  const server = createServer((req, res) => {
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      received += chunk;
+    });
+    req.on('end', () => {
+      res.writeHead(204);
+      res.end();
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const addr = server.address();
+    const s = new HttpSink(`http://127.0.0.1:${addr.port}/logs`);
+    s.write('info', 'transport-test', { n: 7 }, '{}');
+    const deadline = Date.now() + 1000;
+    while (!received && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    ok(
+      'HTTP sink delivered payload',
+      received.includes('transport-test') && received.includes('\"n\":7'),
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
-section('4. SyslogSink does not throw');
+section('4. SyslogSink sends UDP datagram');
 
 {
-  const s = new SyslogSink({ host: '127.0.0.1', port: 1 }); // no syslog server
-  let threw = false;
-  try { s.write('info', 'test', {}, '{}'); }
-  catch (e) { threw = true; }
-  ok('does not throw', !threw);
+  const udp = createSocket('udp4');
+  await new Promise((resolve) => udp.bind(0, '127.0.0.1', resolve));
+  try {
+    const message = new Promise((resolve) =>
+      udp.once('message', (buf) => resolve(buf.toString('utf8'))),
+    );
+    const addr = udp.address();
+    const s = new SyslogSink({ host: '127.0.0.1', port: addr.port });
+    s.write('info', 'syslog-test', {}, '{\"msg\":\"syslog-test\"}');
+    const line = await Promise.race([
+      message,
+      new Promise((resolve) => setTimeout(() => resolve(''), 1000)),
+    ]);
+    ok('syslog sink delivered datagram', line.includes('syslog-test'));
+  } finally {
+    udp.close();
+  }
 }
 
 section('5. parseSinks');
@@ -104,19 +158,35 @@ section('6. log() honors BROKER_LOG_LEVEL');
   log.warn('kept');
   log.error('also kept');
   process.env.BROKER_LOG_LEVEL = orig;
-  ok('debug filtered', !captured.some(l => l.includes('"level":"debug"')));
-  ok('info filtered', !captured.some(l => l.includes('"level":"info"')));
-  ok('warn kept', captured.some(l => l.includes('"level":"warn"')));
-  ok('error kept', captured.some(l => l.includes('"level":"error"')));
+  ok('debug filtered', !captured.some((l) => l.includes('"level":"debug"')));
+  ok('info filtered', !captured.some((l) => l.includes('"level":"info"')));
+  ok(
+    'warn kept',
+    captured.some((l) => l.includes('"level":"warn"')),
+  );
+  ok(
+    'error kept',
+    captured.some((l) => l.includes('"level":"error"')),
+  );
 }
 
 section('7. log() sink failure does not propagate');
 
 {
-  _setSinks([{ name: 'broken', write: () => { throw new Error('boom'); } }]);
+  _setSinks([
+    {
+      name: 'broken',
+      write: () => {
+        throw new Error('boom');
+      },
+    },
+  ]);
   let threw = false;
-  try { log.info('test'); }
-  catch (e) { threw = true; }
+  try {
+    log.info('test');
+  } catch {
+    threw = true;
+  }
   ok('sink failure does not throw', !threw);
   _setSinks(null); // reset
 }
@@ -140,7 +210,11 @@ section('9. log() output is valid JSON');
   log.info('json-test', { foo: 'bar', n: 42 });
   ok('one line', captured.length === 1);
   let parsed;
-  try { parsed = JSON.parse(captured[0]); } catch (e) { ok('parses as JSON', false, e.message); }
+  try {
+    parsed = JSON.parse(captured[0]);
+  } catch (e) {
+    ok('parses as JSON', false, e.message);
+  }
   ok('parses as JSON', !!parsed);
   ok('has ts', typeof parsed?.ts === 'string');
   ok('has level=info', parsed?.level === 'info');

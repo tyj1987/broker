@@ -26,6 +26,7 @@ import { verifyAuditDir } from '../lib/audit-hash-chain.js';
  * @returns {Function} dispatch(req, res, route, ctx) → boolean
  */
 export function createReadApiRoutes(deps) {
+  const currentConfig = () => (typeof deps.config === 'function' ? deps.config() : deps.config);
   function handleIdentity(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/identity') return false;
     send(res, 200, {
@@ -42,24 +43,47 @@ export function createReadApiRoutes(deps) {
   function handleServices(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/services') return false;
     const services = [];
-    for (const [name, svc] of Object.entries(deps.config.services)) {
-      const secretHealth = svc.token_secret
-        ? (() => {
-            const s = deps.healthcheckGetSecretStatus(svc.token_secret);
-            return s ? { name: svc.token_secret, status: s.status, detail: s.detail, latency_ms: s.latency_ms, ts: s.ts } : null;
-          })()
-        : null;
-      services.push({
+    const isAdmin = ctx.client.role === 'admin';
+    for (const [name, svc] of Object.entries(currentConfig()?.services || {})) {
+      const allowed = deps.isServiceAllowed(ctx, name);
+      // Service inventory is security metadata. Non-admin identities (including
+      // delegated API keys) see only services they are actually allowed to use,
+      // and do not receive upstream URLs, secret names or health details.
+      if (!isAdmin && !allowed) continue;
+
+      const base = {
         name,
         type: svc.type || 'unknown',
         description: svc.description || '',
+        allowed: true,
+        actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
+      };
+      if (!isAdmin) {
+        services.push(base);
+        continue;
+      }
+
+      const secretHealth = svc.token_secret
+        ? (() => {
+            const s = deps.healthcheckGetSecretStatus(svc.token_secret);
+            return s
+              ? {
+                  name: svc.token_secret,
+                  status: s.status,
+                  detail: s.detail,
+                  latency_ms: s.latency_ms,
+                  ts: s.ts,
+                }
+              : null;
+          })()
+        : null;
+      services.push({
+        ...base,
         upstream: svc.upstream || '',
         region: svc.region || '',
         action: svc.action || '',
         token_secret: svc.token_secret || null,
         secret_health: secretHealth,
-        allowed: deps.isServiceAllowed(ctx, name),
-        actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
       });
     }
     deps.audit({ action: 'list_services', cn: ctx.cn, fp: ctx.fp, count: services.length });
@@ -69,15 +93,14 @@ export function createReadApiRoutes(deps) {
 
   function handleSecrets(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/secrets') return false;
-    const allow = ctx.client.allowed_resolve || [];
     const all = Array.from(deps.SECRET_CACHE.keys());
-    let visible;
-    if (ctx.client.role === 'admin') visible = all;
-    else if (allow.includes('.*') || allow.includes('*')) visible = all;
-    else visible = all.filter(n => deps.checkPathAllowed(allow, n));
+    // Use the same authorization predicate as resolve itself so list/resolve
+    // cannot drift. This also intersects API-key scopes/allowlists with the
+    // owning client's permissions.
+    const visible = all.filter((name) => deps.canResolve(ctx, name));
     deps.audit({ action: 'list', cn: ctx.cn, fp: ctx.fp, count: visible.length });
     if (ctx.client.role === 'admin') {
-      const out = visible.map(name => {
+      const out = visible.map((name) => {
         const meta = deps.SECRET_CACHE.get(name);
         if (!meta) return { name };
         return {
@@ -95,7 +118,7 @@ export function createReadApiRoutes(deps) {
       return true;
     }
     // Non-admin: minimal metadata
-    const out = visible.map(name => {
+    const out = visible.map((name) => {
       const meta = deps.SECRET_CACHE.get(name);
       if (!meta) return { name };
       return {
@@ -118,13 +141,25 @@ export function createReadApiRoutes(deps) {
       return true;
     }
     if (!deps.canResolve(ctx, body.name)) {
-      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'denied' });
+      deps.audit({
+        action: 'resolve',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        secret: body.name,
+        status: 'denied',
+      });
       jsonError(res, 403, 'Not allowed to resolve this secret');
       return true;
     }
     const entry = deps.getSecret(body.name);
     if (!entry) {
-      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, status: 'not_found' });
+      deps.audit({
+        action: 'resolve',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        secret: body.name,
+        status: 'not_found',
+      });
       jsonError(res, 404, `Secret ${body.name} not loaded`);
       return true;
     }
@@ -135,7 +170,14 @@ export function createReadApiRoutes(deps) {
         jsonError(res, 404, `Field ${field} not found on secret ${body.name}`);
         return true;
       }
-      deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret: body.name, field, status: 'ok' });
+      deps.audit({
+        action: 'resolve',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        secret: body.name,
+        field,
+        status: 'ok',
+      });
       send(res, 200, { name: body.name, field, value: v });
       return true;
     }
@@ -151,19 +193,33 @@ export function createReadApiRoutes(deps) {
       return true;
     }
     if (!deps.auditDir) {
-      jsonError(res, 500, 'auditDir not configured');
+      deps.audit({ action: 'audit_verify', cn: ctx.cn, fp: ctx.fp, status: 'unavailable' });
+      jsonError(res, 503, 'Audit verification is unavailable');
       return true;
     }
     try {
       const r = await verifyAuditDir(deps.auditDir);
       send(res, r.ok ? 200 : 422, r);
     } catch (err) {
-      jsonError(res, 500, `verify failed: ${err.message}`);
+      deps.audit({
+        action: 'audit_verify',
+        cn: ctx.cn,
+        fp: ctx.fp,
+        status: 'error',
+        error: err.message,
+      });
+      jsonError(res, 500, 'Audit verification failed');
     }
     return true;
   }
 
-  const handlers = [handleIdentity, handleServices, handleSecrets, handleSecretsResolve, handleAuditVerify];
+  const handlers = [
+    handleIdentity,
+    handleServices,
+    handleSecrets,
+    handleSecretsResolve,
+    handleAuditVerify,
+  ];
 
   /**
    * Dispatch loop. Returns true if any handler claimed the request.
@@ -174,10 +230,11 @@ export function createReadApiRoutes(deps) {
    */
   async function dispatch(req, res, route, ctx) {
     for (const h of handlers) {
-      const result = h(req, res, route, ctx);
-      // Some handlers are async (return Promise<boolean>)
+      let result = h(req, res, route, ctx);
+      // Some handlers are async (return Promise<boolean>). A resolved false
+      // means "not mine" and must not stop later route handlers.
       if (result && typeof result.then === 'function') {
-        return await result;
+        result = await result;
       }
       if (result === true) return true;
     }

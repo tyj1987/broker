@@ -33,7 +33,7 @@ export function routeEvent(cfg, event) {
 
 function matchesTrigger(channel, event) {
   if (!channel.events || channel.events.length === 0) return true;
-  if (channel.events.includes('*')) return true;  // wildcard
+  if (channel.events.includes('*')) return true; // wildcard
   return channel.events.includes(event.title) || channel.events.includes(event.kind);
 }
 
@@ -56,8 +56,12 @@ function buildPayload(channel, event) {
     ts: event.ts || new Date().toISOString(),
     request_id: event.request_id,
   };
-  if (channel.type === 'slack_webhook' || channel.type === 'feishu_webhook'
-      || channel.type === 'dingtalk_webhook' || channel.type === 'discord_webhook') {
+  if (
+    channel.type === 'slack_webhook' ||
+    channel.type === 'feishu_webhook' ||
+    channel.type === 'dingtalk_webhook' ||
+    channel.type === 'discord_webhook'
+  ) {
     return {
       text: `*[${safe.severity}]* ${safe.title}\n${safe.detail}`,
       // Slack expects blocks/attachments; for simplicity we use text.
@@ -93,14 +97,21 @@ export async function dispatchAlert(route, sinks = {}) {
   const safePayload = sanitizePayload(route.payload);
   try {
     if (route.type === 'console') {
-      const level = safePayload.severity === 'critical' || safePayload.severity === 'high' ? 'error'
-        : safePayload.severity === 'warning' || safePayload.severity === 'medium' ? 'warn'
-        : 'info';
+      const level =
+        safePayload.severity === 'critical' || safePayload.severity === 'high'
+          ? 'error'
+          : safePayload.severity === 'warning' || safePayload.severity === 'medium'
+            ? 'warn'
+            : 'info';
       consoleImpl[level](`[alert] ${safePayload.title}: ${safePayload.detail}`);
       return { ok: true };
     }
-    if (route.type === 'slack_webhook' || route.type === 'feishu_webhook'
-        || route.type === 'dingtalk_webhook' || route.type === 'discord_webhook') {
+    if (
+      route.type === 'slack_webhook' ||
+      route.type === 'feishu_webhook' ||
+      route.type === 'dingtalk_webhook' ||
+      route.type === 'discord_webhook'
+    ) {
       if (!route.target) return { ok: false, error: 'no webhook url' };
       const res = await fetchImpl(route.target, {
         method: 'POST',
@@ -128,7 +139,7 @@ function sanitizePayload(payload) {
     if (typeof v === 'string') {
       out[k] = redact(v);
     } else if (Array.isArray(v)) {
-      out[k] = v.map(item => typeof item === 'string' ? redact(item) : item);
+      out[k] = v.map((item) => (typeof item === 'string' ? redact(item) : item));
     } else {
       out[k] = v;
     }
@@ -146,7 +157,9 @@ function sanitizePayload(payload) {
 export async function alert(cfg, event, sinks) {
   const routes = routeEvent(cfg, event);
   if (routes.length === 0) return [];
-  return Promise.all(routes.map(async (r) => ({ route: r, result: await dispatchAlert(r, sinks) })));
+  return Promise.all(
+    routes.map(async (r) => ({ route: r, result: await dispatchAlert(r, sinks) })),
+  );
 }
 
 export default { routeEvent, dispatchAlert, alert };

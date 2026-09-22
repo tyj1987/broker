@@ -41,6 +41,13 @@ const SCHEMA_VERSION = 3;
 export async function migrateV2ToV3(CONFIG, clientsDir, audit, persistConfig) {
   const changes = [];
   let needsPersist = false;
+  if (
+    CONFIG.api_keys != null &&
+    !Array.isArray(CONFIG.api_keys) &&
+    Object.keys(CONFIG.api_keys).length > 0
+  ) {
+    throw new Error('Unsupported non-empty API-key store; refusing destructive migration');
+  }
 
   // 0. 顶层 schema version
   if (!CONFIG.schema_version || CONFIG.schema_version < SCHEMA_VERSION) {
@@ -77,15 +84,14 @@ export async function migrateV2ToV3(CONFIG, clientsDir, audit, persistConfig) {
         try {
           const pem = readFileSync(crtPath, 'utf8');
           const cert = new X509Certificate(pem);
-          const notAfter = new Date(cert.notAfter);
+          const notAfter = new Date(cert.validTo);
           c.cert_expires_at = notAfter.toISOString();
-          // last_cert_rotation = notAfter - 365d
-          const issued = new Date(notAfter);
-          issued.setDate(issued.getDate() - 365);
+          // Use the actual certificate issuance date, not an assumed lifetime.
+          const issued = new Date(cert.validFrom);
           c.last_cert_rotation = issued.toISOString();
           changes.push(`${name}: cert_expires_at parsed from PEM`);
           needsPersist = true;
-        } catch (e) {
+        } catch {
           // 解析失败不阻塞
         }
       }
@@ -124,9 +130,21 @@ export async function migrateV2ToV3(CONFIG, clientsDir, audit, persistConfig) {
   if (needsPersist) {
     try {
       await persistConfig();
-      audit({ action: 'migration', from: 2, to: SCHEMA_VERSION, status: 'ok', changes: changes.length });
+      audit({
+        action: 'migration',
+        from: 2,
+        to: SCHEMA_VERSION,
+        status: 'ok',
+        changes: changes.length,
+      });
     } catch (e) {
-      audit({ action: 'migration', from: 2, to: SCHEMA_VERSION, status: 'error', error: e.message });
+      audit({
+        action: 'migration',
+        from: 2,
+        to: SCHEMA_VERSION,
+        status: 'error',
+        error: e.message,
+      });
       throw e;
     }
   }

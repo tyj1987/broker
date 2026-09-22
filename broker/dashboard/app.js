@@ -9,7 +9,13 @@ async function api(path, opts = {}, timeoutMs = 15000) {
   // Auto-stringify object bodies so callers can pass `body: { ... }` directly.
   // fetch() with a plain object sends "[object Object]" which breaks JSON.parse on server.
   const merged = { ...opts };
-  if (merged.body && typeof merged.body === 'object' && !(merged.body instanceof FormData) && !(merged.body instanceof Blob) && !(merged.body instanceof ArrayBuffer)) {
+  if (
+    merged.body &&
+    typeof merged.body === 'object' &&
+    !(merged.body instanceof FormData) &&
+    !(merged.body instanceof Blob) &&
+    !(merged.body instanceof ArrayBuffer)
+  ) {
     merged.body = JSON.stringify(merged.body);
   }
   const ctrl = new AbortController();
@@ -35,7 +41,7 @@ async function api(path, opts = {}, timeoutMs = 15000) {
   const ct = res.headers.get('content-type') || '';
   const body = ct.includes('application/json') ? await res.json() : await res.text();
   if (!res.ok) {
-    const msg = typeof body === 'string' ? body : (body.error || JSON.stringify(body));
+    const msg = typeof body === 'string' ? body : body.error || JSON.stringify(body);
     const err = new Error(msg);
     err.status = res.status;
     throw err;
@@ -44,14 +50,19 @@ async function api(path, opts = {}, timeoutMs = 15000) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+  return String(s).replace(
+    /[&<>"']/g,
+    (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m],
+  );
 }
 
 let identity = null;
 let currentServices = [];
 
 function applyAdminVisibility(isAdmin) {
-  document.querySelectorAll('.admin-only').forEach(el => { el.hidden = !isAdmin; });
+  document.querySelectorAll('.admin-only').forEach((el) => {
+    el.hidden = !isAdmin;
+  });
 }
 
 function emitBrokerIdentity(ident) {
@@ -84,7 +95,7 @@ function showLogin() {
 }
 
 // ---------- 登录 ----------
-let _pendingMfaToken = null;  // server 返的 mfa_token，等用户输完 6 位 code 再提交
+let _pendingMfaToken = null; // server 返的 mfa_token，等用户输完 6 位 code 再提交
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = $('#login-error');
@@ -96,11 +107,15 @@ $('#login-form').addEventListener('submit', async (e) => {
   const mfaWrap = $('#login-mfa-wrap');
   const btn = e.target.querySelector('button[type=submit]');
   const originalLabel = _pendingMfaToken ? '验证 2FA / Verify' : '登录 / Login';
-  btn.disabled = true; btn.textContent = '处理中...';
+  btn.disabled = true;
+  btn.textContent = '处理中...';
   try {
     if (_pendingMfaToken) {
       // 第二步：提交 2FA code
-      await api('/api/v1/login/mfa', { method: 'POST', body: { mfa_token: _pendingMfaToken, code: mfaCode } });
+      await api('/api/v1/login/mfa', {
+        method: 'POST',
+        body: { mfa_token: _pendingMfaToken, code: mfaCode },
+      });
       _pendingMfaToken = null;
       mfaWrap.hidden = true;
       $('#login-mfa-code').value = '';
@@ -116,7 +131,8 @@ $('#login-form').addEventListener('submit', async (e) => {
       err.textContent = '需要二次验证 — 输 6 位 TOTP code 或恢复码 / 2FA required';
       err.className = 'status-warn';
       err.hidden = false;
-      btn.disabled = false; btn.textContent = '验证 2FA / Verify';
+      btn.disabled = false;
+      btn.textContent = '验证 2FA / Verify';
       $('#login-mfa-code').focus();
       return;
     }
@@ -127,19 +143,23 @@ $('#login-form').addEventListener('submit', async (e) => {
     err.hidden = false;
     err.className = 'status-error';
   } finally {
-    btn.disabled = false; btn.textContent = _pendingMfaToken ? '验证 2FA / Verify' : '登录 / Login';
+    btn.disabled = false;
+    btn.textContent = _pendingMfaToken ? '验证 2FA / Verify' : '登录 / Login';
   }
 });
 
 // 用户在 mfa 输入框按 Enter 也提交
 $('#login-mfa-code').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); $('#login-form').requestSubmit(); }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    $('#login-form').requestSubmit();
+  }
 });
 
-
-
 $('#btn-logout').addEventListener('click', async () => {
-  try { await api('/api/v1/logout', { method: 'POST' }); } catch {}
+  try {
+    await api('/api/v1/logout', { method: 'POST' });
+  } catch {}
   // 清掉 MFA 状态，让下次登录从头开始
   _pendingMfaToken = null;
   const mfaWrap = $('#login-mfa-wrap');
@@ -163,10 +183,10 @@ function switchTab(name) {
   // emit for modules that listen
   document.dispatchEvent(new CustomEvent('tabchange', { detail: { tab: name } }));
 }
-$$('.tab-btn').forEach(btn => {
+$$('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    $$('.tab-btn').forEach(b => b.classList.remove('active'));
-    $$('.tab-content').forEach(c => c.classList.remove('active'));
+    $$('.tab-btn').forEach((b) => b.classList.remove('active'));
+    $$('.tab-content').forEach((c) => c.classList.remove('active'));
     btn.classList.add('active');
     const tabId = `tab-${btn.dataset.tab}`;
     const tabEl = document.getElementById(tabId);
@@ -204,13 +224,17 @@ const V3_BANNER_KEY = 'v3-banner-dismissed';
 function dismissV3Banner() {
   const banner = document.getElementById('v3-banner');
   if (banner) banner.hidden = true;
-  try { localStorage.setItem(V3_BANNER_KEY, 'true'); } catch {}
+  try {
+    localStorage.setItem(V3_BANNER_KEY, 'true');
+  } catch {}
 }
 
 // 启动时检查：用户已关过 → 不再显示 (on boot, hide if user already dismissed)
 function initV3Banner() {
   let dismissed = false;
-  try { dismissed = localStorage.getItem(V3_BANNER_KEY) === 'true'; } catch {}
+  try {
+    dismissed = localStorage.getItem(V3_BANNER_KEY) === 'true';
+  } catch {}
   if (dismissed) {
     const banner = document.getElementById('v3-banner');
     if (banner) banner.hidden = true;
@@ -232,14 +256,14 @@ if (document.readyState === 'loading') {
 let _pendingG = false;
 let _gTimeout = null;
 const KEY_MAP = {
-  'h': 'home',
-  'a': 'actions',
-  's': 'secrets',
-  'u': 'audit',
-  'd': 'docs',
-  'k': 'admin-secrets',
-  'p': 'admin-services',
-  'c': 'admin-clients',
+  h: 'home',
+  a: 'actions',
+  s: 'secrets',
+  u: 'audit',
+  d: 'docs',
+  k: 'admin-secrets',
+  p: 'admin-services',
+  c: 'admin-clients',
 };
 document.addEventListener('keydown', (e) => {
   // Don't interfere with typing in inputs
@@ -249,8 +273,11 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     // Close any open modal or help
     const help = document.querySelector('#kb-help');
-    if (help) { help.remove(); return; }
-    document.querySelectorAll('.modal:not([hidden])').forEach(m => m.hidden = true);
+    if (help) {
+      help.remove();
+      return;
+    }
+    document.querySelectorAll('.modal:not([hidden])').forEach((m) => (m.hidden = true));
     return;
   }
   if (e.key === '?' || (e.shiftKey && e.key === '/')) {
@@ -270,7 +297,9 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'g') {
     _pendingG = true;
-    _gTimeout = setTimeout(() => { _pendingG = false; }, 1500);
+    _gTimeout = setTimeout(() => {
+      _pendingG = false;
+    }, 1500);
   }
 });
 
@@ -300,7 +329,9 @@ function showHelp() {
   document.body.appendChild(div);
   document.querySelector('#kb-help-close')?.addEventListener('click', () => div.remove());
   // close on backdrop click
-  div.addEventListener('click', (ev) => { if (ev.target === div) div.remove(); });
+  div.addEventListener('click', (ev) => {
+    if (ev.target === div) div.remove();
+  });
 }
 
 // ---------- 服务列表（AI Actions 核心） ----------
@@ -339,15 +370,20 @@ function renderServiceCard(svc) {
 
   const badges = `
     <span class="badge badge-type">${escapeHtml(svc.type)}</span>
-    ${svc.allowed
-      ? '<span class="badge badge-ok">可调用</span>'
-      : '<span class="badge badge-denied">未授权</span>'}
+    ${
+      svc.allowed
+        ? '<span class="badge badge-ok">可调用</span>'
+        : '<span class="badge badge-denied">未授权</span>'
+    }
     ${svc.region ? `<span class="badge badge-type">${escapeHtml(svc.region)}</span>` : ''}
     ${secretBadge}`;
 
-  const actionsHtml = (svc.actions || []).map((a, i) =>
-    `<button class="btn btn-sm btn-action" data-svc="${escapeHtml(svc.name)}" data-idx="${i}">${escapeHtml(a.label || a.path || '动作')}</button>`
-  ).join('');
+  const actionsHtml = (svc.actions || [])
+    .map(
+      (a, i) =>
+        `<button class="btn btn-sm btn-action" data-svc="${escapeHtml(svc.name)}" data-idx="${i}">${escapeHtml(a.label || a.path || '动作')}</button>`,
+    )
+    .join('');
 
   card.innerHTML = `
     <div class="service-head">
@@ -363,7 +399,7 @@ function renderServiceCard(svc) {
       <div class="form-row">
         <label>Method
           <select class="cf-method">
-            ${['GET', 'POST', 'PATCH', 'PUT', 'DELETE'].map(m => `<option>${m}</option>`).join('')}
+            ${['GET', 'POST', 'PATCH', 'PUT', 'DELETE'].map((m) => `<option>${m}</option>`).join('')}
           </select>
         </label>
         <label class="grow">Path
@@ -396,9 +432,9 @@ function renderServiceCard(svc) {
 
 function bindServiceEvents(container) {
   // 快速动作
-  container.querySelectorAll('.btn-action').forEach(btn => {
+  container.querySelectorAll('.btn-action').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const svc = currentServices.find(s => s.name === btn.dataset.svc);
+      const svc = currentServices.find((s) => s.name === btn.dataset.svc);
       const action = (svc && svc.actions[+btn.dataset.idx]) || null;
       if (!action) return;
       const label = action.label || action.path;
@@ -418,7 +454,7 @@ function bindServiceEvents(container) {
     });
   });
   // 自定义请求
-  container.querySelectorAll('.cf-send').forEach(btn => {
+  container.querySelectorAll('.cf-send').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const card = btn.closest('.service-card');
       const svcName = btn.dataset.svc;
@@ -456,7 +492,11 @@ async function runProxy(svcName, payload) {
   const t0 = performance.now();
   try {
     // 代理要转发到外部 API，可能较慢，给 90s
-    const r = await api(`/api/v1/proxy/${encodeURIComponent(svcName)}`, { method: 'POST', body: JSON.stringify(payload) }, 90000);
+    const r = await api(
+      `/api/v1/proxy/${encodeURIComponent(svcName)}`,
+      { method: 'POST', body: JSON.stringify(payload) },
+      90000,
+    );
     showResponse(svcName, r, null, false, Math.round(performance.now() - t0), payload);
   } catch (ex) {
     showResponse(svcName, null, ex.message, true, Math.round(performance.now() - t0), payload);
@@ -466,10 +506,12 @@ async function runProxy(svcName, payload) {
 function showResponse(svcName, body, error, isError, latency, payload) {
   const panel = $('#response-panel');
   panel.hidden = false;
-  $('#resp-title').textContent = `${svcName} · ${payload ? `${payload.method} ${payload.path}` : '请求'}`;
+  $('#resp-title').textContent =
+    `${svcName} · ${payload ? `${payload.method} ${payload.path}` : '请求'}`;
   const statusEl = $('#resp-status');
   if (isError) {
-    statusEl.textContent = error && /^\d{3}$/.test(error.split(' ')[0]) ? error.split(' ')[0] : 'ERR';
+    statusEl.textContent =
+      error && /^\d{3}$/.test(error.split(' ')[0]) ? error.split(' ')[0] : 'ERR';
     statusEl.className = 'badge badge-denied';
   } else {
     statusEl.textContent = 'OK';
@@ -498,7 +540,7 @@ $('#btn-close-response').addEventListener('click', () => {
 // ---------- 审计 ----------
 async function loadAudit() {
   const limitEl = $('#audit-limit') || $('#af-limit');
-  const limit = limitEl ? (limitEl.value || 50) : 50;
+  const limit = limitEl ? limitEl.value || 50 : 50;
   const tbody = $('#audit-table tbody');
   tbody.innerHTML = '<tr><td colspan="6">加载中...</td></tr>';
   try {
@@ -510,12 +552,17 @@ async function loadAudit() {
     }
     tbody.innerHTML = '';
     for (const e of events) {
-      const target = e.secret || (e.service ? `${e.service}${e.path || ''}` : `${e.method || ''} ${e.path || ''}`);
+      const target =
+        e.secret ||
+        (e.service ? `${e.service}${e.path || ''}` : `${e.method || ''} ${e.path || ''}`);
       const latency = e.latency_ms ? `${e.latency_ms}ms` : '-';
       const status = e.status || e.upstream_status || '-';
-      const cls = e.status === 'denied' ? 'status-denied'
-                : (e.upstream_status >= 400 || e.status === 'error' || e.status === 'not_found') ? 'status-error'
-                : 'status-ok';
+      const cls =
+        e.status === 'denied'
+          ? 'status-denied'
+          : e.upstream_status >= 400 || e.status === 'error' || e.status === 'not_found'
+            ? 'status-error'
+            : 'status-ok';
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml((e.ts || '').replace('T', ' ').slice(0, 19))}</td>
         <td>${escapeHtml(e.cn || '-')}</td>
@@ -549,14 +596,14 @@ async function loadSecrets() {
       // - string array (non-admin or before Phase 2)
       // - object array (admin: {name, type, description, ...})
       const name = typeof entry === 'string' ? entry : entry.name;
-      const desc = typeof entry === 'object' ? (entry.description || '') : '';
+      const desc = typeof entry === 'object' ? entry.description || '' : '';
       const tr = document.createElement('tr');
       tr.innerHTML = `<td><code>${escapeHtml(name)}</code>${desc ? `<br><span class="muted" style="font-size:11px">${escapeHtml(desc)}</span>` : ''}</td>
         <td><button class="btn btn-sm" data-act="show" data-name="${escapeHtml(name)}">显示 / Show</button>
             <button class="btn btn-sm" data-act="copy" data-name="${escapeHtml(name)}">复制 / Copy</button></td>`;
       tbody.appendChild(tr);
     }
-    tbody.querySelectorAll('button[data-name]').forEach(btn => {
+    tbody.querySelectorAll('button[data-name]').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (btn.dataset.act === 'show') showSecretValue(btn.dataset.name, btn);
         else if (btn.dataset.act === 'copy') copySecretValue(btn.dataset.name, btn);
@@ -569,9 +616,13 @@ async function loadSecrets() {
 
 async function showSecretValue(name, btn) {
   const oldText = btn.textContent;
-  btn.disabled = true; btn.textContent = '...';
+  btn.disabled = true;
+  btn.textContent = '...';
   try {
-    const r = await api('/api/v1/secrets/resolve', { method: 'POST', body: JSON.stringify({ name }) });
+    const r = await api('/api/v1/secrets/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
     showSecretModal(name, r);
     btn.textContent = oldText;
   } catch (e) {
@@ -584,17 +635,23 @@ async function showSecretValue(name, btn) {
 
 async function copySecretValue(name, btn) {
   const oldText = '复制 / Copy';
-  btn.disabled = true; btn.textContent = '...';
+  btn.disabled = true;
+  btn.textContent = '...';
   try {
-    const r = await api('/api/v1/secrets/resolve', { method: 'POST', body: JSON.stringify({ name }) });
+    const r = await api('/api/v1/secrets/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
     // Always copy JSON for multi-field secrets so user gets full context
-    const toCopy = r.fields && Object.keys(r.fields).length > 1
-      ? JSON.stringify(r.fields, null, 2)
-      : r.value;
+    const toCopy =
+      r.fields && Object.keys(r.fields).length > 1 ? JSON.stringify(r.fields, null, 2) : r.value;
     try {
       await navigator.clipboard.writeText(toCopy);
       btn.textContent = '已复制 ✓';
-      setTimeout(() => { btn.textContent = oldText; btn.disabled = false; }, 1500);
+      setTimeout(() => {
+        btn.textContent = oldText;
+        btn.disabled = false;
+      }, 1500);
       return;
     } catch (clipErr) {
       // Clipboard API often fails in non-HTTPS or non-focused contexts.
@@ -663,23 +720,31 @@ function showSecretModal(name, resolveResult, preselectedForCopy) {
     // Auto-select the textarea contents after the modal renders
     setTimeout(() => {
       const ta = $('#copy-fallback');
-      if (ta) { ta.focus(); ta.select(); }
+      if (ta) {
+        ta.focus();
+        ta.select();
+      }
       // Wire up the action buttons
       const retry = $('#btn-retry-copy');
-      if (retry) retry.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(preselectedForCopy);
-          retry.textContent = '已复制 ✓ / Copied!';
-          setTimeout(() => closeSecretModalClean(), 1000);
-        } catch (e) {
-          retry.textContent = '还是不行 — 用全选 / Still blocked — use select all';
-        }
-      });
+      if (retry)
+        retry.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(preselectedForCopy);
+            retry.textContent = '已复制 ✓ / Copied!';
+            setTimeout(() => closeSecretModalClean(), 1000);
+          } catch (e) {
+            retry.textContent = '还是不行 — 用全选 / Still blocked — use select all';
+          }
+        });
       const sel = $('#btn-select-all');
-      if (sel) sel.addEventListener('click', () => {
-        const ta = $('#copy-fallback');
-        if (ta) { ta.focus(); ta.select(); }
-      });
+      if (sel)
+        sel.addEventListener('click', () => {
+          const ta = $('#copy-fallback');
+          if (ta) {
+            ta.focus();
+            ta.select();
+          }
+        });
     }, 50);
   } else {
     errEl.hidden = true;

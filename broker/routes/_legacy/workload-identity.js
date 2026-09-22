@@ -7,7 +7,13 @@
 // 安全: assume 端点要求 mTLS client 已认证(任何 client 都能用,broker 内置
 // 限流在 deps.rateLimit); cache/invalidate 要求 admin client.
 
-import { getCredentials, listCache, invalidateCache, validateConfig, _resetForTests } from '../../lib/workload-identity.js';
+import {
+  getCredentials,
+  listCache,
+  invalidateCache,
+  validateConfig,
+  _resetForTests,
+} from '../../lib/workload-identity.js';
 
 /**
  * @returns {Promise<boolean>}
@@ -17,7 +23,16 @@ export async function handleWorkloadIdentity(req, res, route, deps) {
   const { send, jsonError, readBody, audit, ctx, config, rateLimit } = deps;
 
   if (p === '/api/v1/workload-identity/assume') {
-    return handleAssume(req, res, { method, send, jsonError, readBody, audit, ctx, config, rateLimit });
+    return handleAssume(req, res, {
+      method,
+      send,
+      jsonError,
+      readBody,
+      audit,
+      ctx,
+      config,
+      rateLimit,
+    });
   }
   if (p === '/api/v1/workload-identity/cache' && method === 'GET') {
     return handleCacheList(res, { jsonError, ctx, config });
@@ -31,7 +46,11 @@ export async function handleWorkloadIdentity(req, res, route, deps) {
   return false;
 }
 
-async function handleAssume(req, res, { send, jsonError, readBody, audit, ctx, config, rateLimit }) {
+async function handleAssume(
+  req,
+  res,
+  { send, jsonError, readBody, audit, ctx, config, rateLimit },
+) {
   if (!ctx?.client) {
     jsonError(res, 401, 'Authentication required');
     return true;
@@ -41,8 +60,17 @@ async function handleAssume(req, res, { send, jsonError, readBody, audit, ctx, c
     jsonError(res, 429, 'Too many requests');
     return true;
   }
-  const body = await readBody(req) || {};
-  const { provider, oidc_token, oidcToken, role_arn, roleArn, audience, session_name, sessionName } = body;
+  const body = (await readBody(req)) || {};
+  const {
+    provider,
+    oidc_token,
+    oidcToken,
+    role_arn,
+    roleArn,
+    audience,
+    session_name,
+    sessionName,
+  } = body;
   if (!provider) {
     jsonError(res, 400, 'provider required (aliyun | aws | gcp)');
     return true;
@@ -56,7 +84,13 @@ async function handleAssume(req, res, { send, jsonError, readBody, audit, ctx, c
   const wi = (config && config.workload_identity) || {};
   const provCfg = (wi.providers || {})[provider];
   if (!provCfg) {
-    audit?.({ action: 'workload_identity.assume', status: 'denied', provider, reason: 'provider_not_configured', cn: ctx.cn });
+    audit?.({
+      action: 'workload_identity.assume',
+      status: 'denied',
+      provider,
+      reason: 'provider_not_configured',
+      cn: ctx.cn,
+    });
     jsonError(res, 403, `provider ${provider} not configured`);
     return true;
   }
@@ -72,7 +106,13 @@ async function handleAssume(req, res, { send, jsonError, readBody, audit, ctx, c
       opts.audience = audience || provCfg.audience;
     }
     const creds = await getCredentials(provider, token, opts);
-    audit?.({ action: 'workload_identity.assume', status: 'ok', provider, role: opts.roleArn || opts.audience, cn: ctx.cn });
+    audit?.({
+      action: 'workload_identity.assume',
+      status: 'ok',
+      provider,
+      role: opts.roleArn || opts.audience,
+      cn: ctx.cn,
+    });
     send(res, 200, {
       ok: true,
       provider: creds.provider,
@@ -84,7 +124,13 @@ async function handleAssume(req, res, { send, jsonError, readBody, audit, ctx, c
       expires_in_ms: creds.expires_at_ms - Date.now(),
     });
   } catch (e) {
-    audit?.({ action: 'workload_identity.assume', status: 'error', provider, error: String(e?.message || e), cn: ctx.cn });
+    audit?.({
+      action: 'workload_identity.assume',
+      status: 'error',
+      provider,
+      error: String(e?.message || e),
+      cn: ctx.cn,
+    });
     jsonError(res, 502, `assume failed: ${e.message}`);
   }
   return true;
@@ -107,7 +153,7 @@ async function handleInvalidate(req, res, { jsonError, readBody, audit, ctx, con
     jsonError(res, 403, 'admin only');
     return true;
   }
-  const body = await readBody(req) || {};
+  const body = (await readBody(req)) || {};
   const { provider, role_arn, roleArn, audience } = body;
   if (!provider) {
     jsonError(res, 400, 'provider required');
@@ -126,7 +172,7 @@ async function handleValidateConfig(req, res, { jsonError, readBody, ctx, config
     jsonError(res, 403, 'admin only');
     return true;
   }
-  const body = await readBody(req) || {};
+  const body = (await readBody(req)) || {};
   const r = validateConfig(body);
   res.statusCode = r.ok ? 200 : 400;
   res.setHeader('content-type', 'application/json; charset=utf-8');

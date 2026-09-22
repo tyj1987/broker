@@ -36,7 +36,9 @@ export async function handleClients(req, res, route, deps) {
       jsonError(res, 403, 'Admin role required');
       return true;
     }
-    const clients = Object.entries(config.clients || {}).map(([name, c]) => publicClientView(name, c));
+    const clients = Object.entries(config.clients || {}).map(([name, c]) =>
+      publicClientView(name, c),
+    );
     send(res, 200, { clients });
     return true;
   }

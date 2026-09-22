@@ -5,7 +5,11 @@
 import { SERVICE_TEMPLATES } from '../service-templates.js';
 
 function hostnameOf(upstream) {
-  try { return new URL(upstream).hostname.toLowerCase(); } catch { return ''; }
+  try {
+    return new URL(upstream).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
 function firstUsefulAction(actions) {

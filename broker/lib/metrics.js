@@ -105,14 +105,11 @@ export function prometheusText(extraLabels = {}) {
 
   for (const [name, h] of histograms) {
     lines.push(`# TYPE ${name} histogram`);
-    let cumulative = 0;
-    // re-read: counts[i] is already cumulative "le" style if we increment all matching
+    // counts[i] is already cumulative "le" style because observeMs increments every matching bucket
     // Our observeMs increments every bucket where ms <= le, so counts are cumulative.
     for (let i = 0; i < h.buckets.length; i++) {
       const le = h.buckets[i];
-      const lab = el
-        ? `{${el},le="${le}"}`
-        : `{le="${le}"}`;
+      const lab = el ? `{${el},le="${le}"}` : `{le="${le}"}`;
       lines.push(`${name}_bucket${lab} ${h.counts[i]}`);
     }
     const infLab = el ? `{${el},le="+Inf"}` : `{le="+Inf"}`;

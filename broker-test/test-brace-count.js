@@ -10,7 +10,7 @@ for (let i = 0; i < lines.length; i++) {
   const delta = opens - closes;
   cumulative += delta;
   if (cumulative < 0 || delta !== 0) {
-    console.log(`line ${i+1}: delta=${delta} cum=${cumulative}: ${lines[i].substring(0, 120)}`);
+    console.log(`line ${i + 1}: delta=${delta} cum=${cumulative}: ${lines[i].substring(0, 120)}`);
   }
 }
 console.log('Final cumulative:', cumulative);

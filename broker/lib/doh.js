@@ -8,8 +8,8 @@ import { request as httpsRequest } from 'node:https';
 
 export const DOH_TTL_MS = 5 * 60 * 1000;
 
-const _cache = new Map();      // hostname -> { ip, expiresAt }
-const _inFlight = new Map();   // hostname -> Promise
+const _cache = new Map(); // hostname -> { ip, expiresAt }
+const _inFlight = new Map(); // hostname -> Promise
 
 export function isIpLiteral(hostname) {
   const h = String(hostname || '');
@@ -41,7 +41,11 @@ export function clearDoHCache() {
 function defaultEndpoints(hostname) {
   const q = encodeURIComponent(hostname);
   return [
-    { url: `https://dns.alidns.com/resolve?name=${q}&type=A`, ip: '223.5.5.5', host: 'dns.alidns.com' },
+    {
+      url: `https://dns.alidns.com/resolve?name=${q}&type=A`,
+      ip: '223.5.5.5',
+      host: 'dns.alidns.com',
+    },
     { url: `https://1.1.1.1/dns-query?name=${q}&type=A`, ip: '1.1.1.1', host: '1.1.1.1' },
   ];
 }
@@ -49,24 +53,27 @@ function defaultEndpoints(hostname) {
 function defaultDohGet(ep, timeout) {
   const u = new URL(ep.url);
   return new Promise((resolve, reject) => {
-    const req = httpsRequest({
-      hostname: ep.ip,
-      port: 443,
-      path: u.pathname + u.search,
-      method: 'GET',
-      servername: ep.host || u.hostname,
-      headers: { Host: ep.host || u.host, Accept: 'application/dns-json' },
-      timeout,
-    }, (res) => {
-      if (res.statusCode !== 200) {
-        res.resume();
-        reject(new Error(`DoH HTTP ${res.statusCode}`));
-        return;
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    });
+    const req = httpsRequest(
+      {
+        hostname: ep.ip,
+        port: 443,
+        path: u.pathname + u.search,
+        method: 'GET',
+        servername: ep.host || u.hostname,
+        headers: { Host: ep.host || u.host, Accept: 'application/dns-json' },
+        timeout,
+      },
+      (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error(`DoH HTTP ${res.statusCode}`));
+          return;
+        }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      },
+    );
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('DoH timeout')));
     req.end();
@@ -97,13 +104,19 @@ export async function resolveHostnameDoH(hostname, opts = {}) {
           _cache.set(hostname, { ip, expiresAt: Date.now() + (opts.ttlMs ?? DOH_TTL_MS) });
           return ip;
         }
-      } catch { /* try next endpoint */ }
+      } catch {
+        /* try next endpoint */
+      }
     }
     throw new Error(`DoH resolve failed for ${hostname}`);
   })();
 
   _inFlight.set(hostname, p);
-  try { return await p; } finally { _inFlight.delete(hostname); }
+  try {
+    return await p;
+  } finally {
+    _inFlight.delete(hostname);
+  }
 }
 
 /**

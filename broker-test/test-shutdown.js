@@ -3,12 +3,20 @@
 
 import { installGracefulShutdown, rejectIfShuttingDown } from '../broker/lib/shutdown.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ============================================================
 // installGracefulShutdown: shuttingDown state
@@ -17,7 +25,9 @@ section('installGracefulShutdown state');
 {
   let exitCode = null;
   const origExit = process.exit;
-  process.exit = (code) => { exitCode = code; };
+  process.exit = (code) => {
+    exitCode = code;
+  };
   try {
     const { shuttingDown, shutdown } = installGracefulShutdown({
       server: null,
@@ -40,7 +50,9 @@ section('shutdown idempotency');
 {
   let exitCount = 0;
   const origExit = process.exit;
-  process.exit = () => { exitCount++; };
+  process.exit = () => {
+    exitCount++;
+  };
   try {
     const { shuttingDown, shutdown } = installGracefulShutdown({
       server: null,
@@ -66,13 +78,19 @@ section('onShutdown hooks');
   let hook1Called = false;
   let hook2Called = false;
   const origExit = process.exit;
-  process.exit = (code) => { exitCode = code; };
+  process.exit = (code) => {
+    exitCode = code;
+  };
   try {
     const { shutdown } = installGracefulShutdown({
       server: null,
       onShutdown: [
-        async () => { hook1Called = true; },
-        () => { hook2Called = true; },
+        async () => {
+          hook1Called = true;
+        },
+        () => {
+          hook2Called = true;
+        },
       ],
       timeoutMs: 1000,
       logger: () => {},
@@ -94,13 +112,19 @@ section('hook error tolerance');
   let exitCode = null;
   let goodCalled = false;
   const origExit = process.exit;
-  process.exit = (code) => { exitCode = code; };
+  process.exit = (code) => {
+    exitCode = code;
+  };
   try {
     const { shutdown } = installGracefulShutdown({
       server: null,
       onShutdown: [
-        async () => { throw new Error('hook fail'); },
-        async () => { goodCalled = true; },
+        async () => {
+          throw new Error('hook fail');
+        },
+        async () => {
+          goodCalled = true;
+        },
       ],
       timeoutMs: 1000,
       logger: () => {},
@@ -121,11 +145,18 @@ section('server.close');
   let exitCode = null;
   let closeCalled = false;
   const origExit = process.exit;
-  process.exit = (code) => { exitCode = code; };
+  process.exit = (code) => {
+    exitCode = code;
+  };
   try {
     const fakeServer = {
-      close(cb) { closeCalled = true; if (cb) cb(); },
-      closeIdleConnections() { /* no-op */ },
+      close(cb) {
+        closeCalled = true;
+        if (cb) cb();
+      },
+      closeIdleConnections() {
+        /* no-op */
+      },
     };
     const { shutdown } = installGracefulShutdown({
       server: fakeServer,
@@ -153,17 +184,26 @@ section('rejectIfShuttingDown');
   let jsonErrorCalled = false;
   const origJsonError = jsonError;
   // monkey-patch: just track calls
-  const mockJsonError = (res, code, msg) => { jsonErrorCalled = true; return origJsonError(res, code, msg); };
+  const mockJsonError = (res, code, msg) => {
+    jsonErrorCalled = true;
+    return origJsonError(res, code, msg);
+  };
 
   const res = { headersSent: false, writeHead() {}, end() {} };
   shuttingDownReturn = false;
-  ok('not shutting down: returns false', rejectIfShuttingDown(shuttingDownFn, res, mockJsonError) === false);
+  ok(
+    'not shutting down: returns false',
+    rejectIfShuttingDown(shuttingDownFn, res, mockJsonError) === false,
+  );
   ok('not shutting down: no error sent', jsonErrorCalled === false);
 
   // Shutting down → returns true, error sent
   shuttingDownReturn = true;
   const res2 = { headersSent: false, writeHead() {}, end() {} };
-  ok('shutting down: returns true', rejectIfShuttingDown(shuttingDownFn, res2, mockJsonError) === true);
+  ok(
+    'shutting down: returns true',
+    rejectIfShuttingDown(shuttingDownFn, res2, mockJsonError) === true,
+  );
   ok('shutting down: error sent', jsonErrorCalled === true);
 }
 

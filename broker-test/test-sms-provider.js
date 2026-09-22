@@ -7,12 +7,20 @@ import {
   generateSmsCode,
 } from '../broker/lib/index.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // === stubSmsProvider ===
 section('stub provider');
@@ -31,12 +39,20 @@ for (let n = 4; n <= 10; n++) {
 }
 {
   let threw = false;
-  try { generateSmsCode(3); } catch (_e) { threw = true; }
+  try {
+    generateSmsCode(3);
+  } catch (_e) {
+    threw = true;
+  }
   ok('length 3 throws', threw);
 }
 {
   let threw = false;
-  try { generateSmsCode(11); } catch (_e) { threw = true; }
+  try {
+    generateSmsCode(11);
+  } catch (_e) {
+    threw = true;
+  }
   ok('length 11 throws', threw);
 }
 {
@@ -53,7 +69,11 @@ for (let n = 4; n <= 10; n++) {
 section('webhook provider');
 {
   let threw = false;
-  try { makeWebhookSmsProvider({}); } catch (_e) { threw = true; }
+  try {
+    makeWebhookSmsProvider({});
+  } catch (_e) {
+    threw = true;
+  }
   ok('missing url throws', threw);
 }
 {
@@ -62,35 +82,43 @@ section('webhook provider');
   let received = null;
   const server = http.createServer((req, res) => {
     let body = '';
-    req.on('data', c => body += c);
+    req.on('data', (c) => (body += c));
     req.on('end', () => {
       received = { method: req.method, url: req.url, body };
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ message_id: 'msg-123', cost: 1 }));
     });
   });
-  await new Promise(r => server.listen(0, r));
+  await new Promise((r) => server.listen(0, r));
   const port = server.address().port;
 
   const provider = makeWebhookSmsProvider({ url: `http://127.0.0.1:${port}/sms` });
   const r = await provider.send('+8613800000000', '654321', { ttl_seconds: 300 });
   ok('webhook returns message_id from upstream', r.message_id === 'msg-123');
   ok('webhook returns cost from upstream', r.cost === 1);
-  ok('webhook posted phone+code', received && received.body.includes('+8613800000000') && received.body.includes('654321'));
+  ok(
+    'webhook posted phone+code',
+    received && received.body.includes('+8613800000000') && received.body.includes('654321'),
+  );
   ok('webhook method=POST', received.method === 'POST');
 
   // test failure path
   server.close();
-  await new Promise(r => server.listen(0, r));
+  await new Promise((r) => server.listen(0, r));
   const port2 = server.address().port;
   const failServer = http.createServer((req, res) => {
-    res.writeHead(500); res.end('boom');
+    res.writeHead(500);
+    res.end('boom');
   });
-  await new Promise(r => failServer.listen(0, r));
+  await new Promise((r) => failServer.listen(0, r));
   const failPort = failServer.address().port;
   const provider2 = makeWebhookSmsProvider({ url: `http://127.0.0.1:${failPort}/sms` });
   let err = null;
-  try { await provider2.send('+86138', '111'); } catch (e) { err = e; }
+  try {
+    await provider2.send('+86138', '111');
+  } catch (e) {
+    err = e;
+  }
   ok('webhook 500 throws', err && /500/.test(err.message));
   failServer.close();
 }
@@ -133,7 +161,7 @@ section('SmsRegistry');
   const reg = new SmsRegistry({ custom: stubSmsProvider }, 'custom');
   ok('direct construction', reg.defaultName === 'custom');
   const r = await reg.send('+86138', '111', { provider: 'custom' });
-  ok('direct send', r.provider === 'stub');  // stub's own name
+  ok('direct send', r.provider === 'stub'); // stub's own name
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -16,12 +16,20 @@
 //   - health: 内部状态(便于 dashboard 显示)
 
 import { EventEmitter } from 'node:events';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const RING_MAX = 1000;
-const ROTATE_BYTES = 50 * 1024 * 1024;  // 50MB
+const ROTATE_BYTES = 50 * 1024 * 1024; // 50MB
 
 /**
  * @param {object} deps
@@ -70,23 +78,39 @@ export function createAuditRoutes({ auditDir, getConfig, redact }) {
     return e;
   }
 
-  function readAuditFiltered({ client, service, action, status, since, until, limit = 100 } = {}) {
+  function readAuditFiltered({
+    client,
+    cn,
+    service,
+    action,
+    status,
+    since,
+    until,
+    limit = 100,
+  } = {}) {
     const maxLimit = Math.min(Math.max(1, limit), 5000);
-    const cnL = client ? String(client).toLowerCase() : null;
+    const clientL = client ? String(client).toLowerCase() : null;
+    const cnExact = cn ? String(cn).toLowerCase() : null;
     const svcL = service ? String(service).toLowerCase() : null;
     const actL = action ? String(action).toLowerCase() : null;
     const stL = status ? String(status).toLowerCase() : null;
     // 热读:无 service / until,since 为空或 ≥ ring 起点,limit ≤ ring 容量
-    const ringHasRange = ring.length > 0
-      && !svcL
-      && !until
-      && (!since || since <= ring[0].ts)
-      && maxLimit <= ring.length;
+    const ringHasRange =
+      ring.length > 0 &&
+      !svcL &&
+      !until &&
+      (!since || since <= ring[0].ts) &&
+      maxLimit <= ring.length;
     if (ringHasRange) {
       const out = [];
       for (let i = ring.length - 1; i >= 0 && out.length < maxLimit; i--) {
         const e = ring[i];
-        if (cnL && !(e.cn || '').toLowerCase().includes(cnL)) continue;
+        if (clientL) {
+          const eventCn = String(e.cn || '').toLowerCase();
+          const eventClient = String(e.client || '').toLowerCase();
+          if (!eventCn.includes(clientL) && !eventClient.includes(clientL)) continue;
+        }
+        if (cnExact && String(e.cn || '').toLowerCase() !== cnExact) continue;
         if (actL && !(e.action || '').toLowerCase().includes(actL)) continue;
         if (stL && !(e.status || '').toLowerCase().includes(stL)) continue;
         out.push(e);
@@ -95,7 +119,7 @@ export function createAuditRoutes({ auditDir, getConfig, redact }) {
     }
     // 冷读:扫描磁盘
     const files = readdirSync(auditDir)
-      .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
+      .filter((f) => f.startsWith('audit-') && f.endsWith('.jsonl'))
       .sort()
       .reverse();
     const out = [];
@@ -105,10 +129,19 @@ export function createAuditRoutes({ auditDir, getConfig, redact }) {
       for (const line of content.split('\n').reverse()) {
         if (!line) continue;
         let e;
-        try { e = JSON.parse(line); } catch { continue; }
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
         if (since && e.ts < since) continue;
         if (until && e.ts > until) continue;
-        if (cnL && !(e.cn || '').toLowerCase().includes(cnL)) continue;
+        if (clientL) {
+          const eventCn = String(e.cn || '').toLowerCase();
+          const eventClient = String(e.client || '').toLowerCase();
+          if (!eventCn.includes(clientL) && !eventClient.includes(clientL)) continue;
+        }
+        if (cnExact && String(e.cn || '').toLowerCase() !== cnExact) continue;
         if (svcL && !(e.service || '').toLowerCase().includes(svcL)) continue;
         if (actL && !(e.action || '').toLowerCase().includes(actL)) continue;
         if (stL && !(e.status || '').toLowerCase().includes(stL)) continue;
@@ -128,8 +161,15 @@ export function createAuditRoutes({ auditDir, getConfig, redact }) {
     const clients = new Set(Object.keys(cfg.clients || {}));
     const services = new Set(Object.keys(cfg.services || {}));
     const actions = new Set([
-      'login', 'logout', 'proxy', 'resolve', 'connect', 'healthcheck',
-      'admin_secrets_create', 'admin_services_create', 'admin_clients_create',
+      'login',
+      'logout',
+      'proxy',
+      'resolve',
+      'connect',
+      'healthcheck',
+      'admin_secrets_create',
+      'admin_services_create',
+      'admin_clients_create',
       'audit_cleared',
     ]);
     const statuses = new Set(['ok', 'error', 'denied', 'not_found', 'mfa_required']);
@@ -158,7 +198,9 @@ export function createAuditRoutes({ auditDir, getConfig, redact }) {
       try {
         unlinkSync(join(auditDir, f));
         deleted.push(f);
-      } catch { /* keep going */ }
+      } catch {
+        /* keep going */
+      }
     }
     return deleted;
   }

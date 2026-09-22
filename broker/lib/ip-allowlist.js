@@ -20,7 +20,7 @@ function ipv4ToInt(ip) {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
   if (!m) return null;
   const parts = [+m[1], +m[2], +m[3], +m[4]];
-  if (parts.some(n => n > 255)) return null;
+  if (parts.some((n) => n > 255)) return null;
   return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
 }
 
@@ -44,7 +44,7 @@ export function matchIpRule(ip, rule) {
     const baseInt = ipv4ToInt(normalizeIp(base));
     if (ipInt === null || baseInt === null) return false;
     if (bits === 0) return true;
-    const mask = bits === 32 ? 0xffffffff : (~((1 << (32 - bits)) - 1)) >>> 0;
+    const mask = bits === 32 ? 0xffffffff : ~((1 << (32 - bits)) - 1) >>> 0;
     return (ipInt & mask) === (baseInt & mask);
   }
 
@@ -61,5 +61,5 @@ export function isIpAllowed(whitelist, remoteIp) {
   if (!whitelist || !Array.isArray(whitelist) || whitelist.length === 0) return true;
   const addr = normalizeIp(remoteIp);
   if (!addr) return false; // have whitelist but no usable IP -> deny
-  return whitelist.some(rule => matchIpRule(addr, rule));
+  return whitelist.some((rule) => matchIpRule(addr, rule));
 }

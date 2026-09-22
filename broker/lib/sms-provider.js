@@ -22,10 +22,15 @@
  */
 export const stubSmsProvider = {
   name: 'stub',
-  async send(phone, code, opts = {}) {
+  async send(phone, code, _opts = {}) {
     // eslint-disable-next-line no-console
-    console.log(`[sms-stub] would send to ${phone}: code=${code} (set sms.providers in broker.yaml to enable real send)`);
-    return { message_id: `stub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, provider: 'stub' };
+    console.log(
+      `[sms-stub] would send to ${phone}: code=${code} (set sms.providers in broker.yaml to enable real send)`,
+    );
+    return {
+      message_id: `stub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      provider: 'stub',
+    };
   },
 };
 

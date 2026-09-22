@@ -25,16 +25,24 @@ import {
   createChainWriter,
   GENESIS_HASH,
 } from '../broker/lib/audit-hash-chain.js';
-import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- tests ----------
 
@@ -141,7 +149,7 @@ section('11. createChainWriter chains correctly');
 
 {
   const events = [];
-  const writer = createChainWriter({ onEvent: e => events.push(e) });
+  const writer = createChainWriter({ onEvent: (e) => events.push(e) });
   for (let i = 0; i < 10; i++) {
     writer.write({ action: 'test', n: i });
   }
@@ -155,7 +163,7 @@ section('12. createChainWriter survives tampering');
 
 {
   const events = [];
-  const writer = createChainWriter({ onEvent: e => events.push(e) });
+  const writer = createChainWriter({ onEvent: (e) => events.push(e) });
   for (let i = 0; i < 5; i++) writer.write({ action: 'test', n: i });
   // Tamper with event #2
   events[2].action = 'TAMPERED';
@@ -168,9 +176,13 @@ section('13. verifyAuditDir works on real files');
 
 {
   const WORK = mkdtempSync(join(tmpdir(), 'broker-chain-'));
-  process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
+  process.on('exit', () => {
+    try {
+      rmSync(WORK, { recursive: true, force: true });
+    } catch {}
+  });
   // Create some audit files with chained events
-  const writer = createChainWriter({ onEvent: e => {} });
+  const writer = createChainWriter({ onEvent: () => {} });
   const events = [];
   for (let i = 0; i < 3; i++) {
     const ev = writer.write({ action: 'test', n: i });
@@ -179,7 +191,7 @@ section('13. verifyAuditDir works on real files');
   // Write to a file in the canonical location
   const day = new Date().toISOString().slice(0, 10);
   const file = join(WORK, `audit-${day}.jsonl`);
-  const content = events.map(e => JSON.stringify(e)).join('\n') + '\n';
+  const content = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
   writeFileSync(file, content);
   const r = await verifyAuditDir(WORK);
   ok('ok=true', r.ok === true);

@@ -10,14 +10,24 @@ import {
   clientNamesAllowedFor,
   matchProxyRule,
   checkPathAllowed,
+  checkMethodAllowed,
+  normalizeProxyMethod,
 } from '../broker/can-proxy.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- helpers ----------
 
@@ -54,17 +64,52 @@ section('4. Object rules');
 ok('object service match', matchProxyRule({ service: 'github' }, 'github', '/user'));
 ok('object service mismatch', !matchProxyRule({ service: 'github' }, 'gitlab', '/user'));
 ok('object regex service', matchProxyRule({ service: '^github' }, 'github_cn', '/user'));
-ok('object with paths all match', matchProxyRule({ service: 'github', paths: ['^/user', '^/repos'] }, 'github', '/user'));
-ok('object with paths none match', !matchProxyRule({ service: 'github', paths: ['^/admin'] }, 'github', '/user'));
-ok('object with empty paths array → no path check (allow all)', matchProxyRule({ service: 'github', paths: [] }, 'github', '/anywhere'));
-ok('object with no paths key → no path check', matchProxyRule({ service: 'github' }, 'github', '/anywhere'));
+ok(
+  'object with paths all match',
+  matchProxyRule({ service: 'github', paths: ['^/user', '^/repos'] }, 'github', '/user'),
+);
+ok(
+  'object with paths none match',
+  !matchProxyRule({ service: 'github', paths: ['^/admin'] }, 'github', '/user'),
+);
+ok(
+  'object with empty paths array → no path check (allow all)',
+  matchProxyRule({ service: 'github', paths: [] }, 'github', '/anywhere'),
+);
+ok(
+  'object with no paths key → no path check',
+  matchProxyRule({ service: 'github' }, 'github', '/anywhere'),
+);
+ok(
+  'object methods allows GET',
+  matchProxyRule({ service: 'github', methods: ['GET', 'POST'] }, 'github', '/user', 'GET'),
+);
+ok(
+  'object methods denies DELETE',
+  !matchProxyRule({ service: 'github', methods: ['GET', 'POST'] }, 'github', '/user', 'DELETE'),
+);
+ok(
+  'object empty methods denies all',
+  !matchProxyRule({ service: 'github', methods: [] }, 'github', '/user', 'GET'),
+);
+
+section('4b. HTTP method validation');
+
+ok('normalize lowercase post', normalizeProxyMethod('post') === 'POST');
+ok('CONNECT is not proxyable', normalizeProxyMethod('CONNECT') === null);
+ok('TRACE is not proxyable', normalizeProxyMethod('TRACE') === null);
+ok('service allow_methods allows PATCH', checkMethodAllowed(['GET', 'PATCH'], 'patch'));
+ok('service allow_methods denies DELETE', !checkMethodAllowed(['GET', 'PATCH'], 'DELETE'));
+ok(
+  'missing service allow_methods means unrestricted supported method',
+  checkMethodAllowed(undefined, 'GET'),
+);
+ok('empty service allow_methods denies all', !checkMethodAllowed([], 'GET'));
 
 section('5. canProxy — admin bypass');
 
-ok('admin allows github regardless of allowed_proxy',
-   canProxy(adminCtx(), 'github', '/user'));
-ok('admin allows any service',
-   canProxy(adminCtx(), 'aliyun_ecs', '/anything'));
+ok('admin allows github regardless of allowed_proxy', canProxy(adminCtx(), 'github', '/user'));
+ok('admin allows any service', canProxy(adminCtx(), 'aliyun_ecs', '/anything'));
 
 section('6. canProxy — developer with allowed_proxy');
 
@@ -77,6 +122,11 @@ section('6. canProxy — developer with allowed_proxy');
   const c = ctx({ allowed_proxy: [{ service: 'github', paths: ['^/user$'] }] });
   ok('object rule with path match', canProxy(c, 'github', '/user'));
   ok('object rule with path mismatch', !canProxy(c, 'github', '/user/repos'));
+}
+{
+  const c = ctx({ allowed_proxy: [{ service: 'github', paths: ['^/repos/'], methods: ['POST'] }] });
+  ok('method-restricted rule allows POST', canProxy(c, 'github', '/repos/acme/app', 'POST'));
+  ok('method-restricted rule denies DELETE', !canProxy(c, 'github', '/repos/acme/app', 'DELETE'));
 }
 {
   const c = ctx({ allowed_proxy: [] });
@@ -113,8 +163,13 @@ section('10. isServiceAllowed — developer');
   const c = ctx({ allowed_proxy: ['github', { service: 'aliyun_ecs', paths: [] }] });
   ok('exact string → allowed', isServiceAllowed(c, 'github'));
   ok('object rule with empty paths → allowed', isServiceAllowed(c, 'aliyun_ecs'));
-  ok('object rule with restrictive paths → NOT allowed (paths checked against "*")',
-     !isServiceAllowed({ client: { role: 'developer', allowed_proxy: [{ service: 'aws', paths: ['^/specific'] }] } }, 'aws'));
+  ok(
+    'object rule with restrictive paths → service is still visible',
+    isServiceAllowed(
+      { client: { role: 'developer', allowed_proxy: [{ service: 'aws', paths: ['^/specific'] }] } },
+      'aws',
+    ),
+  );
   ok('non-matching → not allowed', !isServiceAllowed(c, 'aws'));
 }
 
@@ -126,12 +181,14 @@ section('11. clientNamesAllowedFor — admin matrix');
     'dev.bob': { role: 'developer', allowed_proxy: ['github'] },
     'dev.carol': { role: 'developer', allowed_proxy: ['gitlab'] },
     'dev.dan': { role: 'developer', allowed_proxy: ['*'] },
+    'dev.erin': { role: 'developer', allowed_proxy: [{ service: 'github', paths: ['^/repos/'] }] },
   };
   const r = clientNamesAllowedFor(clients, 'github');
   ok('admin always in list', r.includes('admin.alice'));
   ok('matching dev in list', r.includes('dev.bob'));
   ok('non-matching dev NOT in list', !r.includes('dev.carol'));
   ok('wildcard dev in list', r.includes('dev.dan'));
+  ok('path-restricted dev still appears in service matrix', r.includes('dev.erin'));
 }
 
 section('12. checkPathAllowed');
@@ -150,18 +207,21 @@ section('13. Security: regex injection guard');
 {
   // The "no implicit regex" behavior means a user who passes "github.attacker"
   // doesn't accidentally match "github" (no dot-regex). Verify.
-  ok('"github.attacker" does not match "github" service',
-     !matchProxyRule('github.attacker', 'github', '/'));
+  ok(
+    '"github.attacker" does not match "github" service',
+    !matchProxyRule('github.attacker', 'github', '/'),
+  );
 }
 
 section('14. Security: admin role cannot be downgraded by config');
 
 {
   const c = { client: { role: 'admin', allowed_proxy: [] } };
-  ok('admin with empty allow still allows everything',
-     canProxy(c, 'github', '/'));
-  ok('admin with explicit deny still allows (admin overrides)',
-     canProxy({ client: { role: 'admin', allowed_proxy: ['nothing'] } }, 'github', '/'));
+  ok('admin with empty allow still allows everything', canProxy(c, 'github', '/'));
+  ok(
+    'admin with explicit deny still allows (admin overrides)',
+    canProxy({ client: { role: 'admin', allowed_proxy: ['nothing'] } }, 'github', '/'),
+  );
 }
 
 section('15. Realistic config — multi-service developer');

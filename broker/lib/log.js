@@ -14,6 +14,9 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { createSocket } from 'node:dgram';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -68,27 +71,36 @@ class HttpSink {
     this.headers = opts.headers || {};
     this.timeoutMs = opts.timeoutMs || 2000;
   }
-  write(level, msg, fields, line) {
+  write(level, msg, fields, _line) {
     // Use global fetch (Node 18+) or http module (Node < 18)
     const body = JSON.stringify({ ts: new Date().toISOString(), level, msg, ...fields });
     const doPost = (url) => {
       try {
         const u = new URL(url);
         const isHttps = u.protocol === 'https:';
-        const mod = isHttps ? require('node:https') : require('node:http');
-        const req = mod.request({
-          hostname: u.hostname,
-          port: u.port || (isHttps ? 443 : 80),
-          path: u.pathname + u.search,
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...this.headers },
-          timeout: this.timeoutMs,
-        }, (res) => res.on('data', () => {}).on('end', () => {}));
+        const request = isHttps ? httpsRequest : httpRequest;
+        const req = request(
+          {
+            hostname: u.hostname,
+            port: u.port || (isHttps ? 443 : 80),
+            path: u.pathname + u.search,
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'content-length': Buffer.byteLength(body),
+              ...this.headers,
+            },
+            timeout: this.timeoutMs,
+          },
+          (res) => res.on('data', () => {}).on('end', () => {}),
+        );
         req.on('error', () => {});
         req.on('timeout', () => req.destroy());
         req.write(body);
         req.end();
-      } catch { /* swallow */ }
+      } catch {
+        /* swallow */
+      }
     };
     doPost(this.url);
   }
@@ -109,19 +121,23 @@ class SyslogSink {
       const tag = 'secret-broker';
       // RFC 5424 format
       const syslogLine = `<${pri}>1 ${new Date().toISOString()} ${hostname} ${tag} - - - ${line}`;
-      const dgram = require('node:dgram');
-      const client = dgram.createSocket('udp4');
-      client.send(Buffer.from(syslogLine), this.port, this.host, (err) => {
+      const client = createSocket('udp4');
+      client.send(Buffer.from(syslogLine), this.port, this.host, () => {
         client.close();
       });
-    } catch { /* swallow */ }
+    } catch {
+      /* swallow */
+    }
   }
 }
 
 function parseSinks(spec) {
   if (!spec) return [new StdoutSink()];
   const sinks = [];
-  for (const part of spec.split(',').map(s => s.trim()).filter(Boolean)) {
+  for (const part of spec
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)) {
     if (part === 'stdout') sinks.push(new StdoutSink());
     else if (part.startsWith('file:')) sinks.push(new FileSink(part.slice(5)));
     else if (part.startsWith('http:') || part.startsWith('https:')) sinks.push(new HttpSink(part));
@@ -155,7 +171,11 @@ function emit(level, msg, fields = {}) {
     ...fields,
   });
   for (const sink of getSinks()) {
-    try { sink.write(level, msg, fields, line); } catch { /* never throw */ }
+    try {
+      sink.write(level, msg, fields, line);
+    } catch {
+      /* never throw */
+    }
   }
 }
 

@@ -49,8 +49,15 @@ export function loadMfaPolicy(config) {
   if (!config || typeof config !== 'object') return DEFAULT_POLICY;
   const p = config.mfa_policy;
   if (!p || typeof p !== 'object') return DEFAULT_POLICY;
+  const defaultPolicy = { ...DEFAULT_POLICY.default_policy };
+  for (const [role, override] of Object.entries(p.default_policy || {})) {
+    if (!override || typeof override !== 'object') continue;
+    const base = DEFAULT_POLICY.default_policy[role] || DEFAULT_POLICY.default_policy.developer;
+    defaultPolicy[role] = { ...base, ...override };
+  }
+
   return {
-    default_policy: { ...DEFAULT_POLICY.default_policy, ...(p.default_policy || {}) },
+    default_policy: defaultPolicy,
     risk_score_thresholds: {
       ...DEFAULT_POLICY.risk_score_thresholds,
       ...(p.risk_score_thresholds || {}),
@@ -63,7 +70,11 @@ export function loadMfaPolicy(config) {
  * Pick the policy block for a given role, defaulting to 'developer'.
  */
 function policyForRole(policy, role) {
-  return policy.default_policy[role] || policy.default_policy.developer || DEFAULT_POLICY.default_policy.developer;
+  return (
+    policy.default_policy[role] ||
+    policy.default_policy.developer ||
+    DEFAULT_POLICY.default_policy.developer
+  );
 }
 
 /**
@@ -138,7 +149,7 @@ export function decideMfaRequirement(ctx, config) {
   if (triggers.includes('always')) {
     mfa_required = true;
     base_reason = 'role_always';
-  } else if (factors.length > 0 && factors.some(f => triggers.includes(f))) {
+  } else if (factors.length > 0 && factors.some((f) => triggers.includes(f))) {
     mfa_required = true;
     base_reason = 'trigger_match';
   }
@@ -186,7 +197,7 @@ export function checkMfaProgress(verifiedFactors, decision) {
   }
   // Compute remaining distinct options that haven't been verified
   const verifiedSet = new Set(verifiedFactors || []);
-  const remainingOptions = (decision.options || []).filter(o => !verifiedSet.has(o));
+  const remainingOptions = (decision.options || []).filter((o) => !verifiedSet.has(o));
   const need = Math.max(0, (decision.min_count || 1) - (verifiedFactors || []).length);
   return {
     satisfied: need === 0,

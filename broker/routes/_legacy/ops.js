@@ -19,9 +19,10 @@ export async function handleOps(req, res, route, deps) {
   // GET /api/v1/ops/backup-manifest
   if (method === 'GET' && p === '/api/v1/ops/backup-manifest') {
     const paths = deps.backupPaths || {};
-    const manifest = typeof deps.buildBackupManifest === 'function'
-      ? deps.buildBackupManifest(paths)
-      : buildBackupManifest(paths);
+    const manifest =
+      typeof deps.buildBackupManifest === 'function'
+        ? deps.buildBackupManifest(paths)
+        : buildBackupManifest(paths);
     send(res, 200, manifest);
     return true;
   }

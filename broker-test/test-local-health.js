@@ -8,10 +8,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 function send(res, status, body) {
@@ -27,11 +33,15 @@ function get(port, path) {
   return new Promise((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port, path, method: 'GET' }, (res) => {
       const chunks = [];
-      res.on('data', c => chunks.push(c));
+      res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
         let json = null;
-        try { json = JSON.parse(raw); } catch { /* text */ }
+        try {
+          json = JSON.parse(raw);
+        } catch {
+          /* text */
+        }
         resolve({ status: res.statusCode, json, raw, headers: res.headers });
       });
     });
@@ -61,14 +71,19 @@ console.log('=== local TCP health listener ===');
     listen: { host: '127.0.0.1', port: 0 },
     onRequest: async (req, res) => {
       const url = new URL(req.url || '/', 'http://127.0.0.1');
-      const handled = await handleHealth(req, res, { method: req.method, pathname: url.pathname }, {
-        send,
-        version: '4.1.1',
-        secretCache: new Map([['X', {}]]),
-        config: { services: { github: {} } },
-        requireSops: true,
-        surface: 'local',
-      });
+      const handled = await handleHealth(
+        req,
+        res,
+        { method: req.method, pathname: url.pathname },
+        {
+          send,
+          version: '4.1.1',
+          secretCache: new Map([['X', {}]]),
+          config: { services: { github: {} } },
+          requireSops: true,
+          surface: 'local',
+        },
+      );
       if (!handled) send(res, 404, { error: 'not found', status: 404 });
     },
   });
@@ -94,28 +109,54 @@ console.log('=== handleStatic missing file is 500 not fall-through ===');
   const dir = mkdtempSync(join(tmpdir(), 'broker-dash-'));
   mkdirSync(dir, { recursive: true });
   const res = {
-    status: 0, headers: {}, body: null,
-    writeHead(s, h) { this.status = s; this.headers = h || {}; },
-    end(b) { this.body = b; },
+    status: 0,
+    headers: {},
+    body: null,
+    writeHead(s, h) {
+      this.status = s;
+      this.headers = h || {};
+    },
+    end(b) {
+      this.body = b;
+    },
   };
   const handled = handleStatic({}, res, { method: 'GET', pathname: '/' }, { dashboardDir: dir });
   assert(handled === true, 'missing dashboard path is handled');
   assert(res.status === 500, '500 not 401');
   writeFileSync(join(dir, 'index.html'), '<html>ok</html>');
   const res2 = {
-    status: 0, headers: {}, body: null,
-    writeHead(s, h) { this.status = s; this.headers = h || {}; },
-    end(b) { this.body = b; },
+    status: 0,
+    headers: {},
+    body: null,
+    writeHead(s, h) {
+      this.status = s;
+      this.headers = h || {};
+    },
+    end(b) {
+      this.body = b;
+    },
   };
   handleStatic({ headers: {} }, res2, { method: 'GET', pathname: '/' }, { dashboardDir: dir });
   assert(res2.status === 200 && String(res2.body).includes('ok'), 'serves when present');
   assert(res2.headers.ETag, 'etag set');
   const res3 = {
-    status: 0, headers: {}, body: null,
-    writeHead(s, h) { this.status = s; this.headers = h || {}; },
-    end(b) { this.body = b; },
+    status: 0,
+    headers: {},
+    body: null,
+    writeHead(s, h) {
+      this.status = s;
+      this.headers = h || {};
+    },
+    end(b) {
+      this.body = b;
+    },
   };
-  handleStatic({ headers: { 'if-none-match': res2.headers.ETag } }, res3, { method: 'GET', pathname: '/' }, { dashboardDir: dir });
+  handleStatic(
+    { headers: { 'if-none-match': res2.headers.ETag } },
+    res3,
+    { method: 'GET', pathname: '/' },
+    { dashboardDir: dir },
+  );
   assert(res3.status === 304, '304 on etag hit');
   assert(Object.keys(STATIC_MAP).length >= 10, 'STATIC_MAP size');
   assert(STATIC_MAP['/llms.txt'] === 'llms.txt', 'llms.txt is public');

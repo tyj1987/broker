@@ -1,13 +1,22 @@
 import {
-  relayConfig, shouldRelay, applyRelay, RELAY_SECRET_HEADER,
+  relayConfig,
+  shouldRelay,
+  applyRelay,
+  RELAY_SECRET_HEADER,
 } from '../broker/lib/outbound-relay.js';
 import { AI_HEALTHCHECK } from '../broker/healthcheck.js';
 import worker from '../workers/cf-api-relay/src/index.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 console.log('=== AI_HEALTHCHECK hosts ===');
@@ -30,18 +39,28 @@ console.log('=== relayConfig / applyRelay ===');
   assert(shouldRelay('api.cloudflare.com', on) === true, 'cf host relays');
   assert(shouldRelay('api.github.com', on) === false, 'github does not');
 
-  const applied = applyRelay(new URL('https://api.cloudflare.com/client/v4/user/tokens/verify'), {
-    Authorization: 'Bearer tok',
-  }, on);
+  const applied = applyRelay(
+    new URL('https://api.cloudflare.com/client/v4/user/tokens/verify'),
+    {
+      Authorization: 'Bearer tok',
+    },
+    on,
+  );
   assert(applied.relayed === true, 'relayed');
   assert(applied.url.hostname === 'relay.example.workers.dev', 'relay host');
   assert(applied.url.pathname === '/client/v4/user/tokens/verify', 'path kept');
   const short = applyRelay(new URL('https://api.cloudflare.com/user/tokens/verify'), {}, on);
-  assert(short.url.pathname === '/client/v4/user/tokens/verify', 'prefix /client/v4 when action path is root-relative');
+  assert(
+    short.url.pathname === '/client/v4/user/tokens/verify',
+    'prefix /client/v4 when action path is root-relative',
+  );
   assert(applied.headers.Host === 'relay.example.workers.dev', 'Host is relay');
   assert(applied.headers[RELAY_SECRET_HEADER] === 's3cret', 'secret header');
   assert(applied.headers.Authorization === 'Bearer tok', 'auth kept');
-  assert(applied.headers['X-Broker-Upstream-Authorization'] === 'Bearer tok', 'auth duplicated for FC');
+  assert(
+    applied.headers['X-Broker-Upstream-Authorization'] === 'Bearer tok',
+    'auth duplicated for FC',
+  );
   assert(applied.originalHost === 'api.cloudflare.com', 'originalHost');
 }
 
@@ -52,7 +71,9 @@ console.log('=== cf-api-relay worker ===');
   globalThis.fetch = async (url, init = {}) => {
     const headers = {};
     if (init.headers && typeof init.headers.forEach === 'function') {
-      init.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+      init.headers.forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
     } else if (init.headers) {
       for (const [k, v] of Object.entries(init.headers)) headers[k.toLowerCase()] = v;
     }
@@ -64,27 +85,42 @@ console.log('=== cf-api-relay worker ===');
   };
   try {
     const env = { RELAY_SECRET: 's3cret' };
-    const unauth = await worker.fetch(new Request('https://relay/client/v4/user/tokens/verify'), env);
+    const unauth = await worker.fetch(
+      new Request('https://relay/client/v4/user/tokens/verify'),
+      env,
+    );
     assert(unauth.status === 401, 'missing secret → 401');
 
-    const prefixed = await worker.fetch(new Request('https://relay/user/tokens/verify', {
-      headers: { 'X-Broker-Relay-Secret': 's3cret' },
-    }), env);
+    const prefixed = await worker.fetch(
+      new Request('https://relay/user/tokens/verify', {
+        headers: { 'X-Broker-Relay-Secret': 's3cret' },
+      }),
+      env,
+    );
     assert(prefixed.status === 200, 'root-relative path accepted');
-    assert(calls[0].url === 'https://api.cloudflare.com/client/v4/user/tokens/verify', 'prefixed to /client/v4');
+    assert(
+      calls[0].url === 'https://api.cloudflare.com/client/v4/user/tokens/verify',
+      'prefixed to /client/v4',
+    );
     calls.length = 0;
 
-    const ok = await worker.fetch(new Request('https://relay/client/v4/user/tokens/verify', {
-      headers: {
-        'X-Broker-Relay-Secret': 's3cret',
-        Authorization: 'Bearer tok',
-      },
-    }), env);
+    const ok = await worker.fetch(
+      new Request('https://relay/client/v4/user/tokens/verify', {
+        headers: {
+          'X-Broker-Relay-Secret': 's3cret',
+          Authorization: 'Bearer tok',
+        },
+      }),
+      env,
+    );
     assert(ok.status === 200, 'verify forwarded 200');
     const body = await ok.json();
     assert(body.result?.status === 'active', 'upstream body passed through');
     assert(calls.length === 1, 'one origin fetch');
-    assert(calls[0].url === 'https://api.cloudflare.com/client/v4/user/tokens/verify', 'origin URL');
+    assert(
+      calls[0].url === 'https://api.cloudflare.com/client/v4/user/tokens/verify',
+      'origin URL',
+    );
     assert(calls[0].headers.authorization === 'Bearer tok', 'Authorization forwarded');
     assert(!calls[0].headers['x-broker-relay-secret'], 'relay secret stripped');
   } finally {

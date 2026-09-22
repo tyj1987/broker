@@ -143,14 +143,19 @@ ws.on('message', (data) => console.log(JSON.parse(data.toString())));
 
 ## Health & status
 
-Inspect active subscribers:
+Inspect active subscribers (admin only):
 ```bash
 curl --cert client.crt --key client.key --cacert ca.crt \
   https://broker:8443/api/v1/ws-stats
-# (admin endpoint, not yet implemented — see TODO)
+# Returns { subscriber_count, events, event_counts, subscribers, version }
 ```
 
-For now, the broker exposes subscriber count and event subscriptions via
+Implemented in v4.4.0 (`broker/server.js` → `getStats()` / `listSubscribers()`
+from `broker/lib/ws.js`). The endpoint reports an empty subscriber list
+until a separate commit wires the `attachWebSocket()` upgrade path on the
+HTTPS server.
+
+The broker also exposes subscriber count and event subscriptions via
 Prometheus metrics:
 - `broker_ws_subscribers` (gauge, current count)
 - `broker_ws_broadcasts_total` (counter, total events broadcast)

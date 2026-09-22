@@ -3,18 +3,31 @@
 import { signAliyunV3 } from '../broker/signing/aliyun-v3.js';
 import { signTencentV3 } from '../broker/signing/tencent-v3.js';
 import { signAwsSigV4 } from '../broker/signing/aws-sigv4.js';
-import { buildServiceAccountJwt, exchangeJwtForToken, signGcpJwt, clearGcpCache } from '../broker/signing/gcp-jwt.js';
+import {
+  buildServiceAccountJwt,
+  exchangeJwtForToken,
+  signGcpJwt,
+  clearGcpCache,
+} from '../broker/signing/gcp-jwt.js';
 import { getAzureToken, signAzureAd, clearAzureCache } from '../broker/signing/azure-ad.js';
 import { signCloudflare } from '../broker/signing/cloudflare.js';
 import { getDockerRegistryToken, signDockerRegistry } from '../broker/signing/docker-registry.js';
 import { signWechatPayV3 } from '../broker/signing/wechat-pay.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // === Aliyun v3 ===
 section('Aliyun v3');
@@ -51,7 +64,10 @@ section('Tencent v3');
     timestamp: 1723456789,
     secret: { secret_id: 'AKIDzTestIdxxxxxxxxxxx', secret_key: 'fake-secret' },
   });
-  ok('auth starts with TC3', h.Authorization.startsWith('TC3-HMAC-SHA256 Credential=AKIDzTestIdxxxxxxxxxxx/'));
+  ok(
+    'auth starts with TC3',
+    h.Authorization.startsWith('TC3-HMAC-SHA256 Credential=AKIDzTestIdxxxxxxxxxxx/'),
+  );
   ok('credentialScope has cvm/tc3_request', h.Authorization.includes('/cvm/tc3_request,'));
   ok('has X-TC-Action', h['X-TC-Action'] === 'DescribeInstances');
   ok('has X-TC-Region', h['X-TC-Region'] === 'ap-guangzhou');
@@ -71,9 +87,15 @@ section('AWS SigV4');
     service: 's3',
     region: 'us-east-1',
     now: new Date('2026-08-26T09:12:34Z'),
-    secret: { access_key_id: 'AKIAIOSFODNN7EXAMPLE', secret_access_key: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY' },
+    secret: {
+      access_key_id: 'AKIAIOSFODNN7EXAMPLE',
+      secret_access_key: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
+    },
   });
-  ok('auth starts with AWS4', h.Authorization.startsWith('AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/'));
+  ok(
+    'auth starts with AWS4',
+    h.Authorization.startsWith('AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/'),
+  );
   ok('credentialScope has s3', h.Authorization.includes('/s3/aws4_request,'));
   ok('has X-Amz-Date', h['X-Amz-Date'] === '20260826T091234Z');
   ok('has X-Amz-Content-Sha256', /^[0-9a-f]{64}$/.test(h['X-Amz-Content-Sha256']));
@@ -105,11 +127,14 @@ section('GCP JWT');
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const pkPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
   const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
-  const jwt = buildServiceAccountJwt('test@proj.iam.gserviceaccount.com', pkPem, ['https://www.googleapis.com/auth/cloud-platform']);
+  const jwt = buildServiceAccountJwt('test@proj.iam.gserviceaccount.com', pkPem, [
+    'https://www.googleapis.com/auth/cloud-platform',
+  ]);
   const parts = jwt.split('.');
   ok('JWT has 3 parts', parts.length === 3);
   // decode header and payload
-  const dec = (s) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+  const dec = (s) =>
+    Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
   const header = JSON.parse(dec(parts[0]));
   const payload = JSON.parse(dec(parts[1]));
   ok('header alg=RS256', header.alg === 'RS256');
@@ -176,7 +201,11 @@ section('Cloudflare');
 }
 {
   let threw = false;
-  try { signCloudflare({}); } catch (_e) { threw = true; }
+  try {
+    signCloudflare({});
+  } catch (_e) {
+    threw = true;
+  }
   ok('missing token throws', threw);
 }
 
@@ -189,7 +218,8 @@ section('Docker Registry');
       return new Response('', {
         status: 401,
         headers: {
-          'www-authenticate': 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"',
+          'www-authenticate':
+            'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"',
         },
       });
     }
@@ -198,15 +228,24 @@ section('Docker Registry');
     }
     return new Response('', { status: 404 });
   };
-  const tok = await getDockerRegistryToken({ registry: 'https://registry-1.docker.io', fetchImpl: mockFetch });
+  const tok = await getDockerRegistryToken({
+    registry: 'https://registry-1.docker.io',
+    fetchImpl: mockFetch,
+  });
   ok('returns mock token', tok.token === 'mock-docker-token');
-  const h = await signDockerRegistry({ registry: 'https://registry-1.docker.io', fetchImpl: mockFetch });
+  const h = await signDockerRegistry({
+    registry: 'https://registry-1.docker.io',
+    fetchImpl: mockFetch,
+  });
   ok('Authorization Bearer', h.Authorization === 'Bearer mock-docker-token');
 }
 {
   // no auth needed (probe returns 200)
   const noAuthFetch = async () => new Response('{}', { status: 200 });
-  const tok = await getDockerRegistryToken({ registry: 'http://localhost:5000', fetchImpl: noAuthFetch });
+  const tok = await getDockerRegistryToken({
+    registry: 'http://localhost:5000',
+    fetchImpl: noAuthFetch,
+  });
   ok('no-auth returns empty token', tok.token === '');
 }
 
@@ -224,7 +263,10 @@ section('WeChat Pay V3');
     nonce_str: 'abc123nonce',
     secret: { mch_id: '1900000109', cert_serial: 'SERIAL_ABC', private_key: pkPem },
   });
-  ok('Authorization WECHATPAY2', h.Authorization.startsWith('WECHATPAY2-SHA256-RSA2048 mchid="1900000109"'));
+  ok(
+    'Authorization WECHATPAY2',
+    h.Authorization.startsWith('WECHATPAY2-SHA256-RSA2048 mchid="1900000109"'),
+  );
   ok('nonce_str present', /nonce_str="abc123nonce"/.test(h.Authorization));
   ok('serial_no present', /serial_no="SERIAL_ABC"/.test(h.Authorization));
   ok('signature present', /signature="[A-Za-z0-9+/=]+"/.test(h.Authorization));

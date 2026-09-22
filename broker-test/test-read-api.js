@@ -5,25 +5,43 @@
 
 import { createReadApiRoutes } from '../broker/routes/read-api.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- helpers ----------
 
 const auditEvents = [];
-function audit(e) { auditEvents.push(e); }
+function audit(e) {
+  auditEvents.push(e);
+}
 
 function fakeRes() {
   const r = { statusCode: 0, headers: {}, body: null };
-  r.writeHead = (s, h) => { r.statusCode = s; r.headers = h; return r; };
+  r.writeHead = (s, h) => {
+    r.statusCode = s;
+    r.headers = h;
+    return r;
+  };
   r.end = (b) => {
     if (b !== undefined) {
       // Try to parse JSON like a real client would
-      try { r.body = JSON.parse(b); } catch { r.body = b; }
+      try {
+        r.body = JSON.parse(b);
+      } catch {
+        r.body = b;
+      }
     }
     return r;
   };
@@ -39,7 +57,8 @@ function req({ method = 'GET', body = null } = {}) {
     r.on = (event, fn) => {
       if (event === 'data') setImmediate(() => fn(buf));
       if (event === 'end') setImmediate(() => fn());
-      if (event === 'error') {} // ignore
+      if (event === 'error') {
+      } // ignore
       return r;
     };
   } else {
@@ -52,51 +71,65 @@ function req({ method = 'GET', body = null } = {}) {
 }
 
 const SECRET_CACHE = new Map([
-  ['GITHUB_PAT', {
-    name: 'GITHUB_PAT',
-    type: 'github_pat',
-    description: 'GitHub token',
-    created_at: '2026-01-01',
-    updated_at: '2026-02-01',
-    last_rotated_at: '2026-02-01',
-    rotation_policy_days: 90,
-    updated_by: 'admin',
-  }],
-  ['ALIYUN_KEY', {
-    name: 'ALIYUN_KEY',
-    type: 'aliyun_ak',
-    description: 'Aliyun',
-    created_at: '2026-01-01',
-    updated_at: '2026-01-15',
-    last_rotated_at: '2026-01-15',
-    rotation_policy_days: 180,
-    updated_by: 'admin',
-  }],
+  [
+    'GITHUB_PAT',
+    {
+      name: 'GITHUB_PAT',
+      type: 'github_pat',
+      description: 'GitHub token',
+      created_at: '2026-01-01',
+      updated_at: '2026-02-01',
+      last_rotated_at: '2026-02-01',
+      rotation_policy_days: 90,
+      updated_by: 'admin',
+    },
+  ],
+  [
+    'ALIYUN_KEY',
+    {
+      name: 'ALIYUN_KEY',
+      type: 'aliyun_ak',
+      description: 'Aliyun',
+      created_at: '2026-01-01',
+      updated_at: '2026-01-15',
+      last_rotated_at: '2026-01-15',
+      rotation_policy_days: 180,
+      updated_by: 'admin',
+    },
+  ],
 ]);
 
 function makeDeps(overrides = {}) {
   return {
     config: overrides.config || {
       services: {
-        github: { type: 'github_token', upstream: 'https://api.github.com', token_secret: 'GITHUB_PAT', dashboard_actions: [] },
+        github: {
+          type: 'github_token',
+          upstream: 'https://api.github.com',
+          token_secret: 'GITHUB_PAT',
+          dashboard_actions: [],
+        },
       },
     },
     SECRET_CACHE: overrides.SECRET_CACHE || SECRET_CACHE,
     audit: overrides.audit || audit,
     canResolve: overrides.canResolve || (() => true),
     checkPathAllowed: overrides.checkPathAllowed || (() => true),
-    getSecret: overrides.getSecret || ((name) => {
-      const meta = SECRET_CACHE.get(name);
-      if (!meta) return null;
-      return {
-        name: meta.name,
-        type: meta.type,
-        value: 'SECRET_VALUE',
-        fields: { token: 'SECRET_VALUE' },
-      };
-    }),
+    getSecret:
+      overrides.getSecret ||
+      ((name) => {
+        const meta = SECRET_CACHE.get(name);
+        if (!meta) return null;
+        return {
+          name: meta.name,
+          type: meta.type,
+          value: 'SECRET_VALUE',
+          fields: { token: 'SECRET_VALUE' },
+        };
+      }),
     isServiceAllowed: overrides.isServiceAllowed || (() => true),
     healthcheckGetSecretStatus: overrides.healthcheckGetSecretStatus || (() => null),
+    auditDir: overrides.auditDir,
   };
 }
 
@@ -116,7 +149,12 @@ section('1. Identity endpoint');
     via: 'mtls',
   };
   const res = fakeRes();
-  const handled = await r.dispatch(req({ method: 'GET' }), res, { method: 'GET', pathname: '/api/v1/identity' }, ctx);
+  const handled = await r.dispatch(
+    req({ method: 'GET' }),
+    res,
+    { method: 'GET', pathname: '/api/v1/identity' },
+    ctx,
+  );
   ok('handled', handled === true);
   ok('status 200', res.statusCode === 200);
   ok('body.cn matches', res.body?.cn === 'client.alice');
@@ -129,7 +167,8 @@ section('2. Services endpoint (admin sees all + secret_health)');
 
 {
   const deps = makeDeps({
-    healthcheckGetSecretStatus: (n) => n === 'GITHUB_PAT' ? { status: 'ok', detail: 'user=tyj' } : null,
+    healthcheckGetSecretStatus: (n) =>
+      n === 'GITHUB_PAT' ? { status: 'ok', detail: 'user=tyj' } : null,
   });
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'admin' }, cn: 'admin', fp: 'X' };
@@ -142,10 +181,13 @@ section('2. Services endpoint (admin sees all + secret_health)');
   ok('service.name = github', svc.name === 'github');
   ok('service.allowed = true', svc.allowed === true);
   ok('service.secret_health populated', svc.secret_health?.status === 'ok');
-  ok('audit logged', auditEvents.some(e => e.action === 'list_services'));
+  ok(
+    'audit logged',
+    auditEvents.some((e) => e.action === 'list_services'),
+  );
 }
 
-section('3. Services endpoint (non-admin + service not allowed)');
+section('3. Services endpoint (non-admin sees only allowed minimal metadata)');
 
 {
   const deps = makeDeps({ isServiceAllowed: () => false });
@@ -153,8 +195,52 @@ section('3. Services endpoint (non-admin + service not allowed)');
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'Y' };
   const res = fakeRes();
   await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/services' }, ctx);
-  ok('allowed=false for non-admin', res.body.services[0].allowed === false);
-  ok('still returns service metadata', res.body.services[0].type === 'github_token');
+  ok('unauthorized service is not enumerable', res.body.services.length === 0);
+}
+{
+  const deps = makeDeps({
+    isServiceAllowed: () => true,
+    healthcheckGetSecretStatus: () => ({ status: 'ok', detail: 'account=private' }),
+  });
+  const r = createReadApiRoutes(deps);
+  const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'Y' };
+  const res = fakeRes();
+  await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/services' }, ctx);
+  const svc = res.body.services[0];
+  ok('authorized service remains visible', svc.name === 'github' && svc.allowed === true);
+  ok('non-admin service view hides upstream', svc.upstream === undefined);
+  ok('non-admin service view hides token_secret', svc.token_secret === undefined);
+  ok('non-admin service view hides secret health detail', svc.secret_health === undefined);
+}
+
+section('3b. Services endpoint (API key sees only delegated services)');
+
+{
+  const deps = makeDeps({
+    config: {
+      services: {
+        github: {
+          type: 'github_token',
+          upstream: 'https://api.github.com',
+          token_secret: 'GITHUB_PAT',
+          dashboard_actions: [],
+        },
+        aliyun: { type: 'aliyun_v2', upstream: 'https://ecs.aliyuncs.com', dashboard_actions: [] },
+      },
+    },
+    isServiceAllowed: (_ctx, name) => name === 'github',
+  });
+  const r = createReadApiRoutes(deps);
+  const ctx = { client: { role: 'api_key' }, cn: 'apikey:k1', fp: 'k1', via: 'api_key' };
+  const res = fakeRes();
+  await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/services' }, ctx);
+  ok('API key receives only allowed service metadata', res.body?.services?.length === 1);
+  ok('API key service list contains github only', res.body?.services?.[0]?.name === 'github');
+  ok('API key service metadata hides upstream', res.body?.services?.[0]?.upstream === undefined);
+  ok(
+    'API key service metadata hides token secret',
+    res.body?.services?.[0]?.token_secret === undefined,
+  );
 }
 
 section('4. Secrets endpoint (admin sees full metadata)');
@@ -166,7 +252,7 @@ section('4. Secrets endpoint (admin sees full metadata)');
   const res = fakeRes();
   await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/secrets' }, ctx);
   ok('returns both secrets', res.body?.secrets?.length === 2);
-  const gh = res.body.secrets.find(s => s.name === 'GITHUB_PAT');
+  const gh = res.body.secrets.find((s) => s.name === 'GITHUB_PAT');
   ok('admin sees updated_by', gh?.updated_by === 'admin');
   ok('admin sees rotation_policy_days', gh?.rotation_policy_days === 90);
 }
@@ -180,7 +266,7 @@ section('5. Secrets endpoint (non-admin with allow_all wildcard)');
   const res = fakeRes();
   await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/secrets' }, ctx);
   ok('sees both via wildcard', res.body?.secrets?.length === 2);
-  const gh = res.body.secrets.find(s => s.name === 'GITHUB_PAT');
+  const gh = res.body.secrets.find((s) => s.name === 'GITHUB_PAT');
   ok('non-admin does NOT see updated_by', gh?.updated_by === undefined);
   ok('non-admin DOES see last_rotated_at (M5.9)', gh?.last_rotated_at !== undefined);
 }
@@ -188,13 +274,26 @@ section('5. Secrets endpoint (non-admin with allow_all wildcard)');
 section('6. Secrets endpoint (non-admin with restricted allow)');
 
 {
-  const deps = makeDeps({ checkPathAllowed: (allow, name) => name === 'GITHUB_PAT' });
+  const deps = makeDeps({ canResolve: (_ctx, name) => name === 'GITHUB_PAT' });
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer', allowed_resolve: ['GITHUB_*'] }, cn: 'u', fp: 'W' };
   const res = fakeRes();
   await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/secrets' }, ctx);
   ok('only sees allowed secret', res.body?.secrets?.length === 1);
   ok('GITHUB_PAT visible', res.body.secrets[0].name === 'GITHUB_PAT');
+}
+
+section('6b. Secrets endpoint (API key sees only delegated secrets)');
+
+{
+  const deps = makeDeps({ canResolve: (_ctx, name) => name === 'GITHUB_PAT' });
+  const r = createReadApiRoutes(deps);
+  const ctx = { client: { role: 'api_key' }, cn: 'apikey:k1', fp: 'k1', via: 'api_key' };
+  const res = fakeRes();
+  await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/secrets' }, ctx);
+  ok('API key receives one delegated secret', res.body?.secrets?.length === 1);
+  ok('API key receives GITHUB_PAT only', res.body?.secrets?.[0]?.name === 'GITHUB_PAT');
+  ok('API key does not inherit admin metadata', res.body?.secrets?.[0]?.updated_by === undefined);
 }
 
 section('7. Secrets resolve (allowed)');
@@ -204,11 +303,18 @@ section('7. Secrets resolve (allowed)');
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
   const res = fakeRes();
-  await r.dispatch(req({ method: 'POST', body: { name: 'GITHUB_PAT' } }),
-                    res, { method: 'POST', pathname: '/api/v1/secrets/resolve' }, ctx);
+  await r.dispatch(
+    req({ method: 'POST', body: { name: 'GITHUB_PAT' } }),
+    res,
+    { method: 'POST', pathname: '/api/v1/secrets/resolve' },
+    ctx,
+  );
   ok('status 200', res.statusCode === 200);
   ok('returns fields', res.body?.fields?.token === 'SECRET_VALUE');
-  ok('audit logged ok', auditEvents.some(e => e.action === 'resolve' && e.status === 'ok'));
+  ok(
+    'audit logged ok',
+    auditEvents.some((e) => e.action === 'resolve' && e.status === 'ok'),
+  );
 }
 
 section('8. Secrets resolve (denied by canResolve)');
@@ -218,8 +324,12 @@ section('8. Secrets resolve (denied by canResolve)');
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
   const res = fakeRes();
-  await r.dispatch(req({ method: 'POST', body: { name: 'GITHUB_PAT' } }),
-                    res, { method: 'POST', pathname: '/api/v1/secrets/resolve' }, ctx);
+  await r.dispatch(
+    req({ method: 'POST', body: { name: 'GITHUB_PAT' } }),
+    res,
+    { method: 'POST', pathname: '/api/v1/secrets/resolve' },
+    ctx,
+  );
   ok('status 403', res.statusCode === 403);
   ok('error message present', /Not allowed/.test(res.body?.error || ''));
 }
@@ -231,8 +341,12 @@ section('9. Secrets resolve (missing name)');
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
   const res = fakeRes();
-  await r.dispatch(req({ method: 'POST', body: {} }),
-                    res, { method: 'POST', pathname: '/api/v1/secrets/resolve' }, ctx);
+  await r.dispatch(
+    req({ method: 'POST', body: {} }),
+    res,
+    { method: 'POST', pathname: '/api/v1/secrets/resolve' },
+    ctx,
+  );
   ok('status 400', res.statusCode === 400);
 }
 
@@ -243,8 +357,12 @@ section('10. Secrets resolve (secret not loaded)');
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
   const res = fakeRes();
-  await r.dispatch(req({ method: 'POST', body: { name: 'GITHUB_PAT' } }),
-                    res, { method: 'POST', pathname: '/api/v1/secrets/resolve' }, ctx);
+  await r.dispatch(
+    req({ method: 'POST', body: { name: 'GITHUB_PAT' } }),
+    res,
+    { method: 'POST', pathname: '/api/v1/secrets/resolve' },
+    ctx,
+  );
   ok('status 404', res.statusCode === 404);
 }
 
@@ -252,26 +370,75 @@ section('11. Secrets resolve (specific field)');
 
 {
   const deps = makeDeps({
-    getSecret: () => ({ type: 'github_pat', value: '', fields: { token: 'synthetic-token-value', name: 'my-token' } }),
+    getSecret: () => ({
+      type: 'github_pat',
+      value: '',
+      fields: { token: 'synthetic-token-value', name: 'my-token' },
+    }),
   });
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
   const res = fakeRes();
-  await r.dispatch(req({ method: 'POST', body: { name: 'GITHUB_PAT', field: 'token' } }),
-                    res, { method: 'POST', pathname: '/api/v1/secrets/resolve' }, ctx);
+  await r.dispatch(
+    req({ method: 'POST', body: { name: 'GITHUB_PAT', field: 'token' } }),
+    res,
+    { method: 'POST', pathname: '/api/v1/secrets/resolve' },
+    ctx,
+  );
   ok('status 200', res.statusCode === 200);
   ok('returns requested field', res.body?.value === 'synthetic-token-value');
   ok('returns field name', res.body?.field === 'token');
 }
 
-section('12. Fall-through (unhandled path returns false)');
+section('12. Audit verification error boundary');
+
+{
+  auditEvents.length = 0;
+  const r = createReadApiRoutes(makeDeps());
+  const ctx = { client: { role: 'admin' }, cn: 'admin', fp: 'ADMIN:FP' };
+  const res = fakeRes();
+  await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/admin/audit/verify' }, ctx);
+  ok('missing audit directory returns 503', res.statusCode === 503);
+  ok(
+    'missing directory response is generic',
+    res.body?.error === 'Audit verification is unavailable',
+  );
+  ok(
+    'unavailable verification is audited',
+    auditEvents.some((e) => e.action === 'audit_verify'),
+  );
+}
+{
+  auditEvents.length = 0;
+  const impossible = `missing-audit-dir-${Date.now()}`;
+  const r = createReadApiRoutes(makeDeps({ auditDir: impossible }));
+  const ctx = { client: { role: 'admin' }, cn: 'admin', fp: 'ADMIN:FP' };
+  const res = fakeRes();
+  await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/admin/audit/verify' }, ctx);
+  ok('verification I/O failure returns 500', res.statusCode === 500);
+  ok(
+    'verification I/O response hides filesystem detail',
+    res.body?.error === 'Audit verification failed',
+  );
+  ok(
+    'verification I/O detail remains in audit only',
+    auditEvents.some((e) => e.action === 'audit_verify' && e.status === 'error' && e.error),
+  );
+}
+
+section('13. Fall-through (unhandled path returns false)');
 
 {
   const deps = makeDeps();
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'W' };
   const res = fakeRes();
-  const handled = await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/nonexistent' }, ctx);
+  const handled = await r.dispatch(
+    req(),
+    res,
+    { method: 'GET', pathname: '/api/v1/nonexistent' },
+    ctx,
+  );
   ok('not handled', handled === false);
   ok('no response sent (statusCode 0)', res.statusCode === 0);
 }

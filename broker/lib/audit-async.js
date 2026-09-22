@@ -14,7 +14,7 @@
 // event envelope, and respects the same `mandatory: true` option.
 
 import { EventEmitter } from 'node:events';
-import { appendFile, mkdir, rename, unlink, stat, readdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, rename, unlink, readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -64,8 +64,17 @@ export function createAuditAsync(opts) {
     if (auditBytes <= ROTATE_BYTES) return;
     const old = auditFilePath();
     const rotated = old + '.1';
-    try { await unlink(rotated); } catch { /* ignore */ }
-    try { await rename(old, rotated); auditBytes = 0; } catch { /* ignore */ }
+    try {
+      await unlink(rotated);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await rename(old, rotated);
+      auditBytes = 0;
+    } catch {
+      /* ignore */
+    }
   }
 
   /**
@@ -88,17 +97,31 @@ export function createAuditAsync(opts) {
       await appendFile(auditFilePath(), line, { encoding: 'utf8' });
       auditBytes += Buffer.byteLength(line, 'utf8');
       await rotateIfNeeded();
-      if (consecutiveFailures > 0) bus.emit('recovery', { ts: e.ts, after_failures: consecutiveFailures });
+      if (consecutiveFailures > 0) {
+        bus.emit('recovery', { ts: e.ts, after_failures: consecutiveFailures });
+      }
       consecutiveFailures = 0;
       lastWriteError = null;
     } catch (err) {
-      writeError = new AsyncAuditWriteError(`audit write failed (mandatory=${mandatory}): ${err.message}`, err);
+      writeError = new AsyncAuditWriteError(
+        `audit write failed (mandatory=${mandatory}): ${err.message}`,
+        err,
+      );
       consecutiveFailures++;
       lastWriteError = err;
       lastWriteErrorAt = Date.now();
-      bus.emit('write_error', { ts: e.ts, error: err.message, mandatory, consecutive: consecutiveFailures });
+      bus.emit('write_error', {
+        ts: e.ts,
+        error: err.message,
+        mandatory,
+        consecutive: consecutiveFailures,
+      });
       if (typeof onWriteError === 'function') {
-        try { onWriteError(err, e); } catch { /* ignore */ }
+        try {
+          onWriteError(err, e);
+        } catch {
+          /* ignore */
+        }
       }
       if (mandatory) throw writeError;
     }
@@ -131,7 +154,7 @@ export function createAuditAsync(opts) {
   async function readFiltered({ client, service, action, status, since, until, limit = 100 } = {}) {
     const maxLimit = Math.min(Math.max(1, limit), 5000);
     const files = (await readdir(auditDir))
-      .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
+      .filter((f) => f.startsWith('audit-') && f.endsWith('.jsonl'))
       .sort()
       .reverse();
     const out = [];
@@ -145,7 +168,11 @@ export function createAuditAsync(opts) {
       for (const line of content.split('\n').reverse()) {
         if (!line) continue;
         let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
         if (since && ev.ts < since) continue;
         if (until && ev.ts > until) continue;
         if (cnL && !(ev.cn || '').toLowerCase().includes(cnL)) continue;

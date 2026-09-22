@@ -11,12 +11,12 @@ import { randomUUID } from 'node:crypto';
 import { redact } from './redact.js';
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
-export const CLIENT_TIMEOUT_MS = 60_000;  // 收到任何消息后 60s 内无响应则断开
+export const CLIENT_TIMEOUT_MS = 60_000; // 收到任何消息后 60s 内无响应则断开
 
 // ============================================================
 // 进程内事件总线
 // ============================================================
-const SUBSCRIBERS = new Map();  // clientId -> { ws, events:Set<string>, filter:object, cn, lastSeen }
+const SUBSCRIBERS = new Map(); // clientId -> { ws, events:Set<string>, filter:object, cn, lastSeen }
 const SUBS_BY_EVENT = new Map(); // eventName -> Set<clientId>
 
 export function subscribeClient(clientId, ws, events, filter = {}) {
@@ -68,7 +68,11 @@ export function broadcastEvent(event) {
     if (!sub) continue;
     if (sub.ws.readyState !== sub.ws.OPEN) continue;
     if (!matchesFilter(sub.filter, e)) continue;
-    try { sub.ws.send(JSON.stringify(out)); } catch (_e) { /* dead socket */ }
+    try {
+      sub.ws.send(JSON.stringify(out));
+    } catch (_e) {
+      /* dead socket */
+    }
   }
   return allTargets.size;
 }
@@ -95,7 +99,7 @@ function sanitizePayload(payload) {
   const out = {};
   for (const [k, v] of Object.entries(payload)) {
     if (typeof v === 'string') out[k] = redact(v);
-    else if (Array.isArray(v)) out[k] = v.map(x => typeof x === 'string' ? redact(x) : x);
+    else if (Array.isArray(v)) out[k] = v.map((x) => (typeof x === 'string' ? redact(x) : x));
     else out[k] = v;
   }
   return out;
@@ -114,11 +118,15 @@ export function attachWebSocket(httpsServer, opts = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const heartbeat = startHeartbeat(wss);
   httpsServer.on('upgrade', (req, socket, head) => {
-    if (!req.url || !req.url.startsWith(path)) return;  // not us
+    if (!req.url || !req.url.startsWith(path)) return; // not us
     // 1. auth (mTLS / session token)
     let ctx = null;
     if (opts.authFn) {
-      try { ctx = opts.authFn(req); } catch (_e) { ctx = null; }
+      try {
+        ctx = opts.authFn(req);
+      } catch (_e) {
+        ctx = null;
+      }
     }
     if (!ctx || !ctx.client) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -145,25 +153,47 @@ function handleConnection(ws, ctx, opts) {
   ws.ctx = ctx;
   ws.isAlive = true;
   // 默认订阅 alerts
-  subscribeClient(clientId, ws, ['alerts', 'healthcheck', 'secret_rotated', 'mfa_enrolled', 'config_reloaded', 'audit']);
-  sendAck(ws, 'connected', { clientId, cn: ctx.cn, default_events: ['alerts', 'healthcheck', 'secret_rotated', 'mfa_enrolled', 'config_reloaded', 'audit'] });
+  subscribeClient(clientId, ws, [
+    'alerts',
+    'healthcheck',
+    'secret_rotated',
+    'mfa_enrolled',
+    'config_reloaded',
+    'audit',
+  ]);
+  sendAck(ws, 'connected', {
+    clientId,
+    cn: ctx.cn,
+    default_events: [
+      'alerts',
+      'healthcheck',
+      'secret_rotated',
+      'mfa_enrolled',
+      'config_reloaded',
+      'audit',
+    ],
+  });
   ws.on('message', (raw) => {
     if (SUBSCRIBERS.has(clientId)) SUBSCRIBERS.get(clientId).lastSeen = Date.now();
     ws.isAlive = true;
     let msg;
-    try { msg = JSON.parse(raw.toString('utf8')); } catch (e) {
+    try {
+      msg = JSON.parse(raw.toString('utf8'));
+    } catch (e) {
       sendError(ws, 'invalid_json', e.message);
       return;
     }
     handleClientMessage(ws, clientId, msg, opts);
   });
-  ws.on('pong', () => { ws.isAlive = true; });
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
   ws.on('close', () => unsubscribeClient(clientId));
   ws.on('error', () => unsubscribeClient(clientId));
   opts.onConnect?.({ clientId, cn: ctx.cn });
 }
 
-function handleClientMessage(ws, clientId, msg, opts) {
+function handleClientMessage(ws, clientId, msg, _opts) {
   if (msg.action === 'subscribe') {
     if (Array.isArray(msg.events)) {
       const existing = SUBSCRIBERS.get(clientId);
@@ -198,30 +228,63 @@ function handleClientMessage(ws, clientId, msg, opts) {
     return;
   }
   if (msg.action === 'list_events') {
-    sendAck(ws, 'events', { events: ['audit', 'healthcheck', 'alerts', 'secret_rotated', 'mfa_enrolled', 'config_reloaded', '*'] });
+    sendAck(ws, 'events', {
+      events: [
+        'audit',
+        'healthcheck',
+        'alerts',
+        'secret_rotated',
+        'mfa_enrolled',
+        'config_reloaded',
+        '*',
+      ],
+    });
     return;
   }
-  sendError(ws, 'unknown_action', `action must be one of subscribe|unsubscribe|ping|list_events, got: ${msg.action}`);
+  sendError(
+    ws,
+    'unknown_action',
+    `action must be one of subscribe|unsubscribe|ping|list_events, got: ${msg.action}`,
+  );
 }
 
 function startHeartbeat(wss) {
   return setInterval(() => {
     for (const ws of wss.clients) {
-      if (!ws.isAlive) { try { ws.terminate(); } catch (_e) { /* */ } continue; }
+      if (!ws.isAlive) {
+        try {
+          ws.terminate();
+        } catch (_e) {
+          /* */
+        }
+        continue;
+      }
       ws.isAlive = false;
-      try { ws.ping(); } catch (_e) { /* */ }
+      try {
+        ws.ping();
+      } catch (_e) {
+        /* */
+      }
     }
   }, HEARTBEAT_INTERVAL_MS);
 }
 
 function sendAck(ws, type, data) {
   if (ws.readyState !== ws.OPEN) return;
-  try { ws.send(JSON.stringify({ type: 'ack', ack_type: type, ts: new Date().toISOString(), data })); } catch (_e) { /* */ }
+  try {
+    ws.send(JSON.stringify({ type: 'ack', ack_type: type, ts: new Date().toISOString(), data }));
+  } catch (_e) {
+    /* */
+  }
 }
 
 function sendError(ws, code, message) {
   if (ws.readyState !== ws.OPEN) return;
-  try { ws.send(JSON.stringify({ type: 'error', code, message, ts: new Date().toISOString() })); } catch (_e) { /* */ }
+  try {
+    ws.send(JSON.stringify({ type: 'error', code, message, ts: new Date().toISOString() }));
+  } catch (_e) {
+    /* */
+  }
 }
 
 // ============================================================

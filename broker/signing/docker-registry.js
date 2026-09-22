@@ -9,7 +9,6 @@
 // Implementations often pre-cache the realm/service from the first response
 // or accept a pre-fetched token. We provide both styles.
 
-import { request as httpsRequest, request as httpRequest } from 'node:http';
 import { request as httpsRequestHttps, request as httpRequestHttps } from 'node:https';
 import { URL } from 'node:url';
 
@@ -36,7 +35,12 @@ export async function getDockerRegistryToken(args) {
     // registry says "no auth needed" — return a dummy bearer (some private ones)
     return { token: '' };
   }
-  const wwwAuth = (probeRes.headers && (probeRes.headers.get ? probeRes.headers.get('www-authenticate') : probeRes.headers['www-authenticate'] || probeRes.headers['WWW-Authenticate'])) || '';
+  const wwwAuth =
+    (probeRes.headers &&
+      (probeRes.headers.get
+        ? probeRes.headers.get('www-authenticate')
+        : probeRes.headers['www-authenticate'] || probeRes.headers['WWW-Authenticate'])) ||
+    '';
   // Format: Bearer realm="https://auth...",service="...",scope="..."
   const realmMatch = /realm="([^"]+)"/.exec(wwwAuth);
   const serviceMatch = /service="([^"]+)"/.exec(wwwAuth);
@@ -63,29 +67,34 @@ export async function getDockerRegistryToken(args) {
 
 export async function signDockerRegistry(args) {
   const tok = await getDockerRegistryToken(args);
-  return { 'Authorization': tok.token ? `Bearer ${tok.token}` : '' };
+  return { Authorization: tok.token ? `Bearer ${tok.token}` : '' };
 }
 
 // Tiny fetch implementations over node:http(s)
 function httpsFetch(url, opts = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    const req = httpsRequestHttps({
-      method: opts.method || 'GET',
-      hostname: u.hostname,
-      port: u.port || 443,
-      path: u.pathname + u.search,
-      headers: opts.headers || {},
-    }, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = JSON.parse(text); } catch (_) {}
-        resolve({ status: res.statusCode, headers: res.headers, body: text, json });
-      });
-    });
+    const req = httpsRequestHttps(
+      {
+        method: opts.method || 'GET',
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: u.pathname + u.search,
+        headers: opts.headers || {},
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try {
+            json = JSON.parse(text);
+          } catch (_) {}
+          resolve({ status: res.statusCode, headers: res.headers, body: text, json });
+        });
+      },
+    );
     req.on('error', reject);
     req.end();
   });
@@ -93,22 +102,27 @@ function httpsFetch(url, opts = {}) {
 function httpFetch(url, opts = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    const req = httpRequestHttps({
-      method: opts.method || 'GET',
-      hostname: u.hostname,
-      port: u.port || 80,
-      path: u.pathname + u.search,
-      headers: opts.headers || {},
-    }, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = JSON.parse(text); } catch (_) {}
-        resolve({ status: res.statusCode, headers: res.headers, body: text, json });
-      });
-    });
+    const req = httpRequestHttps(
+      {
+        method: opts.method || 'GET',
+        hostname: u.hostname,
+        port: u.port || 80,
+        path: u.pathname + u.search,
+        headers: opts.headers || {},
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try {
+            json = JSON.parse(text);
+          } catch (_) {}
+          resolve({ status: res.statusCode, headers: res.headers, body: text, json });
+        });
+      },
+    );
     req.on('error', reject);
     req.end();
   });

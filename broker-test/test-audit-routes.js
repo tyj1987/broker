@@ -2,18 +2,26 @@
 // 验证 routes/audit.js 工厂:audit / readAuditFiltered / readAudit /
 // collectAuditFacets / clearAuditLogs / health / bus / ring buffer 行为
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditRoutes } from '../broker/routes/audit.js';
 import { redactDeep } from '../broker/lib/redact.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 const dir = mkdtempSync(join(tmpdir(), 'broker-audit-routes-test-'));
 const cfg = { clients: { 'client.alice': {} }, services: { github: {} } };
@@ -43,9 +51,36 @@ section('readAuditFiltered ring hit');
   ok('ring returns all 4 events', all.length === 4);
   ok('most recent first', all[0].action === 'proxy');
   const filtered = a.readAuditFiltered({ action: 'logout', limit: 100 });
-  ok('action filter narrows to logout (1)', filtered.length === 1 && filtered[0].action === 'logout');
+  ok(
+    'action filter narrows to logout (1)',
+    filtered.length === 1 && filtered[0].action === 'logout',
+  );
   const cnFilter = a.readAuditFiltered({ client: 'alice', limit: 100 });
   ok('client filter substring matches cn', cnFilter.length >= 3);
+}
+
+// ============================================================
+// readAuditFiltered: exact identity isolation for self-service endpoints
+// ============================================================
+section('readAuditFiltered exact identity isolation');
+{
+  a.audit({ action: 'proxy', cn: 'alice@web', client: 'alice', service: 'github' });
+  a.audit({ action: 'proxy', cn: 'bob@web', client: 'bob', service: 'github' });
+
+  const alice = a.readAuditFiltered({ cn: 'alice@web', limit: 100 });
+  ok(
+    'exact cn returns only alice events',
+    alice.length === 1 && alice.every((e) => e.cn === 'alice@web'),
+  );
+
+  const bob = a.readAuditFiltered({ cn: 'bob@web', limit: 100 });
+  ok('exact cn returns only bob events', bob.length === 1 && bob.every((e) => e.cn === 'bob@web'));
+
+  const byClientField = a.readAuditFiltered({ client: 'bob', limit: 100 });
+  ok(
+    'client filter also matches event.client',
+    byClientField.length === 1 && byClientField[0].client === 'bob',
+  );
 }
 
 // ============================================================
@@ -56,7 +91,16 @@ section('readAuditFiltered disk fallback');
   // 模拟 ring 没覆盖的情况:since 设为很久以前 → 不会用 ring
   // 但磁盘只有 ring 里那 4 条。设置 since 在第一之前 → 应从磁盘读
   const r = a.readAuditFiltered({ since: '2000-01-01T00:00:00.000Z', limit: 100 });
-  ok('disk fallback returns same data when within disk scope', r.length === 4);
+  ok('disk fallback returns all persisted data', r.length === 6);
+  const exact = a.readAuditFiltered({
+    cn: 'alice@web',
+    since: '2000-01-01T00:00:00.000Z',
+    limit: 100,
+  });
+  ok(
+    'disk fallback preserves exact cn isolation',
+    exact.length === 1 && exact[0].cn === 'alice@web',
+  );
 }
 
 // ============================================================
@@ -65,11 +109,13 @@ section('readAuditFiltered disk fallback');
 section('bus event subscription');
 {
   let received = null;
-  const handler = (e) => { received = e; };
+  const handler = (e) => {
+    received = e;
+  };
   a.bus.on('event', handler);
   a.audit({ action: 'healthcheck', cn: 'client.alice' });
   // setImmediate 让 emit 异步触发
-  await new Promise(r => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
   a.bus.off('event', handler);
   ok('bus emits event for each audit', received && received.action === 'healthcheck');
 }
@@ -108,7 +154,10 @@ section('collectAuditFacets');
   ok('services from CONFIG + audit', facets.services.includes('github'));
   ok('actions list contains login', facets.actions.includes('login'));
   ok('statuses list contains ok', facets.statuses.includes('ok'));
-  ok('all facets are arrays of strings', ['clients', 'services', 'actions', 'statuses'].every(k => Array.isArray(facets[k])));
+  ok(
+    'all facets are arrays of strings',
+    ['clients', 'services', 'actions', 'statuses'].every((k) => Array.isArray(facets[k])),
+  );
 }
 
 // ============================================================

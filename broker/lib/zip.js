@@ -25,8 +25,14 @@ export function computeCrc32(buf) {
 export function buildZip(files) {
   const enc = (s) => Buffer.from(s, 'binary');
   const now = new Date();
-  const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | (Math.floor(now.getSeconds() / 2) & 0x1f);
-  const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0xf) << 5) | (now.getDate() & 0x1f);
+  const dosTime =
+    ((now.getHours() & 0x1f) << 11) |
+    ((now.getMinutes() & 0x3f) << 5) |
+    (Math.floor(now.getSeconds() / 2) & 0x1f);
+  const dosDate =
+    (((now.getFullYear() - 1980) & 0x7f) << 9) |
+    (((now.getMonth() + 1) & 0xf) << 5) |
+    (now.getDate() & 0x1f);
   let offset = 0;
   const localParts = [];
   const centralParts = [];

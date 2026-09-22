@@ -7,9 +7,9 @@
 //
 // Rules are pluggable; new providers can add a `rotate` function.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { redact } from './redact.js';
+import { join, relative } from 'node:path';
 import { alert } from './alerting.js';
 import { sopsEncryptAtomic } from './sops.js';
 
@@ -33,7 +33,7 @@ export const ROTATION_RULES = {
     hint: 'OpenAI 不支持 API rotate;在 platform.openai.com 创建新 key 后替换',
   },
   aliyun_ak: {
-    canAutoRotate: false,  // 阿里云需 RAM user 操作
+    canAutoRotate: false, // 阿里云需 RAM user 操作
     hint: '在 RAM 控制台创建新 AccessKey,禁用旧 key,更新 broker secret',
   },
   aws_access_key_v2: {
@@ -82,8 +82,8 @@ export function getSecretConfig(secret, brokerConfig) {
 /**
  * Check if a secret is due for rotation.
  * @returns {{
- *   state: 'fresh' | 'warn' | 'overdue' | 'expired',
- *   days_until_rotation: number,  // negative if overdue
+ *   state: 'fresh' | 'warn' | 'expired',
+ *   days_until_rotation: number,  // negative if expired
  *   threshold_days: number,
  * }>}
  */
@@ -96,7 +96,6 @@ export function checkRotationState(secret, brokerConfig) {
   let state;
   if (days >= threshold) state = 'expired';
   else if (days >= threshold - 14) state = 'warn';
-  else if (days >= threshold) state = 'overdue';
   else state = 'fresh';
   return { state, days_until_rotation: remaining, threshold_days: threshold };
 }
@@ -115,9 +114,9 @@ export async function runRotationCheck(secrets, brokerConfig, opts = {}) {
     summary.checked++;
     const r = checkRotationState(s, brokerConfig);
     if (r.state !== 'fresh') {
-      // expired / overdue / warn 都计入 warned,都触发预警 alert
+      // expired / warn 都计入 warned,都触发预警 alert
       summary.warned++;
-      const sev = r.state === 'expired' ? 'critical' : (r.state === 'overdue' ? 'high' : 'warning');
+      const sev = r.state === 'expired' ? 'critical' : 'warning';
       await alert(brokerConfig, {
         severity: sev,
         title: `secret.${r.state}`,
@@ -154,14 +153,16 @@ export async function tryRotate(secret, brokerConfig, opts = {}) {
   const hasExplicit = !!(opts.runRotate || cfg.rotate_command);
   const rule = ROTATION_RULES[secret.type];
   if (!hasExplicit && (!rule || !rule.canAutoRotate)) {
-    log.warn?.(`[rotate] ${secret.name} no auto-rotate rule for type=${secret.type}; ${rule?.hint || 'manual rotation required'}`);
+    log.warn?.(
+      `[rotate] ${secret.name} no auto-rotate rule for type=${secret.type}; ${rule?.hint || 'manual rotation required'}`,
+    );
     return false;
   }
   let result;
   if (opts.runRotate) {
     result = await opts.runRotate(secret);
   } else if (cfg.rotate_command) {
-    result = await runRotateCommand(cfg.rotate_command, secret);
+    result = await runRotateCommand(cfg.rotate_command);
   } else if (rule?.rotate) {
     result = await rule.rotate(secret);
   } else {
@@ -177,12 +178,20 @@ export async function tryRotate(secret, brokerConfig, opts = {}) {
     });
     return false;
   }
-  // Persist new value
+  // Persist new value. Persistence is part of a successful rotation:
+  // never report success if the new credential could not be stored safely.
   try {
     await persistRotatedSecret(secret.name, result.value, brokerConfig, opts);
   } catch (e) {
-    // 测试场景: 没有 secrets 文件 → 不算失败,仍视为 rotate 成功
-    log.warn?.(`[rotate] ${secret.name} rotate 完成但 persist 跳过: ${e.message}`);
+    log.error?.(
+      `[rotate] ${secret.name} rotate succeeded upstream but persist failed: ${e.message}`,
+    );
+    await alert(brokerConfig, {
+      severity: 'critical',
+      title: 'secret.rotate_persist_failed',
+      detail: `Secret ${secret.name} 上游已轮换但安全持久化失败，需要立即人工处理`,
+    });
+    return false;
   }
   await alert(brokerConfig, {
     severity: 'info',
@@ -192,25 +201,30 @@ export async function tryRotate(secret, brokerConfig, opts = {}) {
   return true;
 }
 
-async function runRotateCommand(cmd, secret) {
+async function runRotateCommand(cmd) {
   return new Promise((resolve) => {
     const child = spawn(cmd[0], cmd.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    let out = '', err = '';
-    child.stdout.on('data', d => out += d);
-    child.stderr.on('data', d => err += d);
-    child.on('close', code => {
+    let out = '',
+      err = '';
+    child.stdout.on('data', (d) => {
+      out += d;
+    });
+    child.stderr.on('data', (d) => {
+      err += d;
+    });
+    child.on('close', (code) => {
       if (code === 0) {
         try {
           const parsed = JSON.parse(out);
           resolve({ ok: true, value: parsed });
-        } catch (e) {
+        } catch {
           resolve({ ok: true, value: out });
         }
       } else {
         resolve({ ok: false, error: `command exit ${code}: ${err.slice(0, 200)}` });
       }
     });
-    child.on('error', e => resolve({ ok: false, error: e.message }));
+    child.on('error', (e) => resolve({ ok: false, error: e.message }));
   });
 }
 
@@ -219,31 +233,32 @@ async function runRotateCommand(cmd, secret) {
  * Uses SOPS to re-encrypt in place. Falls back to plain write if sops unavailable.
  */
 async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
-  const secretsPath = opts.secretsPath || process.env.SECRETS_DETAIL_PATH
-    || require('node:path').join(process.cwd(), 'secrets', 'secrets-detail.json');
+  const secretsPath =
+    opts.secretsPath ||
+    process.env.SECRETS_DETAIL_PATH ||
+    join(process.cwd(), 'secrets', 'secrets-detail.json');
   if (!existsSync(secretsPath)) {
     throw new Error(`secrets file not found: ${secretsPath}`);
   }
   let data;
-  try { data = JSON.parse(readFileSync(secretsPath, 'utf8')); }
-  catch (e) { throw new Error(`parse secrets file: ${e.message}`); }
+  try {
+    data = JSON.parse(readFileSync(secretsPath, 'utf8'));
+  } catch (e) {
+    throw new Error(`parse secrets file: ${e.message}`);
+  }
   // 找到对应 secret, 替换 value
-  const all = Array.isArray(data) ? data : (data.secrets || []);
-  const target = all.find(s => s.name === name);
+  const all = Array.isArray(data) ? data : data.secrets || [];
+  const target = all.find((s) => s.name === name);
   if (!target) throw new Error(`secret ${name} not found in ${secretsPath}`);
   target.value = typeof newValue === 'string' ? newValue : JSON.stringify(newValue);
   target.last_rotated_at = new Date().toISOString();
-  // Re-encrypt with SOPS in place (atomic). Falls back to plain JSON if sops unavailable.
+  // Re-encrypt with SOPS in place (atomic). Never fall back to plaintext:
+  // a rotation failure is safer than persisting a fresh credential unencrypted.
   const plaintext = JSON.stringify(data, null, 2);
-  try {
-    await sopsEncryptAtomic(secretsPath, plaintext, {
-      ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
-    });
-  } catch (e) {
-    // Fall back to plain JSON write if sops binary missing or encryption failed.
-    // This is best-effort; the operator should run `sops -e -i` manually in CI.
-    writeFileSync(secretsPath, plaintext, 'utf8');
-  }
+  const encrypt = opts.sopsEncryptAtomic || sopsEncryptAtomic;
+  await encrypt(secretsPath, plaintext, {
+    ageKeyFile: process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE,
+  });
 }
 
 /**
@@ -253,22 +268,27 @@ async function persistRotatedSecret(name, newValue, brokerConfig, opts) {
  * @param {object} opts        { secretsPath, workdir }
  */
 export async function rollbackRotation(name, ref, opts = {}) {
-  const secretsPath = opts.secretsPath
-    || require('node:path').join(process.cwd(), 'secrets', 'secrets-detail.json');
+  const secretsPath = opts.secretsPath || join(process.cwd(), 'secrets', 'secrets-detail.json');
+  const repoRelativePath = relative(opts.workdir || process.cwd(), secretsPath).replace(/\\/g, '/');
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['show', `${ref}:${secretsPath.replace(process.cwd() + '/', '')}`], {
+    const child = spawn('git', ['show', `${ref}:${repoRelativePath}`], {
       cwd: opts.workdir || process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,
     });
-    let out = '', err = '';
-    child.stdout.on('data', d => out += d);
-    child.stderr.on('data', d => err += d);
-    child.on('close', code => {
+    let out = '',
+      err = '';
+    child.stdout.on('data', (d) => {
+      out += d;
+    });
+    child.stderr.on('data', (d) => {
+      err += d;
+    });
+    child.on('close', (code) => {
       if (code !== 0) return reject(new Error(`git show failed: ${err}`));
       try {
         const old = JSON.parse(out);
-        const target = (Array.isArray(old) ? old : old.secrets || []).find(s => s.name === name);
+        const target = (Array.isArray(old) ? old : old.secrets || []).find((s) => s.name === name);
         if (!target) return reject(new Error(`secret ${name} not in ${ref}`));
         resolve({ ok: true, secret: target });
       } catch (e) {
@@ -279,4 +299,10 @@ export async function rollbackRotation(name, ref, opts = {}) {
   });
 }
 
-export default { checkRotationState, runRotationCheck, tryRotate, rollbackRotation, ROTATION_RULES };
+export default {
+  checkRotationState,
+  runRotationCheck,
+  tryRotate,
+  rollbackRotation,
+  ROTATION_RULES,
+};

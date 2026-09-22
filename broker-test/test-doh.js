@@ -1,16 +1,28 @@
 import {
-  isIpLiteral, shouldSkipDoH, pickARecord, clearDoHCache,
-  resolveHostnameDoH, dohConnect,
+  isIpLiteral,
+  shouldSkipDoH,
+  pickARecord,
+  clearDoHCache,
+  resolveHostnameDoH,
+  dohConnect,
 } from '../broker/lib/doh.js';
 import {
-  defaultServiceTest, matchServiceTemplate, describeUpstreamStatus,
+  defaultServiceTest,
+  matchServiceTemplate,
+  describeUpstreamStatus,
 } from '../broker/lib/service-test.js';
 import { SERVICE_TEMPLATES } from '../broker/service-templates.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 console.log('=== doh helpers ===');
@@ -21,7 +33,15 @@ assert(shouldSkipDoH('127.0.0.1'), 'skip loopback ip');
 assert(shouldSkipDoH('localhost'), 'skip localhost');
 assert(shouldSkipDoH('foo.local'), 'skip .local');
 assert(!shouldSkipDoH('api.cloudflare.com'), 'do not skip public host');
-assert(pickARecord({ Answer: [{ type: 5, data: 'cname.' }, { type: 1, data: '104.16.1.1' }] }) === '104.16.1.1', 'pick A');
+assert(
+  pickARecord({
+    Answer: [
+      { type: 5, data: 'cname.' },
+      { type: 1, data: '104.16.1.1' },
+    ],
+  }) === '104.16.1.1',
+  'pick A',
+);
 assert(pickARecord({ Answer: [] }) === null, 'empty answer');
 assert(pickARecord(null) === null, 'null json');
 
@@ -33,7 +53,9 @@ console.log('=== resolveHostnameDoH (injected) ===');
   });
   assert(ip === '104.16.0.1', 'injected A record');
   const cached = await resolveHostnameDoH('api.cloudflare.com', {
-    request: async () => { throw new Error('should use cache'); },
+    request: async () => {
+      throw new Error('should use cache');
+    },
   });
   assert(cached === '104.16.0.1', 'cache hit');
   assert((await resolveHostnameDoH('127.0.0.1')) === '127.0.0.1', 'skip ip');
@@ -43,7 +65,9 @@ console.log('=== resolveHostnameDoH (injected) ===');
   try {
     await resolveHostnameDoH('no.such.host.invalid', {
       endpoints: [{ url: 'https://x/dns-query', ip: '1.1.1.1', host: 'x' }],
-      request: async () => { throw new Error('fail'); },
+      request: async () => {
+        throw new Error('fail');
+      },
     });
   } catch (e) {
     threw = /DoH resolve failed for no.such.host.invalid/.test(e.message);
@@ -52,21 +76,36 @@ console.log('=== resolveHostnameDoH (injected) ===');
   const conn = await dohConnect('api.example', {
     request: async () => JSON.stringify({ Answer: [{ type: 1, data: '9.9.9.9' }] }),
   });
-  assert(conn.hostname === '9.9.9.9' && conn.servername === 'api.example', 'dohConnect SNI stays on name');
+  assert(
+    conn.hostname === '9.9.9.9' && conn.servername === 'api.example',
+    'dohConnect SNI stays on name',
+  );
   const skipped = await dohConnect('api.example', { skip: true });
-  assert(skipped.hostname === 'api.example' && skipped.servername === 'api.example', 'dohConnect skip');
+  assert(
+    skipped.hostname === 'api.example' && skipped.servername === 'api.example',
+    'dohConnect skip',
+  );
   clearDoHCache();
 }
 
 console.log('=== defaultServiceTest ===');
 {
-  const cfTpl = defaultServiceTest({ name: 'cloudflare', upstream: 'https://api.cloudflare.com/client/v4' });
+  const cfTpl = defaultServiceTest({
+    name: 'cloudflare',
+    upstream: 'https://api.cloudflare.com/client/v4',
+  });
   assert(cfTpl.path === '/zones', 'cf by name → zones');
   assert(cfTpl.method === 'GET', 'cf method GET');
 
-  const cfHost = defaultServiceTest({ name: 'prod_cf', upstream: 'https://api.cloudflare.com/client/v4' });
+  const cfHost = defaultServiceTest({
+    name: 'prod_cf',
+    upstream: 'https://api.cloudflare.com/client/v4',
+  });
   assert(cfHost.path === '/zones', 'cf by upstream host → zones');
-  assert(matchServiceTemplate({ upstream: 'https://api.cloudflare.com/client/v4' })?.id === 'cloudflare', 'match host');
+  assert(
+    matchServiceTemplate({ upstream: 'https://api.cloudflare.com/client/v4' })?.id === 'cloudflare',
+    'match host',
+  );
 
   const explicit = defaultServiceTest({
     name: 'cloudflare',

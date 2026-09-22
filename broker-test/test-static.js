@@ -11,21 +11,25 @@
 //   8. 500 for missing dashboard file
 //   9. Falls through (returns false) for non-GET or unknown paths
 
-import {
-  handleStatic,
-  STATIC_MAP,
-  _internals,
-} from '../broker/routes/static.js';
+import { handleStatic, STATIC_MAP, _internals } from '../broker/routes/static.js';
 import { mkdtempSync, writeFileSync, rmSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- setup ----------
 
@@ -48,8 +52,16 @@ function fakeRes() {
     body: null,
     ended: false,
   };
-  res.writeHead = (status, headers) => { res.statusCode = status; res.headers = headers; return res; };
-  res.end = (body) => { res.ended = true; if (body !== undefined) res.body = body; return res; };
+  res.writeHead = (status, headers) => {
+    res.statusCode = status;
+    res.headers = headers;
+    return res;
+  };
+  res.end = (body) => {
+    res.ended = true;
+    if (body !== undefined) res.body = body;
+    return res;
+  };
   return res;
 }
 
@@ -65,7 +77,10 @@ section('1. First GET returns 200 with body');
   ok('handled', handled === true);
   ok('status 200', res.statusCode === 200);
   ok('body matches', res.body.toString() === 'console.log("hi");');
-  ok('ETag header set', typeof res.headers['ETag'] === 'string' && res.headers['ETag'].startsWith('"'));
+  ok(
+    'ETag header set',
+    typeof res.headers['ETag'] === 'string' && res.headers['ETag'].startsWith('"'),
+  );
   ok('Cache-Control set', /max-age=300/.test(res.headers['Cache-Control']));
   ok('Content-Type: js', res.headers['Content-Type'] === 'application/javascript; charset=utf-8');
   ok('X-Frame-Options: DENY', res.headers['X-Frame-Options'] === 'DENY');
@@ -103,7 +118,9 @@ section('4. If-None-Match has multiple ETags including ours → 304');
 
 {
   const res = fakeRes();
-  const req = fakeReq({ 'if-none-match': '"some-other-etag", ' + globalThis._etag + ', "another"' });
+  const req = fakeReq({
+    'if-none-match': '"some-other-etag", ' + globalThis._etag + ', "another"',
+  });
   const handled = handleStatic(req, res, { method: 'GET', pathname: '/app.js' }, deps);
   ok('handled', handled === true);
   ok('status 304 (matched in list)', res.statusCode === 304);
@@ -171,7 +188,12 @@ section('10. Unknown path falls through');
 
 {
   const res = fakeRes();
-  const handled = handleStatic(fakeReq(), res, { method: 'GET', pathname: '/something-random' }, deps);
+  const handled = handleStatic(
+    fakeReq(),
+    res,
+    { method: 'GET', pathname: '/something-random' },
+    deps,
+  );
   ok('not handled', handled === false);
 }
 

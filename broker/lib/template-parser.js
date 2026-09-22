@@ -7,8 +7,11 @@ import { parse as yamlParse } from 'yaml';
 
 function tryParse(text) {
   // First try JSON (strict)
-  try { return JSON.parse(text); }
-  catch (_e) { /* fall through to YAML */ }
+  try {
+    return JSON.parse(text);
+  } catch (_e) {
+    /* fall through to YAML */
+  }
   // Then YAML
   const doc = yamlParse(text, { strict: true });
   if (doc === null || doc === undefined) {
@@ -39,8 +42,11 @@ export function parseOpenAPI(specText) {
     throw new Error('parseOpenAPI: specText must be a non-empty string');
   }
   let spec;
-  try { spec = tryParse(specText); }
-  catch (e) { throw new Error('parseOpenAPI: not valid JSON or YAML: ' + e.message); }
+  try {
+    spec = tryParse(specText);
+  } catch (e) {
+    throw new Error('parseOpenAPI: not valid JSON or YAML: ' + e.message);
+  }
   if (!spec || typeof spec !== 'object') {
     throw new Error('parseOpenAPI: spec root is not an object');
   }
@@ -50,7 +56,7 @@ export function parseOpenAPI(specText) {
 
   // 2. auth_type — scan securitySchemes
   const schemes = (spec.components && spec.components.securitySchemes) || {};
-  let auth_type = 'bearer';  // default
+  let auth_type = 'bearer'; // default
   let default_secret_field = 'value';
   const inject_headers = {};
 
@@ -92,7 +98,7 @@ export function parseOpenAPI(specText) {
     upstream,
     auth_type,
     inject_headers,
-    default_secret_type: null,  // user picks
+    default_secret_type: null, // user picks
     default_secret_field,
     default_actions,
     template_version: (spec.info && spec.info.version) || null,
@@ -133,7 +139,10 @@ export function extractAuthFromDocs(html) {
 export function extractUpstreamFromDocs(html) {
   if (!html) return null;
   // Prefer "https://api.xxx.com" or "https://xxx.com/api"
-  const m = /https:\/\/(api\.[a-z0-9.-]+|[\w.-]+\.amazonaws\.com|[\w.-]+\.googleapis\.com|[\w.-]+\.aliyuncs\.com|[\w.-]+\.tencentcloudapi\.com)/i.exec(html);
+  const m =
+    /https:\/\/(api\.[a-z0-9.-]+|[\w.-]+\.amazonaws\.com|[\w.-]+\.googleapis\.com|[\w.-]+\.aliyuncs\.com|[\w.-]+\.tencentcloudapi\.com)/i.exec(
+      html,
+    );
   if (m) return 'https://' + m[1];
   return null;
 }

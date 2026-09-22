@@ -29,7 +29,7 @@ function canonicalize(obj) {
   if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
   if (Array.isArray(obj)) return '[' + obj.map(canonicalize).join(',') + ']';
   const keys = Object.keys(obj).sort();
-  return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalize(obj[k])).join(',') + '}';
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalize(obj[k])).join(',') + '}';
 }
 
 export function computeHash(eventWithoutHash) {
@@ -59,13 +59,21 @@ export function verifyChain(events) {
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
     if (e.prev_hash !== prevHash) {
-      return { ok: false, broken_at: i, reason: `prev_hash mismatch at index ${i}: expected ${prevHash.slice(0, 12)}, got ${e.prev_hash?.slice(0, 12)}` };
+      return {
+        ok: false,
+        broken_at: i,
+        reason: `prev_hash mismatch at index ${i}: expected ${prevHash.slice(0, 12)}, got ${e.prev_hash?.slice(0, 12)}`,
+      };
     }
     // Recompute hash from event WITHOUT hash field
     const { hash: stored, ...rest } = e;
     const computed = computeHash(rest);
     if (computed !== stored) {
-      return { ok: false, broken_at: i, reason: `hash mismatch at index ${i}: expected ${computed.slice(0, 12)}, got ${stored?.slice(0, 12)}` };
+      return {
+        ok: false,
+        broken_at: i,
+        reason: `hash mismatch at index ${i}: expected ${computed.slice(0, 12)}, got ${stored?.slice(0, 12)}`,
+      };
     }
     prevHash = stored;
   }
@@ -79,14 +87,18 @@ export function verifyChain(events) {
  */
 export async function verifyAuditDir(auditDir) {
   const files = readdirSync(auditDir)
-    .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
+    .filter((f) => f.startsWith('audit-') && f.endsWith('.jsonl'))
     .sort(); // oldest first
   const all = [];
   for (const f of files) {
     const content = await readFile(join(auditDir, f), 'utf8');
     for (const line of content.split('\n')) {
       if (!line) continue;
-      try { all.push(JSON.parse(line)); } catch { continue; }
+      try {
+        all.push(JSON.parse(line));
+      } catch {
+        continue;
+      }
     }
   }
   const result = verifyChain(all);
@@ -109,7 +121,11 @@ export function createChainWriter(opts = {}) {
       onEvent(sealed);
       return sealed;
     },
-    get prevHash() { return prevHash; },
-    get count() { return count; },
+    get prevHash() {
+      return prevHash;
+    },
+    get count() {
+      return count;
+    },
   };
 }

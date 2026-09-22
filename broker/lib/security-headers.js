@@ -42,10 +42,7 @@ const CSP_HTML_DEFAULT =
   "object-src 'none'";
 
 // CSP for JSON API responses (frame-ancestors 'none' still applies; no script/style sources needed)
-const CSP_API_DEFAULT =
-  "default-src 'none'; " +
-  "frame-ancestors 'none'; " +
-  "base-uri 'none'";
+const CSP_API_DEFAULT = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
 
 function buildBaseHeaders() {
   if (DISABLED) return {};
@@ -57,7 +54,8 @@ function buildBaseHeaders() {
     // Referer leakage prevention (no referer to other origins from this app)
     'Referrer-Policy': 'no-referrer',
     // Restrict powerful browser features we never use
-    'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()',
+    'Permissions-Policy':
+      'geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()',
     // Force HTTPS for one year (and subdomains). Only emit on HTTPS connections to
     // avoid breaking plain-HTTP local health server (broker/lib/local-health.js).
     'Strict-Transport-Security': `max-age=${HSTS_MAX_AGE}; includeSubDomains`,

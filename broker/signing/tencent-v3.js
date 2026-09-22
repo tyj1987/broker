@@ -11,7 +11,9 @@
 import { createHmac, createHash } from 'node:crypto';
 
 function sha256Hex(s) {
-  return createHash('sha256').update(s || '').digest('hex');
+  return createHash('sha256')
+    .update(s || '')
+    .digest('hex');
 }
 function hmac(key, data) {
   return createHmac('sha256', key).update(data).digest();
@@ -36,7 +38,7 @@ function canonicalHeaders(headers) {
 
 function signedHeaders(headers) {
   return Object.keys(headers)
-    .map(k => k.toLowerCase().trim())
+    .map((k) => k.toLowerCase().trim())
     .filter(Boolean)
     .sort()
     .join(';');
@@ -60,12 +62,21 @@ function signedHeaders(headers) {
  * @returns {object} headers to merge
  */
 export function signTencentV3({
-  method, host, path, query, headers = {}, body,
-  service, action, version, region,
-  timestamp, secret,
+  method,
+  host,
+  path,
+  query,
+  headers = {},
+  body,
+  service,
+  action,
+  version,
+  region,
+  timestamp,
+  secret,
 }) {
   const ts = timestamp || Math.floor(Date.now() / 1000);
-  const bodyStr = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
+  const bodyStr = body == null ? '' : typeof body === 'string' ? body : JSON.stringify(body);
   const payloadHash = sha256Hex(bodyStr);
 
   // Required headers for signing
@@ -77,7 +88,9 @@ export function signTencentV3({
     'x-tc-version': version,
     'x-tc-region': region,
     ...Object.fromEntries(
-      Object.entries(headers).filter(([k]) => !['content-type', 'host', 'authorization'].includes(k.toLowerCase()))
+      Object.entries(headers).filter(
+        ([k]) => !['content-type', 'host', 'authorization'].includes(k.toLowerCase()),
+      ),
     ),
   };
 
@@ -94,12 +107,9 @@ export function signTencentV3({
 
   const date = new Date(ts * 1000).toISOString().split('T')[0];
   const credentialScope = `${date}/${service}/tc3_request`;
-  const stringToSign = [
-    'TC3-HMAC-SHA256',
-    ts,
-    credentialScope,
-    sha256Hex(canonicalRequest),
-  ].join('\n');
+  const stringToSign = ['TC3-HMAC-SHA256', ts, credentialScope, sha256Hex(canonicalRequest)].join(
+    '\n',
+  );
 
   // Signing chain
   const kDate = hmac('TC3' + secret.secret_key, date);
@@ -111,9 +121,9 @@ export function signTencentV3({
 
   const out = {
     ...headers,
-    'Authorization': authz,
+    Authorization: authz,
     'Content-Type': allHeaders['content-type'],
-    'Host': host,
+    Host: host,
     'X-TC-Action': action,
     'X-TC-Timestamp': String(ts),
     'X-TC-Version': version,

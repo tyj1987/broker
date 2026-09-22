@@ -7,10 +7,16 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 console.log('=== isAdminIdentity ===');
@@ -24,9 +30,15 @@ console.log('=== applyAdminVisibility ===');
 {
   const els = [{ hidden: true }, { hidden: true }, { hidden: false }];
   applyAdminVisibility(true, els);
-  assert(els.every(e => e.hidden === false), 'admin unhides all');
+  assert(
+    els.every((e) => e.hidden === false),
+    'admin unhides all',
+  );
   applyAdminVisibility(false, els);
-  assert(els.every(e => e.hidden === true), 'non-admin hides all');
+  assert(
+    els.every((e) => e.hidden === true),
+    'non-admin hides all',
+  );
 }
 
 console.log('=== dashboard scripts subscribe instead of 30s poll ===');
@@ -49,7 +61,20 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   assert(app.includes("CustomEvent('broker:identity'"), 'app.js emits broker:identity');
   assert(app.includes('emitBrokerIdentity(ident)'), 'boot emits identity');
   assert(app.includes('emitBrokerIdentity(null)'), 'logout clears identity');
-  assert(!/loadServices\(\)\.catch/.test(app.split('async function boot')[1] || ''), 'boot does not eager-load services');
+  assert(
+    !/loadServices\(\)\.catch/.test(app.split('async function boot')[1] || ''),
+    'boot does not eager-load services',
+  );
+
+  const apiKeys = readFileSync(join(root, 'api-keys.js'), 'utf8');
+  assert(
+    apiKeys.includes("window.__brokerIdentity?.role === 'admin'"),
+    'API-key usage action is admin-only in UI',
+  );
+  assert(
+    apiKeys.includes('body: { verify: verify.trim() }'),
+    'API-key revoke submits required second-factor verification',
+  );
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

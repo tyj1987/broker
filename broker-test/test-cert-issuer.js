@@ -20,18 +20,26 @@
 
 import { strict as assert } from 'node:assert';
 import { test, before, after } from 'node:test';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  readFileSync,
+  statSync,
+  mkdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 // ---------- helpers ----------
 
-const OPENSSL = process.env.OPENSSL_BIN || (
-  process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\usr\\bin\\openssl.exe')
+const OPENSSL =
+  process.env.OPENSSL_BIN ||
+  (process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\usr\\bin\\openssl.exe')
     ? 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe'
-    : 'openssl'
-);
+    : 'openssl');
 
 function makeCA(caDir) {
   if (!existsSync(caDir)) mkdirSync(caDir, { recursive: true });
@@ -39,10 +47,19 @@ function makeCA(caDir) {
   const crt = join(caDir, 'ca.crt');
   execFileSync(OPENSSL, ['genrsa', '-out', key, '2048']);
   execFileSync(OPENSSL, [
-    'req', '-x509', '-new', '-nodes',
-    '-key', key, '-sha256', '-days', '30',
-    '-subj', '/CN=test-ca',
-    '-out', crt,
+    'req',
+    '-x509',
+    '-new',
+    '-nodes',
+    '-key',
+    key,
+    '-sha256',
+    '-days',
+    '30',
+    '-subj',
+    '/CN=test-ca',
+    '-out',
+    crt,
   ]);
   return { key, crt };
 }
@@ -56,8 +73,11 @@ function verifyCertAgainstCA(certPem, caPem) {
     writeFileSync(caPath, caPem);
     execFileSync(OPENSSL, ['verify', '-CAfile', caPath, certPath], { stdio: 'pipe' });
     return true;
-  } catch { return false; }
-  finally { rmSync(tmp, { recursive: true, force: true }); }
+  } catch {
+    return false;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 function getCertSubject(certPem) {
@@ -65,9 +85,13 @@ function getCertSubject(certPem) {
   try {
     const certPath = join(tmp, 'c.crt');
     writeFileSync(certPath, certPem);
-    const out = execFileSync(OPENSSL, ['x509', '-in', certPath, '-noout', '-subject'], { encoding: 'utf8' });
+    const out = execFileSync(OPENSSL, ['x509', '-in', certPath, '-noout', '-subject'], {
+      encoding: 'utf8',
+    });
     return out.trim();
-  } finally { rmSync(tmp, { recursive: true, force: true }); }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // ---------- setup env BEFORE dynamic import ----------
@@ -86,17 +110,27 @@ process.env.OPENSSL_BIN = OPENSSL;
 const certIssuer = await import('../broker/cert-issuer.js');
 
 process.on('exit', () => {
-  try { rmSync(WORK, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(WORK, { recursive: true, force: true });
+  } catch {}
 });
 
 // ---------- test runner (matches repo convention) ----------
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- tests ----------
 
@@ -108,13 +142,18 @@ ok('returns cert_pem string', typeof r1.cert_pem === 'string');
 ok('returns key_pem string', typeof r1.key_pem === 'string');
 ok('cert has PEM header', /-----BEGIN CERTIFICATE-----/.test(r1.cert_pem));
 ok('key has PEM header', /-----BEGIN (RSA )?PRIVATE KEY-----/.test(r1.key_pem));
-ok('fingerprint is canonical SHA256 (95 chars, uppercase hex with colons)',
-   /^[A-F0-9:]{95}$/.test(r1.fingerprint_sha256));
+ok(
+  'fingerprint is canonical SHA256 (95 chars, uppercase hex with colons)',
+  /^[A-F0-9:]{95}$/.test(r1.fingerprint_sha256),
+);
 ok('default days = 90', r1.days === 90);
 
 section('2. Cert is signed by our CA');
 
-ok('cert verifies against CA', verifyCertAgainstCA(r1.cert_pem, readFileSync(CA_CERT_PATH, 'utf8')));
+ok(
+  'cert verifies against CA',
+  verifyCertAgainstCA(r1.cert_pem, readFileSync(CA_CERT_PATH, 'utf8')),
+);
 
 section('3. CN preserved in subject');
 
@@ -137,12 +176,70 @@ ok('cert PEM has header', /-----BEGIN CERTIFICATE-----/.test(pem));
 ok('key PEM has header', /-----BEGIN (RSA )?PRIVATE KEY-----/.test(key));
 ok('cert PEM matches', pem === r1.cert_pem);
 
+section('5b. snapshot / restore client material');
+{
+  const cn = 'client.alice';
+  const paths = certIssuer.paths.clientPaths(cn);
+  const snapshot = certIssuer.snapshotClientCertFiles(cn);
+  writeFileSync(paths.crt, 'replacement-cert');
+  writeFileSync(paths.key, 'replacement-key');
+  writeFileSync(paths.csr, 'transient-csr');
+  writeFileSync(paths.ext, 'transient-ext');
+  certIssuer.restoreClientCertFiles(cn, snapshot);
+  ok('snapshot restores original cert bytes', readFileSync(paths.crt, 'utf8') === r1.cert_pem);
+  ok('snapshot restores original key bytes', readFileSync(paths.key, 'utf8') === r1.key_pem);
+  ok('restore removes transient CSR', !existsSync(paths.csr));
+  ok('restore removes transient extension file', !existsSync(paths.ext));
+
+  const newClient = 'client.rollback-new';
+  const newPaths = certIssuer.paths.clientPaths(newClient);
+  writeFileSync(newPaths.crt, 'new-cert');
+  writeFileSync(newPaths.key, 'new-key');
+  certIssuer.restoreClientCertFiles(newClient, { cert: null, key: null });
+  ok('null snapshot removes newly created cert', !existsSync(newPaths.crt));
+  ok('null snapshot removes newly created key', !existsSync(newPaths.key));
+}
+
+section('5c. one-time private-key removal');
+{
+  const cn = 'client.alice';
+  const paths = certIssuer.paths.clientPaths(cn);
+  const snapshot = certIssuer.snapshotClientCertFiles(cn);
+  ok('strict key removal succeeds', certIssuer.deleteClientKeyFile(cn, { strict: true }));
+  ok('private key is removed', !existsSync(paths.key));
+  ok('public certificate remains', existsSync(paths.crt));
+  ok(
+    'repeated strict key removal is idempotent',
+    certIssuer.deleteClientKeyFile(cn, { strict: true }),
+  );
+  certIssuer.restoreClientCertFiles(cn, snapshot);
+  ok('test fixture key is restored', existsSync(paths.key));
+}
+
 section('6. readClientCertPem throws for missing cert');
 
-ok('readClientCertPem throws Cert not found',
-   (() => { try { certIssuer.readClientCertPem('client.nonexistent'); return false; } catch (e) { return /Cert not found/.test(e.message); } })());
-ok('readClientKeyPem throws Key not found',
-   (() => { try { certIssuer.readClientKeyPem('client.nonexistent'); return false; } catch (e) { return /Key not found/.test(e.message); } })());
+ok(
+  'readClientCertPem throws Cert not found',
+  (() => {
+    try {
+      certIssuer.readClientCertPem('client.nonexistent');
+      return false;
+    } catch (e) {
+      return /Cert not found/.test(e.message);
+    }
+  })(),
+);
+ok(
+  'readClientKeyPem throws Key not found',
+  (() => {
+    try {
+      certIssuer.readClientKeyPem('client.nonexistent');
+      return false;
+    } catch (e) {
+      return /Key not found/.test(e.message);
+    }
+  })(),
+);
 
 section('7. certFingerprint rejects for missing cert');
 
@@ -193,7 +290,10 @@ const p12 = certIssuer.paths.clientPaths('client.alice');
 await certIssuer.issueClientCert('client.perm');
 const mode = statSync(certIssuer.paths.clientPaths('client.perm').key).mode & 0o777;
 if (process.platform === 'win32') {
-  ok('private key file created on Windows (POSIX mode is not representable)', existsSync(certIssuer.paths.clientPaths('client.perm').key));
+  ok(
+    'private key file created on Windows (POSIX mode is not representable)',
+    existsSync(certIssuer.paths.clientPaths('client.perm').key),
+  );
 } else {
   ok(`key file mode is 0600 (got ${mode.toString(8)})`, mode === 0o600);
 }
@@ -206,7 +306,10 @@ ok('returns requested days', r13.days === 7);
 
 section('14. CN with various name patterns (use one of r1’s results)');
 
-ok('CN="client.alice" preserved (no extra issuance)', /CN\s*=\s*client\.alice/.test(getCertSubject(r1.cert_pem)));
+ok(
+  'CN="client.alice" preserved (no extra issuance)',
+  /CN\s*=\s*client\.alice/.test(getCertSubject(r1.cert_pem)),
+);
 
 section('15. Fingerprint format is uppercase hex with colons');
 

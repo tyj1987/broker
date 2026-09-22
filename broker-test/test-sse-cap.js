@@ -2,16 +2,28 @@
 // 覆盖 adminSseKey / tryAcquireSseSlot / releaseSseSlot / 边界 / per-admin 隔离
 
 import {
-  createSseCap, adminSseKey, tryAcquireSseSlot, releaseSseSlot,
-  _resetSseCapForTests, _getSseCountForTests,
+  createSseCap,
+  adminSseKey,
+  tryAcquireSseSlot,
+  releaseSseSlot,
+  _resetSseCapForTests,
+  _getSseCountForTests,
 } from '../broker/lib/sse-cap.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 const cap = createSseCap();
 _resetSseCapForTests();
@@ -63,10 +75,10 @@ section('releaseSseSlot');
   const key = 'audit-stream:release-test';
   cap.tryAcquireSseSlot(key);
   cap.tryAcquireSseSlot(key);
-  cap.tryAcquireSseSlot(key);  // count = 3
+  cap.tryAcquireSseSlot(key); // count = 3
   ok('at limit', cap.tryAcquireSseSlot(key).acquired === false);
 
-  cap.releaseSseSlot(key);  // 2
+  cap.releaseSseSlot(key); // 2
   ok('after release: can acquire again', cap.tryAcquireSseSlot(key).acquired === true);
   ok('count back to 3', cap._getSseCountForTests(key) === 3);
 }
@@ -80,8 +92,8 @@ section('release past zero');
   cap.tryAcquireSseSlot(key);
   cap.releaseSseSlot(key);
   ok('count is 0 after full release', cap._getSseCountForTests(key) === 0);
-  cap.releaseSseSlot(key);  // extra release
-  cap.releaseSseSlot(key);  // extra release
+  cap.releaseSseSlot(key); // extra release
+  cap.releaseSseSlot(key); // extra release
   ok('extra release: count still 0 (no underflow)', cap._getSseCountForTests(key) === 0);
   // Key should be removed from Map (cleanup)
   cap.tryAcquireSseSlot(key);
@@ -125,7 +137,7 @@ section('_resetSseCapForTests');
 section('module-level + factory share state');
 {
   _resetSseCapForTests();
-  const cap2 = createSseCap();  // new factory instance
+  const cap2 = createSseCap(); // new factory instance
   // Both instances share the underlying Map (module-level)
   tryAcquireSseSlot('shared');
   ok('cap2 sees the same state', cap2._getSseCountForTests('shared') === 1);

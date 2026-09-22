@@ -34,16 +34,18 @@ export async function getAzureToken({ tenant_id, client_id, client_secret, scope
   const tok = await res.json();
   TOKEN_CACHE.set(key, {
     access_token: tok.access_token,
-    expires_at: Date.now() + (tok.expires_in * 1000),
+    expires_at: Date.now() + tok.expires_in * 1000,
   });
   return tok.access_token;
 }
 
 export async function signAzureAd(args) {
   const token = await getAzureToken(args);
-  return { 'Authorization': `Bearer ${token}` };
+  return { Authorization: `Bearer ${token}` };
 }
 
-export function clearAzureCache() { TOKEN_CACHE.clear(); }
+export function clearAzureCache() {
+  TOKEN_CACHE.clear();
+}
 
 export default { getAzureToken, signAzureAd, clearAzureCache };

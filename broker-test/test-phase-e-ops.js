@@ -4,21 +4,27 @@ import {
   formatValidationReport,
   preflightPaths,
 } from '../broker/lib/config-validate.js';
-import {
-  installGracefulShutdown,
-  rejectIfShuttingDown,
-} from '../broker/lib/shutdown.js';
+import { installGracefulShutdown, rejectIfShuttingDown } from '../broker/lib/shutdown.js';
 import { existsSync } from 'node:fs';
 import { BROKER_VERSION } from '../broker/version.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 console.log('=== version ===');
-assert(typeof BROKER_VERSION === 'string' && /^\d+\.\d+\.\d+/.test(BROKER_VERSION), `version=${BROKER_VERSION}`);
+assert(
+  typeof BROKER_VERSION === 'string' && /^\d+\.\d+\.\d+/.test(BROKER_VERSION),
+  `version=${BROKER_VERSION}`,
+);
 
 console.log('=== validateBrokerConfig ===');
 {
@@ -28,13 +34,19 @@ console.log('=== validateBrokerConfig ===');
   const emptyClients = validateBrokerConfig({ clients: {} });
   assert(emptyClients.ok === true, 'empty clients ok');
   // empty map: no "no admin" warn (only when there are clients but none is admin)
-  assert(!emptyClients.warnings.some((w) => /no client with role admin/i.test(w.message)), 'empty has no admin warn');
+  assert(
+    !emptyClients.warnings.some((w) => /no client with role admin/i.test(w.message)),
+    'empty has no admin warn',
+  );
 
   const noAdmin = validateBrokerConfig({
     clients: { ci: { role: 'ci' } },
   });
   assert(noAdmin.ok === true, 'no-admin config ok');
-  assert(noAdmin.warnings.some((w) => /no client with role admin/i.test(w.message)), 'no admin warn');
+  assert(
+    noAdmin.warnings.some((w) => /no client with role admin/i.test(w.message)),
+    'no admin warn',
+  );
 
   const good = validateBrokerConfig({
     clients: {
@@ -68,9 +80,29 @@ console.log('=== preflightPaths ===');
 
 console.log('=== rejectIfShuttingDown ===');
 {
-  const res = { headersSent: false, status: 0, body: null, writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
+  const res = {
+    headersSent: false,
+    status: 0,
+    body: null,
+    writeHead(s) {
+      this.status = s;
+    },
+    end(b) {
+      this.body = b;
+    },
+  };
   assert(rejectIfShuttingDown(() => false, res) === false, 'not shutting');
-  assert(rejectIfShuttingDown(() => true, res, (r, s, m) => { r.status = s; r.body = m; }) === true, 'shutting');
+  assert(
+    rejectIfShuttingDown(
+      () => true,
+      res,
+      (r, s, m) => {
+        r.status = s;
+        r.body = m;
+      },
+    ) === true,
+    'shutting',
+  );
   assert(res.status === 503, '503');
 }
 

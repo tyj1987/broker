@@ -35,6 +35,7 @@ Thumbs.db
 # Node / Python / Go 通用 / Generic
 node_modules/
 __pycache__/
+**/.pytest_cache/
 *.pyc
 .venv/
 venv/
@@ -48,6 +49,7 @@ coverage/
 # 任务临时文件 / Task scratch
 tmp/
 .tmp/
+.worktrees/
 
 # 备份钥匙归档（轮转时的临时归档）/ Key rotation archives
 .config/sops/age/archive-*/
@@ -67,6 +69,7 @@ tmp/
 # PKI 证书和私钥（ca.crt 入库方便 dev 客户端导入, ca.key 私钥绝不入库）
 pki/**/*.key
 pki/**/*.csr
+*.csr
 pki/**/*.ext
 pki/**/crl.pem
 pki/**/index.txt*
@@ -94,8 +97,10 @@ secrets/secrets-detail.json  # 凭据 detail, SOPS 加密后的不入 (运行时
 # v4.1 dev 明文配置 (本地启动用, 严禁入库)
 secrets/broker.yaml
 secrets/clients.json
-# broker SOPS 原子写回时的临时文件
+# broker SOPS 原子写回及凭据轮换时的临时文件
 secrets/.broker.tmp.*.yaml
+secrets/.inject-aliyun.*/
+secrets/.common.env.next.*
 
 # audit/ 下 dev 脚本副本 (scripts/dev/ 才是 source of truth) + 历史 session 报告
 audit/*.cmd
@@ -162,6 +167,7 @@ secrets/broker.yaml.*
 pki/clients/
 pki/server/
 broker/**/*.bak*
+cli/*.bak*
 broker/server.js.bak*
 broker/server.js.patch.*
 **/.pytest-tmp/
@@ -178,3 +184,6 @@ sdk/vscode/out/
 # CI / ECS 临时扫描脚本(不进库)
 tmp-ecs-pki-scan.sh
 tmp-pki-scan.ps1
+
+# ChatLink recoverable-delete storage is local operational metadata, never source.
+.chatlink-trash/

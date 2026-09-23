@@ -9,6 +9,7 @@ import { isCompatibilityKeyRouteAllowed } from '../broker/lib/compatibility-key-
 import { createApiKeyQuota } from '../broker/lib/api-key-quota.js';
 import { proxyResponseHeaders } from '../broker/lib/proxy-response.js';
 import { securityHeaders } from '../broker/lib/security-headers.js';
+import { enforcePop } from '../broker/lib/pop.js';
 import { canResolveSecret, canProxyService, canCreateChild, generateMasterKey, createApiKey, publicView } from '../broker/api-keys.js';
 import { createReadApiRoutes } from '../broker/routes/read-api.js';
 import { canProxy, isServiceAllowed } from '../broker/can-proxy.js';
@@ -24,11 +25,12 @@ async function check(name, test) {
   try { await test(); passed++; console.log('PASS ' + name); }
   catch (error) { failed++; console.error('FAIL ' + name + ': ' + error.message); }
 }
-function harness({ key = null, withTotp = false, mfaValid = false, v2 = false } = {}) {
+function harness({ key = null, withTotp = false, mfaValid = false, v2 = false, forwarded = false, popVerified = false, popMode } = {}) {
   let writes = 0, upstreamCalls = 0, certificateCalls = 0;
   const client = { role: 'admin', password: 'synthetic-password', ...(withTotp ? { totp_secret: 'SYNTHETIC' } : {}) };
   const ctx = { cn: 'owner', fp: 'synthetic-fp', clientName: 'owner', client, certSubject: { CN: 'owner' }, via: key ? 'api_key' : 'mtls', ...(key ? { apiKey: key } : {}) };
-  const config = { clients: { owner: client }, api_keys: [], services: { visible: { type: 'bearer', upstream: 'https://upstream.example.test', token_secret: 'VISIBLE' }, hidden: { type: 'bearer' } } };
+  if (forwarded) Object.assign(ctx, { via: 'mtls-forwarded-rfc9440', edgeForwarded: true, popVerified });
+  const config = { security: { require_pop: popMode }, clients: { owner: client }, api_keys: [], services: { visible: { type: 'bearer', upstream: 'https://upstream.example.test', token_secret: 'VISIBLE' }, hidden: { type: 'bearer' } } };
   const cache = new Map();
   const sandbox = {
     URL, Buffer, join, __dirname: '/synthetic', createHash, cryptoTimingSafeEqual, totpVerifyPassword,
@@ -42,7 +44,7 @@ function harness({ key = null, withTotp = false, mfaValid = false, v2 = false } 
     readBody: async req => req.body,
     audit: () => {}, rateLimit: () => true, inc: () => {}, observeMs: () => {},
     isCompatibilityKeyRouteAllowed, canResolveSecret, canProxyService, canCreateChild, canProxy, isServiceAllowed,
-    proxyResponseHeaders, securityHeaders,
+    proxyResponseHeaders, securityHeaders, enforcePop,
     createApiKeyFn: createApiKey, generateMasterKey, publicViewFn: publicView, verifyMfaCode: () => ({ ok: mfaValid }),
     persistConfig: async () => { writes++; },
     checkSecretForService: () => ({ allowed: true, status: 'ok' }), healthcheckGetSecretStatus: () => null,
@@ -161,6 +163,22 @@ await check('compatibility key policy enforces each supported operation and reje
   master.revoked_at = new Date().toISOString();
   assert.equal(isCompatibilityKeyRouteAllowed(master, 'POST', '/api/v1/api-keys/issue-child'), false);
   assert.equal(isCompatibilityKeyRouteAllowed({ scopes: ['services:proxy'] }, 'POST', '/api/v1/proxy/visible/extra'), false);
+});
+await check('PoP enforcement precedes typed v2 dispatch for forwarded identities', async () => {
+  const h = harness({ forwarded: true, popMode: 'all', v2: true });
+  assert.equal((await h.request('POST', '/api/v2/operations', {})).statusCode, 403);
+  assert.equal(h.counts().writes, 0);
+});
+await check('PoP enforcement precedes public and login compatibility routes', async () => {
+  for (const [method, path] of [['GET', '/health'], ['POST', '/api/v1/login']]) {
+    assert.equal((await harness({ forwarded: true, popMode: 'all' }).request(method, path, {})).statusCode, 403);
+  }
+});
+await check('verified forwarded identity retains typed v2 routing', async () => {
+  assert.equal((await harness({ forwarded: true, popVerified: true, popMode: 'all', v2: true }).request('POST', '/api/v2/operations', {})).statusCode, 200);
+});
+await check('unknown PoP mode cannot silently disable production guard', async () => {
+  assert.equal((await harness({ forwarded: true, popVerified: true, popMode: 'privleged', v2: true }).request('POST', '/api/v2/operations', {})).statusCode, 403);
 });
 console.log(`compatibility-runtime: ${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

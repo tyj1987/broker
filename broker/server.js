@@ -82,6 +82,7 @@ import { createReadApiRoutes } from './routes/read-api.js';
 import { isCompatibilityKeyRouteAllowed } from './lib/compatibility-key-policy.js';
 import { createApiKeyQuota } from './lib/api-key-quota.js';
 import { proxyResponseHeaders } from './lib/proxy-response.js';
+import { enforcePop } from './lib/pop.js';
 import { createV2Routes } from './routes/v2.js';
 import { OperationBroker, V2Error } from './lib/operations-v2.js';
 import { ApprovalBroker } from './lib/approvals-v2.js';
@@ -1519,6 +1520,17 @@ async function handle(req, res) {
   const p = url.pathname;
   const t0 = Date.now();
   const route = { method: m, pathname: p };
+
+  // Preserve the deployed pre-route PoP gate, including public/v2/login paths.
+  // Direct TLS still proves possession; forwarded identities use the staged
+  // configured policy. Unknown policy values never silently turn protection off.
+  const popDenial = enforcePop({ identity: getIdentity(req), method: m, pathname: p,
+    requirePop: CONFIG?.security?.require_pop });
+  if (popDenial) {
+    audit({ action: 'connect', status: 'denied', reason: popDenial.reason,
+      mode: popDenial.mode, method: m, path: p, cn: getIdentity(req)?.clientName });
+    return jsonError(res, 403, 'Proof-of-possession requirement was not satisfied');
+  }
 
   // Phase AF: modular request pipeline (public routes)
   {
@@ -3253,6 +3265,8 @@ const identityResolver = createIdentityResolver({
     sourceIp: process.env.BROKER_FORWARDED_MTLS_SOURCE_IP,
     fingerprintSha256: process.env.BROKER_FORWARDED_MTLS_FINGERPRINT_SHA256,
     clientName: process.env.BROKER_FORWARDED_MTLS_CLIENT,
+    headerName: process.env.BROKER_FORWARDED_MTLS_HEADER,
+    ownerFingerprintSha256: process.env.BROKER_FORWARDED_MTLS_OWNER_FINGERPRINT_SHA256,
   },
 });
 

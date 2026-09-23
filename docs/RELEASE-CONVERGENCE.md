@@ -1,6 +1,6 @@
 # Mainline release convergence
 
-This work implements the first bounded convergence step tracked in #42. It ports missing protections from a separately tested legacy candidate onto the current control-plane architecture. It is not a bulk merge of the legacy tree, a replacement for deployment validation, or a claim that the legacy candidate's end-to-end evidence applies to this revision.
+This work implements the bounded compatibility and PoP convergence steps tracked in #42 revisions 1 and 2. It ports missing protections from a separately tested legacy candidate onto the current control-plane architecture. It is not a bulk merge of the legacy tree, a replacement for deployment validation, or a claim that the legacy candidate's end-to-end evidence applies to this revision.
 
 ## Preserved mainline contracts
 
@@ -26,6 +26,10 @@ Clients using delegated keys for legacy account-management APIs must migrate to 
 
 Quotas remain process-local. They are not persistent, shared between replicas, or a guarantee of cluster-wide enforcement across restarts. Capacity protection may reject a request below its configured logical limit rather than permit unbounded memory use.
 
+## Deployed PoP compatibility
+
+Revision 2 retains the deployed v1 private-key possession protocol as an explicit mainline module and pre-route enforcement gate. It removes no existing direct-TLS or typed-v2 policy boundary. The deployment-compatible forwarding header is opt-in, with an exact configured source/leaf/client and a live owner-certificate anchor; no production identity pins are copied into source. Replay capacity now rejects new proofs rather than evicting valid history, and unknown enforcement modes fail closed. See [forwarded certificate PoP](PROOF-OF-POSSESSION.md) for the wire contract, limits and required real-topology acceptance.
+
 ## Reuse and review boundaries
 
 The service method CRUD behavior and its regression/documentation are forward-ported from #35, source commit `984db18ed250eb3a2592245af5c52de287485e85`; no second competing method-policy design is introduced. See [service HTTP methods](SERVICE-HTTP-METHODS.md).
@@ -44,6 +48,7 @@ node --check broker/server.js
 node broker-test/test-release-convergence.js
 node broker-test/test-compatibility-runtime.js
 node broker-test/test-service-method-config.js
+node broker-test/test-pop.js
 npm --prefix broker run lint
 npm --prefix broker run test:coverage
 npm --prefix broker audit --omit=dev --audit-level=high

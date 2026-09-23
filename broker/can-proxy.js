@@ -36,16 +36,26 @@ export function checkPathAllowed(pattern, path) {
 // 避免把 '.' 当任意字符. 用户要 regex 显式用 ^...$ / ...* / .* 等含 *^$ 形式.
 const REGEX_META = /[*^$]/;
 function matchAsRegex(s, name) {
-  if (typeof s !== 'string' || !REGEX_META.test(s)) return false;
+  if (typeof s !== 'string' || !REGEX_META.test(s) || !isSafeRegexPattern(s)) return false;
   try { return new RegExp(s).test(name); } catch { return false; }
 }
 
-export function matchProxyRule(rule, serviceName, path) {
+const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+function methodAllowed(rule, method) {
+  if (typeof method !== 'string' || !HTTP_METHODS.has(method.toUpperCase())) return false;
+  if (rule.methods === undefined) return true;
+  return Array.isArray(rule.methods) && rule.methods.length > 0
+    && rule.methods.every(value => typeof value === 'string' && HTTP_METHODS.has(value.toUpperCase()))
+    && rule.methods.some(value => value.toUpperCase() === method.toUpperCase());
+}
+
+export function matchProxyRule(rule, serviceName, path, method = 'GET') {
   if (rule === '*' || rule === '.*') return true;
   if (typeof rule === 'string') {
     return rule === serviceName || matchAsRegex(rule, serviceName);
   }
-  if (rule && typeof rule === 'object') {
+  if (rule && typeof rule === 'object' && !Array.isArray(rule)) {
+    if (!methodAllowed(rule, method)) return false;
     const svc = rule.service;
     if (svc != null && svc !== serviceName && !matchAsRegex(svc, serviceName)) return false;
     if (rule.paths && !checkPathAllowed(rule.paths, path)) return false;
@@ -54,13 +64,14 @@ export function matchProxyRule(rule, serviceName, path) {
   return false;
 }
 
-export function canProxy(ctx, serviceName, path) {
+export function canProxy(ctx, serviceName, path, method = 'GET') {
   if (!ctx || !ctx.client) return false;
   if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
+  if (!Array.isArray(allow)) return false;
   for (const rule of allow) {
-    if (matchProxyRule(rule, serviceName, path)) return true;
+    if (matchProxyRule(rule, serviceName, path, method)) return true;
   }
   return false;
 }
@@ -71,7 +82,15 @@ export function isServiceAllowed(ctx, serviceName) {
   if (ctx.client.security_profile === 'strict') return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_proxy || [];
-  return allow.some(rule => matchProxyRule(rule, serviceName, '*'));
+  if (!Array.isArray(allow)) return false;
+  // Inventory means some permitted path/method exists, not permission to call '*'.
+  // Actual execution still evaluates the original path and method restrictions.
+  return allow.some(rule => {
+    if (!rule || typeof rule !== 'object') return matchProxyRule(rule, serviceName, '*');
+    if (Array.isArray(rule)) return false;
+    const { paths: _paths, ...serviceRule } = rule;
+    return [...HTTP_METHODS].some(method => matchProxyRule(serviceRule, serviceName, '*', method));
+  });
 }
 
 // Phase 1.2: list client names that have access to a given service. Used by
@@ -79,9 +98,7 @@ export function isServiceAllowed(ctx, serviceName) {
 export function clientNamesAllowedFor(clients, serviceName) {
   const out = [];
   for (const [cname, c] of Object.entries(clients || {})) {
-    if (c.role === 'admin') { out.push(cname); continue; }
-    const allow = c.allowed_proxy || [];
-    if (allow.some(rule => matchProxyRule(rule, serviceName, '*'))) out.push(cname);
+    if (isServiceAllowed({ client: c }, serviceName)) out.push(cname);
   }
   return out;
 }

@@ -113,8 +113,8 @@ section('10. isServiceAllowed — developer');
   const c = ctx({ allowed_proxy: ['github', { service: 'aliyun_ecs', paths: [] }] });
   ok('exact string → allowed', isServiceAllowed(c, 'github'));
   ok('object rule with empty paths → allowed', isServiceAllowed(c, 'aliyun_ecs'));
-  ok('object rule with restrictive paths → NOT allowed (paths checked against "*")',
-     !isServiceAllowed({ client: { role: 'developer', allowed_proxy: [{ service: 'aws', paths: ['^/specific'] }] } }, 'aws'));
+  ok('path-restricted service is visible without granting unrestricted execution',
+     isServiceAllowed({ client: { role: 'developer', allowed_proxy: [{ service: 'aws', paths: ['^/specific'] }] } }, 'aws'));
   ok('non-matching → not allowed', !isServiceAllowed(c, 'aws'));
 }
 
@@ -180,6 +180,28 @@ section('15. Realistic config — multi-service developer');
   ok('cloudflare zones allowed', canProxy(c, 'cloudflare', '/zones/abc'));
   ok('cloudflare root denied', !canProxy(c, 'cloudflare', '/'));
   ok('unknown service denied', !canProxy(c, 'aws', '/anything'));
+}
+
+section('16. Method, visibility and malformed-rule boundaries');
+{
+  const c = ctx({ allowed_proxy: [{ service: 'github', paths: ['^/safe$'], methods: ['get', 'HEAD'] }] });
+  ok('method-qualified rule allows the configured method', canProxy(c, 'github', '/safe', 'GET'));
+  ok('same path cannot bypass method restriction', !canProxy(c, 'github', '/safe', 'POST'));
+  ok('same method cannot bypass path restriction', !canProxy(c, 'github', '/other', 'GET'));
+  ok('a restricted service remains discoverable', isServiceAllowed(c, 'github'));
+  ok('service discovery does not disclose other service names', !isServiceAllowed(c, 'other'));
+  for (const methods of [[], null, 'GET', ['CONNECT'], [null]]) {
+    const invalid = ctx({ allowed_proxy: [{ service: 'github', methods }] });
+    ok('malformed or empty method restriction denies calls: ' + JSON.stringify(methods), !canProxy(invalid, 'github', '/', 'GET'));
+    ok('deny-all method policy does not make a service visible: ' + JSON.stringify(methods), !isServiceAllowed(invalid, 'github'));
+  }
+  ok('array is not a permissive object rule', !matchProxyRule([], 'github', '/'));
+  ok('scalar client allowlist cannot become an implicit wildcard', !canProxy(ctx({ allowed_proxy: '*' }), 'github', '/'));
+  ok('invalid inventory allowlist fails closed', !isServiceAllowed(ctx({ allowed_proxy: {} }), 'github'));
+  ok('nested quantified service regex is rejected', !matchProxyRule('^(a+)+$', 'aaa', '/'));
+  ok('strict profile stays outside legacy proxy inventory', !isServiceAllowed(ctx({ security_profile: 'strict', allowed_proxy: ['*'] }), 'github'));
+  const names = clientNamesAllowedFor({ scoped: c.client, strict: { role: 'admin', security_profile: 'strict' } }, 'github');
+  ok('admin matrix includes scoped clients and excludes strict legacy access', names.join(',') === 'scoped');
 }
 
 // ---------- summary ----------

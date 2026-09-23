@@ -217,10 +217,14 @@ export function createIdentityResolver(deps) {
     if (!primary) {
       const session = getSession(req);
       if (session) {
+        // A session may outlive a reload, deletion or role downgrade. Never
+        // authorize using the login-time client object after policy changes.
+        const liveClient = effectiveConfig()?.clients?.[session.clientName];
+        if (!liveClient) return null;
         primary = {
           cn: session.cn,
           fp: session.fp,
-          client: session.client,
+          client: liveClient,
           clientName: session.clientName,
           certSubject: session.cert?.subject || { CN: session.cn },
           via: 'session',

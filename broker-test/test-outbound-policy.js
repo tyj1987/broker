@@ -6,6 +6,8 @@ import {
   parsePinnedUpstream,
   sanitizeCallerHeaders,
   validateMethod,
+  DEFAULT_SERVICE_ALLOWED_METHODS,
+  effectiveServiceAllowedMethods,
 } from '../broker/lib/outbound-policy.js';
 
 let passed = 0;
@@ -64,6 +66,14 @@ ok('rejects x-forwarded variants', denied(() => sanitizeCallerHeaders({ 'X-Forwa
 ok('allows configured method', validateMethod('post', ['GET', 'POST']) === 'POST');
 ok('allows default method', validateMethod() === 'GET');
 ok('rejects unconfigured method', denied(() => validateMethod('DELETE', ['GET', 'POST'])));
+ok('default allowed methods are GET only', DEFAULT_SERVICE_ALLOWED_METHODS.length === 1 && DEFAULT_SERVICE_ALLOWED_METHODS[0] === 'GET');
+ok('default method set rejects POST', denied(() => validateMethod('POST')));
+ok('unconfigured service rejects POST', denied(() => validateMethod('POST', effectiveServiceAllowedMethods({}))));
+ok('null service config uses GET default', effectiveServiceAllowedMethods(null).join(',') === 'GET');
+ok('null allowed_methods uses GET default', effectiveServiceAllowedMethods({ allowed_methods: null }).join(',') === 'GET');
+ok('effective default is a fresh copy', effectiveServiceAllowedMethods({}) !== DEFAULT_SERVICE_ALLOWED_METHODS);
+ok('explicit POST is retained', validateMethod('POST', effectiveServiceAllowedMethods({ allowed_methods: ['GET', 'POST'] })) === 'POST');
+ok('explicit deny-all is retained', denied(() => validateMethod('GET', effectiveServiceAllowedMethods({ allowed_methods: [] }))));
 
 console.log(`\n=== ${passed} pass / ${failed} fail ===`);
 process.exit(failed === 0 ? 0 : 1);

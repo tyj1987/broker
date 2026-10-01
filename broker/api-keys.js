@@ -276,10 +276,21 @@ export function parseBearer(authHeader) {
 export function findApiKey(cfgKeys, secret) {
   if (!cfgKeys || !Array.isArray(cfgKeys) || !secret) return null;
   const fp = createHash('sha256').update(secret).digest('hex');
-  const k = cfgKeys.find(x => x.fingerprint_sha256 === fp);
+  const k = cfgKeys.find(x => x && x.fingerprint_sha256 === fp);
   if (!k) return null;
   if (k.revoked_at) return null;
-  if (k.expires_at && new Date(k.expires_at) < new Date()) return null;
+  if (isExpired(k)) return null;
+  // A child is a live delegation, not an independent credential. Revalidate
+  // its unique parent on every authentication so revocation and owner changes
+  // take effect immediately, including after a configuration reload.
+  if (k.parent_master_id != null) {
+    if (typeof k.parent_master_id !== 'string' || !k.parent_master_id) return null;
+    const parents = cfgKeys.filter(candidate => candidate && candidate.id === k.parent_master_id);
+    if (parents.length !== 1) return null;
+    const parent = parents[0];
+    if (parent === k || parent.parent_master_id != null || parent.client !== k.client
+        || !canCreateChild(parent).ok) return null;
+  }
   return k;
 }
 
@@ -309,8 +320,9 @@ export function canProxyService(k, serviceName) {
  * 检查 API Key 是否过期
  */
 export function isExpired(k) {
-  if (!k.expires_at) return false;
-  return new Date(k.expires_at) < new Date();
+  if (!k || k.expires_at == null || k.expires_at === '') return true;
+  const expiresAt = new Date(k.expires_at).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt <= Date.now();
 }
 
 /**

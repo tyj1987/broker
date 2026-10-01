@@ -12,6 +12,7 @@
 
 import { send, jsonError, readBody } from '../lib/http.js';
 import { verifyAuditDir } from '../lib/audit-hash-chain.js';
+import { canResolveSecret, canProxyService } from '../api-keys.js';
 
 /**
  * @param {object} deps
@@ -43,7 +44,16 @@ export function createReadApiRoutes(deps) {
   function handleServices(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/services') return false;
     const services = [];
+    const isAdmin = ctx.client.role === 'admin' && !ctx.apiKey;
     for (const [name, svc] of Object.entries(deps.config.services)) {
+      const allowed = deps.isServiceAllowed(ctx, name)
+        && (!ctx.apiKey || canProxyService(ctx.apiKey, name));
+      if (!isAdmin && !allowed) continue;
+      if (!isAdmin) {
+        services.push({ name, type: svc.type || 'unknown', description: svc.description || '',
+          allowed: true, actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [] });
+        continue;
+      }
       const secretHealth = svc.token_secret
         ? (() => {
             const s = deps.healthcheckGetSecretStatus(svc.token_secret);
@@ -70,14 +80,11 @@ export function createReadApiRoutes(deps) {
 
   function handleSecrets(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/secrets') return false;
-    const allow = ctx.client.allowed_resolve || [];
     const all = Array.from(deps.SECRET_CACHE.keys());
-    let visible;
-    if (ctx.client.role === 'admin') visible = all;
-    else if (allow.includes('.*') || allow.includes('*')) visible = all;
-    else visible = all.filter(n => deps.checkPathAllowed(allow, n));
+    const visible = all.filter(name => deps.canResolve(ctx, name)
+      && (!ctx.apiKey || canResolveSecret(ctx.apiKey, name)));
     deps.audit({ action: 'list', cn: ctx.cn, fp: ctx.fp, count: visible.length });
-    if (ctx.client.role === 'admin') {
+    if (ctx.client.role === 'admin' && !ctx.apiKey) {
       const out = visible.map(name => {
         const meta = deps.SECRET_CACHE.get(name);
         if (!meta) return { name };
@@ -118,7 +125,7 @@ export function createReadApiRoutes(deps) {
       jsonError(res, 400, 'Missing {name}');
       return true;
     }
-    if (!deps.canResolve(ctx, body.name)) {
+    if (!deps.canResolve(ctx, body.name) || (ctx.apiKey && !canResolveSecret(ctx.apiKey, body.name))) {
       deps.audit({ action: 'resolve', cn: ctx.cn, fp: ctx.fp, secret_name: body.name, status: 'denied' });
       jsonError(res, 403, 'Not allowed to resolve this secret');
       return true;
@@ -147,19 +154,21 @@ export function createReadApiRoutes(deps) {
 
   async function handleAuditVerify(req, res, route, ctx) {
     if (route.method !== 'GET' || route.pathname !== '/api/v1/admin/audit/verify') return false;
-    if (ctx.client.role !== 'admin') {
+    if (ctx.client.role !== 'admin' || ctx.apiKey) {
       jsonError(res, 403, 'Admin only');
       return true;
     }
     if (!deps.auditDir) {
-      jsonError(res, 500, 'auditDir not configured');
+      deps.audit({ action: 'audit_verify', cn: ctx.cn, status: 'unavailable' });
+      jsonError(res, 503, 'Audit verification is unavailable');
       return true;
     }
     try {
       const r = await verifyAuditDir(deps.auditDir);
       send(res, r.ok ? 200 : 422, r);
     } catch (err) {
-      jsonError(res, 500, `verify failed: ${err.message}`);
+      deps.audit({ action: 'audit_verify', cn: ctx.cn, status: 'error', error: err.message });
+      jsonError(res, 500, 'Audit verification failed');
     }
     return true;
   }
@@ -175,10 +184,10 @@ export function createReadApiRoutes(deps) {
    */
   async function dispatch(req, res, route, ctx) {
     for (const h of handlers) {
-      const result = h(req, res, route, ctx);
-      // Some handlers are async (return Promise<boolean>)
+      let result = h(req, res, route, ctx);
+      // An async false means this handler did not claim the route; continue.
       if (result && typeof result.then === 'function') {
-        return await result;
+        result = await result;
       }
       if (result === true) return true;
     }

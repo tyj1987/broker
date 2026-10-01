@@ -406,6 +406,11 @@ section('20. Cloudflare-forwarded RFC9440 mTLS resolves an existing client');
       if (!Buffer.isBuffer(der) || der.toString() !== 'synthetic-cloudflare-client-der') throw new Error('invalid der');
       this.fingerprint256 = CF_FP;
       this.subject = 'O=52TRZ\nCN=client.tyj-laptop.cf-public';
+      this.raw = der;
+      this.ca = false;
+      this.validFrom = '2000-01-01T00:00:00Z';
+      this.validTo = '2099-01-01T00:00:00Z';
+      this.keyUsage = ['1.3.6.1.5.5.7.3.2'];
     }
   }
   const deps = makeDeps({

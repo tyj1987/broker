@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## English
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: `TLS_CA` is now required.** The broker no longer falls back to
+  `PKI_DIR/ca/ca.crt` (by default the repository's committed `pki/ca/ca.crt`)
+  when `TLS_CA` is unset. Startup now fails fast with `[tls] FATAL: ...` and a
+  non-zero exit (78) if `TLS_CA` is unset, or if the `TLS_CA`, `TLS_CERT` or
+  `TLS_KEY` file is missing, unreadable, unparseable, the key does not match the
+  certificate, or the server certificate is expired. **Before upgrading, set
+  `TLS_CA` explicitly** (systemd unit, Helm chart and `docker-compose.yml`
+  already do).
+- Startup banner now reports the result of real checks (path, subject, expiry,
+  CA SHA-256 fingerprint, key/cert match, CRL) instead of `TLS cert: configured`.
+
 ## [4.1.1] - 2026-09-08
 
 ### Fixed
@@ -308,6 +323,18 @@ All 17 recommendations from `REVIEW.md` implemented:
 <a id="中文"></a>
 
 ## 中文
+
+## [Unreleased]
+
+### 变更
+
+- **BREAKING：`TLS_CA` 现为必填。** 未设置 `TLS_CA` 时不再回退到
+  `PKI_DIR/ca/ca.crt`（默认即仓库内提交的 `pki/ca/ca.crt`）。`TLS_CA` 未设置，或
+  `TLS_CA`/`TLS_CERT`/`TLS_KEY` 文件不存在、不可读、无法解析、私钥与证书不匹配、
+  服务端证书已过期时，启动立即以 `[tls] FATAL: ...` 失败并返回非零退出码（78）。
+  **升级前必须显式设置 `TLS_CA`**。
+- 启动横幅改为显示真实校验结果（路径、主题、到期时间、CA SHA-256 指纹、
+  私钥匹配、CRL），不再仅打印 `TLS cert: configured`。
 
 ## [4.1.1] - 2026-09-08
 

@@ -46,6 +46,7 @@ ENV BROKER_BIND=0.0.0.0 \
     BROKER_PORT=8443 \
     NODE_ENV=development \
     PKI_DIR=/app/pki \
+    TLS_CA=/app/pki/ca/ca.crt \
     AUDIT_DIR=/app/audit \
     SECRETS_DETAIL_PATH=/app/secrets/secrets-detail.json
 

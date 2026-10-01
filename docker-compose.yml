@@ -64,6 +64,7 @@ services:
       - BROKER_BIND=0.0.0.0
       - PORT=8443
       - PKI_DIR=/run/secrets/broker/pki
+      - TLS_CA=/run/secrets/broker/pki/ca/ca.crt # required: no implicit default CA
       - AUDIT_DIR=/var/lib/broker/audit
       - SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json
       - CONFIG_PATH=/var/lib/broker/secrets/broker.yaml

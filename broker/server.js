@@ -67,6 +67,7 @@ import {
   assertPublicDestination,
   assertPublicResolvedAddress,
   buildPinnedUrl,
+  effectiveServiceAllowedMethods,
   parsePinnedUpstream,
   sanitizeCallerHeaders,
   validateMethod,
@@ -1350,7 +1351,7 @@ function getAliyunAction(path, serviceCfg, query) {
 
 
 async function callUpstream(serviceCfg, method, path, query, headers, body, opts = {}) {
-  const effectiveMethod = validateMethod(method, serviceCfg.allowed_methods || ['GET']);
+  const effectiveMethod = validateMethod(method, effectiveServiceAllowedMethods(serviceCfg));
   const callerHeaders = sanitizeCallerHeaders(headers, serviceCfg.allowed_request_headers || []);
   parsePinnedUpstream(serviceCfg.upstream);
   // Resolve all secrets used by this service
@@ -2437,7 +2438,7 @@ async function handle(req, res) {
         header_name: svc.header_name || null,
         header_value_template: svc.header_value_template || null,
         allow_paths: svc.allow_paths || null,
-        allowed_methods: svc.allowed_methods === undefined ? ['GET', 'POST'] : svc.allowed_methods,
+        allowed_methods: effectiveServiceAllowedMethods(svc),
         dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
         allowed_clients: clientNamesAllowedFor(CONFIG.clients, name),
         action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
@@ -2472,7 +2473,7 @@ async function handle(req, res) {
       header_name: svc.header_name || null,
       header_value_template: svc.header_value_template || null,
       allow_paths: svc.allow_paths || null,
-      allowed_methods: svc.allowed_methods === undefined ? ['GET', 'POST'] : svc.allowed_methods,
+      allowed_methods: effectiveServiceAllowedMethods(svc),
       dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
       allowed_clients: clientNamesAllowedFor(CONFIG.clients, name),
     });

@@ -3,7 +3,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { validateMethod } from '../broker/lib/outbound-policy.js';
+import {
+  DEFAULT_SERVICE_ALLOWED_METHODS,
+  effectiveServiceAllowedMethods,
+  validateMethod,
+} from '../broker/lib/outbound-policy.js';
 
 const source = readFileSync(new URL('../broker/server.js', import.meta.url), 'utf8');
 function section(start, end) {
@@ -25,6 +29,7 @@ const context = vm.createContext({
   CONFIG: { services: {} },
   isValidSecretName: value => /^[A-Za-z][A-Za-z0-9_-]*$/.test(value),
   clientNamesAllowedFor: () => ['synthetic-admin'],
+  effectiveServiceAllowedMethods,
   readBody: async req => req.body,
   send: (_res, status, body) => ({ status, body }),
   jsonError: (_res, status, error) => ({ status, body: { error } }),
@@ -111,14 +116,44 @@ scenarios += 1;
 response = await dispatch('POST', api, { ...base, name: 'legacy' });
 assert.equal(response.status, 200);
 assert.equal(Object.hasOwn(persisted.legacy, 'allowed_methods'), false);
+// Unconfigured service: GET is the only default, on both the validateMethod
+// default parameter and the effective list the proxy path uses.
+assert.deepEqual([...DEFAULT_SERVICE_ALLOWED_METHODS], ['GET']);
+assert.ok(Object.isFrozen(DEFAULT_SERVICE_ALLOWED_METHODS));
+assert.deepEqual(effectiveServiceAllowedMethods(persisted.legacy), ['GET']);
 assert.equal(validateMethod('GET', persisted.legacy.allowed_methods), 'GET');
-assert.equal(validateMethod('POST', persisted.legacy.allowed_methods), 'POST');
-assert.throws(() => validateMethod('PUT', persisted.legacy.allowed_methods));
+assert.equal(validateMethod('GET', effectiveServiceAllowedMethods(persisted.legacy)), 'GET');
+for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']) {
+  assert.throws(() => validateMethod(method, persisted.legacy.allowed_methods), /not permitted/);
+  assert.throws(() => validateMethod(method, effectiveServiceAllowedMethods(persisted.legacy)), /not permitted/);
+}
 scenarios += 1;
+// Admin read API reports GET as the effective default.
 response = await dispatch('GET', api + '/legacy');
-assert.deepEqual(response.body.allowed_methods, ['GET', 'POST']);
+assert.deepEqual(response.body.allowed_methods, ['GET']);
 response = await dispatch('GET', api);
-assert.deepEqual(response.body.services.find(s => s.name === 'legacy').allowed_methods, ['GET', 'POST']);
+assert.deepEqual(response.body.services.find(s => s.name === 'legacy').allowed_methods, ['GET']);
+// Mutating a read-back must not widen the shared default.
+response.body.services.find(s => s.name === 'legacy').allowed_methods.push('POST');
+assert.deepEqual([...DEFAULT_SERVICE_ALLOWED_METHODS], ['GET']);
+scenarios += 1;
+// An explicitly configured GET/POST service keeps POST.
+response = await dispatch('POST', api, { ...base, name: 'explicit_post', allowed_methods: ['GET', 'post'] });
+assert.equal(response.status, 200);
+assert.deepEqual(persisted.explicit_post.allowed_methods, ['GET', 'POST']);
+context.CONFIG.services = JSON.parse(JSON.stringify(persisted));
+assert.equal(validateMethod('POST', effectiveServiceAllowedMethods(persisted.explicit_post)), 'POST');
+assert.equal(validateMethod('GET', effectiveServiceAllowedMethods(persisted.explicit_post)), 'GET');
+assert.throws(() => validateMethod('PUT', effectiveServiceAllowedMethods(persisted.explicit_post)));
+response = await dispatch('GET', api + '/explicit_post');
+assert.deepEqual(response.body.allowed_methods, ['GET', 'POST']);
+scenarios += 1;
+// Explicit deny-all is not replaced by the default.
+assert.deepEqual(effectiveServiceAllowedMethods({ allowed_methods: [] }), []);
+// The proxy path and both admin reads use the shared helper, not literals.
+assert.match(source, /validateMethod\(method, effectiveServiceAllowedMethods\(serviceCfg\)\)/);
+assert.equal(source.match(/allowed_methods: effectiveServiceAllowedMethods\(svc\)/g)?.length, 2);
+assert.doesNotMatch(source, /\['GET', 'POST'\]/);
 scenarios += 1;
 for (const role of ['reader', 'agent', '']) {
   const before = writes;

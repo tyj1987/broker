@@ -6,6 +6,7 @@
 // but every path is checked (exists, readable, parses) before the server starts.
 
 import { X509Certificate, createPrivateKey } from 'node:crypto';
+import { createSecureContext as tlsCreateSecureContext } from 'node:tls';
 import { readFileSync as fsReadFileSync, existsSync as fsExistsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -64,6 +65,16 @@ function parseCerts(label, path, buf) {
   });
 }
 
+/** Fatal check of a certificate's validity window (not yet valid / expired). */
+function checkValidity(label, path, x509, now) {
+  if (Date.parse(x509.validFrom) > now) {
+    throw new TlsConfigError(`${label} (${path}) is not yet valid (valid from ${x509.validFrom})`);
+  }
+  if (Date.parse(x509.validTo) <= now) {
+    throw new TlsConfigError(`${label} (${path}) expired at ${x509.validTo}`);
+  }
+}
+
 function describe(x509) {
   return {
     subject: x509.subject.replace(/\n/g, ', '),
@@ -92,9 +103,15 @@ export function expiryWarnings(entries, { now = Date.now(), warnDays = EXPIRY_WA
  * Read and validate TLS material. Returns buffers for https.createServer plus a
  * non-secret summary for the startup banner and non-fatal `warnings` (e.g. the
  * server or CA certificate expires within EXPIRY_WARN_DAYS). Throws
- * TlsConfigError on any fatal problem.
+ * TlsConfigError on any fatal problem: missing/unreadable/unparseable files,
+ * key/cert mismatch, a server or CA certificate outside its validity window
+ * (not yet valid or expired), or material OpenSSL rejects when building the
+ * secure context (e.g. truncated PEM, malformed CRL).
  */
-export function loadTlsMaterials(paths, { readFileSync = fsReadFileSync, existsSync = fsExistsSync, now = Date.now(), warnDays = EXPIRY_WARN_DAYS } = {}) {
+export function loadTlsMaterials(paths, {
+  readFileSync = fsReadFileSync, existsSync = fsExistsSync, now = Date.now(), warnDays = EXPIRY_WARN_DAYS,
+  createSecureContext = tlsCreateSecureContext,
+} = {}) {
   const caBuf = readRequired('TLS_CA', paths.ca, readFileSync);
   const caCerts = parseCerts('TLS_CA', paths.ca, caBuf);
   const certBuf = readRequired('TLS_CERT', paths.cert, readFileSync);
@@ -107,14 +124,24 @@ export function loadTlsMaterials(paths, { readFileSync = fsReadFileSync, existsS
   if (!leaf.checkPrivateKey(key)) {
     throw new TlsConfigError(`TLS_KEY (${paths.key}) does not match TLS_CERT (${paths.cert})`);
   }
-  if (Date.parse(leaf.validTo) <= now) {
-    throw new TlsConfigError(`TLS_CERT (${paths.cert}) expired at ${leaf.validTo}`);
-  }
+  const caLabel = (i) => (caCerts.length > 1 ? `TLS_CA[${i}]` : 'TLS_CA');
+  checkValidity('TLS_CERT', paths.cert, leaf, now);
+  caCerts.forEach((x509, i) => checkValidity(caLabel(i), paths.ca, x509, now));
   let crl = null;
   if (paths.crl && existsSync(paths.crl)) crl = readRequired('TLS_CRL', paths.crl, readFileSync);
+  // Final gate: build the exact secure context https.createServer will build, so
+  // anything OpenSSL rejects (truncated PEM blocks the regex skipped, a malformed
+  // CRL, ...) fails here with exit 78 instead of after the banner with exit 1.
+  try {
+    createSecureContext({ cert: certBuf, key: keyBuf, ca: caBuf, ...(crl ? { crl } : {}) });
+  } catch (e) {
+    const which = /CRL/i.test(e.message) && crl ? `TLS_CRL (${paths.crl})`
+      : `TLS_CERT (${paths.cert}) / TLS_KEY (${paths.key}) / TLS_CA (${paths.ca})${crl ? ` / TLS_CRL (${paths.crl})` : ''}`;
+    throw new TlsConfigError(`${which} rejected by OpenSSL: ${e.message}`);
+  }
   const warnings = expiryWarnings([
     { label: 'TLS_CERT', path: paths.cert, x509: leaf },
-    ...caCerts.map((x509, i) => ({ label: caCerts.length > 1 ? `TLS_CA[${i}]` : 'TLS_CA', path: paths.ca, x509 })),
+    ...caCerts.map((x509, i) => ({ label: caLabel(i), path: paths.ca, x509 })),
   ], { now, warnDays });
   return {
     cert: certBuf,

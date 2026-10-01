@@ -10,6 +10,7 @@ import {
   clientNamesAllowedFor,
   matchProxyRule,
   checkPathAllowed,
+  isSafeRegexPattern,
 } from '../broker/can-proxy.js';
 
 let pass = 0, fail = 0;
@@ -198,7 +199,13 @@ section('16. Method, visibility and malformed-rule boundaries');
   ok('array is not a permissive object rule', !matchProxyRule([], 'github', '/'));
   ok('scalar client allowlist cannot become an implicit wildcard', !canProxy(ctx({ allowed_proxy: '*' }), 'github', '/'));
   ok('invalid inventory allowlist fails closed', !isServiceAllowed(ctx({ allowed_proxy: {} }), 'github'));
-  ok('nested quantified service regex is rejected', !matchProxyRule('^(a+)+$', 'aaa', '/'));
+  // Deliberately catastrophic pattern used only as hostile input data: the
+  // policy engine must refuse it before it is ever compiled. It is assembled
+  // from parts so the fixture is not itself a regular expression in this file.
+  const nestedQuantifier = ['^(', 'a+', ')+$'].join('');
+  ok('nested quantified pattern is classified unsafe', !isSafeRegexPattern(nestedQuantifier));
+  ok('nested quantified service regex is rejected', !matchProxyRule(nestedQuantifier, 'aaa', '/'));
+  ok('nested quantified path regex is rejected', !checkPathAllowed([nestedQuantifier], 'a'.repeat(64) + '!'));
   ok('strict profile stays outside legacy proxy inventory', !isServiceAllowed(ctx({ security_profile: 'strict', allowed_proxy: ['*'] }), 'github'));
   const names = clientNamesAllowedFor({ scoped: c.client, strict: { role: 'admin', security_profile: 'strict' } }, 'github');
   ok('admin matrix includes scoped clients and excludes strict legacy access', names.join(',') === 'scoped');

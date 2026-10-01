@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, sta
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { randomUUID, createHash, timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
 // v3.0: 强认证 (TOTP + MFA 状态机)
 import {
   createMfaPending,
@@ -1022,11 +1022,23 @@ function canResolve(ctx, secretName) {
 const RATE_BUCKETS = new Map();
 
 // timing-safe string compare (for password check)
+// Used only for the legacy plaintext password path.
+// Both values are copied into fixed-size zero-padded buffers so the comparison
+// time depends on neither the stored nor the supplied length, and the true
+// lengths are compared only after the constant-time comparison. Nothing is
+// hashed or stored here; scrypt-hashed passwords use totpVerifyPassword.
+const LEGACY_SECRET_COMPARE_BYTES = 1024;
 function timingSafeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const left = createHash('sha256').update(a, 'utf8').digest();
-  const right = createHash('sha256').update(b, 'utf8').digest();
-  return cryptoTimingSafeEqual(left, right);
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  if (left.length > LEGACY_SECRET_COMPARE_BYTES || right.length > LEGACY_SECRET_COMPARE_BYTES) return false;
+  const paddedLeft = Buffer.alloc(LEGACY_SECRET_COMPARE_BYTES);
+  const paddedRight = Buffer.alloc(LEGACY_SECRET_COMPARE_BYTES);
+  left.copy(paddedLeft);
+  right.copy(paddedRight);
+  const same = cryptoTimingSafeEqual(paddedLeft, paddedRight);
+  return same && left.length === right.length;
 }
 
 // v3.0: 密码验证智能 wrapper — 检测 stored 是否 hash，自动选 verify 函数

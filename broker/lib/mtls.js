@@ -107,6 +107,39 @@ export function createIdentityResolver(deps) {
     return { apiKey: k, client: owner, clientName: k.client, via: 'api_key' };
   }
 
+  // Cloudflare-edge mTLS forwarded by the trusted local nginx hop. The
+  // X-SSL-Client-Verify value is written by nginx (never by the caller) and
+  // only selects which verification runs; it never grants identity by itself.
+  // Every value other than the two below fails closed before any certificate
+  // or proof-of-possession processing happens.
+  //   SUCCESS without a forwarded certificate header -> nginx verified a direct
+  //     client certificate; continue to the nginx mTLS path (1b).
+  //   NONE -> the forwarded certificate must pass the pinned fingerprint,
+  //     owner binding, validity and EKU checks before PoP is evaluated.
+  function resolveEdgeForwardedIdentity(req, config, forwardedHeaders) {
+    const nginxVerify = String(req.headers['x-ssl-client-verify'] || '');
+    if (nginxVerify === 'SUCCESS' && forwardedHeaders.length === 0) return EDGE_FORWARDED_PASSTHROUGH;
+    if (nginxVerify !== 'NONE') {
+      audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_proxy_verify_invalid', remote: forwardedMtlsConfig.sourceIp });
+      return null;
+    }
+    const resolved = resolveForwardedMtlsCertificate(
+      req.headers[forwardedMtlsConfig.headerName],
+      config,
+      forwardedMtlsConfig,
+      requireNodeCrypto,
+    );
+    if (!resolved.ok) {
+      audit({ action: 'connect', status: 'denied', reason: resolved.reason, remote: forwardedMtlsConfig.sourceIp });
+      return null;
+    }
+    recordClientSeen(resolved.identity.clientName);
+    return { ...resolved.identity, edgeForwarded: true,
+      popVerified: verifyPoP({ headerValue: req.headers['x-broker-pop'],
+        publicKey: resolved.certificate.publicKey, fingerprint: resolved.certificate.fingerprint256,
+        method: req.method || 'GET', pathAndQuery: popCanonicalPath(req), cache: popCache }) };
+  }
+
   /**
    * Resolve identity from a request. Returns null if no valid auth source.
    * Synchronous (matches inline behavior in server.js).
@@ -146,27 +179,9 @@ export function createIdentityResolver(deps) {
       return null;
     }
     if (fromForwardedMtlsSource) {
-      const nginxVerify = String(req.headers['x-ssl-client-verify'] || '');
-      if (nginxVerify === 'NONE') {
-        const resolved = resolveForwardedMtlsCertificate(
-          req.headers[forwardedMtlsConfig.headerName],
-          config,
-          forwardedMtlsConfig,
-          requireNodeCrypto,
-        );
-        if (!resolved.ok) {
-          audit({ action: 'connect', status: 'denied', reason: resolved.reason, remote: forwardedMtlsConfig.sourceIp });
-          return null;
-        }
-        recordClientSeen(resolved.identity.clientName);
-        primary = { ...resolved.identity, edgeForwarded: true,
-          popVerified: verifyPoP({ headerValue: req.headers['x-broker-pop'],
-            publicKey: resolved.certificate.publicKey, fingerprint: resolved.certificate.fingerprint256,
-            method: req.method || 'GET', pathAndQuery: popCanonicalPath(req), cache: popCache }) };
-      } else if (nginxVerify !== 'SUCCESS' || forwardedHeaders.length > 0) {
-        audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_proxy_verify_invalid', remote: forwardedMtlsConfig.sourceIp });
-        return null;
-      }
+      const edge = resolveEdgeForwardedIdentity(req, config, forwardedHeaders);
+      if (edge === null) return null;
+      if (edge !== EDGE_FORWARDED_PASSTHROUGH) primary = edge;
     }
 
     // 1b. nginx-forwarded mTLS. A proxy marker on any other connection is a
@@ -268,6 +283,8 @@ export function createIdentityResolver(deps) {
 
   return { getIdentity, getApiKeyIdentity };
 }
+
+const EDGE_FORWARDED_PASSTHROUGH = Object.freeze({ passthrough: true });
 
 function normalizeForwardedMtlsConfig(value) {
   if (value === undefined || value === null) return null;

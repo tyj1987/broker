@@ -1,7 +1,7 @@
 // Mainline convergence regressions. All identities, credentials and persistence
 // are synthetic. Extracted server functions run without starting server.js.
 import assert from 'node:assert/strict';
-import { createHash, timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
+import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -141,7 +141,7 @@ function section(start, end) {
   assert.ok(a >= 0 && b > a && source.indexOf(start, a + 1) === -1, 'production section must be unique: ' + start);
   return source.slice(a, b);
 }
-const passwords = vm.createContext({ createHash, cryptoTimingSafeEqual, totpVerifyPassword });
+const passwords = vm.createContext({ Buffer, cryptoTimingSafeEqual, totpVerifyPassword });
 vm.runInContext(section('// timing-safe string compare', 'function rateLimit(ctx)'), passwords);
 await check('legacy password verification returns a synchronous rejecting boolean', () => {
   assert.equal(passwords.verifyClientPassword('incorrect', 'synthetic-legacy-password'), false);
@@ -149,6 +149,19 @@ await check('legacy password verification returns a synchronous rejecting boolea
 await check('legacy and scrypt valid passwords remain supported', () => {
   assert.equal(passwords.verifyClientPassword('synthetic-password', 'synthetic-password'), true);
   assert.equal(passwords.verifyClientPassword('synthetic-password', hashPassword('synthetic-password')), true);
+});
+await check('legacy password compare is exact and length-safe without hashing', () => {
+  assert.equal(passwords.verifyClientPassword('synthetic-password', 'synthetic-passwor'), false);
+  assert.equal(passwords.verifyClientPassword('synthetic-passwor', 'synthetic-password'), false);
+  assert.equal(passwords.verifyClientPassword('synthetic-password\0', 'synthetic-password'), false);
+  assert.equal(passwords.verifyClientPassword('', 'synthetic-password'), false);
+  assert.equal(passwords.verifyClientPassword('pässwörd-ü', 'pässwörd-ü'), true);
+  const long = 'x'.repeat(1024);
+  assert.equal(passwords.verifyClientPassword(long, long), true);
+  assert.equal(passwords.verifyClientPassword(long + 'x', long + 'x'), false);
+  assert.equal(passwords.verifyClientPassword('x'.repeat(4096), long), false);
+  const compare = section('// timing-safe string compare', 'function verifyClientPassword');
+  assert.doesNotMatch(compare, /createHash|createHmac/);
 });
 await check('malformed password input fails closed', () => {
   assert.equal(passwords.verifyClientPassword({}, 'synthetic-password'), false);

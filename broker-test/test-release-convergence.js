@@ -141,7 +141,8 @@ function section(start, end) {
   assert.ok(a >= 0 && b > a && source.indexOf(start, a + 1) === -1, 'production section must be unique: ' + start);
   return source.slice(a, b);
 }
-const passwords = vm.createContext({ Buffer, cryptoTimingSafeEqual, totpVerifyPassword });
+const legacyWarnings = [];
+const passwords = vm.createContext({ Buffer, cryptoTimingSafeEqual, totpVerifyPassword, console: { warn: (...args) => legacyWarnings.push(args.join(' ')) } });
 vm.runInContext(section('// timing-safe string compare', 'function rateLimit(ctx)'), passwords);
 await check('legacy password verification returns a synchronous rejecting boolean', () => {
   assert.equal(passwords.verifyClientPassword('incorrect', 'synthetic-legacy-password'), false);
@@ -156,11 +157,17 @@ await check('legacy password compare is exact and length-safe without hashing', 
   assert.equal(passwords.verifyClientPassword('synthetic-password\0', 'synthetic-password'), false);
   assert.equal(passwords.verifyClientPassword('', 'synthetic-password'), false);
   assert.equal(passwords.verifyClientPassword('pässwörd-ü', 'pässwörd-ü'), true);
+  const compare = section('// timing-safe string compare', 'function verifyClientPassword');
   const long = 'x'.repeat(1024);
   assert.equal(passwords.verifyClientPassword(long, long), true);
   assert.equal(passwords.verifyClientPassword(long + 'x', long + 'x'), false);
+  legacyWarnings.length = 0;
   assert.equal(passwords.verifyClientPassword('x'.repeat(4096), long), false);
-  const compare = section('// timing-safe string compare', 'function verifyClientPassword');
+  assert.equal(legacyWarnings.length, 1, 'oversize legacy password must be explicitly rejected and logged');
+  assert.match(legacyWarnings[0], /exceeds 1024 bytes/);
+  assert.equal(passwords.verifyClientPassword('abc', 'abc\0'), false);
+  assert.equal(passwords.verifyClientPassword('abc\0', 'abc'), false);
+  assert.match(compare, /writeUInt32BE[\s\S]*cryptoTimingSafeEqual\(lenLeft, lenRight\)/);
   assert.doesNotMatch(compare, /createHash|createHmac/);
 });
 await check('malformed password input fails closed', () => {

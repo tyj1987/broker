@@ -1032,13 +1032,23 @@ function timingSafeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   const left = Buffer.from(a, 'utf8');
   const right = Buffer.from(b, 'utf8');
-  if (left.length > LEGACY_SECRET_COMPARE_BYTES || right.length > LEGACY_SECRET_COMPARE_BYTES) return false;
+  if (left.length > LEGACY_SECRET_COMPARE_BYTES || right.length > LEGACY_SECRET_COMPARE_BYTES) {
+    // Explicit rejection (never a silent mismatch): legacy plaintext secrets are capped.
+    console.warn('[auth] legacy plaintext password rejected: exceeds', LEGACY_SECRET_COMPARE_BYTES, 'bytes');
+    return false;
+  }
   const paddedLeft = Buffer.alloc(LEGACY_SECRET_COMPARE_BYTES);
   const paddedRight = Buffer.alloc(LEGACY_SECRET_COMPARE_BYTES);
   left.copy(paddedLeft);
   right.copy(paddedRight);
-  const same = cryptoTimingSafeEqual(paddedLeft, paddedRight);
-  return same && left.length === right.length;
+  const sameBytes = cryptoTimingSafeEqual(paddedLeft, paddedRight);
+  // Compare the true lengths in constant time too, so 'abc' and 'abc\0' never match.
+  const lenLeft = Buffer.alloc(4);
+  const lenRight = Buffer.alloc(4);
+  lenLeft.writeUInt32BE(left.length);
+  lenRight.writeUInt32BE(right.length);
+  const sameLength = cryptoTimingSafeEqual(lenLeft, lenRight);
+  return sameBytes & sameLength ? true : false;
 }
 
 // v3.0: 密码验证智能 wrapper — 检测 stored 是否 hash，自动选 verify 函数

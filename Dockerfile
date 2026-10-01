@@ -42,11 +42,14 @@ RUN mkdir -p pki/server pki/ca pki/clients audit secrets && \
     rm /tmp/server.csr /tmp/client.csr pki/ca/ca.key pki/ca/ca.srl
 
 EXPOSE 8443
+# TLS_CA is intentionally NOT set in the image (any stage): it must be supplied
+# explicitly by the deployment (docker-compose.yml, Helm, systemd). To run this
+# dev image locally against its ephemeral CA, pass it on the command line:
+#   docker run -e TLS_CA=/app/pki/ca/ca.crt ... <image>
 ENV BROKER_BIND=0.0.0.0 \
     BROKER_PORT=8443 \
     NODE_ENV=development \
     PKI_DIR=/app/pki \
-    TLS_CA=/app/pki/ca/ca.crt \
     AUDIT_DIR=/app/audit \
     SECRETS_DETAIL_PATH=/app/secrets/secrets-detail.json
 

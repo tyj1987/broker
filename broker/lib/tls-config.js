@@ -16,6 +16,10 @@ export class TlsConfigError extends Error {
   }
 }
 
+/** Startup warns (non-fatal) when the server cert or a CA cert expires within this window. */
+export const EXPIRY_WARN_DAYS = 14;
+const DAY_MS = 86_400_000;
+
 const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
 
 /** Resolve TLS paths from env. Throws TlsConfigError when TLS_CA is unset. */
@@ -69,10 +73,28 @@ function describe(x509) {
 }
 
 /**
- * Read and validate TLS material. Returns buffers for https.createServer plus a
- * non-secret summary for the startup banner. Throws TlsConfigError on any problem.
+ * Non-fatal expiry warnings for certificates that expire within `warnDays`.
+ * Returns an array of human-readable messages (empty when nothing is close to expiry).
  */
-export function loadTlsMaterials(paths, { readFileSync = fsReadFileSync, existsSync = fsExistsSync, now = Date.now() } = {}) {
+export function expiryWarnings(entries, { now = Date.now(), warnDays = EXPIRY_WARN_DAYS } = {}) {
+  const warnings = [];
+  for (const { label, path, x509 } of entries) {
+    const remainingMs = Date.parse(x509.validTo) - now;
+    if (remainingMs > warnDays * DAY_MS) continue;
+    const days = Math.max(0, Math.floor(remainingMs / DAY_MS));
+    warnings.push(`${label} (${path}) expires in ${days} day(s) at ${x509.validTo} `
+      + `(< ${warnDays} days); renew it before the broker fails to start`);
+  }
+  return warnings;
+}
+
+/**
+ * Read and validate TLS material. Returns buffers for https.createServer plus a
+ * non-secret summary for the startup banner and non-fatal `warnings` (e.g. the
+ * server or CA certificate expires within EXPIRY_WARN_DAYS). Throws
+ * TlsConfigError on any fatal problem.
+ */
+export function loadTlsMaterials(paths, { readFileSync = fsReadFileSync, existsSync = fsExistsSync, now = Date.now(), warnDays = EXPIRY_WARN_DAYS } = {}) {
   const caBuf = readRequired('TLS_CA', paths.ca, readFileSync);
   const caCerts = parseCerts('TLS_CA', paths.ca, caBuf);
   const certBuf = readRequired('TLS_CERT', paths.cert, readFileSync);
@@ -90,11 +112,16 @@ export function loadTlsMaterials(paths, { readFileSync = fsReadFileSync, existsS
   }
   let crl = null;
   if (paths.crl && existsSync(paths.crl)) crl = readRequired('TLS_CRL', paths.crl, readFileSync);
+  const warnings = expiryWarnings([
+    { label: 'TLS_CERT', path: paths.cert, x509: leaf },
+    ...caCerts.map((x509, i) => ({ label: caCerts.length > 1 ? `TLS_CA[${i}]` : 'TLS_CA', path: paths.ca, x509 })),
+  ], { now, warnDays });
   return {
     cert: certBuf,
     key: keyBuf,
     ca: caBuf,
     crl,
+    warnings,
     summary: {
       ca: { path: paths.ca, count: caCerts.length, ...describe(caCerts[0]) },
       cert: { path: paths.cert, ...describe(leaf) },

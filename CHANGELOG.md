@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   already do).
 - Startup banner now reports the result of real checks (path, subject, expiry,
   CA SHA-256 fingerprint, key/cert match, CRL) instead of `TLS cert: configured`.
+- The container image no longer sets `TLS_CA` in any stage; it must come from
+  the deployment config. When running the `dev` image directly, pass
+  `-e TLS_CA=/app/pki/ca/ca.crt`.
+- Startup logs a non-fatal `[tls] WARNING` when the server certificate or a CA
+  certificate expires within 14 days.
+- `deploy/systemd/secret-broker.service` sets `RestartPreventExitStatus=78` so a
+  configuration error (exit 78) is not restarted in a loop.
 
 ## [4.1.1] - 2026-09-08
 
@@ -335,6 +342,11 @@ All 17 recommendations from `REVIEW.md` implemented:
   **升级前必须显式设置 `TLS_CA`**。
 - 启动横幅改为显示真实校验结果（路径、主题、到期时间、CA SHA-256 指纹、
   私钥匹配、CRL），不再仅打印 `TLS cert: configured`。
+- 镜像任何阶段都不再设置 `TLS_CA`，必须由部署配置提供；直接运行 `dev` 镜像时
+  请传入 `-e TLS_CA=/app/pki/ca/ca.crt`。
+- 服务端证书或 CA 证书 14 天内到期时，启动打印非致命的 `[tls] WARNING`。
+- `deploy/systemd/secret-broker.service` 增加 `RestartPreventExitStatus=78`，
+  配置错误（退出码 78）时不再被反复重启。
 
 ## [4.1.1] - 2026-09-08
 

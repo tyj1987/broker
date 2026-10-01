@@ -9,10 +9,12 @@
 //     5. key that does not match cert → error
 //     6. expired server cert → error
 //     7. valid material → buffers + summary (subject, sha256, CRL)
+//     8. server/CA cert expiring within 14 days → non-fatal warning; >14 days → none
 //   integration (spawn broker/server.js)
-//     8. TLS_CA unset → non-zero exit, clear message, no banner
-//     9. TLS_CA points at a missing file → non-zero exit
-//    10. valid material → banner shows real checks and server listens
+//     9. TLS_CA unset → non-zero exit, clear message, no banner
+//    10. TLS_CA points at a missing file → non-zero exit
+//    11. valid material → banner shows real checks and server listens
+//    12. cert expiring within 14 days → [tls] WARNING logged, server still listens
 
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,7 +22,9 @@ import { join, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { resolveTlsPaths, loadTlsMaterials, formatTlsSummary, TlsConfigError } from '../broker/lib/tls-config.js';
+import {
+  resolveTlsPaths, loadTlsMaterials, formatTlsSummary, expiryWarnings, TlsConfigError, EXPIRY_WARN_DAYS,
+} from '../broker/lib/tls-config.js';
 
 const OPENSSL_BIN = process.env.OPENSSL_BIN
   || (process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\usr\\bin\\openssl.exe')
@@ -54,6 +58,11 @@ writeFileSync(p('garbage.pem'), 'not a pem\n');
 writeFileSync(p('bad-cert.pem'), '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n');
 writeFileSync(p('empty.pem'), '');
 writeFileSync(p('crl.pem'), '-----BEGIN X509 CRL-----\n-----END X509 CRL-----\n');
+// Long-lived (30-day) CA + server cert: must produce no expiry warning.
+ossl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
+  '-keyout', p('ca30.key'), '-out', p('ca30.crt'), '-days', '30', '-subj', '/CN=tls-config-test-ca30');
+ossl('x509', '-req', '-in', p('server.csr'), '-CA', p('ca30.crt'), '-CAkey', p('ca30.key'),
+  '-CAcreateserial', '-out', p('server30.crt'), '-days', '30', '-extfile', p('srv.ext'));
 const good = { ca: p('ca.crt'), cert: p('server.crt'), key: p('server.key'), crl: p('missing-crl.pem') };
 
 // ---------- unit ----------
@@ -104,6 +113,25 @@ section('loadTlsMaterials — valid');
   writeFileSync(p('bundle.crt'), `${m.ca.toString()}${m.ca.toString()}`);
   const bundle = loadTlsMaterials({ ...good, ca: p('bundle.crt') });
   ok('CA bundle counted', bundle.summary.ca.count === 2 && /\+1 more/.test(formatTlsSummary(bundle.summary).join('\n')));
+}
+
+section('loadTlsMaterials — expiry warning (non-fatal)');
+{
+  ok('warning window is 14 days', EXPIRY_WARN_DAYS === 14);
+  const near = loadTlsMaterials(good); // 2-day CA + cert
+  ok('cert expiring within 14 days → warning', near.warnings.some((w) => /^TLS_CERT .*server\.crt.*expires in [01] day\(s\).*< 14 days/.test(w)),
+    JSON.stringify(near.warnings));
+  ok('CA expiring within 14 days → warning', near.warnings.some((w) => /^TLS_CA .*ca\.crt.*expires in/.test(w)));
+  const far = loadTlsMaterials({ ...good, ca: p('ca30.crt'), cert: p('server30.crt') });
+  ok('>14 days → no warning', Array.isArray(far.warnings) && far.warnings.length === 0, JSON.stringify(far.warnings));
+  const at13 = loadTlsMaterials({ ...good, ca: p('ca30.crt'), cert: p('server30.crt') }, { now: Date.now() + 17 * 86_400_000 });
+  ok('30-day cert viewed 17 days later → warns for cert and CA', at13.warnings.length === 2
+    && /^TLS_CERT /.test(at13.warnings[0]) && /^TLS_CA /.test(at13.warnings[1]), JSON.stringify(at13.warnings));
+  writeFileSync(p('bundle-mixed.crt'), `${far.ca.toString()}${near.ca.toString()}`);
+  const mixed = loadTlsMaterials({ ...good, ca: p('bundle-mixed.crt'), cert: p('server30.crt') });
+  ok('CA bundle: only the expiring CA entry warns', mixed.warnings.length === 1 && /^TLS_CA\[1\] /.test(mixed.warnings[0]),
+    JSON.stringify(mixed.warnings));
+  ok('expiryWarnings: empty input → none', expiryWarnings([]).length === 0);
 }
 
 // ---------- integration ----------
@@ -168,6 +196,15 @@ section('server.js startup');
   ok('valid material → server listens', r.matched, `code=${r.code} out=${r.out.slice(-500)}`);
   ok('valid material → banner shows CA subject', /CA: +OK .*CN=tls-config-test-ca.*sha256/.test(r.out));
   ok('banner no longer prints bare "configured"', !/TLS cert: +configured/.test(r.out));
+  ok('2-day cert → startup logs [tls] WARNING but still listens', r.matched
+    && /\[tls\] WARNING: TLS_CERT .*expires in/.test(r.out), r.out.slice(0, 800));
+}
+{
+  const r = await runServer(
+    baseEnv({ TLS_CA: p('ca30.crt'), TLS_CERT: p('server30.crt'), TLS_KEY: p('server.key') }),
+    { waitFor: /mTLS HTTPS listening/ },
+  );
+  ok('30-day cert → listens with no expiry warning', r.matched && !/\[tls\] WARNING/.test(r.out), r.out.slice(-500));
 }
 
 rmSync(dir, { recursive: true, force: true });

@@ -253,6 +253,7 @@ console.log(`  Config:         ${CONFIG_PATH}`);
 console.log(`  Secrets:        ${SECRETS_PATH}`);
 console.log(`  PKI dir:        ${PKI_DIR}`);
 for (const line of formatTlsSummary(TLS_MATERIALS.summary)) console.log(line);
+for (const w of TLS_MATERIALS.warnings) console.warn(`[tls] WARNING: ${w}`);
 console.log(`  Audit dir:      ${AUDIT_DIR}`);
 console.log(`  Age key:        ${AGE_KEY_FILE || '(not set)'}`);
 console.log('============================================');

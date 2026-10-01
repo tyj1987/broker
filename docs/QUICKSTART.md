@@ -40,6 +40,13 @@ git diff --exit-code -- ..\contracts\openapi.yaml
 
 上述文件任一不存在、不可读、无法解析或私钥与证书不匹配时，进程以 `[tls] FATAL`
 退出（退出码 78）。启动横幅会显示证书主题、到期时间和 CA SHA-256 指纹。
+服务端证书或 CA 证书在 14 天内到期时，启动会打印 `[tls] WARNING`（不阻止启动），
+请在到期前更换。
+
+镜像（含 `dev` 阶段）不内置 `TLS_CA`，必须由部署配置显式设置：`docker-compose.yml`、
+Helm chart 和 systemd unit 已设置。本地直接运行 `dev` 镜像时需自行传入，例如
+`docker run -e TLS_CA=/app/pki/ca/ca.crt ... <image>`。systemd unit 配置了
+`RestartPreventExitStatus=78`，配置错误时不会被反复重启。
 
 证书校验失败时停止并修复证书、主机名、用途或 CA；禁止使用 `-k`、`--insecure`
 或关闭上游验证绕过。

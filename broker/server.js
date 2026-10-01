@@ -132,6 +132,7 @@ import { SERVICE_TEMPLATES, publicTemplateList } from './service-templates.js';
 import {
   checkPathAllowed, canProxy, isServiceAllowed, clientNamesAllowedFor,
 } from './can-proxy.js';
+import { resolveTlsPaths, loadTlsMaterials, formatTlsSummary } from './lib/tls-config.js';
 import {
   issueClientCert, certFingerprint, readClientCertPem, readClientKeyPem,
   deleteClientCertFiles, readCaCertPem, paths as certPaths,
@@ -155,10 +156,20 @@ const SECRETS_DETAIL_PATH = process.env.SECRETS_DETAIL_PATH || resolvePath(__dir
 const PKI_DIR        = process.env.PKI_DIR || resolvePath(__dirname, '../pki');
 const AGE_KEY_FILE   = process.env.AGE_KEY_FILE || process.env.SOPS_AGE_KEY_FILE;
 const AUDIT_DIR      = process.env.AUDIT_DIR || resolvePath(__dirname, '../audit');
-const TLS_CERT       = process.env.TLS_CERT || join(PKI_DIR, 'server/server.crt');
-const TLS_KEY        = process.env.TLS_KEY  || join(PKI_DIR, 'server/server.key');
-const TLS_CA         = process.env.TLS_CA   || join(PKI_DIR, 'ca/ca.crt');
-const TLS_CRL        = process.env.TLS_CRL  || join(PKI_DIR, 'ca/crl.pem');
+// TLS_CA is required (no implicit fallback to a repository CA). All TLS files
+// are validated (exist, readable, parse, key matches cert) before anything else.
+let TLS_MATERIALS;
+let TLS_PATHS;
+try {
+  TLS_PATHS = resolveTlsPaths(process.env, PKI_DIR);
+  TLS_MATERIALS = loadTlsMaterials(TLS_PATHS);
+} catch (err) {
+  console.error(`[tls] FATAL: ${err.message}`);
+  process.exit(78); // EX_CONFIG
+}
+const TLS_CERT       = TLS_PATHS.cert;
+const TLS_KEY        = TLS_PATHS.key;
+const TLS_CA         = TLS_PATHS.ca;
 const RELOAD_TOKEN   = process.env.RELOAD_TOKEN || randomUUID();
 const packagedToolRegistry = resolvePath(__dirname, 'tools/registry.json');
 const TOOL_REGISTRY_PATH = process.env.TOOL_REGISTRY_PATH
@@ -246,8 +257,8 @@ console.log(`  Port:           ${PORT}`);
 console.log(`  Config:         ${CONFIG_PATH}`);
 console.log(`  Secrets:        ${SECRETS_PATH}`);
 console.log(`  PKI dir:        ${PKI_DIR}`);
-console.log(`  TLS cert:       ${TLS_CERT ? 'configured' : 'missing'}`);
-console.log(`  CA:             ${TLS_CA}`);
+for (const line of formatTlsSummary(TLS_MATERIALS.summary)) console.log(line);
+for (const w of TLS_MATERIALS.warnings) console.warn(`[tls] WARNING: ${w}`);
 console.log(`  Audit dir:      ${AUDIT_DIR}`);
 console.log(`  Age key:        ${AGE_KEY_FILE || '(not set)'}`);
 console.log('============================================');
@@ -3319,17 +3330,17 @@ function rateLimitApiKey(k) {
 // ============================================================
 function start() {
   const tlsOpts = {
-    cert: readFileSync(TLS_CERT),
-    key: readFileSync(TLS_KEY),
-    ca: readFileSync(TLS_CA),
+    cert: TLS_MATERIALS.cert,
+    key: TLS_MATERIALS.key,
+    ca: TLS_MATERIALS.ca,
     // The public TLS listener is mTLS-only. Public liveness is exposed by the
     // trusted reverse proxy; local probes use the separate loopback listener.
     requestCert: true,
     rejectUnauthorized: true,
     minVersion: 'TLSv1.3',
   };
-  if (existsSync(TLS_CRL)) {
-    tlsOpts.crl = readFileSync(TLS_CRL);
+  if (TLS_MATERIALS.crl) {
+    tlsOpts.crl = TLS_MATERIALS.crl;
   }
 
   const server = createHttpsServer(tlsOpts, handle);

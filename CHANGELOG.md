@@ -17,6 +17,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## English
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: `TLS_CA` is now required.** The broker no longer falls back to
+  `PKI_DIR/ca/ca.crt` (by default the repository's committed `pki/ca/ca.crt`)
+  when `TLS_CA` is unset. Startup now fails fast with `[tls] FATAL: ...` and a
+  non-zero exit (78) if `TLS_CA` is unset, or if the `TLS_CA`, `TLS_CERT` or
+  `TLS_KEY` file is missing, unreadable, unparseable, the key does not match the
+  certificate, or the server certificate is expired. **Before upgrading, set
+  `TLS_CA` explicitly** (systemd unit, Helm chart and `docker-compose.yml`
+  already do).
+- Startup banner now reports the result of real checks (path, subject, expiry,
+  CA SHA-256 fingerprint, key/cert match, CRL) instead of `TLS cert: configured`.
+- The container image no longer sets `TLS_CA` in any stage; it must come from
+  the deployment config. When running the `dev` image directly, pass
+  `-e TLS_CA=/app/pki/ca/ca.crt`.
+- Startup logs a non-fatal `[tls] WARNING` when the server certificate or a CA
+  certificate expires within 14 days.
+- `deploy/systemd/secret-broker.service` sets `RestartPreventExitStatus=78` so a
+  configuration error (exit 78) is not restarted in a loop.
+- Startup TLS validation now also rejects (exit 78, before the banner) a server
+  certificate that is not yet valid, any `TLS_CA` bundle certificate that is
+  expired or not yet valid, and any material OpenSSL refuses when building the
+  secure context (e.g. truncated PEM, malformed CRL). Previously these passed
+  the checks and crashed later with exit 1.
+- The `dev` image no longer creates an empty `pki/ca/crl.pem`, which made the
+  documented `docker run -e TLS_CA=...` command fail at startup.
+
 ## [4.1.1] - 2026-09-08
 
 ### Fixed
@@ -308,6 +337,28 @@ All 17 recommendations from `REVIEW.md` implemented:
 <a id="中文"></a>
 
 ## 中文
+
+## [Unreleased]
+
+### 变更
+
+- **BREAKING：`TLS_CA` 现为必填。** 未设置 `TLS_CA` 时不再回退到
+  `PKI_DIR/ca/ca.crt`（默认即仓库内提交的 `pki/ca/ca.crt`）。`TLS_CA` 未设置，或
+  `TLS_CA`/`TLS_CERT`/`TLS_KEY` 文件不存在、不可读、无法解析、私钥与证书不匹配、
+  服务端证书已过期时，启动立即以 `[tls] FATAL: ...` 失败并返回非零退出码（78）。
+  **升级前必须显式设置 `TLS_CA`**。
+- 启动横幅改为显示真实校验结果（路径、主题、到期时间、CA SHA-256 指纹、
+  私钥匹配、CRL），不再仅打印 `TLS cert: configured`。
+- 镜像任何阶段都不再设置 `TLS_CA`，必须由部署配置提供；直接运行 `dev` 镜像时
+  请传入 `-e TLS_CA=/app/pki/ca/ca.crt`。
+- 服务端证书或 CA 证书 14 天内到期时，启动打印非致命的 `[tls] WARNING`。
+- `deploy/systemd/secret-broker.service` 增加 `RestartPreventExitStatus=78`，
+  配置错误（退出码 78）时不再被反复重启。
+- 启动时 TLS 校验还会拒绝（退出码 78，在启动横幅之前）尚未生效的服务端证书、
+  `TLS_CA` 证书包中任何已过期或尚未生效的证书，以及 OpenSSL 构建 secure context
+  时拒绝的材料（如截断的 PEM、格式错误的 CRL）；此前这些情况会通过校验并在之后以退出码 1 崩溃。
+- `dev` 镜像不再生成空的 `pki/ca/crl.pem`，该文件曾导致文档中的
+  `docker run -e TLS_CA=...` 命令启动失败。
 
 ## [4.1.1] - 2026-09-08
 

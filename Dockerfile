@@ -30,6 +30,8 @@ COPY tools/ ./tools/
 
 # Generate ephemeral self-signed certs for dev convenience
 # (override by mounting PKI_DIR=/pki at runtime for real certs)
+# No crl.pem is generated: TLS_CRL is optional, and an empty CRL file is a
+# fatal config error (exit 78), which would stop this dev image from starting.
 RUN mkdir -p pki/server pki/ca pki/clients audit secrets && \
     openssl req -x509 -newkey rsa:2048 -nodes -keyout pki/ca/ca.key -out pki/ca/ca.crt -days 365 -subj '/CN=broker-dev-ca' && \
     openssl genrsa -out pki/server/server.key 2048 && \
@@ -38,10 +40,13 @@ RUN mkdir -p pki/server pki/ca pki/clients audit secrets && \
     openssl genrsa -out pki/clients/client.health.key 2048 && \
     openssl req -new -key pki/clients/client.health.key -out /tmp/client.csr -subj '/CN=health-probe' && \
     openssl x509 -req -in /tmp/client.csr -CA pki/ca/ca.crt -CAkey pki/ca/ca.key -CAcreateserial -out pki/clients/client.health.crt -days 365 && \
-    touch pki/ca/crl.pem && \
     rm /tmp/server.csr /tmp/client.csr pki/ca/ca.key pki/ca/ca.srl
 
 EXPOSE 8443
+# TLS_CA is intentionally NOT set in the image (any stage): it must be supplied
+# explicitly by the deployment (docker-compose.yml, Helm, systemd). To run this
+# dev image locally against its ephemeral CA, pass it on the command line:
+#   docker run -e TLS_CA=/app/pki/ca/ca.crt ... <image>
 ENV BROKER_BIND=0.0.0.0 \
     BROKER_PORT=8443 \
     NODE_ENV=development \

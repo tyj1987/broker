@@ -29,6 +29,25 @@ git diff --exit-code -- ..\contracts\openapi.yaml
 证书，并把私密材料保存在仓库之外。当前文档不把“源码测试通过”包装成可直接运行
 的安全部署。
 
+启动时必须通过环境变量显式指定 TLS 材料，Broker 不再回退到仓库内的 CA：
+
+| 变量 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `TLS_CA` | **必填** | 签发受信客户端证书的 CA 证书路径；未设置则启动失败 |
+| `TLS_CERT` | 可选 | 服务端证书，默认 `$PKI_DIR/server/server.crt` |
+| `TLS_KEY` | 可选 | 服务端私钥，默认 `$PKI_DIR/server/server.key` |
+| `TLS_CRL` | 可选 | CRL，默认 `$PKI_DIR/ca/crl.pem`（不存在则跳过） |
+
+上述文件任一不存在、不可读、无法解析或私钥与证书不匹配时，进程以 `[tls] FATAL`
+退出（退出码 78）。启动横幅会显示证书主题、到期时间和 CA SHA-256 指纹。
+服务端证书或 CA 证书在 14 天内到期时，启动会打印 `[tls] WARNING`（不阻止启动），
+请在到期前更换。
+
+镜像（含 `dev` 阶段）不内置 `TLS_CA`，必须由部署配置显式设置：`docker-compose.yml`、
+Helm chart 和 systemd unit 已设置。本地直接运行 `dev` 镜像时需自行传入，例如
+`docker run -e TLS_CA=/app/pki/ca/ca.crt ... <image>`。systemd unit 配置了
+`RestartPreventExitStatus=78`，配置错误时不会被反复重启。
+
 证书校验失败时停止并修复证书、主机名、用途或 CA；禁止使用 `-k`、`--insecure`
 或关闭上游验证绕过。
 

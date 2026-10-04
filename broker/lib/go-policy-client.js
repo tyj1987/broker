@@ -3,7 +3,16 @@ import http from 'node:http';
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
 function listOr(value, fallback) {
+  if (Array.isArray(value) && value.includes('*')) return [...fallback];
   return Array.isArray(value) && value.length > 0 ? [...value] : [...fallback];
+}
+
+// A stored `*` is an open marker on the key. It widens only the subject list
+// to the concrete request value. Rule lists stay exactly as configured, so an
+// empty policy resource list still fails closed in the core engine.
+function widenStar(values, grant, concrete) {
+  if (!Array.isArray(grant) || !grant.includes('*') || typeof concrete !== 'string' || concrete === '') return values;
+  return values.includes(concrete) ? values : [...values, concrete];
 }
 
 function approvalsFor(ctx, provider, operationId, accountRef, now) {
@@ -32,10 +41,26 @@ export function corePolicyPayload(config, operation, preliminary, now = Date.now
     const prefix = `${provider}:`;
     return value.startsWith(prefix) ? value.slice(prefix.length) : value;
   });
-  const serviceValues = listOr(key?.allowed_services, listOr(client.allowed_services, [provider]));
-  const accountValues = listOr(key?.allowed_accounts, listOr(client.allowed_accounts, policy.accounts));
-  const resourceValues = listOr(key?.allowed_resources, listOr(client.allowed_resources, policy.resources || []));
-  const environmentValues = listOr(key?.allowed_environments, listOr(client.allowed_environments, policy.environments));
+  const serviceValues = widenStar(
+    listOr(key?.allowed_services, listOr(client.allowed_services, [provider])),
+    key?.allowed_services,
+    provider,
+  );
+  const accountValues = widenStar(
+    listOr(key?.allowed_accounts, listOr(client.allowed_accounts, policy.accounts)),
+    key?.allowed_accounts,
+    accountRef,
+  );
+  const resourceValues = widenStar(
+    listOr(key?.allowed_resources, listOr(client.allowed_resources, policy.resources || [])),
+    key?.allowed_resources,
+    resource,
+  );
+  const environmentValues = widenStar(
+    listOr(key?.allowed_environments, listOr(client.allowed_environments, policy.environments)),
+    key?.allowed_environments,
+    environment,
+  );
   const configuredApprovals = Math.max(Number(policy.required_approvals || 0), policy.approval_required ? 1 : 0);
   return {
     subject: {

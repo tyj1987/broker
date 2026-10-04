@@ -58,6 +58,21 @@ assert.deepEqual(payload.subject.providers, ['github']);
 assert.deepEqual(payload.rule.source_cidrs, ['127.0.0.0/8']);
 assert.equal(payload.rule.not_before, policy.not_before);
 assert.equal(payload.rule.not_after, policy.not_after);
+const starred = structuredClone(operation);
+starred.identity.context.apiKey = {
+  allowed_services: ['*'],
+  allowed_operations: ['*'],
+  allowed_accounts: ['*'],
+  allowed_resources: ['*'],
+  allowed_environments: ['*'],
+};
+const starPayload = corePolicyPayload(config, starred, { allow: true, ttlMs: 90_000, tool });
+assert.deepEqual(starPayload.subject.providers, ['github']);
+assert.deepEqual(starPayload.subject.operations, ['repo.read']);
+assert.deepEqual(starPayload.subject.accounts, ['primary']);
+assert.deepEqual(starPayload.subject.resources, ['tyj1987/broker']);
+assert.deepEqual(starPayload.subject.environments, ['production']);
+assert.deepEqual(starPayload.rule.resources, ['tyj1987/broker']);
 const preflightPayload = corePolicyPayload(config, operation, { allow: true, ttlMs: 90_000, tool }, Date.now(), { ignoreApproval: true });
 assert.equal(preflightPayload.rule.required_approvals, 2);
 assert.equal(preflightPayload.request.approval_phase, true);

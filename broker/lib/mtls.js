@@ -137,21 +137,30 @@ export function createIdentityResolver(deps) {
       && config
       && trustedProxyConnection(req, config)
       && exactForwardedSource(req, forwardedMtlsConfig.sourceIp);
+    // A browser that does not present a client certificate is a normal dashboard
+    // login, including password and WebAuthn. Only a presented-but-invalid edge
+    // certificate fails closed. A missing certificate must not erase a session.
+    let tunnelWithoutCertificate = false;
     if (fromForwardedMtlsSource) {
       const nginxVerify = String(req.headers['x-ssl-client-verify'] || '');
       if (nginxVerify === 'NONE') {
-        const resolved = resolveForwardedMtlsCertificate(
-          req.headers['client-cert'],
-          config,
-          forwardedMtlsConfig,
-          requireNodeCrypto,
-        );
-        if (!resolved.ok) {
-          audit({ action: 'connect', status: 'denied', reason: resolved.reason, remote: forwardedMtlsConfig.sourceIp });
-          return null;
+        const rawCertificate = req.headers['client-cert'];
+        if (typeof rawCertificate === 'string' && rawCertificate.trim() !== '') {
+          const resolved = resolveForwardedMtlsCertificate(
+            rawCertificate,
+            config,
+            forwardedMtlsConfig,
+            requireNodeCrypto,
+          );
+          if (!resolved.ok) {
+            audit({ action: 'connect', status: 'denied', reason: resolved.reason, remote: forwardedMtlsConfig.sourceIp });
+            return null;
+          }
+          recordClientSeen(resolved.identity.clientName);
+          primary = resolved.identity;
+        } else {
+          tunnelWithoutCertificate = true;
         }
-        recordClientSeen(resolved.identity.clientName);
-        primary = resolved.identity;
       } else if (nginxVerify !== 'SUCCESS') {
         audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_proxy_verify_invalid', remote: forwardedMtlsConfig.sourceIp });
         return null;
@@ -239,6 +248,15 @@ export function createIdentityResolver(deps) {
       return { ...primary, apiKey: apiKeyCtx.apiKey };
     }
     if (primary) return primary;
+    // The tunnel certificate is optional for a browser session, but it remains
+    // mandatory before a bearer key can stand alone. A stolen key must not
+    // become a login just because the browser did not send a certificate.
+    if (tunnelWithoutCertificate) {
+      if (apiKeyCtx) {
+        audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_certificate_missing', remote: forwardedMtlsConfig.sourceIp });
+      }
+      return null;
+    }
     if (!apiKeyCtx) return null;
     return {
       cn: `apikey:${apiKeyCtx.apiKey.id}`,

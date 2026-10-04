@@ -36,7 +36,8 @@
         <button type="button" class="btn btn-block" id="btn-webauthn-login">使用安全密钥 / Security key</button>
       </form>
       <p class="hint muted">
-        严格档仅支持安全密钥。密码与 TOTP 只属于隔离的兼容档或受控档。
+        密码和安全密钥可以在任意浏览器使用，不需要 Edge 客户端证书。已安装的证书仍然可用。
+        严格档的写操作仍需要安全密钥。
       </p>
     </div>
   </section>
@@ -336,7 +337,7 @@
         <!-- 创建表单 -->
         <section class="me-section">
           <h3>创建新 API Key / Create New Key</h3>
-          <p class="muted">操作型 Key 必须同时绑定服务、操作、账户、资源和环境；任何一项缺失都会失败关闭。</p>
+          <p class="muted">默认授予当前已登记的全部权限。需要收窄时，取消默认勾选，再勾选下面列出的项目。</p>
           <form id="form-create-key" autocomplete="off">
             <label>Label / 标签
               <input type="text" name="name" id="ak-name" required maxlength="64"
@@ -361,26 +362,24 @@
             </fieldset>
 
             <fieldset id="ak-operation-constraints" style="border:1px solid #1f2530;border-radius:4px;padding:8px 14px;margin:8px 0;">
-              <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Typed operation constraints / 类型化操作边界</legend>
-              <p class="hint">每行或逗号分隔；禁止 <code>*</code>。值必须与 Broker 已登记策略完全一致。</p>
-              <label>Services / 服务
-                <textarea name="allowed_services" id="ak-allowed-services" rows="2" placeholder="github"></textarea>
+              <legend style="color:#d4a849;font-size:0.9em;padding:0 6px;">Permissions / 权限</legend>
+              <label style="display:block;margin:4px 0;">
+                <input type="checkbox" id="ak-grant-registered" checked />
+                默认全部已登记权限
               </label>
-              <label>Operations / 操作
-                <textarea name="allowed_operations" id="ak-allowed-operations" rows="3" placeholder="github:repository.read"></textarea>
-              </label>
-              <label>Accounts / 账户引用
-                <textarea name="allowed_accounts" id="ak-allowed-accounts" rows="2" placeholder="52trz-github"></textarea>
-              </label>
-              <label>Resources / 资源引用
-                <textarea name="allowed_resources" id="ak-allowed-resources" rows="3" placeholder="tyj1987/52trz"></textarea>
-              </label>
-              <label>Environments / 环境
-                <textarea name="allowed_environments" id="ak-allowed-environments" rows="2" placeholder="development, staging"></textarea>
-              </label>
-              <label>Secret refs / 密钥引用（仅需要凭据的操作）
-                <textarea name="allowed_secrets" id="ak-allowed-secrets" rows="2" placeholder="GITHUB_APP"></textarea>
-              </label>
+              <p class="hint">名单来自已登记的策略、账户和服务。取消上面的勾选后，再按需选择。</p>
+              <div id="ak-permission-picker" hidden>
+                <div class="filter-row">
+                  <button type="button" class="btn btn-sm" id="ak-check-all">全选</button>
+                  <button type="button" class="btn btn-sm" id="ak-check-none">全不选</button>
+                </div>
+                <div id="ak-catalog-services" data-field="allowed_services"></div>
+                <div id="ak-catalog-operations" data-field="allowed_operations"></div>
+                <div id="ak-catalog-accounts" data-field="allowed_accounts"></div>
+                <div id="ak-catalog-resources" data-field="allowed_resources"></div>
+                <div id="ak-catalog-environments" data-field="allowed_environments"></div>
+                <div id="ak-catalog-secrets" data-field="allowed_secrets"></div>
+              </div>
             </fieldset>
 
             <label>有效期 / Expires-in
@@ -832,7 +831,7 @@ secret-broker get github.pat</code></pre>
   <script src="home.js?v=4.1.5"></script>
   <script src="me.js?v=4.1.5"></script>
   <script src="approvals.js?v=4.2.0"></script>
-  <script src="api-keys.js?v=4.1.5"></script>
+  <script src="api-keys.js?v=4.2.1"></script>
   <script src="admin/secrets.js?v=4.1.5"></script>
   <script src="admin/services.js?v=4.1.5"></script>
   <script src="admin/clients.js?v=4.2.0"></script>

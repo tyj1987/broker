@@ -140,17 +140,21 @@ function canAdministerOtherOwners(identity) {
     && context.authFactors?.includes('webauthn');
 }
 
+function grantAllows(list, value) {
+  return Array.isArray(list) && (list.includes('*') || list.includes(value));
+}
+
 function apiKeyAllowsOperation(identity, operation) {
   const context = identity?.context;
   const key = context?.apiKey;
   if (!key) return context?.via !== 'api_key';
   const exactScope = `operations:${operation.provider}:${operation.operationId}`;
   return (key?.scopes?.includes('operations:execute') || key?.scopes?.includes(exactScope))
-    && key.allowed_services?.includes(operation.provider)
-    && key.allowed_operations?.includes(`${operation.provider}:${operation.operationId}`)
-    && key.allowed_accounts?.includes(operation.accountRef)
-    && key.allowed_environments?.includes(operation.environment)
-    && key.allowed_resources?.includes(operation.typedParameters?.resource_ref);
+    && grantAllows(key.allowed_services, operation.provider)
+    && grantAllows(key.allowed_operations, `${operation.provider}:${operation.operationId}`)
+    && grantAllows(key.allowed_accounts, operation.accountRef)
+    && grantAllows(key.allowed_environments, operation.environment)
+    && grantAllows(key.allowed_resources, operation.typedParameters?.resource_ref);
 }
 
 function validatedDeviceKey(publicKeyPem, requestedAlgorithm = null) {
@@ -893,11 +897,11 @@ export class OperationBroker {
     const operation = this.operations.get(task.operationId);
     const key = identity.context?.apiKey;
     const allowed = key
-      && key.allowed_services?.includes(provider)
-      && key.allowed_operations?.includes(`${provider}:browser.otp.fill`)
-      && key.allowed_accounts?.includes(accountRef)
-      && key.allowed_environments?.includes(operation.environment)
-      && key.allowed_resources?.includes(operation.typedParameters.resource_ref);
+      && grantAllows(key.allowed_services, provider)
+      && grantAllows(key.allowed_operations, `${provider}:browser.otp.fill`)
+      && grantAllows(key.allowed_accounts, accountRef)
+      && grantAllows(key.allowed_environments, operation.environment)
+      && grantAllows(key.allowed_resources, operation.typedParameters.resource_ref);
     if (!allowed) throw new V2Error('forbidden', 'browser bridge key constraints denied the operation', 403);
     task.status = 'consuming';
     const previousOperationStatus = operation.status;

@@ -16,6 +16,10 @@ const TRANSITIONS = new Map([
   ['EXECUTING', new Set(['SUCCEEDED', 'FAILED', 'EXPIRED'])],
 ]);
 const ENVIRONMENTS = new Set(['development', 'staging', 'production']);
+
+function grantAllows(list, value) {
+  return Array.isArray(list) && (list.includes('*') || list.includes(value));
+}
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const VERSION_RE = /^[1-9][0-9]*\.[0-9]+\.[0-9]+$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{16,128}$/;
@@ -417,9 +421,9 @@ export class AutomationTaskBroker {
     const toolVisible = this.toolRegistry.listFor(identity)
       .some((candidate) => candidate.name === task.tool.name && candidate.version === task.tool.version);
     return toolVisible
-      && apiKey.allowed_accounts?.includes(task.accountRef)
-      && apiKey.allowed_resources?.includes(task.parameters?.resource_ref)
-      && apiKey.allowed_environments?.includes(task.environment);
+      && grantAllows(apiKey.allowed_accounts, task.accountRef)
+      && grantAllows(apiKey.allowed_resources, task.parameters?.resource_ref)
+      && grantAllows(apiKey.allowed_environments, task.environment);
   }
 
   async create(identity, input) {

@@ -476,7 +476,7 @@ section('22. Forwarded certificate still requires the trusted nginx workload cer
   ok('untrusted proxy rejection audited', deps.auditEvents.some(e => e.reason === 'untrusted_proxy_identity'));
 }
 
-section('23. Trusted Tunnel source without RFC9440 certificate fails closed');
+section('23. Trusted Tunnel source without a certificate has no anonymous identity');
 
 {
   const deps = makeDeps({
@@ -490,8 +490,33 @@ section('23. Trusted Tunnel source without RFC9440 certificate fails closed');
       getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
     },
   }));
-  ok('missing forwarded cert denied', id === null);
-  ok('missing cert denial audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+  ok('missing forwarded cert has no identity', id === null);
+  ok('absent certificate is not a hard denial', !deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+}
+
+section('23b. Trusted Tunnel source without a certificate keeps a browser session');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+    getSession: () => ({
+      cn: 'client.alice',
+      fp: FP_LOWER,
+      client: { role: 'developer', cert_fingerprint_sha256: FP },
+      clientName: 'client.alice',
+      cert: { subject: { CN: 'client.alice' } },
+    }),
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: { 'x-ssl-client-verify': 'NONE', 'x-forwarded-for': '192.168.2.200' },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('browser session survives a missing edge certificate', id?.via === 'session' && id?.clientName === 'client.alice');
+  ok('session fallthrough is not audited as a missing certificate', !deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
 }
 
 section('24. Malformed RFC9440 certificate fails closed');
@@ -499,6 +524,13 @@ section('24. Malformed RFC9440 certificate fails closed');
 {
   const deps = makeDeps({
     forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+    getSession: () => ({
+      cn: 'client.alice',
+      fp: FP_LOWER,
+      client: { role: 'developer', cert_fingerprint_sha256: FP },
+      clientName: 'client.alice',
+      cert: { subject: { CN: 'client.alice' } },
+    }),
   });
   const r = createIdentityResolver(deps);
   const id = r.getIdentity(req({

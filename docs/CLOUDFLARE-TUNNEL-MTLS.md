@@ -12,23 +12,35 @@ BROKER_FORWARDED_MTLS_FINGERPRINT_SHA256=<64 hex characters, no wildcards>
 BROKER_FORWARDED_MTLS_CLIENT=<existing Broker client name>
 ```
 
-The Cloudflare side must enforce mTLS for the public hostname before origin
-routing. A WAF rule must block requests when the certificate is not verified,
-is revoked, or does not have the exact approved SHA-256 fingerprint. A request
-header Transform Rule must then overwrite `Client-Cert` with
-`cf.tls_client_auth.cert_rfc9440` for that exact verified certificate.
+nginx keeps `ssl_verify_client optional`. A browser that presents the approved
+client certificate still signs in through that certificate. A browser that
+presents no certificate reaches the dashboard and can use password login, when
+`allow_password_login` is set, or a WebAuthn security key. Strict-profile writes
+still require that security key.
 
-Broker does not trust `Client-Cert` merely because the header exists. The
-connection from nginx to Broker must already satisfy `trusted_proxy_fingerprints`,
-and nginx must have overwritten `X-Forwarded-For` with the immediate peer IP.
-That exact peer must equal `BROKER_FORWARDED_MTLS_SOURCE_IP`. Broker then parses
-the RFC 9440 leaf certificate, recomputes its fingerprint, and maps it only to
-the configured existing client.
+The Cloudflare hostname used by the dashboard must allow a request that has no
+client certificate. A WAF rule that blocks every unverified client certificate
+stops those browsers before nginx, so Broker never sees the login. Keep
+certificate checks for workloads that authenticate with the Cloudflare client
+certificate: a presented certificate that is revoked, malformed, or not the
+approved fingerprint still fails closed.
 
-A request from the trusted Tunnel source with nginx client verification `NONE`
-but without a valid forwarded certificate fails closed and cannot fall back to
-a session or bearer API key. Existing direct private-CA mTLS remains unchanged,
-including when it originates from the same host address.
+When a verified certificate is present, a request header Transform Rule
+overwrites `Client-Cert` with `cf.tls_client_auth.cert_rfc9440` for that exact
+certificate. Broker does not trust `Client-Cert` merely because the header
+exists. The connection from nginx to Broker must already satisfy
+`trusted_proxy_fingerprints`, and nginx must have overwritten `X-Forwarded-For`
+with the immediate peer IP. That exact peer must equal
+`BROKER_FORWARDED_MTLS_SOURCE_IP`. Broker then parses the RFC 9440 leaf
+certificate, recomputes its fingerprint, and maps it only to the configured
+existing client.
+
+A trusted Tunnel request with nginx client verification `NONE` and no
+`Client-Cert` header can continue with an existing browser session. It cannot
+continue with a bearer API key alone. A presented certificate that does not
+validate still fails closed and does not fall through to a session. Existing
+direct private-CA mTLS remains unchanged, including when it originates from the
+same host address.
 
 Do not use this feature to trust arbitrary proxy headers, a CIDR, a wildcard
 fingerprint, or a client name that is not already present in Broker config. Do

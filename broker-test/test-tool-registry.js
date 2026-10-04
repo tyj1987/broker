@@ -47,6 +47,14 @@ assert.deepEqual(
   ['github.repository.read'],
   'tool discovery cannot exceed API-key operation constraints',
 );
+const openAgent = structuredClone(githubAgent);
+openAgent.context.apiKey.allowed_services = ['*'];
+openAgent.context.apiKey.allowed_operations = ['*'];
+openAgent.context.apiKey.allowed_environments = ['*'];
+assert.ok(
+  registry.listFor(openAgent).some((tool) => tool.name === 'github.repository.read'),
+  'an open marker still discovers the granted operation',
+);
 for (const field of [
   'scopes',
   'allowed_services',

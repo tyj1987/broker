@@ -94,6 +94,10 @@ assert.doesNotMatch(workflow, /push-to-registry:\s*true/);
 assert.doesNotMatch(workflow, /packages:\s*write/);
 assert.match(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.2/);
 assert.doesNotMatch(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.1/);
+assert.match(dockerfile, /golang:1\.27\.3-alpine3\.24@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c/);
+assert.doesNotMatch(dockerfile, /golang:1\.27\.2/);
+assert.match(dockerfile, /-require=golang\.org\/x\/net@v0\.60\.0/);
+assert.match(dockerfile, /-require=golang\.org\/x\/crypto@v0\.57\.0/);
 
 console.log(
   'deployment state boundary: protected key, persistent state, single replica and fail-closed bootstrap passed',

@@ -62,7 +62,7 @@ CMD ["node", "server.js"]
 # ============================================================
 # Stage 3: SOPS built from a verified source archive and patched dependencies
 # ============================================================
-FROM golang:1.27.2-alpine3.24@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS sops-build
+FROM golang:1.27.3-alpine3.24@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS sops-build
 ARG SOPS_VERSION=3.13.3
 ARG SOPS_SOURCE_SHA256=49811c5ed80f6b4d4e98cef98e3f7378406aa692fd773dfb72ad1b4dfb940448
 RUN apk add --no-cache ca-certificates curl tar \
@@ -77,7 +77,8 @@ WORKDIR /src
 # The upstream v3.13.3 binaries predate these security releases. Build the
 # signed tag with patched direct dependencies and the repository's pinned Go.
 RUN go mod edit \
-      -require=golang.org/x/crypto@v0.55.0 \
+      -require=golang.org/x/crypto@v0.57.0 \
+      -require=golang.org/x/net@v0.60.0 \
       -require=google.golang.org/grpc@v1.83.2 \
     && CGO_ENABLED=0 go build -mod=mod -trimpath -buildvcs=false \
       -ldflags='-s -w' -o /out/sops ./cmd/sops \
@@ -86,7 +87,7 @@ RUN go mod edit \
 # ============================================================
 # Stage 4: Go policy core
 # ============================================================
-FROM golang:1.27.2-alpine3.24@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS core-build
+FROM golang:1.27.3-alpine3.24@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS core-build
 WORKDIR /src
 COPY core/go.mod ./
 COPY core/ ./

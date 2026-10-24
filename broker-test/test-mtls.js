@@ -17,6 +17,7 @@
 //  14. Error in X509Certificate parsing → null (graceful)
 
 import { createIdentityResolver } from '../broker/lib/mtls.js';
+import { enforcePop } from '../broker/lib/pop.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -481,7 +482,7 @@ section('22. Forwarded certificate still requires the trusted nginx workload cer
   ok('untrusted proxy rejection audited', deps.auditEvents.some(e => e.reason === 'untrusted_proxy_identity'));
 }
 
-section('23. Trusted Tunnel source without RFC9440 certificate fails closed');
+section('23. Trusted Tunnel source without a certificate has no anonymous identity');
 
 {
   const deps = makeDeps({
@@ -495,8 +496,33 @@ section('23. Trusted Tunnel source without RFC9440 certificate fails closed');
       getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
     },
   }));
-  ok('missing forwarded cert denied', id === null);
-  ok('missing cert denial audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+  ok('missing forwarded cert has no identity', id === null);
+  ok('absent certificate is not a hard denial', !deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+}
+
+section('23b. Trusted Tunnel source without a certificate keeps a browser session');
+
+{
+  const deps = makeDeps({
+    forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+    getSession: () => ({
+      cn: 'client.alice',
+      fp: FP_LOWER,
+      client: { role: 'developer', cert_fingerprint_sha256: FP },
+      clientName: 'client.alice',
+      cert: { subject: { CN: 'client.alice' } },
+    }),
+  });
+  const r = createIdentityResolver(deps);
+  const id = r.getIdentity(req({
+    headers: { 'x-ssl-client-verify': 'NONE', 'x-forwarded-for': '192.168.2.200' },
+    socket: {
+      remoteAddress: '127.0.0.1', authorized: true,
+      getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+    },
+  }));
+  ok('browser session survives a missing edge certificate', id?.via === 'session' && id?.clientName === 'client.alice');
+  ok('session fallthrough is not audited as a missing certificate', !deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
 }
 
 section('24. Malformed RFC9440 certificate fails closed');
@@ -504,6 +530,13 @@ section('24. Malformed RFC9440 certificate fails closed');
 {
   const deps = makeDeps({
     forwardedMtls: { sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice' },
+    getSession: () => ({
+      cn: 'client.alice',
+      fp: FP_LOWER,
+      client: { role: 'developer', cert_fingerprint_sha256: FP },
+      clientName: 'client.alice',
+      cert: { subject: { CN: 'client.alice' } },
+    }),
   });
   const r = createIdentityResolver(deps);
   const id = r.getIdentity(req({
@@ -640,6 +673,125 @@ section('29. Missing forwarded certificate cannot fall back to a bearer key');
   }));
   ok('trusted Tunnel source cannot downgrade to API key', id === null);
   ok('missing cert downgrade is audited', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+}
+
+section('30. Dashboard login without an edge certificate leaves proxy and API on mTLS plus PoP');
+
+function tunnelSocket() {
+  return {
+    remoteAddress: '127.0.0.1', authorized: true,
+    getPeerCertificate: () => ({ fingerprint256: PROXY_FP }),
+  };
+}
+function browserSession() {
+  return {
+    cn: 'client.alice',
+    fp: FP_LOWER,
+    clientName: 'client.alice',
+    cert: { subject: { CN: 'client.alice' } },
+  };
+}
+const forwardedAlice = {
+  sourceIp: '192.168.2.200', fingerprintSha256: CF_FP_HEX, clientName: 'client.alice',
+};
+
+{
+  const deps = makeDeps({ forwardedMtls: forwardedAlice, getSession: () => browserSession() });
+  const login = createIdentityResolver(deps).getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': '   ',
+    },
+    socket: tunnelSocket(),
+  }));
+  ok('blank edge certificate keeps the dashboard session', login?.via === 'session' && login.edgeForwarded !== true);
+  ok('dashboard login is not blocked by the edge PoP gate', enforcePop({
+    identity: login, method: 'POST', pathname: '/api/v1/login', requirePop: 'all',
+  }) === null);
+  const anonymous = createIdentityResolver(makeDeps({ forwardedMtls: forwardedAlice })).getIdentity(req({
+    headers: { 'x-ssl-client-verify': 'NONE', 'x-forwarded-for': '192.168.2.200' },
+    socket: tunnelSocket(),
+  }));
+  ok('login without a certificate or session creates no mTLS identity', anonymous === null);
+}
+
+{
+  class FakeX509Certificate {
+    constructor(der) {
+      if (!Buffer.isBuffer(der) || der.toString() !== 'synthetic-cloudflare-client-der') throw new Error('invalid der');
+      this.fingerprint256 = CF_FP;
+      this.subject = 'CN=client.alice';
+      this.raw = der;
+      this.ca = false;
+      this.validFrom = '2000-01-01T00:00:00Z';
+      this.validTo = '2099-01-01T00:00:00Z';
+      this.keyUsage = ['1.3.6.1.5.5.7.3.2'];
+    }
+  }
+  const id = createIdentityResolver(makeDeps({
+    requireNodeCrypto: { X509Certificate: FakeX509Certificate },
+    forwardedMtls: forwardedAlice,
+    getSession: () => browserSession(),
+  })).getIdentity(req({
+    method: 'POST',
+    url: '/api/v1/proxy/github',
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: tunnelSocket(),
+  }));
+  ok('presented edge certificate stays on mTLS and does not fall through to the session',
+    id?.via === 'mtls-forwarded-rfc9440' && id.edgeForwarded === true && id.popVerified === false);
+  for (const [method, pathname] of [
+    ['POST', '/api/v1/proxy/github'],
+    ['GET', '/api/v1/secrets'],
+    ['POST', '/api/v2/operations'],
+  ]) {
+    const denial = enforcePop({ identity: id, method, pathname, requirePop: 'privileged' });
+    ok(`proxy/API route ${method} ${pathname} still requires PoP`, denial?.reason === 'pop_required');
+  }
+  ok('all-mode PoP still rejects the proxy route', enforcePop({
+    identity: id, method: 'POST', pathname: '/api/v1/proxy/github', requirePop: 'all',
+  })?.reason === 'pop_required');
+}
+
+{
+  const deps = makeDeps({
+    forwardedMtls: {
+      ...forwardedAlice,
+      headerName: 'x-broker-cf-client-cert',
+      ownerFingerprintSha256: FP.replace(/:/g, ''),
+    },
+    getSession: () => browserSession(),
+  });
+  const resolver = createIdentityResolver(deps);
+  const kept = resolver.getIdentity(req({
+    headers: { 'x-ssl-client-verify': 'NONE', 'x-forwarded-for': '192.168.2.200' },
+    socket: tunnelSocket(),
+  }));
+  ok('omitted deployment certificate header keeps the dashboard session', kept?.via === 'session');
+  const denied = resolver.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'x-broker-cf-client-cert': ':not canonical base64!:',
+    },
+    socket: tunnelSocket(),
+  }));
+  ok('malformed deployment header does not fall through to the dashboard session', denied === null);
+  const wrongHeader = resolver.getIdentity(req({
+    headers: {
+      'x-ssl-client-verify': 'NONE',
+      'x-forwarded-for': '192.168.2.200',
+      'client-cert': CF_CERT_RFC9440,
+    },
+    socket: tunnelSocket(),
+  }));
+  ok('unexpected certificate header cannot become a dashboard session', wrongHeader === null);
+  ok('unexpected certificate header fails closed', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
 }
 
 // ---------- summary ----------

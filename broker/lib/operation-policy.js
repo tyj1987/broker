@@ -7,6 +7,10 @@ function includes(list, value) {
   return Array.isArray(list) && list.includes(value);
 }
 
+function keyAllows(list, value) {
+  return Array.isArray(list) && (list.includes('*') || list.includes(value));
+}
+
 function matchesType(value, type) {
   if (type === 'array') return Array.isArray(value);
   if (type === 'integer') return Number.isSafeInteger(value);
@@ -171,12 +175,12 @@ export function evaluateOperationPolicy(config, request, now = Date.now(), optio
   if (apiKey) {
     const operationScope = `operations:${provider}:${operationId}`;
     if (!includes(apiKey.scopes, 'operations:execute') && !includes(apiKey.scopes, operationScope)) return deny('scope_denied');
-    if (!includes(apiKey.allowed_services, provider)) return deny('key_service_denied');
-    if (!includes(apiKey.allowed_operations, `${provider}:${operationId}`)) return deny('key_operation_denied');
-    if (!includes(apiKey.allowed_accounts, accountRef)) return deny('key_account_denied');
-    if (!includes(apiKey.allowed_environments, environment)) return deny('key_environment_denied');
-    if (!includes(apiKey.allowed_resources, resource)) return deny('key_resource_denied');
-    if (Array.isArray(policy.secret_refs) && policy.secret_refs.some((name) => !includes(apiKey.allowed_secrets, name))) return deny('key_secret_denied');
+    if (!keyAllows(apiKey.allowed_services, provider)) return deny('key_service_denied');
+    if (!keyAllows(apiKey.allowed_operations, `${provider}:${operationId}`)) return deny('key_operation_denied');
+    if (!keyAllows(apiKey.allowed_accounts, accountRef)) return deny('key_account_denied');
+    if (!keyAllows(apiKey.allowed_environments, environment)) return deny('key_environment_denied');
+    if (!keyAllows(apiKey.allowed_resources, resource)) return deny('key_resource_denied');
+    if (Array.isArray(policy.secret_refs) && policy.secret_refs.some((name) => !keyAllows(apiKey.allowed_secrets, name))) return deny('key_secret_denied');
   }
 
   return {

@@ -32,6 +32,126 @@ const DEFAULT_MASTER_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // 30d
 const DEFAULT_CHILD_TTL_SECONDS = 60 * 60;  // 1h
 const MASTER_KEY_SCOPES = ['keys:issue_child'];  // master key 只能创建子 key，不能直接调 service
 const DEFAULT_CHILD_SCOPES = ['secrets:resolve', 'services:proxy'];
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const CONSTRAINT_FIELDS = [
+  ['allowed_services', 'services'],
+  ['allowed_operations', 'operations'],
+  ['allowed_accounts', 'accounts'],
+  ['allowed_resources', 'resources'],
+  ['allowed_environments', 'environments'],
+  ['allowed_secrets', 'secrets'],
+];
+
+function addCatalogValue(set, value) {
+  if (typeof value !== 'string') return;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '*' || trimmed.length > 256 || /[\r\n\0]/.test(trimmed)) return;
+  set.add(trimmed);
+}
+
+function addCatalogList(set, values) {
+  if (!Array.isArray(values)) return;
+  for (const value of values) addCatalogValue(set, value);
+}
+
+function sorted(set) {
+  return [...set].sort();
+}
+
+/**
+ * Names already recorded in operation policies, provider accounts, and services.
+ * The dashboard renders these as checkboxes so an operator does not type them.
+ */
+export function registeredPermissionCatalog(config) {
+  const services = new Set();
+  const operations = new Set();
+  const accounts = new Set();
+  const resources = new Set();
+  const environments = new Set();
+  const secrets = new Set();
+  const policies = config?.operation_policies;
+  if (policies && typeof policies === 'object' && !Array.isArray(policies)) {
+    for (const [provider, ops] of Object.entries(policies)) {
+      if (UNSAFE_OBJECT_KEYS.has(provider) || !ops || typeof ops !== 'object' || Array.isArray(ops)) continue;
+      addCatalogValue(services, provider);
+      for (const [operationId, policy] of Object.entries(ops)) {
+        if (UNSAFE_OBJECT_KEYS.has(operationId) || !policy || typeof policy !== 'object' || Array.isArray(policy)) continue;
+        addCatalogValue(operations, `${provider}:${operationId}`);
+        addCatalogList(accounts, policy.accounts);
+        addCatalogList(environments, policy.environments);
+        addCatalogList(resources, policy.resources);
+        addCatalogList(secrets, policy.secret_refs);
+      }
+    }
+  }
+  const providerAccounts = config?.provider_accounts;
+  if (providerAccounts && typeof providerAccounts === 'object' && !Array.isArray(providerAccounts)) {
+    for (const [provider, accountMap] of Object.entries(providerAccounts)) {
+      if (UNSAFE_OBJECT_KEYS.has(provider) || !accountMap || typeof accountMap !== 'object' || Array.isArray(accountMap)) continue;
+      addCatalogValue(services, provider);
+      for (const [accountRef, account] of Object.entries(accountMap)) {
+        if (UNSAFE_OBJECT_KEYS.has(accountRef)) continue;
+        addCatalogValue(accounts, accountRef);
+        if (!account || typeof account !== 'object' || Array.isArray(account)) continue;
+        addCatalogList(environments, account.environments);
+        addCatalogList(resources, account.repositories);
+        addCatalogList(resources, account.resources);
+      }
+    }
+  }
+  if (config?.services && typeof config.services === 'object' && !Array.isArray(config.services)) {
+    for (const name of Object.keys(config.services)) addCatalogValue(services, name);
+  }
+  return {
+    services: sorted(services),
+    operations: sorted(operations),
+    accounts: sorted(accounts),
+    resources: sorted(resources),
+    environments: sorted(environments),
+    secrets: sorted(secrets),
+  };
+}
+
+function explicitConstraintList(value, field) {
+  if (!Array.isArray(value)) return { ok: false, error: `Invalid ${field}` };
+  const items = [];
+  for (const item of value) {
+    if (typeof item !== 'string') return { ok: false, error: `Invalid ${field}` };
+    const trimmed = item.trim();
+    if (!trimmed || trimmed === '*' || trimmed.length > 256 || /[\r\n\0]/.test(trimmed)) {
+      return { ok: false, error: `Invalid ${field}` };
+    }
+    items.push(trimmed);
+  }
+  return { ok: true, items: [...new Set(items)] };
+}
+
+/**
+ * `use_registered_permissions` grants every name in the catalog. A dimension
+ * with no registered names is stored as `*` so later calls are not blocked by
+ * an empty list. Explicit lists never accept a caller-typed wildcard.
+ */
+export function resolveApiKeyConstraints(config, body = {}) {
+  const catalog = registeredPermissionCatalog(config);
+  if (body.use_registered_permissions === true) {
+    const lists = {};
+    for (const [field, catalogKey] of CONSTRAINT_FIELDS) {
+      lists[field] = catalog[catalogKey].length > 0 ? [...catalog[catalogKey]] : ['*'];
+    }
+    return { ok: true, ...lists };
+  }
+  const lists = {};
+  for (const [field] of CONSTRAINT_FIELDS) {
+    if (body[field] === undefined) {
+      lists[field] = [];
+      continue;
+    }
+    const parsed = explicitConstraintList(body[field], field);
+    if (!parsed.ok) return parsed;
+    lists[field] = parsed.items;
+  }
+  return { ok: true, ...lists };
+}
 
 // V4.0 任务 6: 多维度限额
 // 历史 v3 rate_limit 字段是 "100/hour" 字符串;V4 支持每分钟/小时/天 三个维度
@@ -311,7 +431,7 @@ export function canResolveSecret(k, secretName) {
 export function canProxyService(k, serviceName) {
   if (!k || !k.scopes || !k.scopes.includes('services:proxy')) return false;
   if (Array.isArray(k.allowed_services) && k.allowed_services.length > 0) {
-    if (!k.allowed_services.includes(serviceName)) return false;
+    if (!k.allowed_services.includes('*') && !k.allowed_services.includes(serviceName)) return false;
   }
   return true;
 }

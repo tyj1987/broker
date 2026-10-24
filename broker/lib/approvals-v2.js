@@ -116,17 +116,21 @@ function requestHash(input) {
   }));
 }
 
+function grantAllows(list, value) {
+  return Array.isArray(list) && (list.includes('*') || list.includes(value));
+}
+
 function apiKeyAllowsApproval(identity, record) {
   const context = identity?.context;
   const key = context?.apiKey;
   if (!key) return context?.via !== 'api_key';
   const exactScope = `operations:${record.provider}:${record.operationId}`;
   return (key?.scopes?.includes('operations:execute') || key?.scopes?.includes(exactScope))
-    && key.allowed_services?.includes(record.provider)
-    && key.allowed_operations?.includes(`${record.provider}:${record.operationId}`)
-    && key.allowed_accounts?.includes(record.accountRef)
-    && key.allowed_environments?.includes(record.environment)
-    && key.allowed_resources?.includes(record.resourceRef);
+    && grantAllows(key.allowed_services, record.provider)
+    && grantAllows(key.allowed_operations, `${record.provider}:${record.operationId}`)
+    && grantAllows(key.allowed_accounts, record.accountRef)
+    && grantAllows(key.allowed_environments, record.environment)
+    && grantAllows(key.allowed_resources, record.resourceRef);
 }
 
 export class ApprovalBroker {

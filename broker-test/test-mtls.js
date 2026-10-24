@@ -794,6 +794,30 @@ const forwardedAlice = {
   ok('unexpected certificate header fails closed', deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
 }
 
+section('31. Empty or blank edge certificate lets a dashboard session succeed');
+
+{
+  const deps = makeDeps({ forwardedMtls: forwardedAlice, getSession: () => browserSession() });
+  const resolver = createIdentityResolver(deps);
+  for (const clientCert of ['', '   ']) {
+    const request = req({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        'x-ssl-client-verify': 'NONE',
+        'x-forwarded-for': '192.168.2.200',
+        'client-cert': clientCert,
+      },
+      socket: tunnelSocket(),
+    });
+    const id = resolver.getIdentity(request);
+    const label = clientCert === '' ? 'empty' : 'blank';
+    ok(`${label} cert header request succeeds`, id !== null && id.clientName === 'client.alice' && id.client?.role === 'developer');
+    ok(`${label} cert header identity via session`, id?.via === 'session');
+  }
+  ok('empty or blank certificate is not a hard denial', !deps.auditEvents.some(e => e.reason === 'forwarded_mtls_certificate_missing'));
+}
+
 // ---------- summary ----------
 
 console.log(`\n=== ${pass} pass / ${fail} fail ===`);

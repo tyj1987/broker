@@ -18,7 +18,7 @@ findings below.
 - Source baseline: `master@450c3ed2e1ffafb6507b908fc5b94a980c9820b0`
 - Upgrade branch: `codex/platform-upgrade`
 - Production read-only observation date: 2026-09-09 (Asia/Singapore)
-- Production DNS observed: `broker.52trz.com` resolved to `47.94.225.76`
+- Production DNS observed: `broker.52trz.com` resolved to `<origin-ip-redacted>`
 - Public `/health`: HTTP 200 with the minimal body `{"status":"ok"}`
 
 No credential values, private keys, environment files, or secret configuration were read during this observation.

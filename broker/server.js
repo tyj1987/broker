@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, sta
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
 // v3.0: 强认证 (TOTP + MFA 状态机)
 import {
   createMfaPending,
@@ -67,6 +67,7 @@ import {
   assertPublicDestination,
   assertPublicResolvedAddress,
   buildPinnedUrl,
+  effectiveServiceAllowedMethods,
   parsePinnedUpstream,
   sanitizeCallerHeaders,
   validateMethod,
@@ -79,6 +80,10 @@ import { handleMetrics } from './routes/metrics.js';
 import { defaultHealthBind, startLocalHealthServer } from './lib/local-health.js';
 import { handleSshProxy } from './routes/ssh-proxy.js';
 import { createReadApiRoutes } from './routes/read-api.js';
+import { isCompatibilityKeyRouteAllowed } from './lib/compatibility-key-policy.js';
+import { createApiKeyQuota } from './lib/api-key-quota.js';
+import { proxyResponseHeaders } from './lib/proxy-response.js';
+import { enforcePop } from './lib/pop.js';
 import { createV2Routes } from './routes/v2.js';
 import { OperationBroker, V2Error } from './lib/operations-v2.js';
 import { ApprovalBroker } from './lib/approvals-v2.js';
@@ -368,8 +373,8 @@ let _readApi = null;
 function readApiRoutes() {
   if (_readApi) return _readApi;
   _readApi = createReadApiRoutes({
-    config: CONFIG,
-    SECRET_CACHE,
+    get config() { return CONFIG; },
+    get SECRET_CACHE() { return SECRET_CACHE; },
     audit,
     canResolve,
     checkPathAllowed,
@@ -677,6 +682,7 @@ function lastSeenAgo(name) {
 // are referenced in URL paths like /api/v1/proxy/:name).
 const SERVICE_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const SERVICE_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 function isValidServiceName(name) {
   return typeof name === 'string' && SERVICE_NAME_RE.test(name) && !RESERVED_OBJECT_KEYS.has(name);
 }
@@ -722,6 +728,13 @@ function normalizeServiceConfig(body) {
   if (Array.isArray(body.allow_paths)) {
     out.allow_paths = body.allow_paths.map(s => String(s));
   }
+  // Retain explicit method constraints. Preserve malformed shapes for validation
+  // rather than silently dropping them and falling back to a broader default.
+  if (body.allowed_methods !== undefined) {
+    out.allowed_methods = Array.isArray(body.allowed_methods)
+      ? body.allowed_methods.map(method => typeof method === 'string' ? method.toUpperCase() : method)
+      : body.allowed_methods;
+  }
   // dashboard_actions: array of {label, method, path, query?}
   if (Array.isArray(body.dashboard_actions)) {
     out.dashboard_actions = body.dashboard_actions
@@ -760,6 +773,14 @@ function validateServiceConfig(name, cfg) {
   }
   if (cfg.type === 'aliyun_v2' && !cfg.region) {
     errs.push('type=aliyun_v2 requires region');
+  }
+  if (cfg.allowed_methods !== undefined) {
+    const methods = cfg.allowed_methods;
+    if (!Array.isArray(methods) || methods.length > SERVICE_HTTP_METHODS.size
+      || methods.some(method => typeof method !== 'string' || !SERVICE_HTTP_METHODS.has(method))
+      || new Set(methods).size !== methods.length) {
+      errs.push('allowed_methods must be an array of distinct supported HTTP methods');
+    }
   }
   if (cfg.token_secret && !isValidSecretName(cfg.token_secret)) {
     errs.push(`token_secret "${cfg.token_secret}" is not a valid secret name`);
@@ -999,9 +1020,11 @@ function getClientContext(socket) {
 function canResolve(ctx, secretName) {
   if (!ctx.client) return false;
   if (ctx.client.security_profile === 'strict') return false;
+  if (ctx.apiKey && !canResolveSecret(ctx.apiKey, secretName)) return false;
   if (ctx.client.role === 'admin') return true;
   const allow = ctx.client.allowed_resolve || [];
-  return checkPathAllowed(allow, secretName);
+  if (!Array.isArray(allow) || allow.length === 0) return false;
+  return allow.includes('*') || checkPathAllowed(allow, secretName);
 }
 
 // ============================================================
@@ -1010,23 +1033,39 @@ function canResolve(ctx, secretName) {
 const RATE_BUCKETS = new Map();
 
 // timing-safe string compare (for password check)
-async function timingSafeEqual(a, b) {
+// Used only for the legacy plaintext password path.
+// Both values are copied into fixed-size zero-padded buffers so the comparison
+// time depends on neither the stored nor the supplied length, and the true
+// lengths are compared only after the constant-time comparison. Nothing is
+// hashed or stored here; scrypt-hashed passwords use totpVerifyPassword.
+const LEGACY_SECRET_COMPARE_BYTES = 1024;
+function timingSafeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  if (a.length !== b.length) {
-    // still consume time on the longest length to avoid early-reject timing leak
-    let dummy = 0;
-    for (let i = 0; i < Math.max(a.length, b.length); i++) dummy |= 0;
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  if (left.length > LEGACY_SECRET_COMPARE_BYTES || right.length > LEGACY_SECRET_COMPARE_BYTES) {
+    // Explicit rejection (never a silent mismatch): legacy plaintext secrets are capped.
+    console.warn('[auth] legacy plaintext password rejected: exceeds', LEGACY_SECRET_COMPARE_BYTES, 'bytes');
     return false;
   }
-  let r = 0;
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return r === 0;
+  const paddedLeft = Buffer.alloc(LEGACY_SECRET_COMPARE_BYTES);
+  const paddedRight = Buffer.alloc(LEGACY_SECRET_COMPARE_BYTES);
+  left.copy(paddedLeft);
+  right.copy(paddedRight);
+  const sameBytes = cryptoTimingSafeEqual(paddedLeft, paddedRight);
+  // Compare the true lengths in constant time too, so 'abc' and 'abc\0' never match.
+  const lenLeft = Buffer.alloc(4);
+  const lenRight = Buffer.alloc(4);
+  lenLeft.writeUInt32BE(left.length);
+  lenRight.writeUInt32BE(right.length);
+  const sameLength = cryptoTimingSafeEqual(lenLeft, lenRight);
+  return sameBytes & sameLength ? true : false;
 }
 
 // v3.0: 密码验证智能 wrapper — 检测 stored 是否 hash，自动选 verify 函数
 // 兼容：plaintext / scrypt$... 两种格式
 function verifyClientPassword(plaintext, stored) {
-  if (!stored) return false;
+  if (typeof plaintext !== 'string' || typeof stored !== 'string' || !stored) return false;
   if (stored.startsWith('scrypt$')) {
     return totpVerifyPassword(plaintext, stored);
   }
@@ -1345,7 +1384,7 @@ function getAliyunAction(path, serviceCfg, query) {
 
 
 async function callUpstream(serviceCfg, method, path, query, headers, body, opts = {}) {
-  const effectiveMethod = validateMethod(method, serviceCfg.allowed_methods || ['GET']);
+  const effectiveMethod = validateMethod(method, effectiveServiceAllowedMethods(serviceCfg));
   const callerHeaders = sanitizeCallerHeaders(headers, serviceCfg.allowed_request_headers || []);
   parsePinnedUpstream(serviceCfg.upstream);
   // Resolve all secrets used by this service
@@ -1477,15 +1516,9 @@ async function callUpstream(serviceCfg, method, path, query, headers, body, opts
   });
   const latency = Date.now() - start;
 
-  // Read response (https.request returns IncomingMessage with plain headers object)
-  const respHeaders = {};
-  for (const [k, v] of Object.entries(upstreamResp.headers)) {
-    respHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
-  }
-  // strip hop-by-hop
-  delete respHeaders['transfer-encoding'];
-  delete respHeaders['connection'];
-  delete respHeaders['keep-alive'];
+  // Inspect Connection nominations before stripping the transport header.
+  // Credentials and browser policy must not cross from the upstream origin.
+  const respHeaders = proxyResponseHeaders(upstreamResp.headers);
 
   // IncomingMessage has no .arrayBuffer(); collect from 'data' events.
   const chunks = [];
@@ -1522,6 +1555,17 @@ async function handle(req, res) {
   const t0 = Date.now();
   const route = { method: m, pathname: p };
 
+  // Preserve the deployed pre-route PoP gate, including public/v2/login paths.
+  // Direct TLS still proves possession; forwarded identities use the staged
+  // configured policy. Unknown policy values never silently turn protection off.
+  const popDenial = enforcePop({ identity: getIdentity(req), method: m, pathname: p,
+    requirePop: CONFIG?.security?.require_pop });
+  if (popDenial) {
+    audit({ action: 'connect', status: 'denied', reason: popDenial.reason,
+      mode: popDenial.mode, method: m, path: p, cn: getIdentity(req)?.clientName });
+    return jsonError(res, 403, 'Proof-of-possession requirement was not satisfied');
+  }
+
   // Phase AF: modular request pipeline (public routes)
   {
     const publicDeps = {
@@ -1557,6 +1601,12 @@ async function handle(req, res) {
   // Public /health + dashboard static are handled by the modular pipeline above.
 
   if (await v2Routes(req, res, route)) return;
+
+  const delegatedIdentity = getIdentity(req);
+  if (delegatedIdentity?.apiKey && !isCompatibilityKeyRouteAllowed(delegatedIdentity.apiKey, m, p)) {
+    audit({ action: 'legacy_api', status: 'denied', reason: 'delegated_key_route_denied', cn: delegatedIdentity.cn, path: p });
+    return jsonError(res, 403, 'Delegated API key cannot access this compatibility endpoint');
+  }
 
   // ----- POST /api/v1/login: mTLS cert OR allow_password_login client -> session token -----
   // Login must work from a browser that may not have a client cert installed.
@@ -1788,7 +1838,7 @@ async function handle(req, res) {
       const mfaResult = verifyMfaCode(c, verify);
       if (mfaResult.ok) verified = true;
     }
-    if (!verified && c.password) {
+    if (!verified && !c.totp_secret && c.password) {
       verified = verifyClientPassword(verify, c.password);
     }
     if (!verified) {
@@ -1971,7 +2021,7 @@ async function handle(req, res) {
       if (mfaR.ok) verified = true;
     }
     // admin 没 TOTP 时允许用密码
-    if (!verified && ctx.client.role === 'admin' && ctx.client.password) {
+    if (!verified && !ctx.client.totp_secret && ctx.client.role === 'admin' && ctx.client.password) {
       verified = verifyClientPassword(verifyCode, ctx.client.password);
     }
     if (!verified) {
@@ -2037,7 +2087,7 @@ async function handle(req, res) {
       const mfaR = verifyMfaCode(ctx.client, verifyCode);
       if (mfaR.ok) verified = true;
     }
-    if (!verified && ctx.client.role === 'admin' && ctx.client.password) {
+    if (!verified && !ctx.client.totp_secret && ctx.client.role === 'admin' && ctx.client.password) {
       verified = verifyClientPassword(verifyCode, ctx.client.password);
     }
     if (!verified) {
@@ -2088,7 +2138,7 @@ async function handle(req, res) {
     if (/^\d{6}$/.test(verifyCode) && ctx.client.totp_secret) {
       if (verifyMfaCode(ctx.client, verifyCode).ok) verified = true;
     }
-    if (!verified && ctx.client.password) {
+    if (!verified && !ctx.client.totp_secret && ctx.client.password) {
       verified = verifyClientPassword(verifyCode, ctx.client.password);
     }
     if (!verified) {
@@ -2421,8 +2471,9 @@ async function handle(req, res) {
         header_name: svc.header_name || null,
         header_value_template: svc.header_value_template || null,
         allow_paths: svc.allow_paths || null,
+        allowed_methods: effectiveServiceAllowedMethods(svc),
         dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
-        allowed_clients: clientNamesAllowedFor(name),
+        allowed_clients: clientNamesAllowedFor(CONFIG.clients, name),
         action_count: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions.length : 0,
       });
     }
@@ -2455,8 +2506,9 @@ async function handle(req, res) {
       header_name: svc.header_name || null,
       header_value_template: svc.header_value_template || null,
       allow_paths: svc.allow_paths || null,
+      allowed_methods: effectiveServiceAllowedMethods(svc),
       dashboard_actions: Array.isArray(svc.dashboard_actions) ? svc.dashboard_actions : [],
-      allowed_clients: clientNamesAllowedFor(name),
+      allowed_clients: clientNamesAllowedFor(CONFIG.clients, name),
     });
   }
 
@@ -2905,7 +2957,7 @@ async function handle(req, res) {
     const body = await readBody(req) || {};
     const method = body.method || 'GET';
     const path = body.path || '/';
-    if (!canProxy(ctx, serviceName, path)) {
+    if (!canProxy(ctx, serviceName, path, method) || (ctx.apiKey && !canProxyService(ctx.apiKey, serviceName))) {
       audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'denied' });
       return jsonError(res, 403, `Not allowed to proxy ${serviceName}${path}`);
     }
@@ -2946,7 +2998,10 @@ async function handle(req, res) {
         status: r.status >= 200 && r.status < 400 ? 'ok' : 'error',
       });
       // forward response
-      res.writeHead(r.status, { ...r.headers, 'X-Broker-Latency-Ms': String(r.latency), 'X-Broker-Version': BROKER_VERSION });
+      res.writeHead(r.status, proxyResponseHeaders(r.headers, {
+        ...securityHeaders({ kind: 'json' }),
+        'X-Broker-Latency-Ms': String(r.latency), 'X-Broker-Version': BROKER_VERSION,
+      }));
       return res.end(r.body);
     } catch (err) {
       audit({ action: 'proxy', cn: ctx.cn, fp: ctx.fp, service: serviceName, method, path, status: 'error', error: err.message });
@@ -3244,6 +3299,8 @@ const identityResolver = createIdentityResolver({
     sourceIp: process.env.BROKER_FORWARDED_MTLS_SOURCE_IP,
     fingerprintSha256: process.env.BROKER_FORWARDED_MTLS_FINGERPRINT_SHA256,
     clientName: process.env.BROKER_FORWARDED_MTLS_CLIENT,
+    headerName: process.env.BROKER_FORWARDED_MTLS_HEADER,
+    ownerFingerprintSha256: process.env.BROKER_FORWARDED_MTLS_OWNER_FINGERPRINT_SHA256,
   },
 });
 
@@ -3263,26 +3320,9 @@ function getApiKeyIdentity(req) {
 }
 
 // v3.0 M2: API Key 限速 (用 k.id 作 bucket key)
-const API_KEY_BUCKETS = new Map();
+const API_KEY_QUOTA = createApiKeyQuota();
 function rateLimitApiKey(k) {
-  if (!k) return true;
-  const limit = k.rate_limit || '100/hour';
-  if (limit === 'unlimited') return true;
-  const m = limit.match(/^(\d+)\/(hour|minute|day)$/);
-  if (!m) return false;
-  const max = parseInt(m[1], 10);
-  const windowMs = m[2] === 'minute' ? 60_000 : m[2] === 'day' ? 86_400_000 : 3_600_000;
-  const key = 'apikey:' + k.id;
-  const now = Date.now();
-  const bucket = API_KEY_BUCKETS.get(key) || [];
-  const fresh = bucket.filter(t => now - t < windowMs);
-  if (fresh.length >= max) {
-    API_KEY_BUCKETS.set(key, fresh);
-    return false;
-  }
-  fresh.push(now);
-  API_KEY_BUCKETS.set(key, fresh);
-  return true;
+  return API_KEY_QUOTA(k);
 }
 
 // ============================================================

@@ -107,7 +107,20 @@ export function buildPinnedUrl(upstream, requestPath, query) {
   return url;
 }
 
-export function validateMethod(method, allowedMethods = ['GET', 'POST']) {
+// Services without an explicit `allowed_methods` list may only be called with
+// GET. Explicitly configured lists (including POST or an empty deny-all list)
+// are used verbatim. This single default is shared by the proxy path, the
+// admin service read API and validateMethod so they cannot drift apart.
+export const DEFAULT_SERVICE_ALLOWED_METHODS = Object.freeze(['GET']);
+
+export function effectiveServiceAllowedMethods(serviceCfg) {
+  const configured = serviceCfg?.allowed_methods;
+  return configured === undefined || configured === null
+    ? [...DEFAULT_SERVICE_ALLOWED_METHODS]
+    : configured;
+}
+
+export function validateMethod(method, allowedMethods = DEFAULT_SERVICE_ALLOWED_METHODS) {
   const normalized = String(method || 'GET').toUpperCase();
   const allowed = new Set((allowedMethods || []).map((item) => String(item).toUpperCase()));
   if (!allowed.has(normalized)) throw new OutboundPolicyError(`HTTP method ${normalized} is not permitted`);

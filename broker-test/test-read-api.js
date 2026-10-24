@@ -155,8 +155,7 @@ section('3. Services endpoint (non-admin + service not allowed)');
   const ctx = { client: { role: 'developer' }, cn: 'u', fp: 'Y' };
   const res = fakeRes();
   await r.dispatch(req(), res, { method: 'GET', pathname: '/api/v1/services' }, ctx);
-  ok('allowed=false for non-admin', res.body.services[0].allowed === false);
-  ok('still returns service metadata', res.body.services[0].type === 'github_token');
+  ok('unauthorized service names are not enumerable', res.body.services.length === 0);
 }
 
 section('4. Secrets endpoint (admin sees full metadata)');
@@ -190,7 +189,7 @@ section('5. Secrets endpoint (non-admin with allow_all wildcard)');
 section('6. Secrets endpoint (non-admin with restricted allow)');
 
 {
-  const deps = makeDeps({ checkPathAllowed: (allow, name) => name === 'GITHUB_PAT' });
+  const deps = makeDeps({ canResolve: (_ctx, name) => name === 'GITHUB_PAT' });
   const r = createReadApiRoutes(deps);
   const ctx = { client: { role: 'developer', allowed_resolve: ['GITHUB_*'] }, cn: 'u', fp: 'W' };
   const res = fakeRes();

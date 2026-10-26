@@ -110,12 +110,15 @@ export function createIdentityResolver(deps) {
   // Cloudflare-edge mTLS forwarded by the trusted local nginx hop. The
   // X-SSL-Client-Verify value is written by nginx (never by the caller) and
   // only selects which verification runs; it never grants identity by itself.
-  // Every value other than the two below fails closed before any certificate
-  // or proof-of-possession processing happens.
+  // Every other verify value fails closed before any certificate or
+  // proof-of-possession processing happens.
   //   SUCCESS without a forwarded certificate header -> nginx verified a direct
   //     client certificate; continue to the nginx mTLS path (1b).
-  //   NONE -> the forwarded certificate must pass the pinned fingerprint,
-  //     owner binding, validity and EKU checks before PoP is evaluated.
+  //   NONE with a presented forwarded certificate -> pinned fingerprint, owner
+  //     binding, validity and EKU checks run before PoP. Failure does not fall
+  //     through to a browser session.
+  //   NONE with no presented certificate -> no edge identity. A browser session
+  //     may continue; a bearer key still cannot stand alone.
   function resolveEdgeForwardedIdentity(req, config, forwardedHeaders) {
     const nginxVerify = String(req.headers['x-ssl-client-verify'] || '');
     if (nginxVerify === 'SUCCESS' && forwardedHeaders.length === 0) return EDGE_FORWARDED_PASSTHROUGH;
@@ -123,8 +126,15 @@ export function createIdentityResolver(deps) {
       audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_proxy_verify_invalid', remote: forwardedMtlsConfig.sourceIp });
       return null;
     }
+    const rawCertificate = req.headers[forwardedMtlsConfig.headerName];
+    const onlyConfiguredHeader = forwardedHeaders.length === 1
+      && forwardedHeaders[0] === forwardedMtlsConfig.headerName;
+    if (forwardedHeaders.length === 0
+        || (onlyConfiguredHeader && typeof rawCertificate === 'string' && rawCertificate.trim() === '')) {
+      return EDGE_TUNNEL_WITHOUT_CERTIFICATE;
+    }
     const resolved = resolveForwardedMtlsCertificate(
-      req.headers[forwardedMtlsConfig.headerName],
+      rawCertificate,
       config,
       forwardedMtlsConfig,
       requireNodeCrypto,
@@ -161,6 +171,10 @@ export function createIdentityResolver(deps) {
     }
 
     let primary = null;
+    // A browser that does not present a client certificate is a normal dashboard
+    // login, including password and WebAuthn. Only a presented-but-invalid edge
+    // certificate fails closed. A missing certificate must not erase a session.
+    let tunnelWithoutCertificate = false;
 
     // 1a. Cloudflare-managed mTLS forwarded through the existing local nginx
     // proxy. nginx overwrites X-Forwarded-For with the immediate peer address,
@@ -181,7 +195,8 @@ export function createIdentityResolver(deps) {
     if (fromForwardedMtlsSource) {
       const edge = resolveEdgeForwardedIdentity(req, config, forwardedHeaders);
       if (edge === null) return null;
-      if (edge !== EDGE_FORWARDED_PASSTHROUGH) primary = edge;
+      if (edge === EDGE_TUNNEL_WITHOUT_CERTIFICATE) tunnelWithoutCertificate = true;
+      else if (edge !== EDGE_FORWARDED_PASSTHROUGH) primary = edge;
     }
 
     // 1b. nginx-forwarded mTLS. A proxy marker on any other connection is a
@@ -269,6 +284,15 @@ export function createIdentityResolver(deps) {
       return { ...primary, apiKey: apiKeyCtx.apiKey };
     }
     if (primary) return primary;
+    // The tunnel certificate is optional for a browser session, but it remains
+    // mandatory before a bearer key can stand alone. A stolen key must not
+    // become a login just because the browser did not send a certificate.
+    if (tunnelWithoutCertificate) {
+      if (apiKeyCtx) {
+        audit({ action: 'connect', status: 'denied', reason: 'forwarded_mtls_certificate_missing', remote: forwardedMtlsConfig.sourceIp });
+      }
+      return null;
+    }
     if (!apiKeyCtx) return null;
     return {
       cn: `apikey:${apiKeyCtx.apiKey.id}`,
@@ -285,6 +309,7 @@ export function createIdentityResolver(deps) {
 }
 
 const EDGE_FORWARDED_PASSTHROUGH = Object.freeze({ passthrough: true });
+const EDGE_TUNNEL_WITHOUT_CERTIFICATE = Object.freeze({ tunnelWithoutCertificate: true });
 
 function normalizeForwardedMtlsConfig(value) {
   if (value === undefined || value === null) return null;

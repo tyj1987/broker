@@ -156,18 +156,26 @@ function isAgentIdentity(identity) {
   return context?.via !== 'session' || AGENT_IDENTITY_METHODS.has(context?.via);
 }
 
+function grantAllows(list, value) {
+  return Array.isArray(list) && (list.includes('*') || list.includes(value));
+}
+
 function apiKeyAllowsDiscovery(identity, tool) {
   const context = identity?.context;
   const apiKey = context?.apiKey;
   if (!apiKey) return context?.via !== 'api_key';
   const operation = `${tool.provider}:${tool.operation_id}`;
   const operationScope = `operations:${tool.provider}:${tool.operation_id}`;
+  const environments = apiKey.allowed_environments;
+  const environmentAllowed = Array.isArray(environments) && (
+    environments.includes('*') || environments.some((environment) => tool.environments.includes(environment))
+  );
   return (apiKey.scopes?.includes('operations:execute') || apiKey.scopes?.includes(operationScope))
-    && apiKey.allowed_services?.includes(tool.provider)
-    && apiKey.allowed_operations?.includes(operation)
+    && grantAllows(apiKey.allowed_services, tool.provider)
+    && grantAllows(apiKey.allowed_operations, operation)
     && Array.isArray(apiKey.allowed_accounts) && apiKey.allowed_accounts.length > 0
     && Array.isArray(apiKey.allowed_resources) && apiKey.allowed_resources.length > 0
-    && apiKey.allowed_environments?.some((environment) => tool.environments.includes(environment));
+    && environmentAllowed;
 }
 
 export class ToolRegistry {

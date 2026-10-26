@@ -66,12 +66,18 @@ console.log('=== dashboard scripts subscribe instead of 30s poll ===');
   const apiKeysUi = readFileSync(join(root, 'api-keys.js'), 'utf8');
   assert(html.includes('id="ak-scope-operations"'), 'API key form offers typed operation scope');
   assert(!html.includes('id="ak-scope-resolve" value="secrets:resolve" checked'), 'plaintext resolve is not selected by default');
-  for (const field of ['allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_resources', 'allowed_environments']) {
-    assert(html.includes(`name="${field}"`), `API key form includes ${field}`);
-    assert(apiKeysUi.includes(`${field}: parseList`), `API key request includes ${field}`);
+  assert(html.includes('id="ak-grant-registered" checked'), 'API key form defaults to every registered permission');
+  assert(html.includes('id="ak-permission-picker"'), 'API key form offers an optional permission picker');
+  assert(apiKeysUi.includes('use_registered_permissions: true'), 'default create grants the registered catalog');
+  assert(apiKeysUi.includes("api('/api/v1/api-keys/permission-catalog')"), 'picker loads the registered catalog');
+  for (const field of ['allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_resources', 'allowed_environments', 'allowed_secrets']) {
+    assert(html.includes(`data-field="${field}"`), `API key picker includes ${field}`);
+    assert(apiKeysUi.includes(`selectedValues('${field}')`), `API key request includes ${field}`);
   }
   assert(apiKeysUi.includes("includes('*')"), 'API key form rejects wildcard grants');
   assert(apiKeysUi.includes("scopes.push('operations:execute')"), 'API key request uses typed operation scope');
+  assert(server.includes("p === '/api/v1/api-keys/permission-catalog'"), 'server exposes the permission catalog');
+  assert(server.includes('use_registered_permissions'), 'server expands the registered-permission default');
   const serverSource = readFileSync(join(root, '..', 'server.js'), 'utf8');
   assert(serverSource.includes("RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype'])"), 'service names reject prototype keys');
   assert(serverSource.includes("if (/[\\r\\n]/.test(value)) continue"), 'injected header values reject CRLF');

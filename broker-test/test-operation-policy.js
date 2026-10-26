@@ -45,6 +45,21 @@ const base = {
 };
 
 assert.equal(evaluateOperationPolicy(config, base, 1_000).allow, true);
+const openKey = {
+  ...apiKey,
+  allowed_services: ['*'],
+  allowed_operations: ['*'],
+  allowed_accounts: ['*'],
+  allowed_environments: ['*'],
+  allowed_resources: ['*'],
+  allowed_secrets: ['*'],
+};
+assert.equal(evaluateOperationPolicy(config, {
+  ...base, identity: { ...base.identity, context: { ...context, apiKey: openKey } },
+}, 1_000).allow, true, 'open marker matches the registered request');
+assert.equal(evaluateOperationPolicy(config, {
+  ...base, identity: { ...base.identity, context: { ...context, apiKey: { ...apiKey, allowed_services: [] } } },
+}, 1_000).allow, false, 'empty service list stays denied');
 assert.equal(evaluateOperationPolicy(config, base, 1_000).executionMode, 'adapter');
 assert.equal(evaluateOperationPolicy({
   operation_policies: { aliyun: { 'billing.read': { ...policy, execution_mode: 'browser' } } },

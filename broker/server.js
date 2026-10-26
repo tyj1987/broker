@@ -59,6 +59,8 @@ import {
   createChildKey,
   canCreateChild,
   isClientIpAllowed,
+  registeredPermissionCatalog,
+  resolveApiKeyConstraints,
 } from './api-keys.js';
 import { BROKER_VERSION } from './version.js';
 import { aliyunRpcVersion, mergeAliyunQuery } from './lib/aliyun-rpc.js';
@@ -2000,6 +2002,10 @@ async function handle(req, res) {
     return send(res, 200, { keys: listApiKeysFn(CONFIG.api_keys, opts) });
   }
 
+  if (m === 'GET' && p === '/api/v1/api-keys/permission-catalog') {
+    return send(res, 200, { catalog: registeredPermissionCatalog(CONFIG) });
+  }
+
   // ----- POST /api/v1/api-keys -----
   if (m === 'POST' && p === '/api/v1/api-keys') {
     const body = await readBody(req) || {};
@@ -2028,14 +2034,22 @@ async function handle(req, res) {
       audit({ action: 'api_key_create', cn: ctx.cn, fp: ctx.fp, status: 'denied', reason: 'bad_verify' });
       return jsonError(res, 401, 'Invalid TOTP code or password');
     }
+    const constraints = resolveApiKeyConstraints(CONFIG, body);
+    if (!constraints.ok) return jsonError(res, 400, constraints.error);
+    const scopes = Array.isArray(body.scopes) ? body.scopes : [];
+    if (scopes.includes('operations:execute') && body.use_registered_permissions !== true) {
+      const missing = ['allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_environments']
+        .filter((field) => constraints[field].length === 0);
+      if (missing.length > 0) return jsonError(res, 400, `Missing permission selection: ${missing.join(', ')}`);
+    }
     const opts = {
       scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
-      allowed_secrets: Array.isArray(body.allowed_secrets) ? body.allowed_secrets : undefined,
-      allowed_services: Array.isArray(body.allowed_services) ? body.allowed_services : undefined,
-      allowed_operations: Array.isArray(body.allowed_operations) ? body.allowed_operations : undefined,
-      allowed_accounts: Array.isArray(body.allowed_accounts) ? body.allowed_accounts : undefined,
-      allowed_resources: Array.isArray(body.allowed_resources) ? body.allowed_resources : undefined,
-      allowed_environments: Array.isArray(body.allowed_environments) ? body.allowed_environments : undefined,
+      allowed_secrets: constraints.allowed_secrets,
+      allowed_services: constraints.allowed_services,
+      allowed_operations: constraints.allowed_operations,
+      allowed_accounts: constraints.allowed_accounts,
+      allowed_resources: constraints.allowed_resources,
+      allowed_environments: constraints.allowed_environments,
       rate_limit: body.rate_limit,
       ip_whitelist: Array.isArray(body.ip_whitelist) ? body.ip_whitelist : null,
       ttl_ms: body.ttl_seconds ? body.ttl_seconds * 1000 : undefined,

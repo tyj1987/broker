@@ -6,8 +6,12 @@ import {
   createChildKey,
   normalizeRateLimit,
   RATE_LIMIT_PRESETS,
+  registeredPermissionCatalog,
+  resolveApiKeyConstraints,
+  canProxyService,
+  canResolveSecret,
+  isClientIpAllowed,
 } from '../broker/api-keys.js';
-import { isClientIpAllowed } from '../broker/api-keys.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -131,6 +135,55 @@ section('backward compat');
   const { key_obj } = generateApiKey('t', 'c', {});
   ok('no whitelist = open', isClientIpAllowed(key_obj, '8.8.8.8'));
   ok('default rate_limit = "100/hour"', key_obj.rate_limit === '100/hour' || (typeof key_obj.rate_limit === 'object'));
+}
+
+section('registered permission catalog');
+{
+  const policies = {
+    github: {
+      'repo.read': {
+        accounts: [' github-primary '],
+        environments: ['production'],
+        resources: ['*'],
+        secret_refs: ['github-app', 'bad\nname'],
+      },
+    },
+  };
+  Object.defineProperty(policies, 'constructor', { value: { leak: {} }, enumerable: true });
+  const catalog = registeredPermissionCatalog({
+    operation_policies: policies,
+    provider_accounts: {
+      github: { 'github-primary': { environments: ['staging'], repositories: ['tyj1987/broker'] } },
+    },
+    services: { openai: {} },
+  });
+  ok('catalog services', JSON.stringify(catalog.services) === '["github","openai"]');
+  ok('catalog operations', JSON.stringify(catalog.operations) === '["github:repo.read"]');
+  ok('catalog accounts', JSON.stringify(catalog.accounts) === '["github-primary"]');
+  ok('catalog resources', JSON.stringify(catalog.resources) === '["tyj1987/broker"]');
+  ok('catalog environments', JSON.stringify(catalog.environments) === '["production","staging"]');
+  ok('catalog secrets', JSON.stringify(catalog.secrets) === '["github-app"]');
+  const granted = resolveApiKeyConstraints({
+    operation_policies: policies,
+    services: { openai: {} },
+    provider_accounts: {
+      github: { 'github-primary': { environments: ['staging'], repositories: ['tyj1987/broker'] } },
+    },
+  }, { use_registered_permissions: true });
+  ok('default grant uses catalog services', JSON.stringify(granted.allowed_services) === '["github","openai"]');
+  ok('default grant uses catalog operations', JSON.stringify(granted.allowed_operations) === '["github:repo.read"]');
+  const emptyGrant = resolveApiKeyConstraints({}, { use_registered_permissions: true });
+  ok('empty catalog stores an open marker', emptyGrant.allowed_services[0] === '*' && emptyGrant.allowed_resources[0] === '*');
+  const explicit = resolveApiKeyConstraints({}, { allowed_services: ['github'], allowed_operations: ['github:repo.read'] });
+  ok('explicit list kept', explicit.ok === true && explicit.allowed_services[0] === 'github' && explicit.allowed_accounts.length === 0);
+  const wildcard = resolveApiKeyConstraints({}, { allowed_services: ['*'] });
+  ok('caller-typed wildcard rejected', wildcard.ok === false);
+  const proxyKey = { scopes: ['services:proxy'], allowed_services: ['*'] };
+  ok('open marker can proxy a service', canProxyService(proxyKey, 'github') === true);
+  const secretKey = { scopes: ['secrets:resolve'], allowed_secrets: ['*'] };
+  ok('open marker does not export an unlisted secret', canResolveSecret(secretKey, 'GITHUB_PAT') === false);
+  const namedSecret = { scopes: ['secrets:resolve'], allowed_secrets: ['github-app'] };
+  ok('listed secret remains resolvable', canResolveSecret(namedSecret, 'github-app') === true);
 }
 
 section('child constraints fail closed');

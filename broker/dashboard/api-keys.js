@@ -12,10 +12,68 @@
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
-  const parseList = (value) => [...new Set(String(value || '')
-    .split(/[\r\n,]+/)
-    .map((item) => item.trim())
-    .filter(Boolean))];
+  const CATALOG_GROUPS = [
+    ['#ak-catalog-services', '服务 / Services'],
+    ['#ak-catalog-operations', '操作 / Operations'],
+    ['#ak-catalog-accounts', '账户 / Accounts'],
+    ['#ak-catalog-resources', '资源 / Resources'],
+    ['#ak-catalog-environments', '环境 / Environments'],
+    ['#ak-catalog-secrets', '密钥引用 / Secret refs'],
+  ];
+
+  function selectedValues(field) {
+    return $$(`#ak-permission-picker input[name="${field}"]:checked`).map((input) => input.value);
+  }
+
+  function renderCatalog(catalog) {
+    for (const [selector, title] of CATALOG_GROUPS) {
+      const host = $(selector);
+      if (!host) continue;
+      const field = host.dataset.field;
+      const values = Array.isArray(catalog?.[field.replace('allowed_', '')])
+        ? catalog[field.replace('allowed_', '')]
+        : [];
+      host.innerHTML = '';
+      const heading = document.createElement('p');
+      heading.className = 'hint';
+      heading.textContent = title;
+      host.appendChild(heading);
+      if (values.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = '没有单独登记的项目。使用默认全部权限时，这一项不按名单拦截。';
+        host.appendChild(empty);
+        continue;
+      }
+      for (const value of values) {
+        const label = document.createElement('label');
+        label.style.display = 'block';
+        label.style.margin = '4px 0';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.name = field;
+        input.value = value;
+        input.checked = true;
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(' ' + value));
+        host.appendChild(label);
+      }
+    }
+  }
+
+  async function loadCatalog() {
+    try {
+      const response = await api('/api/v1/api-keys/permission-catalog');
+      renderCatalog(response.catalog || {});
+    } catch (ex) {
+      setStatus('#create-key-status', '权限名单加载失败: ' + (ex.message || ex), 'err');
+    }
+  }
+
+  function setPickerVisible(visible) {
+    const picker = $('#ak-permission-picker');
+    if (picker) picker.hidden = !visible;
+  }
 
   // ---- 加载列表 ----
   async function loadKeys() {
@@ -84,24 +142,24 @@
       setStatus('#create-key-status', '❌ 至少勾选一个 scope', 'err');
       return;
     }
-    const operationConstraints = {
-      allowed_services: parseList(form.allowed_services.value),
-      allowed_operations: parseList(form.allowed_operations.value),
-      allowed_accounts: parseList(form.allowed_accounts.value),
-      allowed_resources: parseList(form.allowed_resources.value),
-      allowed_environments: parseList(form.allowed_environments.value),
-      allowed_secrets: parseList(form.allowed_secrets.value),
+    const grantRegistered = $('#ak-grant-registered')?.checked === true;
+    const operationConstraints = grantRegistered ? {} : {
+      allowed_services: selectedValues('allowed_services'),
+      allowed_operations: selectedValues('allowed_operations'),
+      allowed_accounts: selectedValues('allowed_accounts'),
+      allowed_resources: selectedValues('allowed_resources'),
+      allowed_environments: selectedValues('allowed_environments'),
+      allowed_secrets: selectedValues('allowed_secrets'),
     };
-    if (scopes.includes('operations:execute')) {
-      const missing = Object.entries(operationConstraints)
-        .filter(([field, values]) => field !== 'allowed_secrets' && values.length === 0)
-        .map(([field]) => field);
+    if (!grantRegistered && scopes.includes('operations:execute')) {
+      const missing = ['allowed_services', 'allowed_operations', 'allowed_accounts', 'allowed_environments']
+        .filter((field) => operationConstraints[field].length === 0);
       if (missing.length > 0) {
-        setStatus('#create-key-status', `❌ 类型化操作缺少边界: ${missing.join(', ')}`, 'err');
+        setStatus('#create-key-status', `❌ 请至少勾选一项，或改回默认全部权限: ${missing.join(', ')}`, 'err');
         return;
       }
       if (Object.values(operationConstraints).flat().includes('*')) {
-        setStatus('#create-key-status', '❌ 不允许通配符；请填写精确服务、操作、账户、资源和环境', 'err');
+        setStatus('#create-key-status', '❌ 不允许手填通配符；请勾选列出的权限，或使用默认全部权限', 'err');
         return;
       }
     }
@@ -111,7 +169,13 @@
       return;
     }
     const ttlRaw = form.ttl_seconds.value;
-    const body = { name, scopes, verify, ...operationConstraints };
+    const body = {
+      name,
+      scopes,
+      verify,
+      ...operationConstraints,
+      ...(grantRegistered ? { use_registered_permissions: true } : {}),
+    };
     if (ttlRaw !== '0') body.ttl_seconds = parseInt(ttlRaw, 10);
 
     try {
@@ -125,6 +189,9 @@
       $('#ak-scope-operations').checked = true;
       $('#ak-scope-resolve').checked = false;
       $('#ak-scope-proxy').checked = false;
+      const grantAll = $('#ak-grant-registered');
+      if (grantAll) grantAll.checked = true;
+      setPickerVisible(false);
       $('#ak-verify').value = '';  // 安全: 清空 verify 字段
       await loadKeys();
     } catch (ex) {
@@ -242,11 +309,27 @@
     if (copyBtn) copyBtn.addEventListener('click', copyNewKey);
     const closeUsage = $('#btn-close-usage');
     if (closeUsage) closeUsage.addEventListener('click', () => { $('#ak-usage-modal').hidden = true; });
+    const grantAll = $('#ak-grant-registered');
+    if (grantAll) {
+      grantAll.addEventListener('change', () => {
+        setPickerVisible(!grantAll.checked);
+        if (!grantAll.checked) loadCatalog();
+      });
+    }
+    const checkAll = $('#ak-check-all');
+    if (checkAll) checkAll.addEventListener('click', () => {
+      $$('#ak-permission-picker input[type="checkbox"]').forEach((input) => { input.checked = true; });
+    });
+    const checkNone = $('#ak-check-none');
+    if (checkNone) checkNone.addEventListener('click', () => {
+      $$('#ak-permission-picker input[type="checkbox"]').forEach((input) => { input.checked = false; });
+    });
 
     // 监听 tabchange 事件（app.js 在切 tab 时 dispatch）
     document.addEventListener('tabchange', (ev) => {
       if (ev && ev.detail && ev.detail.tab === 'api-keys') {
         loadKeys();
+        if ($('#ak-grant-registered')?.checked === false) loadCatalog();
       }
     });
   }

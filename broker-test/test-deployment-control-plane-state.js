@@ -61,6 +61,23 @@ assert.match(
   deployWorkflow,
   /name: Build Go policy core[\s\S]*working-directory: core[\s\S]*-o \.\.\/broker\/bin\/secret-broker-policy \.\/cmd\/policy-server/,
 );
+assert.equal(
+  deployWorkflow.match(/if: startsWith\(github\.ref, 'refs\/tags\/v'\)/g)?.length,
+  2,
+);
+assert.match(deployWorkflow, /needs: build/);
+assert.equal(deployWorkflow.match(/environment: production-aliyun/g)?.length, 2);
+assert.match(deployWorkflow, /actions: read/);
+assert.match(deployWorkflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+assert.match(deployWorkflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$\{RELEASE_SHA\}/);
+assert.match(deployWorkflow, /total_count \/\/ 0\) == 0/);
+assert.match(deployWorkflow, /No CI workflow run found/);
+assert.match(deployWorkflow, /\.workflow_runs\[0\]\.conclusion/);
+assert.match(deployWorkflow, /expected success/);
+assert.match(deployWorkflow, /fetch-depth: 0/);
+assert.match(deployWorkflow, /git fetch origin master/);
+assert.match(deployWorkflow, /git merge-base --is-ancestor "\$RELEASE_SHA" origin\/master/);
+assert.doesNotMatch(deployWorkflow, /workflow_run:/);
 assert.match(nginx, /ssl_certificate \/etc\/nginx\/cert\/broker\.52trz\.com\/fullchain\.pem/);
 assert.match(nginx, /proxy_ssl_verify on;/);
 assert.match(nginx, /proxy_ssl_protocols TLSv1\.3;/);
@@ -77,6 +94,10 @@ assert.doesNotMatch(workflow, /push-to-registry:\s*true/);
 assert.doesNotMatch(workflow, /packages:\s*write/);
 assert.match(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.2/);
 assert.doesNotMatch(dockerfile, /-require=google\.golang\.org\/grpc@v1\.83\.1/);
+assert.match(dockerfile, /golang:1\.27\.3-alpine3\.24@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c/);
+assert.doesNotMatch(dockerfile, /golang:1\.27\.2/);
+assert.match(dockerfile, /-require=golang\.org\/x\/net@v0\.60\.0/);
+assert.match(dockerfile, /-require=golang\.org\/x\/crypto@v0\.57\.0/);
 
 console.log(
   'deployment state boundary: protected key, persistent state, single replica and fail-closed bootstrap passed',

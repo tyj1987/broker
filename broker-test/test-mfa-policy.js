@@ -143,12 +143,15 @@ section('risk-based');
 {
   // high risk via score (no sensitive action), unusual_ip + stale + UA + hour (use LOCAL 3AM)
   // 30 + 20 + 15 + 10 = 75 -> > 60 -> high_risk -> min 2
+  // last_login is derived from this same pinned clock. Date.now() moves past
+  // 2026-09-01 and drops stale_account, leaving score 55 / trigger_match.
+  const riskNow = new Date(2026, 8, 1, 3, 0, 0); // local 3 AM
   const d = decideMfaRequirement({
     client: { role: 'developer', ip_whitelist: ['10.0.0.0/8'] },
     source_ip: '8.8.8.8',
-    last_login_at: Date.now() - 40 * 86400_000,
+    last_login_at: riskNow.getTime() - 40 * 86400_000,
     user_agent: 'new', last_user_agent: 'old',
-    now: new Date(2026, 8, 1, 3, 0, 0),  // local 3 AM
+    now: riskNow,
   });
   ok('high risk = 2 factors', d.reason === 'high_risk' && d.min_count === 2);
 }

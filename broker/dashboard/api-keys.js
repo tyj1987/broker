@@ -22,7 +22,8 @@
       const r = await api('/api/v1/api-keys');
       const keys = r.keys || [];
       if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="muted">还没有 API Key。点上方表单创建一个。</td></tr>';
+        tbody.innerHTML =
+          '<tr><td colspan="7" class="muted">还没有 API Key。点上方表单创建一个。</td></tr>';
         return;
       }
       tbody.innerHTML = '';
@@ -30,7 +31,10 @@
         tbody.appendChild(renderRow(k));
       }
     } catch (ex) {
-      tbody.innerHTML = '<tr><td colspan="7" style="color:#e74c3c">加载失败: ' + escapeHtml(String(ex.message || ex)) + '</td></tr>';
+      tbody.innerHTML =
+        '<tr><td colspan="7" style="color:#e74c3c">加载失败: ' +
+        escapeHtml(String(ex.message || ex)) +
+        '</td></tr>';
       console.error('loadKeys failed', ex);
     }
   }
@@ -38,7 +42,8 @@
   // 状态判断: active / revoked / expired
   function computeStatus(k) {
     if (k.revoked) return { label: '已撤销 / revoked', cls: 'badge-denied' };
-    if (k.expires_at && new Date(k.expires_at) < new Date()) return { label: '已过期 / expired', cls: 'badge-denied' };
+    if (k.expires_at && new Date(k.expires_at) < new Date())
+      return { label: '已过期 / expired', cls: 'badge-denied' };
     return { label: 'active / 有效', cls: 'badge-ok' };
   }
 
@@ -51,17 +56,39 @@
     // 操作按钮: 撤销（active 状态才显示）+ 查看 usage（admin only）
     const actions = [];
     if (!k.revoked) {
-      actions.push(`<button type="button" class="btn btn-sm btn-danger" data-action="revoke" data-id="${escapeHtml(k.id)}" data-label="${escapeHtml(k.name)}">撤销 / Revoke</button>`);
+      actions.push(
+        `<button type="button" class="btn btn-sm btn-danger" data-action="revoke" data-id="${escapeHtml(k.id)}" data-label="${escapeHtml(k.name)}">撤销 / Revoke</button>`,
+      );
     }
-    actions.push(`<button type="button" class="btn btn-sm" data-action="usage" data-id="${escapeHtml(k.id)}" data-label="${escapeHtml(k.name)}" data-fp="${escapeHtml(k.fingerprint_prefix || '')}">查看 usage</button>`);
+    if (window.__brokerIdentity?.role === 'admin') {
+      actions.push(
+        `<button type="button" class="btn btn-sm" data-action="usage" data-id="${escapeHtml(k.id)}" data-label="${escapeHtml(k.name)}" data-fp="${escapeHtml(k.fingerprint_prefix || '')}">查看 usage</button>`,
+      );
+    }
     tr.innerHTML =
-      '<td><code>' + escapeHtml(k.name) + '</code></td>' +
-      '<td><code class="small">' + escapeHtml(k.fingerprint_prefix || (k.id || '').slice(0, 8) + '...') + '</code></td>' +
-      '<td><code class="small">' + escapeHtml(scopes) + '</code></td>' +
-      '<td><code class="small">' + escapeHtml(lastUsed) + '</code></td>' +
-      '<td><code class="small">' + escapeHtml(expires) + '</code></td>' +
-      '<td><span class="badge ' + status.cls + '">' + status.label + '</span></td>' +
-      '<td>' + actions.join(' ') + '</td>';
+      '<td><code>' +
+      escapeHtml(k.name) +
+      '</code></td>' +
+      '<td><code class="small">' +
+      escapeHtml(k.fingerprint_prefix || (k.id || '').slice(0, 8) + '...') +
+      '</code></td>' +
+      '<td><code class="small">' +
+      escapeHtml(scopes) +
+      '</code></td>' +
+      '<td><code class="small">' +
+      escapeHtml(lastUsed) +
+      '</code></td>' +
+      '<td><code class="small">' +
+      escapeHtml(expires) +
+      '</code></td>' +
+      '<td><span class="badge ' +
+      status.cls +
+      '">' +
+      status.label +
+      '</span></td>' +
+      '<td>' +
+      actions.join(' ') +
+      '</td>';
     return tr;
   }
 
@@ -98,7 +125,7 @@
       $('#ak-ttl').value = '604800';
       $('#ak-scope-resolve').checked = true;
       $('#ak-scope-proxy').checked = true;
-      $('#ak-verify').value = '';  // 安全: 清空 verify 字段
+      $('#ak-verify').value = ''; // 安全: 清空 verify 字段
       await loadKeys();
     } catch (ex) {
       setStatus('#create-key-status', '❌ ' + (ex.message || ex), 'err');
@@ -133,7 +160,9 @@
       const btn = $('#btn-copy-newkey');
       const old = btn.textContent;
       btn.textContent = '✓ 已复制 / Copied';
-      setTimeout(() => { btn.textContent = old; }, 1500);
+      setTimeout(() => {
+        btn.textContent = old;
+      }, 1500);
     } catch (e) {
       console.warn('copy failed', e);
     }
@@ -141,9 +170,21 @@
 
   // ---- 撤销 ----
   async function revokeKey(id, label) {
-    if (!confirm(`确认撤销 API Key "${label}"?\n\n此操作不可恢复。该 key 立即失效。\n\nRevoke "${label}"? This cannot be undone.`)) return;
+    if (
+      !confirm(
+        `确认撤销 API Key "${label}"?\n\n此操作不可恢复。该 key 立即失效。\n\nRevoke "${label}"? This cannot be undone.`,
+      )
+    )
+      return;
+    const verify = prompt(
+      '请输入当前 TOTP 验证码；管理员也可输入密码。\nEnter current TOTP code (admin may use password):',
+    );
+    if (!verify || !verify.trim()) return;
     try {
-      await api('/api/v1/api-keys/' + id, { method: 'DELETE' });
+      await api('/api/v1/api-keys/' + id, {
+        method: 'DELETE',
+        body: { verify: verify.trim() },
+      });
       await loadKeys();
     } catch (ex) {
       alert('撤销失败: ' + (ex.message || ex));
@@ -160,22 +201,36 @@
       const r = await api('/api/v1/api-keys/' + id + '/usage?limit=50');
       const events = r.events || [];
       if (events.length === 0) {
-        $('#ak-usage-tbody').innerHTML = '<tr><td colspan="5" class="muted">还没有使用记录 / no usage yet</td></tr>';
+        $('#ak-usage-tbody').innerHTML =
+          '<tr><td colspan="5" class="muted">还没有使用记录 / no usage yet</td></tr>';
         return;
       }
       $('#ak-usage-tbody').innerHTML = '';
       for (const e of events) {
         const tr = document.createElement('tr');
         tr.innerHTML =
-          '<td><code class="small">' + escapeHtml(e.ts || '') + '</code></td>' +
-          '<td><code>' + escapeHtml(e.action || '') + '</code></td>' +
-          '<td><code>' + escapeHtml(e.method || '') + '</code></td>' +
-          '<td><code class="small">' + escapeHtml(e.path || e.upstream || '') + '</code></td>' +
-          '<td><code>' + escapeHtml(String(e.status || '')) + '</code></td>';
+          '<td><code class="small">' +
+          escapeHtml(e.ts || '') +
+          '</code></td>' +
+          '<td><code>' +
+          escapeHtml(e.action || '') +
+          '</code></td>' +
+          '<td><code>' +
+          escapeHtml(e.method || '') +
+          '</code></td>' +
+          '<td><code class="small">' +
+          escapeHtml(e.path || e.upstream || '') +
+          '</code></td>' +
+          '<td><code>' +
+          escapeHtml(String(e.status || '')) +
+          '</code></td>';
         $('#ak-usage-tbody').appendChild(tr);
       }
     } catch (ex) {
-      $('#ak-usage-tbody').innerHTML = '<tr><td colspan="5" style="color:#e74c3c">加载失败: ' + escapeHtml(String(ex.message || ex)) + '</td></tr>';
+      $('#ak-usage-tbody').innerHTML =
+        '<tr><td colspan="5" style="color:#e74c3c">加载失败: ' +
+        escapeHtml(String(ex.message || ex)) +
+        '</td></tr>';
     }
   }
 
@@ -198,7 +253,10 @@
     el.className = 'status ' + (cls || '');
   }
   function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    return String(s).replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+    );
   }
 
   // ---- 初始化 ----
@@ -214,7 +272,10 @@
     const copyBtn = $('#btn-copy-newkey');
     if (copyBtn) copyBtn.addEventListener('click', copyNewKey);
     const closeUsage = $('#btn-close-usage');
-    if (closeUsage) closeUsage.addEventListener('click', () => { $('#ak-usage-modal').hidden = true; });
+    if (closeUsage)
+      closeUsage.addEventListener('click', () => {
+        $('#ak-usage-modal').hidden = true;
+      });
 
     // 监听 tabchange 事件（app.js 在切 tab 时 dispatch）
     document.addEventListener('tabchange', (ev) => {

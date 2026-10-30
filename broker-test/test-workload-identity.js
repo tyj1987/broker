@@ -11,12 +11,20 @@ import {
   _resetForTests,
 } from '../broker/lib/workload-identity.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ============================================================
 // 提供方常量
@@ -36,32 +44,56 @@ section('provider constants');
 section('input validation');
 {
   let threw = false;
-  try { await getCredentials('azure', 'tok', {}, {}); } catch (e) { threw = /unknown.*provider/.test(e.message); }
+  try {
+    await getCredentials('azure', 'tok', {}, {});
+  } catch (e) {
+    threw = /unknown.*provider/.test(e.message);
+  }
   ok('unknown provider throws', threw);
 }
 {
   let threw = false;
-  try { await getCredentials('aws', '', { roleArn: 'r' }, {}); } catch (e) { threw = /oidcToken.*non-empty/.test(e.message); }
+  try {
+    await getCredentials('aws', '', { roleArn: 'r' }, {});
+  } catch (e) {
+    threw = /oidcToken.*non-empty/.test(e.message);
+  }
   ok('empty oidc token throws', threw);
 }
 {
   let threw = false;
-  try { await getCredentials('aws', null, { roleArn: 'r' }, {}); } catch (e) { threw = /oidcToken.*non-empty/.test(e.message); }
+  try {
+    await getCredentials('aws', null, { roleArn: 'r' }, {});
+  } catch (e) {
+    threw = /oidcToken.*non-empty/.test(e.message);
+  }
   ok('null oidc token throws', threw);
 }
 {
   let threw = false;
-  try { await getCredentials('aws', 'tok', {}, {}); } catch (e) { threw = /aws: roleArn required/.test(e.message); }
+  try {
+    await getCredentials('aws', 'tok', {}, {});
+  } catch (e) {
+    threw = /aws: roleArn required/.test(e.message);
+  }
   ok('aws without roleArn throws', threw);
 }
 {
   let threw = false;
-  try { await getCredentials('aliyun', 'tok', {}, {}); } catch (e) { threw = /aliyun: oidcProviderArn required/.test(e.message); }
+  try {
+    await getCredentials('aliyun', 'tok', {}, {});
+  } catch (e) {
+    threw = /aliyun: oidcProviderArn required/.test(e.message);
+  }
   ok('aliyun without oidcProviderArn throws', threw);
 }
 {
   let threw = false;
-  try { await getCredentials('gcp', 'tok', {}, {}); } catch (e) { threw = /gcp: audience/.test(e.message); }
+  try {
+    await getCredentials('gcp', 'tok', {}, {});
+  } catch (e) {
+    threw = /gcp: audience/.test(e.message);
+  }
   ok('gcp without audience throws', threw);
 }
 
@@ -93,10 +125,15 @@ section('aliyun provider');
       }),
     };
   };
-  const c = await getCredentials('aliyun', 'fake-sa-token', {
-    oidcProviderArn: 'acs:ram::123:oidc-provider/k',
-    roleArn: 'acs:ram::123:role/app',
-  }, { httpClient: http });
+  const c = await getCredentials(
+    'aliyun',
+    'fake-sa-token',
+    {
+      oidcProviderArn: 'acs:ram::123:oidc-provider/k',
+      roleArn: 'acs:ram::123:role/app',
+    },
+    { httpClient: http },
+  );
   ok('aliyun: returned access_key_id', c.access_key_id === 'STS.AKIDxxx');
   ok('aliyun: returned security_token', c.security_token === 'TOKENxxx');
   ok('aliyun: provider=aliyun', c.provider === 'aliyun');
@@ -113,7 +150,10 @@ section('aws provider');
   const http = async (url, opts) => {
     ok('aws: hits sts.amazonaws.com', url === 'https://sts.amazonaws.com/');
     const params = new URLSearchParams(opts.body);
-    ok('aws: Action=AssumeRoleWithWebIdentity', params.get('Action') === 'AssumeRoleWithWebIdentity');
+    ok(
+      'aws: Action=AssumeRoleWithWebIdentity',
+      params.get('Action') === 'AssumeRoleWithWebIdentity',
+    );
     ok('aws: WebIdentityToken', params.get('WebIdentityToken') === 'k8s-sa.jwt.token');
     return {
       status: 200,
@@ -129,20 +169,30 @@ section('aws provider');
       }),
     };
   };
-  const c = await getCredentials('aws', 'k8s-sa.jwt.token', {
-    roleArn: 'arn:aws:iam::123:role/app',
-  }, { httpClient: http });
+  const c = await getCredentials(
+    'aws',
+    'k8s-sa.jwt.token',
+    {
+      roleArn: 'arn:aws:iam::123:role/app',
+    },
+    { httpClient: http },
+  );
   ok('aws: access_key_id', c.access_key_id === 'ASIAxxxx');
   ok('aws: provider=aws', c.provider === 'aws');
 }
 {
   _resetForTests();
   // AWS error path
-  const http = async () => ({ status: 403, body: '<ErrorResponse><Error><Code>AccessDenied</Code></Error></ErrorResponse>' });
+  const http = async () => ({
+    status: 403,
+    body: '<ErrorResponse><Error><Code>AccessDenied</Code></Error></ErrorResponse>',
+  });
   let threw = false;
   try {
     await getCredentials('aws', 'tok', { roleArn: 'arn:aws:iam::1:role/x' }, { httpClient: http });
-  } catch (e) { threw = /aws sts 403/.test(e.message); }
+  } catch (e) {
+    threw = /aws sts 403/.test(e.message);
+  }
   ok('aws: 403 surfaces as error', threw);
 }
 
@@ -155,9 +205,19 @@ section('gcp provider');
   const http = async (url, opts) => {
     ok('gcp: hits sts.googleapis.com', url === 'https://sts.googleapis.com/v1/token');
     const body = JSON.parse(opts.body);
-    ok('gcp: grant_type=token-exchange', body.grant_type === 'urn:ietf:params:oauth:grant-type:token-exchange');
-    ok('gcp: subject_token_type=k8s', body.subject_token_type === 'urn:k8s:params:oauth:token-type:serviceaccount');
-    ok('gcp: audience', body.audience === '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/a');
+    ok(
+      'gcp: grant_type=token-exchange',
+      body.grant_type === 'urn:ietf:params:oauth:grant-type:token-exchange',
+    );
+    ok(
+      'gcp: subject_token_type=k8s',
+      body.subject_token_type === 'urn:k8s:params:oauth:token-type:serviceaccount',
+    );
+    ok(
+      'gcp: audience',
+      body.audience ===
+        '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/a',
+    );
     return {
       status: 200,
       body: JSON.stringify({
@@ -167,20 +227,33 @@ section('gcp provider');
       }),
     };
   };
-  const c = await getCredentials('gcp', 'sa.jwt', {
-    audience: '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/a',
-  }, { httpClient: http });
+  const c = await getCredentials(
+    'gcp',
+    'sa.jwt',
+    {
+      audience:
+        '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/a',
+    },
+    { httpClient: http },
+  );
   ok('gcp: access_token in access_key_id', c.access_key_id === 'ya29.xxx');
   ok('gcp: token_type in security_token', c.security_token === 'Bearer');
   ok('gcp: provider=gcp', c.provider === 'gcp');
-  ok('gcp: expires_at_ms ~ now+3600s', c.expires_at_ms > Date.now() + 3500_000 && c.expires_at_ms < Date.now() + 3700_000);
+  ok(
+    'gcp: expires_at_ms ~ now+3600s',
+    c.expires_at_ms > Date.now() + 3500_000 && c.expires_at_ms < Date.now() + 3700_000,
+  );
 }
 {
   _resetForTests();
   // GCP error path
   const http = async () => ({ status: 400, body: JSON.stringify({ error: 'invalid_grant' }) });
   let threw = false;
-  try { await getCredentials('gcp', 'tok', { audience: 'x' }, { httpClient: http }); } catch (e) { threw = /gcp sts 400/.test(e.message); }
+  try {
+    await getCredentials('gcp', 'tok', { audience: 'x' }, { httpClient: http });
+  } catch (e) {
+    threw = /gcp sts 400/.test(e.message);
+  }
   ok('gcp: 400 surfaces as error', threw);
 }
 
@@ -210,7 +283,10 @@ section('cache hit');
   const c2 = await getCredentials('aliyun', 'tok', opts, { httpClient: http });
   const c3 = await getCredentials('aliyun', 'tok', opts, { httpClient: http });
   ok('cache: only 1 upstream call for 3 requests', httpCalls === 1);
-  ok('cache: same creds returned', c1.access_key_id === c2.access_key_id && c2.access_key_id === c3.access_key_id);
+  ok(
+    'cache: same creds returned',
+    c1.access_key_id === c2.access_key_id && c2.access_key_id === c3.access_key_id,
+  );
 }
 
 // ============================================================
@@ -252,7 +328,7 @@ section('in-flight coalesce');
   const http = async () => {
     httpCalls++;
     // 模拟 50ms 延迟
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
     return {
       status: 200,
       body: JSON.stringify({
@@ -275,7 +351,10 @@ section('in-flight coalesce');
     getCredentials('aliyun', 'tok', opts, { httpClient: http }),
   ]);
   ok('in-flight: 1 upstream call for 5 concurrent', httpCalls === 1);
-  ok('in-flight: all return same creds', results.every(r => r.access_key_id === 'shared'));
+  ok(
+    'in-flight: all return same creds',
+    results.every((r) => r.access_key_id === 'shared'),
+  );
 }
 
 // ============================================================
@@ -315,9 +394,19 @@ section('listCache');
   _resetForTests();
   const http = async (url) => ({
     status: 200,
-    body: JSON.stringify(url.includes('amazonaws')
-      ? {
-          AssumeRoleWithWebIdentityResult: {
+    body: JSON.stringify(
+      url.includes('amazonaws')
+        ? {
+            AssumeRoleWithWebIdentityResult: {
+              Credentials: {
+                AccessKeyId: 'SHOULD-NOT-LEAK',
+                AccessKeySecret: 'SHOULD-NOT-LEAK',
+                SecurityToken: 'SHOULD-NOT-LEAK',
+                Expiration: new Date(Date.now() + 3600_000).toISOString(),
+              },
+            },
+          }
+        : {
             Credentials: {
               AccessKeyId: 'SHOULD-NOT-LEAK',
               AccessKeySecret: 'SHOULD-NOT-LEAK',
@@ -325,24 +414,27 @@ section('listCache');
               Expiration: new Date(Date.now() + 3600_000).toISOString(),
             },
           },
-        }
-      : {
-          Credentials: {
-            AccessKeyId: 'SHOULD-NOT-LEAK',
-            AccessKeySecret: 'SHOULD-NOT-LEAK',
-            SecurityToken: 'SHOULD-NOT-LEAK',
-            Expiration: new Date(Date.now() + 3600_000).toISOString(),
-          },
-        }),
+    ),
   });
-  await getCredentials('aliyun', 'tok', { oidcProviderArn: 'a', roleArn: 'r1' }, { httpClient: http });
+  await getCredentials(
+    'aliyun',
+    'tok',
+    { oidcProviderArn: 'a', roleArn: 'r1' },
+    { httpClient: http },
+  );
   await getCredentials('aws', 'tok', { roleArn: 'r2' }, { httpClient: http });
   const items = listCache();
   ok('listCache has 2 entries', items.length === 2);
   const txt = JSON.stringify(items);
   ok('listCache does NOT leak access_key_id', !txt.includes('SHOULD-NOT-LEAK'));
-  ok('listCache has remaining_ms', items.every(i => typeof i.remaining_ms === 'number'));
-  ok('listCache has provider', items.every(i => ['aliyun', 'aws', 'gcp'].includes(i.provider)));
+  ok(
+    'listCache has remaining_ms',
+    items.every((i) => typeof i.remaining_ms === 'number'),
+  );
+  ok(
+    'listCache has provider',
+    items.every((i) => ['aliyun', 'aws', 'gcp'].includes(i.provider)),
+  );
 }
 
 // ============================================================
@@ -367,15 +459,24 @@ section('validateConfig');
 }
 {
   const r5 = validateConfig({ providers: { azure: { roleArns: ['r'] } } });
-  ok('unknown provider flagged', r5.errors.some(e => /unknown provider: azure/.test(e)));
+  ok(
+    'unknown provider flagged',
+    r5.errors.some((e) => /unknown provider: azure/.test(e)),
+  );
 }
 {
   const r6 = validateConfig({ providers: { aliyun: { roleArns: [] } } });
-  ok('aliyun missing oidcProviderArn flagged', r6.errors.some(e => /oidcProviderArn required/.test(e)));
+  ok(
+    'aliyun missing oidcProviderArn flagged',
+    r6.errors.some((e) => /oidcProviderArn required/.test(e)),
+  );
 }
 {
   const r7 = validateConfig({ providers: { aliyun: { oidcProviderArn: 'a' } } });
-  ok('aliyun missing roleArns flagged', r7.errors.some(e => /roleArns.*required/.test(e)));
+  ok(
+    'aliyun missing roleArns flagged',
+    r7.errors.some((e) => /roleArns.*required/.test(e)),
+  );
 }
 {
   const r8 = validateConfig(null);
@@ -388,9 +489,15 @@ section('validateConfig');
 section('zero credential leakage');
 {
   _resetForTests();
-  const http = async () => { throw new Error('upstream 500 with secret=ghp_xxx in stack'); };
+  const http = async () => {
+    throw new Error('upstream 500 with secret=ghp_xxx in stack');
+  };
   let err = '';
-  try { await getCredentials('aws', 'tok', { roleArn: 'r' }, { httpClient: http }); } catch (e) { err = e.message; }
+  try {
+    await getCredentials('aws', 'tok', { roleArn: 'r' }, { httpClient: http });
+  } catch (e) {
+    err = e.message;
+  }
   // 错误来自我们的 wrap,不暴露内部
   ok('error does not leak stack', !err.includes('at '));
 }

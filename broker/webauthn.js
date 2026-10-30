@@ -11,7 +11,7 @@
 // Zero deps: 完整的 challenge 生成、credential 存储、签发与验证接口,
 // 实际签名验证由可选 adapter 提供。
 
-import { createHash, randomBytes, createVerify } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 // ============================================================
 // Challenge 池(防重放)
@@ -28,7 +28,8 @@ function newChallenge(clientName, type) {
 
 function consumeChallenge(challenge, clientName, type) {
   gcChallenges();
-  const key = (typeof challenge === 'string') ? challenge : Buffer.from(challenge).toString('base64url');
+  const key =
+    typeof challenge === 'string' ? challenge : Buffer.from(challenge).toString('base64url');
   const rec = CHALLENGES.get(key);
   if (!rec) return null;
   CHALLENGES.delete(key);
@@ -51,10 +52,10 @@ const DEFAULT_CONFIG = {
   rp_id: process.env.WEBAUTHN_RP_ID || 'localhost',
   rp_origin: process.env.WEBAUTHN_ORIGIN || 'https://localhost:8443',
   timeout_ms: 60_000,
-  user_verification: 'preferred',  // 'discouraged' | 'preferred' | 'required'
+  user_verification: 'preferred', // 'discouraged' | 'preferred' | 'required'
   resident_key: 'preferred',
-  attestation: 'none',  // 'none' | 'indirect' | 'direct' | 'enterprise'
-  algorithms: [-7, -257],  // ES256, RS256
+  attestation: 'none', // 'none' | 'indirect' | 'direct' | 'enterprise'
+  algorithms: [-7, -257], // ES256, RS256
 };
 
 let ACTIVE_CONFIG = { ...DEFAULT_CONFIG };
@@ -90,14 +91,14 @@ export function beginRegistration(clientName, displayName, existingCredentials =
         displayName: displayName || clientName,
       },
       challenge,
-      pubKeyCredParams: cfg.algorithms.map(alg => ({ type: 'public-key', alg })),
+      pubKeyCredParams: cfg.algorithms.map((alg) => ({ type: 'public-key', alg })),
       timeout: cfg.timeout_ms,
       authenticatorSelection: {
         residentKey: cfg.resident_key,
         userVerification: cfg.user_verification,
       },
       attestation: cfg.attestation,
-      excludeCredentials: existingCredentials.map(c => ({
+      excludeCredentials: existingCredentials.map((c) => ({
         id: typeof c.id === 'string' ? Buffer.from(c.id, 'base64url') : c.id,
         type: 'public-key',
         transports: c.transports || ['usb', 'nfc', 'ble', 'internal'],
@@ -129,9 +130,14 @@ export function finishRegistration(clientName, credential, attestationVerifier) 
 
   // 2. Verify attestation
   if (typeof attestationVerifier !== 'function') {
-    return { ok: false, error: 'attestationVerifier not provided (install @simplewebauthn/server)' };
+    return {
+      ok: false,
+      error: 'attestationVerifier not provided (install @simplewebauthn/server)',
+    };
   }
-  const clientDataHash = createHash('sha256').update(Buffer.from(clientDataB64, 'base64url')).digest();
+  const clientDataHash = createHash('sha256')
+    .update(Buffer.from(clientDataB64, 'base64url'))
+    .digest();
   const attestationObject = Buffer.from(credential.response.attestationObject, 'base64url');
   const result = attestationVerifier(attestationObject, clientDataHash);
   if (!result?.verified) {
@@ -139,10 +145,13 @@ export function finishRegistration(clientName, credential, attestationVerifier) 
   }
 
   // 3. Store credential
-  const credential_id = (typeof credential.id === 'string' ? credential.id : Buffer.from(credential.id).toString('base64url'));
+  const credential_id =
+    typeof credential.id === 'string'
+      ? credential.id
+      : Buffer.from(credential.id).toString('base64url');
   const cred = {
     credential_id,
-    publicKey: result.publicKey,  // base64 or Buffer
+    publicKey: result.publicKey, // base64 or Buffer
     signCount: result.signCount || 0,
     aaguid: result.aaguid || null,
     fmt: result.fmt || null,
@@ -171,7 +180,7 @@ export function beginAuthentication(clientName, credentials = []) {
       rpId: cfg.rp_id,
       timeout: cfg.timeout_ms,
       userVerification: cfg.user_verification,
-      allowCredentials: credentials.map(c => ({
+      allowCredentials: credentials.map((c) => ({
         id: typeof c.id === 'string' ? Buffer.from(c.id, 'base64url') : c.id,
         type: 'public-key',
         transports: c.transports || ['usb', 'nfc', 'ble', 'internal'],
@@ -202,15 +211,20 @@ export function finishAuthentication(clientName, credential, storedCredentials, 
   }
 
   // 2. Find stored credential
-  const credId = typeof credential.id === 'string' ? credential.id : Buffer.from(credential.id).toString('base64url');
-  const stored = storedCredentials.find(c => c.credential_id === credId);
+  const credId =
+    typeof credential.id === 'string'
+      ? credential.id
+      : Buffer.from(credential.id).toString('base64url');
+  const stored = storedCredentials.find((c) => c.credential_id === credId);
   if (!stored) return { ok: false, error: 'credential not registered' };
 
   // 3. Verify signature
   if (typeof assertionVerifier !== 'function') {
     return { ok: false, error: 'assertionVerifier not provided (install @simplewebauthn/server)' };
   }
-  const clientDataHash = createHash('sha256').update(Buffer.from(clientDataB64, 'base64url')).digest();
+  const clientDataHash = createHash('sha256')
+    .update(Buffer.from(clientDataB64, 'base64url'))
+    .digest();
   const authenticatorData = Buffer.from(credential.response.authenticatorData, 'base64url');
   const signature = Buffer.from(credential.response.signature, 'base64url');
   const publicKey = stored.publicKey;
@@ -248,7 +262,7 @@ export function ensureWebAuthnFactors(client) {
  */
 export function listCredentials(wa) {
   if (!wa || !wa.credentials) return [];
-  return wa.credentials.map(c => ({
+  return wa.credentials.map((c) => ({
     credential_id: c.credential_id,
     transports: c.transports,
     aaguid: c.aaguid,
@@ -282,8 +296,14 @@ export function parseAuthenticatorData(buf) {
  * Use this when @simplewebauthn/server is not yet installed.
  */
 export const noopVerifier = {
-  verifyRegistration: () => ({ verified: false, error: 'no attestation verifier configured (install @simplewebauthn/server)' }),
-  verifyAuthentication: () => ({ verified: false, error: 'no assertion verifier configured (install @simplewebauthn/server)' }),
+  verifyRegistration: () => ({
+    verified: false,
+    error: 'no attestation verifier configured (install @simplewebauthn/server)',
+  }),
+  verifyAuthentication: () => ({
+    verified: false,
+    error: 'no assertion verifier configured (install @simplewebauthn/server)',
+  }),
 };
 
 export default {

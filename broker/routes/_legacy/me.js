@@ -51,9 +51,10 @@ export async function handleMe(req, res, route, deps) {
     const c = ctx.client;
     send(res, 200, {
       remaining: (c.totp_recovery_codes_hash || []).length,
-      warning: c.totp_recovery_codes_hash && c.totp_recovery_codes_hash.length < 3
-        ? 'Few recovery codes left. Consider re-setup.'
-        : undefined,
+      warning:
+        c.totp_recovery_codes_hash && c.totp_recovery_codes_hash.length < 3
+          ? 'Few recovery codes left. Consider re-setup.'
+          : undefined,
     });
     return true;
   }

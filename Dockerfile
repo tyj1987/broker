@@ -1,31 +1,40 @@
 # Multi-stage Dockerfile for Secret Broker V4.1
 # Targets:
 #   dev        — full toolchain, hot reload, source mounted from host
-#   production — distroless, runs as non-root, minimal attack surface
+#   production — Debian slim, non-root, with the runtime tools required by enabled features
 
 # ============================================================
 # Stage 1: install production dependencies
 # ============================================================
-FROM node:20-alpine AS deps
+FROM node:24-bookworm-slim AS deps
 WORKDIR /build
 
-# Copy ONLY the manifest first for better Docker layer cache
-COPY broker/package.json broker/package-lock.json* ./
-# Use `npm ci` for reproducible installs; allow either lockfile or none
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; \
-    else npm install --omit=dev --no-audit --no-fund; fi
+# Require the lockfile: production builds must be deterministic.
+COPY broker/package.json broker/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # ============================================================
-# Stage 2: dev (hot reload)
+# Stage 2: standalone SOPS runtime binary
 # ============================================================
-FROM node:20-alpine AS dev
+FROM alpine:3.22 AS tools
+ARG SOPS_VERSION=3.13.3
+ARG TARGETARCH=amd64
+RUN apk add --no-cache ca-certificates coreutils curl
+COPY scripts/ci/install-sops.sh /tmp/install-sops.sh
+RUN SOPS_VERSION="$SOPS_VERSION" SOPS_ARCH="$TARGETARCH" \
+      sh /tmp/install-sops.sh /usr/local/bin/sops \
+    && rm -f /tmp/install-sops.sh
+
+# ============================================================
+# Stage 3: dev (hot reload)
+# ============================================================
+FROM node:24-alpine AS dev
 WORKDIR /app
 RUN apk add --no-cache curl openssl
 
-# Install all deps (including dev for test:verify, lint, etc.)
-COPY broker/package.json broker/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
-    else npm install --no-audit --no-fund; fi
+# Install all deps (including dev for test:verify, lint, etc.) from the lockfile.
+COPY broker/package.json broker/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 # Copy source
 COPY broker/ ./
@@ -40,7 +49,7 @@ RUN mkdir -p pki/server pki/ca pki/clients audit secrets && \
     touch pki/ca/crl.pem && \
     rm /tmp/server.csr pki/ca/ca.key pki/ca/ca.srl
 
-EXOSE 8443
+EXPOSE 8443
 ENV BROKER_BIND=0.0.0.0 \
     BROKER_PORT=8443 \
     NODE_ENV=development \
@@ -54,32 +63,50 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
 CMD ["node", "server.js"]
 
 # ============================================================
-# Stage 3: production (distroless, non-root)
+# Stage 4: production (minimal Debian, non-root)
 # ============================================================
-FROM gcr.io/distroless/nodejs20-debian12:nonroot AS production
+# The broker intentionally exposes certificate issuance, SSH proxying, SOPS
+# decryption and git-backed rollback. Those features require openssl, ssh,
+# ssh-keygen, sops and git at runtime, so a pure distroless image is incomplete.
+FROM node:24-bookworm-slim AS production
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      git \
+      openssh-client \
+      openssl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy production node_modules from deps stage
-COPY --from=deps /build/node_modules ./node_modules
+# Keep production dependencies ABI-compatible with the Debian runtime.
+COPY --from=deps --chown=node:node /build/node_modules ./node_modules
+COPY --from=tools /usr/local/bin/sops /usr/local/bin/sops
+COPY --chown=node:node broker/ ./
 
-# Copy broker source
-COPY broker/ ./
-
-# Copy CA certs/clients templates (caller mounts PKI_DIR for runtime certs)
-COPY --chown=nonroot:nonroot pki/ ./pki-template/
+# Credentials and PKI are runtime mounts; the image contains no certificate,
+# private key or decrypted secret material. Pre-create writable state paths.
+RUN mkdir -p \
+      /run/secrets/broker/pki \
+      /var/lib/broker/audit \
+      /var/lib/broker/secrets \
+    && chown -R node:node /app /run/secrets/broker /var/lib/broker
 
 ENV NODE_ENV=production \
+    BROKER_BIND=0.0.0.0 \
+    PORT=8443 \
     PKI_DIR=/run/secrets/broker/pki \
+    TLS_CA=/run/secrets/broker/pki/ca/ca.crt \
+    CA_KEY_PATH=/run/secrets/broker/pki/ca/ca.key \
     AUDIT_DIR=/var/lib/broker/audit \
-    SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json
+    CONFIG_PATH=/var/lib/broker/secrets/broker.yaml \
+    SECRETS_PATH=/var/lib/broker/secrets/common.env \
+    SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json \
+    SOPS_AGE_KEY_FILE=/run/secrets/broker/age/key.txt
 
+USER node
 EXPOSE 8443
-
-# distroless has no shell/curl — healthcheck must be ENTRYPOINT-side
-# or use a separate probe. The helm chart uses startup + readiness probes.
-
-# nonroot is the default user in distroless nonroot variant
 ENTRYPOINT ["node", "server.js"]
 
 # ============================================================

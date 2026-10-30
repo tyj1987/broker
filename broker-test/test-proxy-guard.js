@@ -15,15 +15,25 @@ import {
   SECRET_GUARD_TTL_MS,
 } from 'file:///C:/home/my-first-app/broker/service-secret-guard.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(s) { console.log(`\n--- ${s} ---`); }
+function section(s) {
+  console.log(`\n--- ${s} ---`);
+}
 
 // 每次测试前清缓存, 避免互相干扰
-function reset() { clearSecretGuardCache(); }
+function reset() {
+  clearSecretGuardCache();
+}
 
 // mock: 健康度查表
 function makeStatusLookup(table) {
@@ -36,49 +46,61 @@ function makeStatusLookup(table) {
   {
     reset();
     const lookup = makeStatusLookup({
-      'OK_TOKEN':    { status: 'ok',            detail: 'user=octocat' },
-      'EXP_TOKEN':   { status: 'expired',       detail: '401 Bad credentials' },
-      'UNR_TOKEN':   { status: 'unreachable',   detail: 'ECONNRESET' },
-      'MIS_TOKEN':   { status: 'misconfigured', detail: 'ssh_connection missing host field' },
-      'FAIL_TOKEN':  { status: 'fail',          detail: 'unknown error' },
-      'SKIP_TOKEN':  { status: 'skipped',       detail: 'no extractable credential' },
-      'UNK_TOKEN':   null,  // 模拟没 healthcheck 数据
+      OK_TOKEN: { status: 'ok', detail: 'user=octocat' },
+      EXP_TOKEN: { status: 'expired', detail: '401 Bad credentials' },
+      UNR_TOKEN: { status: 'unreachable', detail: 'ECONNRESET' },
+      MIS_TOKEN: { status: 'misconfigured', detail: 'ssh_connection missing host field' },
+      FAIL_TOKEN: { status: 'fail', detail: 'unknown error' },
+      SKIP_TOKEN: { status: 'skipped', detail: 'no extractable credential' },
+      UNK_TOKEN: null, // 模拟没 healthcheck 数据
     });
     // ok → allowed
     const r1 = checkSecretForService('OK_TOKEN', lookup);
-    ok('ok → allowed=true, status=ok',
-       r1.allowed === true && r1.status === 'ok' && r1.detail === 'user=octocat');
+    ok(
+      'ok → allowed=true, status=ok',
+      r1.allowed === true && r1.status === 'ok' && r1.detail === 'user=octocat',
+    );
     // expired → blocked
     const r2 = checkSecretForService('EXP_TOKEN', lookup);
-    ok('expired → allowed=false, status=expired',
-       r2.allowed === false && r2.status === 'expired' && r2.detail.includes('401'));
+    ok(
+      'expired → allowed=false, status=expired',
+      r2.allowed === false && r2.status === 'expired' && r2.detail.includes('401'),
+    );
     // unreachable → blocked
     const r3 = checkSecretForService('UNR_TOKEN', lookup);
-    ok('unreachable → allowed=false, status=unreachable',
-       r3.allowed === false && r3.status === 'unreachable' && r3.detail.includes('ECONNRESET'));
+    ok(
+      'unreachable → allowed=false, status=unreachable',
+      r3.allowed === false && r3.status === 'unreachable' && r3.detail.includes('ECONNRESET'),
+    );
     // misconfigured → blocked
     const r4 = checkSecretForService('MIS_TOKEN', lookup);
-    ok('misconfigured → allowed=false, status=misconfigured',
-       r4.allowed === false && r4.status === 'misconfigured' && r4.detail.includes('host'));
+    ok(
+      'misconfigured → allowed=false, status=misconfigured',
+      r4.allowed === false && r4.status === 'misconfigured' && r4.detail.includes('host'),
+    );
     // fail → blocked (兜底未知错)
     const r5 = checkSecretForService('FAIL_TOKEN', lookup);
-    ok('fail → allowed=false, status=fail',
-       r5.allowed === false && r5.status === 'fail');
+    ok('fail → allowed=false, status=fail', r5.allowed === false && r5.status === 'fail');
     // skipped → allowed (service 可能不真用 secret)
     const r6 = checkSecretForService('SKIP_TOKEN', lookup);
-    ok('skipped → allowed=true, status=skipped',
-       r6.allowed === true && r6.status === 'skipped');
+    ok('skipped → allowed=true, status=skipped', r6.allowed === true && r6.status === 'skipped');
     // null (无 healthcheck 数据) → allowed, status=unknown
     const r7 = checkSecretForService('UNK_TOKEN', lookup);
-    ok('no healthcheck data → allowed=true, status=unknown',
-       r7.allowed === true && r7.status === 'unknown' && r7.detail.includes('no healthcheck'));
+    ok(
+      'no healthcheck data → allowed=true, status=unknown',
+      r7.allowed === true && r7.status === 'unknown' && r7.detail.includes('no healthcheck'),
+    );
     // 没 token_secret → allowed, status=no_secret
     const r8 = checkSecretForService(null, lookup);
-    ok('null token_secret → allowed=true, status=no_secret',
-       r8.allowed === true && r8.status === 'no_secret');
+    ok(
+      'null token_secret → allowed=true, status=no_secret',
+      r8.allowed === true && r8.status === 'no_secret',
+    );
     const r9 = checkSecretForService('', lookup);
-    ok('empty token_secret → allowed=true, status=no_secret',
-       r9.allowed === true && r9.status === 'no_secret');
+    ok(
+      'empty token_secret → allowed=true, status=no_secret',
+      r9.allowed === true && r9.status === 'no_secret',
+    );
   }
 
   // ======== 2. 5 min 缓存复用 ========
@@ -86,7 +108,10 @@ function makeStatusLookup(table) {
   {
     reset();
     let callCount = 0;
-    const lookup = (name) => { callCount++; return { status: 'ok', detail: `call #${callCount}` }; };
+    const lookup = (name) => {
+      callCount++;
+      return { status: 'ok', detail: `call #${callCount}` };
+    };
     // 第一次 → 查
     const r1 = checkSecretForService('GITHUB_PAT', lookup);
     ok('第一次 → 查 (callCount=1)', callCount === 1 && r1.detail === 'call #1');
@@ -95,7 +120,7 @@ function makeStatusLookup(table) {
     ok('第二次 (立即) → 缓存命中 (callCount 仍 1)', callCount === 1);
     ok('第二次返同 result', r2.detail === r1.detail && r2.status === r1.status);
     // 第三次 (1ms 后) → 仍缓存命中
-    await new Promise(r => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 5));
     checkSecretForService('GITHUB_PAT', lookup);
     ok('第三次 (5ms 后) → 仍缓存命中 (callCount 仍 1)', callCount === 1);
   }
@@ -105,7 +130,10 @@ function makeStatusLookup(table) {
   {
     reset();
     let callCount = 0;
-    const lookup = (name) => { callCount++; return { status: 'ok', detail: `call #${callCount}` }; };
+    const lookup = (name) => {
+      callCount++;
+      return { status: 'ok', detail: `call #${callCount}` };
+    };
     // 第一次查
     checkSecretForService('GITHUB_PAT', lookup);
     ok('初始 callCount=1', callCount === 1);
@@ -133,7 +161,10 @@ function makeStatusLookup(table) {
   {
     reset();
     let callCount = 0;
-    const lookup = (name) => { callCount++; return { status: 'ok' }; };
+    const lookup = (name) => {
+      callCount++;
+      return { status: 'ok' };
+    };
     checkSecretForService('S1', lookup);
     checkSecretForService('S2', lookup);
     ok('2 个 secret 都缓存 (callCount=2)', callCount === 2);
@@ -155,14 +186,13 @@ function makeStatusLookup(table) {
   // ======== 5. guardHint 4 种 status 提示 ========
   section('guardHint 4 种 status 提示');
   {
-    ok('expired → "rotate the secret first"',
-       guardHint('expired').includes('rotate'));
-    ok('unreachable → "fix the upstream network/firewall"',
-       guardHint('unreachable').includes('network'));
-    ok('misconfigured → "fix the secret config"',
-       guardHint('misconfigured').includes('config'));
-    ok('fail → "check the secret status"',
-       guardHint('fail').includes('check'));
+    ok('expired → "rotate the secret first"', guardHint('expired').includes('rotate'));
+    ok(
+      'unreachable → "fix the upstream network/firewall"',
+      guardHint('unreachable').includes('network'),
+    );
+    ok('misconfigured → "fix the secret config"', guardHint('misconfigured').includes('config'));
+    ok('fail → "check the secret status"', guardHint('fail').includes('check'));
     ok('未知 status → 兜底 "check"', guardHint('xyz').includes('check'));
   }
 
@@ -172,16 +202,22 @@ function makeStatusLookup(table) {
     reset();
     // 缺 getSecretStatusFn
     const r1 = checkSecretForService('GITHUB_PAT');
-    ok('缺 getSecretStatusFn → allowed=true, status=no_check_fn',
-       r1.allowed === true && r1.status === 'no_check_fn');
+    ok(
+      '缺 getSecretStatusFn → allowed=true, status=no_check_fn',
+      r1.allowed === true && r1.status === 'no_check_fn',
+    );
     // null
     const r2 = checkSecretForService('GITHUB_PAT', null);
-    ok('getSecretStatusFn=null → allowed=true, status=no_check_fn',
-       r2.allowed === true && r2.status === 'no_check_fn');
+    ok(
+      'getSecretStatusFn=null → allowed=true, status=no_check_fn',
+      r2.allowed === true && r2.status === 'no_check_fn',
+    );
     // 非函数 (e.g. object)
     const r3 = checkSecretForService('GITHUB_PAT', { not: 'a function' });
-    ok('getSecretStatusFn 非函数 → allowed=true, status=no_check_fn',
-       r3.allowed === true && r3.status === 'no_check_fn');
+    ok(
+      'getSecretStatusFn 非函数 → allowed=true, status=no_check_fn',
+      r3.allowed === true && r3.status === 'no_check_fn',
+    );
   }
 
   // ======== 7. SECRET_GUARD_TTL_MS = 5 min ========
@@ -194,7 +230,7 @@ function makeStatusLookup(table) {
   section('未知 status 兜底 (未来扩展)');
   {
     reset();
-    const lookup = makeStatusLookup({ 'X': { status: 'mystatus', detail: 'future status' } });
+    const lookup = makeStatusLookup({ X: { status: 'mystatus', detail: 'future status' } });
     const r = checkSecretForService('X', lookup);
     ok('未知 status (mystatus) → allowed=false (保守阻断)', r.allowed === false);
     ok('保留原 status 和 detail', r.status === 'mystatus' && r.detail === 'future status');
@@ -204,7 +240,7 @@ function makeStatusLookup(table) {
   console.log(`  test-proxy-guard: PASS=${pass} FAIL=${fail}`);
   console.log('========================================');
   process.exit(fail === 0 ? 0 : 1);
-})().catch(e => {
+})().catch((e) => {
   console.error('FATAL:', e);
   process.exit(1);
 });

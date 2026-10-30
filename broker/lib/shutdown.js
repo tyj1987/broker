@@ -58,7 +58,9 @@ export function installGracefulShutdown(opts = {}) {
           // also destroy idle if Node supports closeIdleConnections
           try {
             server.closeIdleConnections?.();
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         });
       }
 

@@ -4,8 +4,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-const TRACEPARENT_RE =
-  /^([\da-f]{2})-([\da-f]{32})-([\da-f]{16})-([\da-f]{2})$/i;
+const TRACEPARENT_RE = /^([\da-f]{2})-([\da-f]{32})-([\da-f]{16})-([\da-f]{2})$/i;
 
 /**
  * @typedef {{ version: string, traceId: string, parentId: string, flags: string }}
@@ -22,7 +21,12 @@ export function parseTraceparent(header) {
   if (!m) return null;
   const [, version, traceId, parentId, flags] = m;
   if (traceId === '0'.repeat(32) || parentId === '0'.repeat(16)) return null;
-  return { version: version.toLowerCase(), traceId: traceId.toLowerCase(), parentId: parentId.toLowerCase(), flags: flags.toLowerCase() };
+  return {
+    version: version.toLowerCase(),
+    traceId: traceId.toLowerCase(),
+    parentId: parentId.toLowerCase(),
+    flags: flags.toLowerCase(),
+  };
 }
 
 /** 16 random bytes → 32 hex (trace-id) */
@@ -90,11 +94,7 @@ export function outboundTraceHeaders(ctx) {
  */
 export function resolveRequestId(reqHeaders = {}) {
   const h = reqHeaders;
-  const existing =
-    h['x-request-id'] ||
-    h['x-correlation-id'] ||
-    h['x-amzn-trace-id'] ||
-    null;
+  const existing = h['x-request-id'] || h['x-correlation-id'] || h['x-amzn-trace-id'] || null;
   if (existing && typeof existing === 'string' && existing.length < 200) {
     return existing.split(',')[0].trim();
   }
@@ -128,7 +128,9 @@ if (OTLP_ENDPOINT) {
         if (eq > 0) otlpHeaders[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
       }
     }
-  } catch { otlpHeaders = null; }
+  } catch {
+    otlpHeaders = null;
+  }
 }
 
 /**
@@ -146,9 +148,8 @@ if (OTLP_ENDPOINT) {
  */
 export function exportSpan(span) {
   if (!OTLP_ENDPOINT || !otlpHeaders) return;
-  if (Math.random() > OTLP_SAMPLE) return;  // sample before building payload
+  if (Math.random() > OTLP_SAMPLE) return; // sample before building payload
 
-  const now = Date.now();
   const startNs = BigInt(span.startMs) * 1000000n;
   const endNs = BigInt(span.endMs) * 1000000n;
   const attributes = Object.entries(span.attributes || {}).map(([k, v]) => ({
@@ -156,28 +157,37 @@ export function exportSpan(span) {
     value: { stringValue: String(v) },
   }));
   const body = {
-    resourceSpans: [{
-      resource: {
-        attributes: [
-          { key: 'service.name', value: { stringValue: 'secret-broker' } },
-          { key: 'service.version', value: { stringValue: process.env.BROKER_VERSION || 'unknown' } },
+    resourceSpans: [
+      {
+        resource: {
+          attributes: [
+            { key: 'service.name', value: { stringValue: 'secret-broker' } },
+            {
+              key: 'service.version',
+              value: { stringValue: process.env.BROKER_VERSION || 'unknown' },
+            },
+          ],
+        },
+        scopeSpans: [
+          {
+            scope: { name: 'broker.lib.trace', version: '4.6.0' },
+            spans: [
+              {
+                traceId: span.traceId,
+                spanId: span.spanId,
+                parentSpanId: span.parentSpanId || undefined,
+                name: span.name,
+                kind: span.kind || 'SPAN_KIND_INTERNAL',
+                startTimeUnixNano: startNs.toString(),
+                endTimeUnixNano: endNs.toString(),
+                attributes,
+                status: span.status || { code: 'STATUS_CODE_OK' },
+              },
+            ],
+          },
         ],
       },
-      scopeSpans: [{
-        scope: { name: 'broker.lib.trace', version: '4.6.0' },
-        spans: [{
-          traceId: span.traceId,
-          spanId: span.spanId,
-          parentSpanId: span.parentSpanId || undefined,
-          name: span.name,
-          kind: span.kind || 'SPAN_KIND_INTERNAL',
-          startTimeUnixNano: startNs.toString(),
-          endTimeUnixNano: endNs.toString(),
-          attributes,
-          status: span.status || { code: 'STATUS_CODE_OK' },
-        }],
-      }],
-    }],
+    ],
   };
   try {
     const u = new URL('/v1/traces', OTLP_ENDPOINT);
@@ -190,9 +200,19 @@ export function exportSpan(span) {
       headers: otlpHeaders,
       timeout: 2000,
     });
-    req.on('error', () => { /* swallow */ });
-    req.on('timeout', () => { try { req.destroy(); } catch { /* */ } });
+    req.on('error', () => {
+      /* swallow */
+    });
+    req.on('timeout', () => {
+      try {
+        req.destroy();
+      } catch {
+        /* */
+      }
+    });
     req.write(JSON.stringify(body));
     req.end();
-  } catch { /* swallow */ }
+  } catch {
+    /* swallow */
+  }
 }

@@ -82,9 +82,9 @@ export function buildBackupManifest(paths = {}) {
   let clientCertCount = 0;
   if (paths.clientsDir && existsSync(paths.clientsDir)) {
     try {
-      clientCertCount = readdirSync(paths.clientsDir, { withFileTypes: true })
-        .filter((d) => d.isDirectory() || d.name.endsWith('.crt') || d.name.endsWith('.pem'))
-        .length;
+      clientCertCount = readdirSync(paths.clientsDir, { withFileTypes: true }).filter(
+        (d) => d.isDirectory() || d.name.endsWith('.crt') || d.name.endsWith('.pem'),
+      ).length;
     } catch {
       clientCertCount = 0;
     }

@@ -38,7 +38,12 @@ export async function handleProxy(req, res, route, deps) {
     await proxyRequest(req, res, { serviceName, service, subPath, method, ctx });
     audit?.({ action: 'proxy', status: 'ok', service: serviceName, cn: ctx.cn, path: subPath });
   } catch (e) {
-    audit?.({ action: 'proxy', status: 'error', service: serviceName, error: String(e?.message || e) });
+    audit?.({
+      action: 'proxy',
+      status: 'error',
+      service: serviceName,
+      error: String(e?.message || e),
+    });
     if (!res.headersSent) jsonError(res, 502, 'Upstream error');
   }
   return true;

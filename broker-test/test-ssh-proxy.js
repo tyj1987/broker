@@ -10,19 +10,30 @@ import {
   validateCommand,
 } from '../broker/ssh-proxy.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 const HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFRlc3RIb3N0S2V5';
 function testSecret(target, privateKey = 'k') {
   const parsed = parseSshTarget(target);
   const hostToken = parsed.port === 22 ? parsed.host : `[${parsed.host}]:${parsed.port}`;
   return {
-    host: parsed.host, port: parsed.port, username: parsed.user,
-    private_key: privateKey, known_hosts: `${hostToken} ${HOST_KEY}`,
+    host: parsed.host,
+    port: parsed.port,
+    username: parsed.user,
+    private_key: privateKey,
+    known_hosts: `${hostToken} ${HOST_KEY}`,
   };
 }
 
@@ -44,42 +55,74 @@ section('parseSshTarget');
 }
 {
   let threw = false;
-  try { parseSshTarget('app@host;rm -rf /'); } catch (e) { threw = /shell metacharacter/.test(e.message); }
+  try {
+    parseSshTarget('app@host;rm -rf /');
+  } catch (e) {
+    threw = /shell metacharacter/.test(e.message);
+  }
   ok('rejects ; in host', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('app@host`whoami`'); } catch (e) { threw = /shell metacharacter/.test(e.message); }
+  try {
+    parseSshTarget('app@host`whoami`');
+  } catch (e) {
+    threw = /shell metacharacter/.test(e.message);
+  }
   ok('rejects backtick', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('app@host|tee'); } catch (e) { threw = /shell metacharacter/.test(e.message); }
+  try {
+    parseSshTarget('app@host|tee');
+  } catch (e) {
+    threw = /shell metacharacter/.test(e.message);
+  }
   ok('rejects pipe', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('app@host $IFS'); } catch (e) { threw = /shell metacharacter/.test(e.message); }
+  try {
+    parseSshTarget('app@host $IFS');
+  } catch (e) {
+    threw = /shell metacharacter/.test(e.message);
+  }
   ok('rejects $ in target', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('bad-host'); } catch (e) { threw = /user@host/.test(e.message); }
+  try {
+    parseSshTarget('bad-host');
+  } catch (e) {
+    threw = /user@host/.test(e.message);
+  }
   ok('rejects no @ format', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('app@host:99999'); } catch (e) { threw = /invalid ssh port/.test(e.message); }
+  try {
+    parseSshTarget('app@host:99999');
+  } catch (e) {
+    threw = /invalid ssh port/.test(e.message);
+  }
   ok('rejects port out of range', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('app@-bad-host-.com'); } catch (e) { threw = /invalid ssh host/.test(e.message); }
+  try {
+    parseSshTarget('app@-bad-host-.com');
+  } catch (e) {
+    threw = /invalid ssh host/.test(e.message);
+  }
   ok('rejects malformed host', threw);
 }
 {
   let threw = false;
-  try { parseSshTarget('-rf@host'); } catch (e) { threw = /invalid ssh username/.test(e.message); }
+  try {
+    parseSshTarget('-rf@host');
+  } catch (e) {
+    threw = /invalid ssh username/.test(e.message);
+  }
   ok('rejects username starting with -', threw);
 }
 
@@ -89,26 +132,45 @@ section('parseSshTarget');
 section('validateCommand');
 {
   ok('valid simple cmd', validateCommand('ls -la') === 'ls -la');
-  ok('valid with quoted spaces', validateCommand("grep 'foo bar' /tmp/x") === "grep 'foo bar' /tmp/x");
+  ok(
+    'valid with quoted spaces',
+    validateCommand("grep 'foo bar' /tmp/x") === "grep 'foo bar' /tmp/x",
+  );
 }
 {
   let threw = false;
-  try { validateCommand('ls\nrm -rf /'); } catch (e) { threw = /newline/.test(e.message); }
+  try {
+    validateCommand('ls\nrm -rf /');
+  } catch (e) {
+    threw = /newline/.test(e.message);
+  }
   ok('rejects newline in command', threw);
 }
 {
   let threw = false;
-  try { validateCommand('ls\0rm'); } catch (e) { threw = /null|newline/.test(e.message); }
+  try {
+    validateCommand('ls\0rm');
+  } catch (e) {
+    threw = /null|newline/.test(e.message);
+  }
   ok('rejects NUL in command', threw);
 }
 {
   let threw = false;
-  try { validateCommand('a'.repeat(5000)); } catch (e) { threw = /too long/.test(e.message); }
+  try {
+    validateCommand('a'.repeat(5000));
+  } catch (e) {
+    threw = /too long/.test(e.message);
+  }
   ok('rejects command >4KB', threw);
 }
 {
   let threw = false;
-  try { validateCommand(''); } catch (e) { threw = /required/.test(e.message); }
+  try {
+    validateCommand('');
+  } catch (e) {
+    threw = /required/.test(e.message);
+  }
   ok('rejects empty command', threw);
 }
 {
@@ -129,24 +191,46 @@ section('sshExec (mocked executor)');
   };
   const auditCalls = [];
   const r = await sshExec(
-    { target: 'app@10.0.1.5', command: 'systemctl status nginx', secret: testSecret('app@10.0.1.5', 'FAKE-KEY-CONTENT') },
-    { executor, audit: (e) => auditCalls.push(e) }
+    {
+      target: 'app@10.0.1.5',
+      command: 'systemctl status nginx',
+      secret: testSecret('app@10.0.1.5', 'FAKE-KEY-CONTENT'),
+    },
+    { executor, audit: (e) => auditCalls.push(e) },
   );
   ok('executor called with ssh', captured.cmd === 'ssh');
-  ok('args include -i key', captured.args.some(a => a === '-i'));
-  ok('args include private key path', captured.args.some(a => a.includes('id_key')));
-  ok('args include BatchMode', captured.args.includes('-o') && captured.args.includes('BatchMode=yes'));
+  ok(
+    'args include -i key',
+    captured.args.some((a) => a === '-i'),
+  );
+  ok(
+    'args include private key path',
+    captured.args.some((a) => a.includes('id_key')),
+  );
+  ok(
+    'args include BatchMode',
+    captured.args.includes('-o') && captured.args.includes('BatchMode=yes'),
+  );
   ok('strict host key checking enabled', captured.args.includes('StrictHostKeyChecking=yes'));
-  ok('pinned known_hosts path used', captured.args.some(a => a.includes('UserKnownHostsFile=') && a.includes('known_hosts')));
-  ok('accept-new forbidden', !captured.args.some(a => a.includes('accept-new')));
+  ok(
+    'pinned known_hosts path used',
+    captured.args.some((a) => a.includes('UserKnownHostsFile=') && a.includes('known_hosts')),
+  );
+  ok('accept-new forbidden', !captured.args.some((a) => a.includes('accept-new')));
   ok('args include -- separator', captured.args.includes('--'));
   ok('args target is user@host', captured.args.includes('app@10.0.1.5'));
   ok('args command after --', captured.args[captured.args.length - 1] === 'systemctl status nginx');
   ok('returns ok=true', r.ok === true);
   ok('returns stdout', r.stdout === 'hello\n');
   ok('returns exitCode=0', r.exitCode === 0);
-  ok('audit ok', auditCalls.some(a => a.action === 'ssh_exec' && a.status === 'ok'));
-  ok('audit does NOT include private_key', !JSON.stringify(auditCalls).includes('FAKE-KEY-CONTENT'));
+  ok(
+    'audit ok',
+    auditCalls.some((a) => a.action === 'ssh_exec' && a.status === 'ok'),
+  );
+  ok(
+    'audit does NOT include private_key',
+    !JSON.stringify(auditCalls).includes('FAKE-KEY-CONTENT'),
+  );
   ok('returns duration_ms', typeof r.duration_ms === 'number');
 }
 
@@ -157,21 +241,31 @@ section('sshExec error paths');
 {
   let threw = false;
   try {
-    await sshExec({ target: 'a@b', command: 'c', secret: null }, { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
-  } catch (e) { threw = /private_key required/.test(e.message); }
+    await sshExec(
+      { target: 'a@b', command: 'c', secret: null },
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    );
+  } catch (e) {
+    threw = /private_key required/.test(e.message);
+  }
   ok('missing secret throws', threw);
 }
 {
   let threw = false;
   try {
-    await sshExec({ target: 'a@b', command: 'c', secret: {} }, { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
-  } catch (e) { threw = /private_key required/.test(e.message); }
+    await sshExec(
+      { target: 'a@b', command: 'c', secret: {} },
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    );
+  } catch (e) {
+    threw = /private_key required/.test(e.message);
+  }
   ok('secret without private_key throws', threw);
 }
 {
   const r = await sshExec(
     { target: 'a@b', command: 'c', secret: testSecret('a@b') },
-    { executor: async () => ({ exitCode: 1, stdout: '', stderr: 'Permission denied' }) }
+    { executor: async () => ({ exitCode: 1, stdout: '', stderr: 'Permission denied' }) },
   );
   ok('non-zero exit returns ok=false', r.ok === false);
   ok('returns stderr', r.stderr === 'Permission denied');
@@ -182,9 +276,15 @@ section('sshExec error paths');
   try {
     await sshExec(
       { target: 'a@b', command: 'c', secret: testSecret('a@b') },
-      { executor: async () => { throw new Error('spawn ENOENT'); } }
+      {
+        executor: async () => {
+          throw new Error('spawn ENOENT');
+        },
+      },
     );
-  } catch (e) { threw = /spawn ENOENT/.test(e.message); }
+  } catch (e) {
+    threw = /spawn ENOENT/.test(e.message);
+  }
   ok('executor error propagates', threw);
 }
 {
@@ -192,9 +292,11 @@ section('sshExec error paths');
   try {
     await sshExec(
       { target: 'a@other', command: 'c', secret: testSecret('a@b') },
-      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) }
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
     );
-  } catch (e) { threw = /does not match/.test(e.message); }
+  } catch (e) {
+    threw = /does not match/.test(e.message);
+  }
   ok('target must match secret target', threw);
 }
 {
@@ -202,9 +304,11 @@ section('sshExec error paths');
   try {
     await sshExec(
       { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), known_hosts: '' } },
-      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) }
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
     );
-  } catch (e) { threw = /known_hosts required/.test(e.message); }
+  } catch (e) {
+    threw = /known_hosts required/.test(e.message);
+  }
   ok('missing known_hosts fails closed', threw);
 }
 
@@ -216,21 +320,49 @@ section('key file lifecycle');
   // 用真实 fs,但 keydir 在 tmpdir,测试后清掉
   const calls = [];
   const fsImpl = {
-    mkdtempSync: (prefix) => { const d = `${prefix}X`; calls.push(['mkdtemp', d]); return d; },
-    writeFileSync: (p, c) => { calls.push(['write', p, c]); },
-    chmodSync: (p) => { calls.push(['chmod', p]); },
-    existsSync: (p) => { calls.push(['exists', p]); return true; },
-    rmSync: (p) => { calls.push(['rm', p]); },
+    mkdtempSync: (prefix) => {
+      const d = `${prefix}X`;
+      calls.push(['mkdtemp', d]);
+      return d;
+    },
+    writeFileSync: (p, c) => {
+      calls.push(['write', p, c]);
+    },
+    chmodSync: (p) => {
+      calls.push(['chmod', p]);
+    },
+    existsSync: (p) => {
+      calls.push(['exists', p]);
+      return true;
+    },
+    rmSync: (p) => {
+      calls.push(['rm', p]);
+    },
   };
   await sshExec(
     { target: 'a@b', command: 'c', secret: testSecret('a@b', 'SECRET-CONTENT') },
-    { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), fsImpl }
+    { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), fsImpl },
   );
-  ok('key dir created in tmp', calls.some(c => c[0] === 'mkdtemp' && c[1].includes('broker-ssh-')));
-  ok('key file written with 0600', calls.some(c => c[0] === 'write' && c[2] === 'SECRET-CONTENT'));
-  ok('known_hosts written with 0600', calls.some(c => c[0] === 'write' && String(c[1]).includes('known_hosts')));
-  ok('chmod 0600 applied', calls.some(c => c[0] === 'chmod'));
-  ok('key dir cleaned up', calls.some(c => c[0] === 'rm'));
+  ok(
+    'key dir created in tmp',
+    calls.some((c) => c[0] === 'mkdtemp' && c[1].includes('broker-ssh-')),
+  );
+  ok(
+    'key file written with 0600',
+    calls.some((c) => c[0] === 'write' && c[2] === 'SECRET-CONTENT'),
+  );
+  ok(
+    'known_hosts written with 0600',
+    calls.some((c) => c[0] === 'write' && String(c[1]).includes('known_hosts')),
+  );
+  ok(
+    'chmod 0600 applied',
+    calls.some((c) => c[0] === 'chmod'),
+  );
+  ok(
+    'key dir cleaned up',
+    calls.some((c) => c[0] === 'rm'),
+  );
 }
 
 // ============================================================
@@ -240,36 +372,76 @@ section('sshTunnel');
 {
   let killed = false;
   const fakeChild = {
-    on: (ev, cb) => { if (ev === 'close') fakeChild._closeCb = cb; },
-    kill: (sig) => { killed = true; fakeChild._sig = sig; },
+    on: (ev, cb) => {
+      if (ev === 'close') fakeChild._closeCb = cb;
+    },
+    kill: (sig) => {
+      killed = true;
+      fakeChild._sig = sig;
+    },
   };
   const executor = async () => ({ child: fakeChild });
   const t = await sshTunnel(
-    { target: 'app@db.internal:22', localPort: 5432, remoteHost: 'db.svc', remotePort: 5432, secret: testSecret('app@db.internal:22') },
-    { executor, audit: () => {} }
+    {
+      target: 'app@db.internal:22',
+      localPort: 5432,
+      remoteHost: 'db.svc',
+      remotePort: 5432,
+      secret: testSecret('app@db.internal:22'),
+    },
+    { executor, audit: () => {} },
   );
   ok('tunnel has id', typeof t.id === 'string' && t.id.length > 0);
   ok('tunnel has stop()', typeof t.stop === 'function');
   ok('tunnel metadata correct', t.localPort === 5432 && t.remote === 'db.svc:5432');
-  ok('tunnel listed in ACTIVE_TUNNELS', listTunnels().some(x => x.id === t.id));
+  ok(
+    'tunnel listed in ACTIVE_TUNNELS',
+    listTunnels().some((x) => x.id === t.id),
+  );
   // 关掉
   const stopped = await stopTunnel(t.id, () => {});
   ok('stop returns true', stopped === true);
   ok('child SIGTERM sent', killed && fakeChild._sig === 'SIGTERM');
   // 异步 close
   fakeChild._closeCb?.(0);
-  ok('tunnel removed after close', !listTunnels().some(x => x.id === t.id));
+  ok('tunnel removed after close', !listTunnels().some((x) => x.id === t.id));
 }
 
 {
   // tunnel 参数校验
   let threw = false;
-  try { await sshTunnel({ target: 'a@b', localPort: 99999, remoteHost: 'h', remotePort: 22, secret: testSecret('a@b') }, { executor: async () => ({ child: { on: () => {} } }) }); } catch (e) { threw = /localPort/.test(e.message); }
+  try {
+    await sshTunnel(
+      {
+        target: 'a@b',
+        localPort: 99999,
+        remoteHost: 'h',
+        remotePort: 22,
+        secret: testSecret('a@b'),
+      },
+      { executor: async () => ({ child: { on: () => {} } }) },
+    );
+  } catch (e) {
+    threw = /localPort/.test(e.message);
+  }
   ok('rejects bad localPort', threw);
 }
 {
   let threw = false;
-  try { await sshTunnel({ target: 'a@b', localPort: 22, remoteHost: 'bad host!', remotePort: 22, secret: testSecret('a@b') }, { executor: async () => ({ child: { on: () => {} } }) }); } catch (e) { threw = /remoteHost/.test(e.message); }
+  try {
+    await sshTunnel(
+      {
+        target: 'a@b',
+        localPort: 22,
+        remoteHost: 'bad host!',
+        remotePort: 22,
+        secret: testSecret('a@b'),
+      },
+      { executor: async () => ({ child: { on: () => {} } }) },
+    );
+  } catch (e) {
+    threw = /remoteHost/.test(e.message);
+  }
   ok('rejects bad remoteHost', threw);
 }
 
@@ -281,7 +453,7 @@ section('zero credential leakage');
   // AI 拿到 sshExec 的返回值,不应该包含 private_key
   const r = await sshExec(
     { target: 'a@b', command: 'c', secret: testSecret('a@b', 'GHp_LEAK_ME_xxxxxxxxxxxxx') },
-    { executor: async () => ({ exitCode: 0, stdout: 'ok', stderr: '' }) }
+    { executor: async () => ({ exitCode: 0, stdout: 'ok', stderr: '' }) },
   );
   const txt = JSON.stringify(r);
   ok('result does not contain private_key', !txt.includes('GHp_LEAK_ME'));
@@ -291,8 +463,14 @@ section('zero credential leakage');
   // listTunnels 也不应泄漏
   const fakeChild = { on: () => {}, kill: () => {} };
   await sshTunnel(
-    { target: 'a@b', localPort: 3333, remoteHost: 'h', remotePort: 22, secret: testSecret('a@b', 'LEAK-KEY') },
-    { executor: async () => ({ child: fakeChild }) }
+    {
+      target: 'a@b',
+      localPort: 3333,
+      remoteHost: 'h',
+      remotePort: 22,
+      secret: testSecret('a@b', 'LEAK-KEY'),
+    },
+    { executor: async () => ({ child: fakeChild }) },
   );
   const items = listTunnels();
   const txt = JSON.stringify(items);
@@ -311,8 +489,10 @@ section('sshExec passphrase decryption');
     { target: 'app@10.0.1.5', command: 'uptime', secret: testSecret('app@10.0.1.5', 'FAKE-KEY') },
     {
       executor: async () => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
-      keygen: async () => { keygenCalls++; },
-    }
+      keygen: async () => {
+        keygenCalls++;
+      },
+    },
   );
   ok('no passphrase → keygen not called', keygenCalls === 0);
   ok('ssh still completes when no passphrase', r.ok === true);
@@ -321,16 +501,28 @@ section('sshExec passphrase decryption');
   // 有 passphrase → keygen 被调用,且参数正确
   let keygenArgs = null;
   const r = await sshExec(
-    { target: 'app@10.0.1.5', command: 'uptime', secret: { ...testSecret('app@10.0.1.5', 'ENCRYPTED-KEY'), passphrase: 'secret-phrase' } },
+    {
+      target: 'app@10.0.1.5',
+      command: 'uptime',
+      secret: { ...testSecret('app@10.0.1.5', 'ENCRYPTED-KEY'), passphrase: 'secret-phrase' },
+    },
     {
       executor: async () => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
-      keygen: async (args) => { keygenArgs = args; },
-    }
+      keygen: async (args) => {
+        keygenArgs = args;
+      },
+    },
   );
   ok('passphrase → keygen called', keygenArgs !== null);
   ok('keygen args include -p (change passphrase)', keygenArgs?.[0] === '-p');
-  ok('keygen args include -f <keyPath>', keygenArgs?.[1] === '-f' && /id_key$/.test(keygenArgs?.[2] || ''));
-  ok('keygen args include -P <passphrase>', keygenArgs?.[3] === '-P' && keygenArgs?.[4] === 'secret-phrase');
+  ok(
+    'keygen args include -f <keyPath>',
+    keygenArgs?.[1] === '-f' && /id_key$/.test(keygenArgs?.[2] || ''),
+  );
+  ok(
+    'keygen args include -P <passphrase>',
+    keygenArgs?.[3] === '-P' && keygenArgs?.[4] === 'secret-phrase',
+  );
   ok('keygen args include -N "" (remove)', keygenArgs?.[5] === '-N' && keygenArgs?.[6] === '');
 }
 {
@@ -342,7 +534,9 @@ section('sshExec passphrase decryption');
       { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), passphrase: 'wrong' } },
       {
         executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
-        keygen: async () => { throw new Error('ssh-keygen decrypt failed (exit 1)'); },
+        keygen: async () => {
+          throw new Error('ssh-keygen decrypt failed (exit 1)');
+        },
         fsImpl: {
           writeFileSync: (...a) => fsCalls.push(['write', a[0], a[1]]),
           chmodSync: () => {},
@@ -350,21 +544,32 @@ section('sshExec passphrase decryption');
           existsSync: () => true,
           mkdtempSync: () => '/tmp/broker-ssh-test',
         },
-      }
+      },
     );
-  } catch (e) { threw = /ssh-keygen decrypt failed/.test(e.message); }
+  } catch (e) {
+    threw = /ssh-keygen decrypt failed/.test(e.message);
+  }
   ok('wrong passphrase → sshExec rejects', threw);
-  ok('tmp dir cleaned after keygen failure', fsCalls.some(c => c[0] === 'rm'));
+  ok(
+    'tmp dir cleaned after keygen failure',
+    fsCalls.some((c) => c[0] === 'rm'),
+  );
 }
 {
   // passphrase 过长 → 直接拒绝
   let threw = false;
   try {
     await sshExec(
-      { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), passphrase: 'x'.repeat(1025) } },
-      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), keygen: async () => {} }
+      {
+        target: 'a@b',
+        command: 'c',
+        secret: { ...testSecret('a@b'), passphrase: 'x'.repeat(1025) },
+      },
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), keygen: async () => {} },
     );
-  } catch (e) { threw = /passphrase too long/.test(e.message); }
+  } catch (e) {
+    threw = /passphrase too long/.test(e.message);
+  }
   ok('passphrase > 1KB rejected', threw);
 }
 {
@@ -373,21 +578,27 @@ section('sshExec passphrase decryption');
   try {
     await sshExec(
       { target: 'a@b', command: 'c', secret: { ...testSecret('a@b'), passphrase: 12345 } },
-      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), keygen: async () => {} }
+      { executor: async () => ({ exitCode: 0, stdout: '', stderr: '' }), keygen: async () => {} },
     );
-  } catch (e) { threw = /must be a string/.test(e.message); }
+  } catch (e) {
+    threw = /must be a string/.test(e.message);
+  }
   ok('non-string passphrase rejected', threw);
 }
 {
   // passphrase 永远不出现在 audit 或返回值
   const auditCalls = [];
   const r = await sshExec(
-    { target: 'app@10.0.1.5', command: 'echo hi', secret: { ...testSecret('app@10.0.1.5', 'ENCRYPTED'), passphrase: 'SECRET-PHRASE-VALUE' } },
+    {
+      target: 'app@10.0.1.5',
+      command: 'echo hi',
+      secret: { ...testSecret('app@10.0.1.5', 'ENCRYPTED'), passphrase: 'SECRET-PHRASE-VALUE' },
+    },
     {
       executor: async () => ({ exitCode: 0, stdout: 'hi', stderr: '' }),
       keygen: async () => {},
       audit: (e) => auditCalls.push(e),
-    }
+    },
   );
   const rTxt = JSON.stringify(r);
   const aTxt = JSON.stringify(auditCalls);
@@ -400,9 +611,20 @@ section('sshExec passphrase decryption');
   let keygenArgs = null;
   const fakeChild = { on: () => {}, kill: () => {} };
   await sshTunnel(
-    { target: 'app@b:22', localPort: 5432, remoteHost: 'db.svc', remotePort: 5432,
-      secret: { ...testSecret('app@b:22'), passphrase: 'topsecret' } },
-    { executor: async () => ({ child: fakeChild }), keygen: async (args) => { keygenArgs = args; }, audit: () => {} }
+    {
+      target: 'app@b:22',
+      localPort: 5432,
+      remoteHost: 'db.svc',
+      remotePort: 5432,
+      secret: { ...testSecret('app@b:22'), passphrase: 'topsecret' },
+    },
+    {
+      executor: async () => ({ child: fakeChild }),
+      keygen: async (args) => {
+        keygenArgs = args;
+      },
+      audit: () => {},
+    },
   );
   ok('sshTunnel calls keygen when passphrase set', keygenArgs !== null);
   ok('sshTunnel keygen args include passphrase', keygenArgs?.[4] === 'topsecret');

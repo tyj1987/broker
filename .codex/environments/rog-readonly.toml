@@ -1,0 +1,14 @@
+version = 1
+name = "ROG read-only preflight"
+
+[setup]
+script = ""
+
+[setup.win32]
+script = "python \"E:\\Workspaces\\_control\\codex-local\\environment_check.py\" --project broker"
+
+[[actions]]
+name = "Check local prerequisites"
+icon = "test"
+platform = "win32"
+command = "python \"E:\\Workspaces\\_control\\codex-local\\environment_check.py\" --project broker"

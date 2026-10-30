@@ -4,7 +4,6 @@ import {
   continueOrCreateTrace,
   outboundTraceHeaders,
   resolveRequestId,
-  newTraceId,
 } from '../broker/lib/trace.js';
 import {
   runWithRequestContext,
@@ -23,14 +22,23 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BROKER_VERSION } from '../broker/version.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 console.log('=== version ===');
-assert(typeof BROKER_VERSION === 'string' && /^\d+\.\d+\.\d+/.test(BROKER_VERSION), `version=${BROKER_VERSION}`);
+assert(
+  typeof BROKER_VERSION === 'string' && /^\d+\.\d+\.\d+/.test(BROKER_VERSION),
+  `version=${BROKER_VERSION}`,
+);
 
 console.log('=== parseTraceparent ===');
 {
@@ -61,11 +69,17 @@ console.log('=== resolveRequestId ===');
 console.log('=== request context ALS ===');
 {
   let seen;
-  runWithRequestContext({ 'x-request-id': 'req-9', traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, () => {
-    seen = getRequestContext();
-    assert(getRequestId() === 'req-9', 'req id');
-    assert(getTraceparent().includes('4bf92f3577b34da6'), 'tp in ctx');
-  });
+  runWithRequestContext(
+    {
+      'x-request-id': 'req-9',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+    },
+    () => {
+      seen = getRequestContext();
+      assert(getRequestId() === 'req-9', 'req id');
+      assert(getTraceparent().includes('4bf92f3577b34da6'), 'tp in ctx');
+    },
+  );
   assert(seen.traceId === '4bf92f3577b34da6a3ce929d0e0e4736', 'ctx trace');
   assert(getRequestId() === undefined, 'cleared outside');
 }
@@ -74,9 +88,18 @@ console.log('=== audit sampling ===');
 {
   assert(shouldSampleAudit({ action: 'login' }, { sampleRate: 0 }) === true, 'always login');
   assert(shouldSampleAudit({ action: 'ping' }, { sampleRate: 0 }) === false, 'drop ping');
-  assert(shouldSampleAudit({ action: 'ping', status: 'denied' }, { sampleRate: 0 }) === true, 'denied');
+  assert(
+    shouldSampleAudit({ action: 'ping', status: 'denied' }, { sampleRate: 0 }) === true,
+    'denied',
+  );
   let calls = 0;
-  const wrapped = withAuditSampling((e) => { calls++; return e; }, { sampleRate: 0, alwaysActions: ['login'] });
+  const wrapped = withAuditSampling(
+    (e) => {
+      calls++;
+      return e;
+    },
+    { sampleRate: 0, alwaysActions: ['login'] },
+  );
   wrapped({ action: 'ping' });
   wrapped({ action: 'login' });
   assert(calls === 1, 'sampled wrap');

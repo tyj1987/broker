@@ -12,9 +12,13 @@
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
-  const esc = (s) => String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const esc = (s) =>
+    String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
 
   let isAdmin = false;
   let currentIdentity = null;
@@ -24,9 +28,10 @@
     wireButtons();
     wireAiPrompt();
     setGreet();
-    const subscribe = typeof subscribeBrokerIdentity === 'function'
-      ? subscribeBrokerIdentity
-      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    const subscribe =
+      typeof subscribeBrokerIdentity === 'function'
+        ? subscribeBrokerIdentity
+        : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
     subscribe((ident) => {
       currentIdentity = ident ? `CN=${ident.cn} · role=${ident.role}` : '';
       isAdmin = !!(ident && ident.role === 'admin');
@@ -44,7 +49,12 @@
     const hour = new Date().getHours();
     const greet = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好';
     $('#home-greet-line').textContent = `${greet}, ${cn}`;
-    const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+    const dateStr = new Date().toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+    });
     $('#home-subtitle').textContent = `${dateStr} · 仪表盘 · 快捷操作 · 最近活动`;
   }
 
@@ -75,26 +85,31 @@ Content-Type: application/json
     const ta = $('#home-ai-prompt');
     if (ta && !ta.value) ta.value = AI_PROMPT;
     const btn = $('#btn-copy-ai-prompt');
-    if (btn) btn.addEventListener('click', async () => {
-      const text = $('#home-ai-prompt')?.value || AI_PROMPT;
-      const status = $('#ai-prompt-copy-status');
-      try {
-        await navigator.clipboard.writeText(text);
-        if (status) status.textContent = '已复制';
-      } catch {
-        if (ta) { ta.focus(); ta.select(); }
-        if (status) status.textContent = '请手动复制';
-      }
-    });
+    if (btn)
+      btn.addEventListener('click', async () => {
+        const text = $('#home-ai-prompt')?.value || AI_PROMPT;
+        const status = $('#ai-prompt-copy-status');
+        try {
+          await navigator.clipboard.writeText(text);
+          if (status) status.textContent = '已复制';
+        } catch {
+          if (ta) {
+            ta.focus();
+            ta.select();
+          }
+          if (status) status.textContent = '请手动复制';
+        }
+      });
   }
 
   function wireButtons() {
     const open = $('#btn-home-open-audit');
-    if (open) open.addEventListener('click', () => {
-      const tab = document.querySelector('button[data-tab="audit"]');
-      if (tab) tab.click();
-    });
-    $$('.stat-card').forEach(card => {
+    if (open)
+      open.addEventListener('click', () => {
+        const tab = document.querySelector('button[data-tab="audit"]');
+        if (tab) tab.click();
+      });
+    $$('.stat-card').forEach((card) => {
       card.addEventListener('click', () => {
         const stat = card.dataset.stat;
         const map = {
@@ -120,7 +135,7 @@ Content-Type: application/json
       fetchSafe('/api/v1/services'),
       fetchSafe('/api/v1/secrets'),
       fetchSafe('/api/v1/admin/clients'),
-      fetchSafe(isAdmin ? '/api/v1/admin/audit?limit=200' : '/api/v1/audit?limit=200'),
+      fetchSafe(isAdmin ? '/api/v1/admin/audit?limit=200' : '/api/v1/me/audit?limit=200'),
       fetchSafe('/api/v1/healthcheck/status'),
     ]);
     renderStats(services, secrets, clients, audit, healthcheck);
@@ -149,17 +164,18 @@ Content-Type: application/json
 
   // ---- Render: stats ----
   function renderStats(services, secrets, clients, audit, healthcheck) {
-    const sCount = services.status === 'fulfilled' ? (services.value.services?.length || 0) : 0;
+    const sCount = services.status === 'fulfilled' ? services.value.services?.length || 0 : 0;
     let secCount = 0;
     if (secrets.status === 'fulfilled') {
       const sv = secrets.value.secrets || secrets.value;
       secCount = Array.isArray(sv) ? sv.length : 0;
     }
-    const cCount = clients.status === 'fulfilled' && isAdmin ? (clients.value.clients?.length || 0) : '—';
+    const cCount =
+      clients.status === 'fulfilled' && isAdmin ? clients.value.clients?.length || 0 : '—';
     let aCount = 0;
     if (audit.status === 'fulfilled' && audit.value.events) {
       const today = new Date().toISOString().slice(0, 10);
-      aCount = audit.value.events.filter(e => (e.ts || '').slice(0, 10) === today).length;
+      aCount = audit.value.events.filter((e) => (e.ts || '').slice(0, 10) === today).length;
     }
     animateNumber($('#stat-services'), sCount);
     animateNumber($('#stat-secrets'), secCount);
@@ -171,10 +187,13 @@ Content-Type: application/json
       if (healthcheck.status === 'fulfilled' && healthcheck.value.summary?.total) {
         const sum = healthcheck.value.summary;
         hcEl.textContent = `${sum.ok || 0}/${sum.total}`;
-        hcEl.className = 'stat-num ' + (
-          healthcheck.value.last_status === 'ok' ? 'hc-ok' :
-          healthcheck.value.last_status === 'degraded' ? 'hc-degraded' : 'hc-unknown'
-        );
+        hcEl.className =
+          'stat-num ' +
+          (healthcheck.value.last_status === 'ok'
+            ? 'hc-ok'
+            : healthcheck.value.last_status === 'degraded'
+              ? 'hc-degraded'
+              : 'hc-unknown');
       } else {
         hcEl.textContent = '—';
         hcEl.className = 'stat-num hc-unknown';
@@ -186,8 +205,8 @@ Content-Type: application/json
       const sum = healthcheck.value.summary;
       const dims = ['ok', 'expired', 'unreachable', 'misconfigured', 'fail', 'skipped'];
       const parts = dims
-        .filter(d => (sum[d] || 0) > 0)
-        .map(d => `<span class="hc-pill ${d}">${d} ${sum[d]}</span>`);
+        .filter((d) => (sum[d] || 0) > 0)
+        .map((d) => `<span class="hc-pill ${d}">${d} ${sum[d]}</span>`);
       sumPillsEl.innerHTML = parts.length ? parts.join('') : '<span class="muted">无</span>';
     } else if (sumPillsEl) {
       sumPillsEl.innerHTML = '';
@@ -196,7 +215,10 @@ Content-Type: application/json
 
   function animateNumber(el, target) {
     if (!el) return;
-    if (typeof target !== 'number') { el.textContent = target; return; }
+    if (typeof target !== 'number') {
+      el.textContent = target;
+      return;
+    }
     el.textContent = target;
   }
 
@@ -206,23 +228,31 @@ Content-Type: application/json
     if (!wrap) return;
     const out = [];
     // 1. Browse all services
-    out.push(`<button class="qa-card" data-go="actions"><div class="qa-icon">⚡</div><div class="qa-body"><div class="qa-title">浏览所有服务</div><div class="qa-sub muted">调用 GitHub / OpenAI / 阿里云</div></div></button>`);
+    out.push(
+      `<button class="qa-card" data-go="actions"><div class="qa-icon">⚡</div><div class="qa-body"><div class="qa-title">浏览所有服务</div><div class="qa-sub muted">调用 GitHub / OpenAI / 阿里云</div></div></button>`,
+    );
     // 2. View secrets
-    out.push(`<button class="qa-card" data-go="secrets"><div class="qa-icon">🔑</div><div class="qa-body"><div class="qa-title">可见密钥</div><div class="qa-sub muted">查看你能用哪些密钥</div></div></button>`);
+    out.push(
+      `<button class="qa-card" data-go="secrets"><div class="qa-icon">🔑</div><div class="qa-body"><div class="qa-title">可见密钥</div><div class="qa-sub muted">查看你能用哪些密钥</div></div></button>`,
+    );
     // 3. Audit log
-    out.push(`<button class="qa-card" data-go="audit"><div class="qa-icon">📋</div><div class="qa-body"><div class="qa-title">审计日志</div><div class="qa-sub muted">查谁在什么时候调了什么</div></div></button>`);
+    out.push(
+      `<button class="qa-card" data-go="audit"><div class="qa-icon">📋</div><div class="qa-body"><div class="qa-title">审计日志</div><div class="qa-sub muted">查谁在什么时候调了什么</div></div></button>`,
+    );
     // 4. Top services quick action
     if (services.status === 'fulfilled' && services.value.services?.length) {
       const top = services.value.services.slice(0, 3);
       for (const s of top) {
         const act = (s.actions && s.actions[0]) || null;
         if (!act) continue;
-        out.push(`<button class="qa-card" data-service="${esc(s.name)}" data-method="${esc(act.method)}" data-path="${esc(act.path)}"><div class="qa-icon">${esc(s.name === 'github' ? '🐙' : s.name === 'openai' ? '🤖' : s.name === 'aliyun_ecs' ? '☁️' : s.name === 'alidns' ? '🌐' : '🔌')}</div><div class="qa-body"><div class="qa-title">${esc(s.name)} · ${esc(act.label || act.path)}</div><div class="qa-sub muted">${esc(act.method)} ${esc(act.path)}</div></div></button>`);
+        out.push(
+          `<button class="qa-card" data-service="${esc(s.name)}" data-method="${esc(act.method)}" data-path="${esc(act.path)}"><div class="qa-icon">${esc(s.name === 'github' ? '🐙' : s.name === 'openai' ? '🤖' : s.name === 'aliyun_ecs' ? '☁️' : s.name === 'alidns' ? '🌐' : '🔌')}</div><div class="qa-body"><div class="qa-title">${esc(s.name)} · ${esc(act.label || act.path)}</div><div class="qa-sub muted">${esc(act.method)} ${esc(act.path)}</div></div></button>`,
+        );
       }
     }
     wrap.innerHTML = out.join('');
     // wire up
-    wrap.querySelectorAll('.qa-card').forEach(b => {
+    wrap.querySelectorAll('.qa-card').forEach((b) => {
       b.addEventListener('click', async () => {
         if (b.dataset.go) {
           const tab = document.querySelector(`button[data-tab="${b.dataset.go}"]`);
@@ -234,7 +264,15 @@ Content-Type: application/json
           const tab = document.querySelector('button[data-tab="actions"]');
           if (tab) tab.click();
           // Dispatch custom event that app.js / services module can listen to
-          window.dispatchEvent(new CustomEvent('home:quickcall', { detail: { service: b.dataset.service, method: b.dataset.method, path: b.dataset.path } }));
+          window.dispatchEvent(
+            new CustomEvent('home:quickcall', {
+              detail: {
+                service: b.dataset.service,
+                method: b.dataset.method,
+                path: b.dataset.path,
+              },
+            }),
+          );
         }
       });
     });
@@ -253,17 +291,29 @@ Content-Type: application/json
       wrap.innerHTML = '<div class="muted">还没有活动</div>';
       return;
     }
-    wrap.innerHTML = '<table class="recent-table"><tbody>' + ev.map(e => {
-      const cls = e.status === 'ok' ? 'status-ok' : e.status === 'error' || e.status === 'denied' ? 'status-error' : 'muted-cell';
-      const ts = e.ts ? e.ts.replace('T', ' ').slice(0, 19) : '';
-      const target = e.service ? `${e.method || ''} ${e.service}${e.path || ''}`.trim() : (e.name || e.action || '?');
-      return `<tr>
+    wrap.innerHTML =
+      '<table class="recent-table"><tbody>' +
+      ev
+        .map((e) => {
+          const cls =
+            e.status === 'ok'
+              ? 'status-ok'
+              : e.status === 'error' || e.status === 'denied'
+                ? 'status-error'
+                : 'muted-cell';
+          const ts = e.ts ? e.ts.replace('T', ' ').slice(0, 19) : '';
+          const target = e.service
+            ? `${e.method || ''} ${e.service}${e.path || ''}`.trim()
+            : e.name || e.action || '?';
+          return `<tr>
         <td class="muted-cell" style="white-space:nowrap">${esc(ts)}</td>
         <td><code>${esc(e.action || '')}</code></td>
         <td>${esc(target)}</td>
         <td class="${cls}">${esc(e.status || '')}</td>
       </tr>`;
-    }).join('') + '</tbody></table>';
+        })
+        .join('') +
+      '</tbody></table>';
   }
 
   // ---- Render: v3.0 M4 healthcheck ----
@@ -274,8 +324,12 @@ Content-Type: application/json
     const runBtn = $('#btn-hc-run');
     if (!listEl) return;
     if (hc.status !== 'fulfilled' || !hc.value) {
-      listEl.innerHTML = '<div class="muted">加载失败 — ' + esc(hc.value?.error || 'unknown') + '</div>';
-      if (statusEl) { statusEl.textContent = '未知'; statusEl.className = 'hc-status-badge hc-unknown'; }
+      listEl.innerHTML =
+        '<div class="muted">加载失败 — ' + esc(hc.value?.error || 'unknown') + '</div>';
+      if (statusEl) {
+        statusEl.textContent = '未知';
+        statusEl.className = 'hc-status-badge hc-unknown';
+      }
       return;
     }
     const v = hc.value;
@@ -295,7 +349,10 @@ Content-Type: application/json
         const origText = runBtn.textContent;
         runBtn.textContent = '跑中… / Running…';
         try {
-          const r = await fetch('/api/v1/healthcheck/run', { method: 'POST', credentials: 'include' });
+          const r = await fetch('/api/v1/healthcheck/run', {
+            method: 'POST',
+            credentials: 'include',
+          });
           const data = await r.json();
           if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
           // 重新拉全部 (含 healthcheck)
@@ -312,15 +369,17 @@ Content-Type: application/json
     const checks = v.checks || {};
     const names = Object.keys(checks).sort();
     if (names.length === 0) {
-      listEl.innerHTML = '<div class="muted">还没有 healthcheck 结果。点 "立即跑" 触发首次检查。</div>';
+      listEl.innerHTML =
+        '<div class="muted">还没有 healthcheck 结果。点 "立即跑" 触发首次检查。</div>';
       return;
     }
-    listEl.innerHTML = names.map(name => {
-      const c = checks[name];
-      const status = c.status || 'unknown';
-      const detail = c.detail || '';
-      const ts = c.ts ? c.ts.replace('T', ' ').slice(11, 19) : '';
-      return `<div class="hc-row">
+    listEl.innerHTML = names
+      .map((name) => {
+        const c = checks[name];
+        const status = c.status || 'unknown';
+        const detail = c.detail || '';
+        const ts = c.ts ? c.ts.replace('T', ' ').slice(11, 19) : '';
+        return `<div class="hc-row">
         <div>
           <div class="hc-name">${esc(name)}</div>
           <div class="hc-type">${esc(c.type || '')}</div>
@@ -331,7 +390,8 @@ Content-Type: application/json
         </div>
         <div class="hc-detail" title="${esc(detail)}">${esc(detail)}</div>
       </div>`;
-    }).join('');
+      })
+      .join('');
   }
   // 保存最后一次 renderStats 参数, 给 healthcheck Run Now 刷新用 (currently unused,
   // Run Now 直接调 loadAll 重拉全部)
@@ -344,19 +404,31 @@ Content-Type: application/json
 
     // Rotation reminders: secrets without rotation metadata
     if (secrets.status === 'fulfilled') {
-      const list = Array.isArray(secrets.value) ? secrets.value : (secrets.value.secrets || []);
+      const list = Array.isArray(secrets.value) ? secrets.value : secrets.value.secrets || [];
       for (const s of list) {
-        if (typeof s === 'string') continue;  // non-admin gets strings only
+        if (typeof s === 'string') continue; // non-admin gets strings only
         const lastRotated = s.last_rotated_at;
         const policyDays = s.rotation_policy_days;
         if (!lastRotated) {
-          items.push({ level: 'warn', text: `密钥 <code>${esc(s.name)}</code> 无轮换时间戳 — 建议设置轮换策略`, go: 'admin-secrets' });
+          items.push({
+            level: 'warn',
+            text: `密钥 <code>${esc(s.name)}</code> 无轮换时间戳 — 建议设置轮换策略`,
+            go: 'admin-secrets',
+          });
         } else if (policyDays) {
           const days = Math.floor((Date.now() - new Date(lastRotated).getTime()) / 86400000);
           if (days >= policyDays) {
-            items.push({ level: 'danger', text: `密钥 <code>${esc(s.name)}</code> 已 ${days} 天未轮换 (策略: ${policyDays} 天)`, go: 'admin-secrets' });
+            items.push({
+              level: 'danger',
+              text: `密钥 <code>${esc(s.name)}</code> 已 ${days} 天未轮换 (策略: ${policyDays} 天)`,
+              go: 'admin-secrets',
+            });
           } else if (days >= policyDays * 0.8) {
-            items.push({ level: 'warn', text: `密钥 <code>${esc(s.name)}</code> 还剩 ${policyDays - days} 天到轮换期`, go: 'admin-secrets' });
+            items.push({
+              level: 'warn',
+              text: `密钥 <code>${esc(s.name)}</code> 还剩 ${policyDays - days} 天到轮换期`,
+              go: 'admin-secrets',
+            });
           }
         }
       }
@@ -365,18 +437,31 @@ Content-Type: application/json
     // Anomaly count
     if (audit.status === 'fulfilled' && audit.value.events) {
       const ev = audit.value.events.slice(0, 50);
-      const denied = ev.filter(e => e.status === 'denied' || e.status === 'error').length;
+      const denied = ev.filter((e) => e.status === 'denied' || e.status === 'error').length;
       if (denied >= 5) {
-        items.push({ level: 'danger', text: `最近 50 事件中有 ${denied} 次失败 — 请检查审计`, go: 'audit' });
+        items.push({
+          level: 'danger',
+          text: `最近 50 事件中有 ${denied} 次失败 — 请检查审计`,
+          go: 'audit',
+        });
       }
     }
 
     // Stale clients (no recent activity in 7 days)
-    if (clients.status === 'fulfilled' && clients.value.clients && audit.status === 'fulfilled' && audit.value.events) {
-      const recentCns = new Set(audit.value.events.map(e => e.cn).filter(Boolean));
+    if (
+      clients.status === 'fulfilled' &&
+      clients.value.clients &&
+      audit.status === 'fulfilled' &&
+      audit.value.events
+    ) {
+      const recentCns = new Set(audit.value.events.map((e) => e.cn).filter(Boolean));
       for (const c of clients.value.clients) {
         if (!recentCns.has(c.name) && c.role !== 'admin') {
-          items.push({ level: 'info', text: `客户端 <code>${esc(c.name)}</code> 已 7 天无活动 — 考虑撤销`, go: 'admin-clients' });
+          items.push({
+            level: 'info',
+            text: `客户端 <code>${esc(c.name)}</code> 已 7 天无活动 — 考虑撤销`,
+            go: 'admin-clients',
+          });
         }
       }
     }
@@ -386,11 +471,14 @@ Content-Type: application/json
       wrap.innerHTML = '<li class="muted">✅ 一切正常，没有待办</li>';
       return;
     }
-    wrap.innerHTML = items.map(it => {
-      const cls = it.level === 'danger' ? 'todo-danger' : it.level === 'warn' ? 'todo-warn' : 'todo-info';
-      return `<li class="${cls}">${it.text}${it.go ? ` <button class="btn btn-sm btn-ghost" data-todo-go="${esc(it.go)}">→ 打开</button>` : ''}</li>`;
-    }).join('');
-    wrap.querySelectorAll('[data-todo-go]').forEach(b => {
+    wrap.innerHTML = items
+      .map((it) => {
+        const cls =
+          it.level === 'danger' ? 'todo-danger' : it.level === 'warn' ? 'todo-warn' : 'todo-info';
+        return `<li class="${cls}">${it.text}${it.go ? ` <button class="btn btn-sm btn-ghost" data-todo-go="${esc(it.go)}">→ 打开</button>` : ''}</li>`;
+      })
+      .join('');
+    wrap.querySelectorAll('[data-todo-go]').forEach((b) => {
       b.addEventListener('click', () => {
         const tab = document.querySelector(`button[data-tab="${b.dataset.todoGo}"]`);
         if (tab) tab.click();
@@ -411,11 +499,11 @@ Content-Type: application/json
   //   状态变化时 dashboard 红点 + 浏览器通知 + 刷新 healthcheck card
   // ============================================================
   let alertSSE = null;
-  let alertSeenIds = new Set();  // 已展示的 status_change, 避免重连后重复通知
+  let alertSeenIds = new Set(); // 已展示的 status_change, 避免重连后重复通知
 
   function startAlertStream() {
     if (alertSSE) return;
-    if (!isAdmin) return;  // 非 admin 不连 (浪费连接)
+    if (!isAdmin) return; // 非 admin 不连 (浪费连接)
     try {
       alertSSE = new EventSource('/api/v1/admin/healthcheck/stream', { withCredentials: true });
       alertSSE.addEventListener('ready', () => {
@@ -431,7 +519,9 @@ Content-Type: application/json
         try {
           const data = JSON.parse(ev.data);
           // 用 ts+changes hash 当 ID, 避免重连后重放
-          const changeId = `${data.ts}:${Object.keys(data.changes || {}).sort().join(',')}`;
+          const changeId = `${data.ts}:${Object.keys(data.changes || {})
+            .sort()
+            .join(',')}`;
           if (alertSeenIds.has(changeId)) return;
           alertSeenIds.add(changeId);
           // 清理 seen 集合 (避免无限增长)
@@ -456,7 +546,9 @@ Content-Type: application/json
 
   function stopAlertStream() {
     if (alertSSE) {
-      try { alertSSE.close(); } catch {}
+      try {
+        alertSSE.close();
+      } catch {}
       alertSSE = null;
     }
   }
@@ -473,11 +565,21 @@ Content-Type: application/json
       const names = Object.keys(data.changes || {});
       const title = `凭据状态变化 / Credential status change`;
       const body = names.length
-        ? names.map(n => `${n}: ${data.changes[n].from} → ${data.changes[n].to}`).slice(0, 5).join('\n')
-        : (data.summary?.ok || 0) + ' ok / ' + (data.summary?.expired || 0) + ' expired / ' + (data.summary?.unreachable || 0) + ' unreachable';
+        ? names
+            .map((n) => `${n}: ${data.changes[n].from} → ${data.changes[n].to}`)
+            .slice(0, 5)
+            .join('\n')
+        : (data.summary?.ok || 0) +
+          ' ok / ' +
+          (data.summary?.expired || 0) +
+          ' expired / ' +
+          (data.summary?.unreachable || 0) +
+          ' unreachable';
       try {
         new Notification(title, { body, tag: 'broker-alert' });
-      } catch (e) { /* 通知被拒 */ }
+      } catch (e) {
+        /* 通知被拒 */
+      }
     }
     // 3) 刷新 healthcheck card 显示最新
     loadAll();

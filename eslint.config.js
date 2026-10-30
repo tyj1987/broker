@@ -24,6 +24,12 @@ export default [
         global: 'readonly',
         URL: 'readonly',
         URLSearchParams: 'readonly',
+        // Node 18+ Web Platform globals
+        fetch: 'readonly',
+        Request: 'readonly',
+        Response: 'readonly',
+        AbortController: 'readonly',
+        structuredClone: 'readonly',
         // Node modules
         require: 'readonly',
         module: 'readonly',
@@ -34,7 +40,7 @@ export default [
     },
     rules: {
       // Best practices
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
       'no-undef': 'error',
       'no-undef-init': 'error',
       'no-var': 'error',
@@ -56,14 +62,23 @@ export default [
       'no-trailing-spaces': 'warn',
       'no-multiple-empty-lines': ['warn', { max: 2, maxEOF: 1 }],
       eqeqeq: ['error', 'smart'],
-      curly: ['error', 'multi-line'],
+      // Disabled to avoid formatter/linter churn. Control-flow correctness is covered by tests and no-undef/no-unused checks.
+      curly: 'off',
     },
   },
-  // Test files relax some rules
+  // Intentional console-driven entry points: stdout is part of their operator/CLI interface.
+  {
+    files: ['broker/server.js', 'broker/cron-tasks.js', 'broker/bin/**/*.js', 'broker/lib/log.js', 'cli/**/*.js'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  // Test files relax some rules: console output and fixture placeholders are part of the harness.
   {
     files: ['broker-test/**/*.js'],
     rules: {
-      'no-console': 'off', // tests use console.log/PASS/FAIL
+      'no-console': 'off',
+      'no-unused-vars': 'off',
     },
   },
   // Generated/vendor code: ignore
@@ -74,6 +89,7 @@ export default [
       '**/build/**',
       'broker/dashboard/**', // generated / hand-written dashboard JS, separate concern
       'broker/experimental/**', // unsupported reference impls
+      'broker/routes/_legacy/**', // historical reference implementations, not in production request pipeline
       'sdk/python/**', // Python (different lint tool)
     ],
   },

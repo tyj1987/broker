@@ -8,17 +8,30 @@ import {
   SUPPORTED_PATTERNS,
 } from '../broker/lib/redact.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // === GitHub ===
 section('GitHub tokens');
 ok('ghp_ redacted', !redact('pat=ghp_1234567890ABCDEFGHIJabcdefghij').includes('ghp_1234567890'));
-ok('github_pat_ redacted', !redact('Bearer github_pat_abc_DEF_123_ghi_456jklmno_789pqrstu_vwx_yzABC_DEF').includes('github_pat_abc_DEF_123'));
+ok(
+  'github_pat_ redacted',
+  !redact('Bearer github_pat_abc_DEF_123_ghi_456jklmno_789pqrstu_vwx_yzABC_DEF').includes(
+    'github_pat_abc_DEF_123',
+  ),
+);
 ok('ghu_ (App user) redacted', !redact('token=ghu_AAAAAAAAAAAAAAAAAAAA').includes('ghu_AAAA'));
 
 // === OpenAI / Anthropic / Google ===
@@ -35,18 +48,30 @@ ok('AKID redacted', !redact('AKID1234567890ABCDEFG').includes('AKID1234567890'))
 ok('AKIA long-term redacted', !redact('AKIAIOSFODNN7EXAMPLE').includes('AKIAIOSFODNN7EXAMPLE'));
 ok('ASIA STS redacted', !redact('ASIAJBBLPLV4ABCDEFG').includes('ASIAJBBLPLV4ABCDEFG'));
 // Azure tenant id 32 hex chars (16 hex without dashes matches)
-ok('Azure tenant uuid redacted', !redact('tenant: 12345678-1234-1234-1234-123456789012').includes('12345678-1234-1234'));
+ok(
+  'Azure tenant uuid redacted',
+  !redact('tenant: 12345678-1234-1234-1234-123456789012').includes('12345678-1234-1234'),
+);
 
 // === Slack / Stripe / Docker ===
 section('Other provider tokens');
-ok('xoxb- redacted', !redact('xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx').includes('AbCdEfGhIjKl'));
-ok('xoxp- redacted', !redact('xoxp-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx').includes('AbCdEfGhIjKl'));
+ok(
+  'xoxb- redacted',
+  !redact('xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx').includes('AbCdEfGhIjKl'),
+);
+ok(
+  'xoxp- redacted',
+  !redact('xoxp-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx').includes('AbCdEfGhIjKl'),
+);
 ok('sk_live_ redacted', !redact('sk_live_' + 'a'.repeat(30)).includes('a'.repeat(30)));
 ok('docker_ registry redacted', !redact('auth: docker_' + 'f'.repeat(40)).includes('f'.repeat(40)));
 
 // === Headers ===
 section('HTTP headers');
-ok('Bearer header redacted', !redact('Authorization: Bearer abcDEF123_-.' + 'X'.repeat(30)).includes('X'.repeat(30)));
+ok(
+  'Bearer header redacted',
+  !redact('Authorization: Bearer abcDEF123_-.' + 'X'.repeat(30)).includes('X'.repeat(30)),
+);
 ok('Basic auth redacted', !redact('Authorization: Basic dXNlcjpwYXNz').includes('dXNlcjpwYXNz'));
 
 // === PEM keys ===
@@ -57,14 +82,16 @@ ok('PEM start marker preserved', r.includes('-----BEGIN PRIVATE KEY-----'));
 ok('PEM end marker preserved', r.includes('-----END PRIVATE KEY-----'));
 ok('PEM key body not leaked', !r.includes('MIIEowIBAAKCAQEAabcd'));
 
-const openssh = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----';
+const openssh =
+  '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----';
 const r2 = redact(openssh);
 ok('OpenSSH PEM start preserved', r2.includes('-----BEGIN PRIVATE KEY-----'));
 ok('OpenSSH PEM body redacted', !r2.includes('b3BlbnNzaC1rZXktdjEAAAAA'));
 
 // === JWT ===
 section('JWT');
-const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+const jwt =
+  'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
 const r3 = redact('Token: ' + jwt);
 ok('JWT signature redacted', !r3.includes('SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'));
 
@@ -84,10 +111,7 @@ const nested = {
     aws: 'AKIAIOSFODNN7EXAMPLE',
     nested: { ok: 'public', leak: 'sk-' + 'A'.repeat(40) },
   },
-  list: [
-    { x: 1, y: 'github_pat_abc_DEF_123_ghi_456jklmno_789pqrstu_vwx_yzABC_DEF' },
-    'plain text',
-  ],
+  list: [{ x: 1, y: 'github_pat_abc_DEF_123_ghi_456jklmno_789pqrstu_vwx_yzABC_DEF' }, 'plain text'],
 };
 const safe = redactDeep(nested);
 ok('user not redacted', safe.user === 'tyj');
@@ -111,12 +135,21 @@ ok('null safe', redact(null) === null);
 ok('undefined safe', redact(undefined) === undefined);
 ok('number safe', redact(42) === 42);
 ok('empty string safe', redact('') === '');
-ok('non-secret unchanged', redact('hello world this is benign content') === 'hello world this is benign content');
+ok(
+  'non-secret unchanged',
+  redact('hello world this is benign content') === 'hello world this is benign content',
+);
 
 // === supported patterns ===
 section('meta');
-ok('SUPPORTED_PATTERNS non-empty', Array.isArray(SUPPORTED_PATTERNS) && SUPPORTED_PATTERNS.length >= 15);
-ok('all patterns have unique names', new Set(SUPPORTED_PATTERNS).size === SUPPORTED_PATTERNS.length);
+ok(
+  'SUPPORTED_PATTERNS non-empty',
+  Array.isArray(SUPPORTED_PATTERNS) && SUPPORTED_PATTERNS.length >= 15,
+);
+ok(
+  'all patterns have unique names',
+  new Set(SUPPORTED_PATTERNS).size === SUPPORTED_PATTERNS.length,
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

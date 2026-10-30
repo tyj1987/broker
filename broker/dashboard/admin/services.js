@@ -10,17 +10,18 @@
 
   let currentIdentity = null;
   let isAdmin = false;
-  let templates = {};        // id -> { label, icon, description, type, disabled }
-  let services = [];         // [{ name, type, description, upstream, dashboard_actions, allowed_clients, ... }]
+  let templates = {}; // id -> { label, icon, description, type, disabled }
+  let services = []; // [{ name, type, description, upstream, dashboard_actions, allowed_clients, ... }]
   let editingName = null;
   let loadedTemplatesAt = 0;
   let appliedTemplate = null;
 
   // ---- Bootstrap ----
   function init() {
-    const subscribe = typeof subscribeBrokerIdentity === 'function'
-      ? subscribeBrokerIdentity
-      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    const subscribe =
+      typeof subscribeBrokerIdentity === 'function'
+        ? subscribeBrokerIdentity
+        : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
     subscribe((ident) => {
       currentIdentity = ident;
       isAdmin = !!(ident && ident.role === 'admin');
@@ -61,7 +62,10 @@
     return api('/api/v1/admin/services', { method: 'POST', body: JSON.stringify(payload) });
   }
   async function updateService(name, payload) {
-    return api(`/api/v1/admin/services/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(payload) });
+    return api(`/api/v1/admin/services/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
   }
   async function deleteService(name) {
     return api(`/api/v1/admin/services/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -69,9 +73,14 @@
   async function testService(name, opts = {}) {
     // Upstream itself waits 15s; keep the browser wait longer so a server
     // timeout/redirect message is shown instead of a generic "network" abort.
-    return api(`/api/v1/admin/services/${encodeURIComponent(name)}/test`, {
-      method: 'POST', body: JSON.stringify(opts || {}),
-    }, 25000);
+    return api(
+      `/api/v1/admin/services/${encodeURIComponent(name)}/test`,
+      {
+        method: 'POST',
+        body: JSON.stringify(opts || {}),
+      },
+      25000,
+    );
   }
 
   // ---- Render table ----
@@ -80,7 +89,8 @@
     if (!tbody) return;
     $('#admin-services-count').textContent = services.length ? `共 ${services.length} 个` : '';
     if (services.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">（还没有任何服务）— 点右上角"+ 新增"添加第一个。选模板会自动填好 upstream / headers。</td></tr>';
+      tbody.innerHTML =
+        '<tr><td colspan="6" class="muted">（还没有任何服务）— 点右上角"+ 新增"添加第一个。选模板会自动填好 upstream / headers。</td></tr>';
       return;
     }
     tbody.innerHTML = '';
@@ -103,7 +113,7 @@
       tbody.appendChild(tr);
     }
     // Wire row buttons
-    tbody.querySelectorAll('button[data-act]').forEach(btn => {
+    tbody.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const act = e.currentTarget.dataset.act;
         const name = e.currentTarget.dataset.name;
@@ -116,7 +126,8 @@
 
   function showTableError(msg) {
     const tbody = $('#admin-services-table tbody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="status-error">加载失败: ${esc(msg)}</td></tr>`;
+    if (tbody)
+      tbody.innerHTML = `<tr><td colspan="6" class="status-error">加载失败: ${esc(msg)}</td></tr>`;
   }
 
   // ---- Template dropdown (in modal) ----
@@ -134,10 +145,13 @@
   }
 
   function formatActions(actions) {
-    return (actions || []).map(a => {
-      const q = a.query && Object.keys(a.query).length ? `  query=${JSON.stringify(a.query)}` : '';
-      return `${(a.method || 'GET').toUpperCase()} ${a.path || '/'}${q}  -- ${a.label || a.path || ''}`;
-    }).join('\n');
+    return (actions || [])
+      .map((a) => {
+        const q =
+          a.query && Object.keys(a.query).length ? `  query=${JSON.stringify(a.query)}` : '';
+        return `${(a.method || 'GET').toUpperCase()} ${a.path || '/'}${q}  -- ${a.label || a.path || ''}`;
+      })
+      .join('\n');
   }
 
   function applyTemplate(templateId) {
@@ -145,8 +159,12 @@
     const docs = $('#svc-tpl-docs');
     if (!templateId) {
       appliedTemplate = null;
-      if (hint) hint.textContent = '选模板会填入官方 upstream、鉴权类型和预置动作。密钥名仍需你手动填写。';
-      if (docs) { docs.hidden = true; docs.innerHTML = ''; }
+      if (hint)
+        hint.textContent = '选模板会填入官方 upstream、鉴权类型和预置动作。密钥名仍需你手动填写。';
+      if (docs) {
+        docs.hidden = true;
+        docs.innerHTML = '';
+      }
       return;
     }
     const t = templates[templateId];
@@ -154,7 +172,7 @@
     appliedTemplate = t;
     const typeSel = $('#svc-type');
     if (typeSel && t.type) {
-      if (![...typeSel.options].some(o => o.value === t.type)) {
+      if (![...typeSel.options].some((o) => o.value === t.type)) {
         const opt = document.createElement('option');
         opt.value = t.type;
         opt.textContent = t.type;
@@ -209,7 +227,7 @@
     editingName = name;
     $('#service-modal-title').textContent = `编辑服务 / Edit: ${name}`;
     $('#svc-name').value = name;
-    $('#svc-name').disabled = true;  // name is immutable on edit
+    $('#svc-name').disabled = true; // name is immutable on edit
     try {
       const r = await api(`/api/v1/admin/services/${encodeURIComponent(name)}`);
       const s = r;
@@ -218,10 +236,13 @@
       $('#svc-upstream').value = s.upstream || '';
       $('#svc-region').value = s.region || '';
       $('#svc-token-secret').value = s.token_secret || '';
-      $('#svc-actions').value = (s.dashboard_actions || []).map(a =>
-        `${a.method || 'GET'} ${a.path}${a.query ? '  query=' + JSON.stringify(a.query) : ''}  -- ${a.label}`
-      ).join('\n');
-      $('#svc-tpl').value = '';  // editing never re-applies template
+      $('#svc-actions').value = (s.dashboard_actions || [])
+        .map(
+          (a) =>
+            `${a.method || 'GET'} ${a.path}${a.query ? '  query=' + JSON.stringify(a.query) : ''}  -- ${a.label}`,
+        )
+        .join('\n');
+      $('#svc-tpl').value = ''; // editing never re-applies template
       appliedTemplate = null;
       $('#service-error').hidden = true;
       $('#service-modal').hidden = false;
@@ -257,11 +278,16 @@
       }
       if (appliedTemplate.token_field) cfg.token_field = appliedTemplate.token_field;
       if (appliedTemplate.header_name) cfg.header_name = appliedTemplate.header_name;
-      if (appliedTemplate.header_value_template) cfg.header_value_template = appliedTemplate.header_value_template;
+      if (appliedTemplate.header_value_template)
+        cfg.header_value_template = appliedTemplate.header_value_template;
       if (appliedTemplate.api_version) cfg.api_version = appliedTemplate.api_version;
     }
     if (!name) return showServiceError('请填写服务名 / Name required');
-    if (cfg.dashboard_actions && cfg.dashboard_actions.length === 0 && $('#svc-actions').value.trim() !== '') {
+    if (
+      cfg.dashboard_actions &&
+      cfg.dashboard_actions.length === 0 &&
+      $('#svc-actions').value.trim() !== ''
+    ) {
       return showServiceError('快捷操作格式错误。示例：GET /user  -- 我的信息');
     }
     try {
@@ -289,15 +315,27 @@
       const m = line.match(/^([A-Z]+)\s+(\S+)(?:\s+query=(\{[^}]*\}))?(?:\s+--\s*(.+))?$/);
       if (!m) continue;
       let q;
-      try { q = m[3] ? JSON.parse(m[3]) : undefined; } catch (e) { q = undefined; }
-      out.push({ method: m[1], path: m[2], ...(q ? { query: q } : {}), label: (m[4] || m[2]).trim() });
+      try {
+        q = m[3] ? JSON.parse(m[3]) : undefined;
+      } catch (e) {
+        q = undefined;
+      }
+      out.push({
+        method: m[1],
+        path: m[2],
+        ...(q ? { query: q } : {}),
+        label: (m[4] || m[2]).trim(),
+      });
     }
     return out;
   }
 
   function showServiceError(msg) {
     const el = $('#service-error');
-    if (!el) { alert(msg); return; }
+    if (!el) {
+      alert(msg);
+      return;
+    }
     el.textContent = msg;
     el.hidden = false;
   }
@@ -316,18 +354,35 @@
   // ---- Test ----
   async function runTest(name) {
     const btn = document.querySelector(`button[data-act="test"][data-name="${cssEsc(name)}"]`);
-    if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '测试中…';
+    }
     const out = $('#service-test-result');
-    if (out) { out.hidden = true; out.textContent = ''; }
+    if (out) {
+      out.hidden = true;
+      out.textContent = '';
+    }
     try {
       const r = await testService(name, {});
       const text = formatTestResult(r);
-      if (out) { out.textContent = text; out.hidden = false; out.className = r.ok ? 'status-ok' : 'status-error'; }
+      if (out) {
+        out.textContent = text;
+        out.hidden = false;
+        out.className = r.ok ? 'status-ok' : 'status-error';
+      }
     } catch (e) {
       const text = '调用失败: ' + e.message;
-      if (out) { out.textContent = text; out.hidden = false; out.className = 'status-error'; }
+      if (out) {
+        out.textContent = text;
+        out.hidden = false;
+        out.className = 'status-error';
+      }
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '测试'; }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '测试';
+      }
     }
   }
 
@@ -359,7 +414,10 @@
     const tplSel = $('#svc-tpl');
     if (tplSel) tplSel.addEventListener('change', (e) => applyTemplate(e.currentTarget.value));
     const modal = $('#service-modal');
-    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+    if (modal)
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+      });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && modal && !modal.hidden) closeModal();
     });
@@ -376,8 +434,11 @@
   // ---- Util ----
   function esc(s) {
     return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
   function cssEsc(s) {
     return String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');

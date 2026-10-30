@@ -28,7 +28,7 @@
 //   allowed=false + fail           → 兜底未知错, 阻断
 
 export const SECRET_GUARD_TTL_MS = 5 * 60 * 1000;
-const secretGuardCache = new Map();  // tokenSecret -> { result, cached_at }
+const secretGuardCache = new Map(); // tokenSecret -> { result, cached_at }
 
 /**
  * 检查 tokenSecret 引用的 secret 是否可用.
@@ -47,7 +47,7 @@ export function checkSecretForService(tokenSecret, getSecretStatusFn) {
   }
   const cached = secretGuardCache.get(tokenSecret);
   const now = Date.now();
-  if (cached && (now - cached.cached_at) < SECRET_GUARD_TTL_MS) {
+  if (cached && now - cached.cached_at < SECRET_GUARD_TTL_MS) {
     return cached.result;
   }
   const s = getSecretStatusFn(tokenSecret);
@@ -56,10 +56,27 @@ export function checkSecretForService(tokenSecret, getSecretStatusFn) {
     // 无 healthcheck 数据 (还没跑过), 放过
     result = { allowed: true, status: 'unknown', detail: 'no healthcheck data yet' };
   } else if (s.status === 'ok' || s.status === 'skipped' || s.status === 'unknown') {
-    result = { allowed: true, status: s.status, detail: s.detail, latency_ms: s.latency_ms, ts: s.ts };
-  } else if (s.status === 'expired' || s.status === 'unreachable' || s.status === 'misconfigured' || s.status === 'fail') {
+    result = {
+      allowed: true,
+      status: s.status,
+      detail: s.detail,
+      latency_ms: s.latency_ms,
+      ts: s.ts,
+    };
+  } else if (
+    s.status === 'expired' ||
+    s.status === 'unreachable' ||
+    s.status === 'misconfigured' ||
+    s.status === 'fail'
+  ) {
     // 5 维中的 4 个非 ok 维度都阻断
-    result = { allowed: false, status: s.status, detail: s.detail, latency_ms: s.latency_ms, ts: s.ts };
+    result = {
+      allowed: false,
+      status: s.status,
+      detail: s.detail,
+      latency_ms: s.latency_ms,
+      ts: s.ts,
+    };
   } else {
     // 未知 status (e.g. 未来新 status), 保守阻断
     result = { allowed: false, status: s.status, detail: s.detail || 'unknown secret status' };
@@ -80,10 +97,15 @@ export function clearSecretGuardCache(name) {
  */
 export function guardHint(status) {
   switch (status) {
-    case 'expired':       return 'rotate the secret first';
-    case 'unreachable':   return 'fix the upstream network/firewall';
-    case 'misconfigured': return 'fix the secret config (broker.yaml)';
-    case 'fail':          return 'check the secret status';
-    default:              return 'check the secret status';
+    case 'expired':
+      return 'rotate the secret first';
+    case 'unreachable':
+      return 'fix the upstream network/firewall';
+    case 'misconfigured':
+      return 'fix the secret config (broker.yaml)';
+    case 'fail':
+      return 'check the secret status';
+    default:
+      return 'check the secret status';
   }
 }

@@ -9,7 +9,7 @@
 
   let currentMe = null;
   let isAdmin = false;
-  let totpPending = null;  // { secret, recovery_codes } — 暂存 setup 结果
+  let totpPending = null; // { secret, recovery_codes } — 暂存 setup 结果
 
   // ---- 加载 + 渲染 ----
   async function loadMe() {
@@ -20,7 +20,9 @@
     } catch (ex) {
       console.error('loadMe failed', ex);
       const el = $('#me-tab');
-      if (el) el.innerHTML = '<p style="color:#e74c3c">加载失败: ' + escapeHtml(String(ex.message || ex)) + '</p>';
+      if (el)
+        el.innerHTML =
+          '<p style="color:#e74c3c">加载失败: ' + escapeHtml(String(ex.message || ex)) + '</p>';
     }
   }
 
@@ -72,10 +74,13 @@
     }
     try {
       const r = await api('/api/v1/me/change-password', { method: 'POST', body });
-      setStatus('#change-pw-status', '✅ 改完，' + r.password_set_at, 'ok');
+      setStatus(
+        '#change-pw-status',
+        `✅ 密码已更新，已撤销 ${r.sessions_revoked || 0} 个会话，请重新登录`,
+        'ok',
+      );
       ev.target.reset();
-      // 改完 password 后要重新登录（强制下线其他 session 不影响当前）
-      // 简单做法：刷新页面让用户重登
+      // 服务端同时撤销当前及其他会话；刷新后回到登录页。
       setTimeout(() => location.reload(), 1500);
     } catch (ex) {
       setStatus('#change-pw-status', '❌ ' + (ex.message || ex), 'err');
@@ -120,7 +125,9 @@
     img.alt = 'TOTP QR';
     img.style = 'background:#fff;padding:8px;display:block;margin:8px 0;width:200px;height:200px;';
     // 使用 api.qrserver.com 渲染（公网/内网都能用）
-    const chartUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(otpauthUrl);
+    const chartUrl =
+      'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' +
+      encodeURIComponent(otpauthUrl);
     img.src = chartUrl;
     const anchor = $('#totp-otpauth-url');
     if (anchor) anchor.parentNode.insertBefore(img, anchor.nextSibling);
@@ -133,7 +140,11 @@
     try {
       const r = await api('/api/v1/me/totp/verify', { method: 'POST', body: { code } });
       totpPending = null;
-      setStatus('#totp-verify-status', '✅ TOTP 已激活，剩 ' + r.recovery_codes_remaining + ' 个恢复码', 'ok');
+      setStatus(
+        '#totp-verify-status',
+        '✅ TOTP 已激活，剩 ' + r.recovery_codes_remaining + ' 个恢复码',
+        'ok',
+      );
       await loadMe();
     } catch (ex) {
       setStatus('#totp-verify-status', '❌ ' + (ex.message || ex), 'err');
@@ -150,7 +161,10 @@
     const fd = new FormData(ev.target);
     if (!confirm('关 TOTP 后账号只用密码登录。确认？')) return;
     try {
-      const r = await api('/api/v1/me/totp/disable', { method: 'POST', body: { code: fd.get('code') } });
+      const r = await api('/api/v1/me/totp/disable', {
+        method: 'POST',
+        body: { code: fd.get('code') },
+      });
       setStatus('#totp-disable-status', '✅ TOTP 已关', 'ok');
       await loadMe();
     } catch (ex) {
@@ -183,13 +197,24 @@
       const r = await api('/api/v1/me/audit?limit=100');
       const tbody = $('#me-audit-table tbody');
       tbody.innerHTML = '';
-      for (const e of (r.events || [])) {
+      for (const e of r.events || []) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td>' + escapeHtml(e.ts || '') + '</td>' +
-                       '<td>' + escapeHtml(e.action || '') + '</td>' +
-                       '<td>' + escapeHtml(e.method || '') + '</td>' +
-                       '<td>' + escapeHtml(e.path || e.upstream || '') + '</td>' +
-                       '<td>' + escapeHtml(e.status || '') + '</td>';
+        tr.innerHTML =
+          '<td>' +
+          escapeHtml(e.ts || '') +
+          '</td>' +
+          '<td>' +
+          escapeHtml(e.action || '') +
+          '</td>' +
+          '<td>' +
+          escapeHtml(e.method || '') +
+          '</td>' +
+          '<td>' +
+          escapeHtml(e.path || e.upstream || '') +
+          '</td>' +
+          '<td>' +
+          escapeHtml(e.status || '') +
+          '</td>';
         tbody.appendChild(tr);
       }
     } catch (ex) {
@@ -205,19 +230,29 @@
     el.className = 'status ' + (cls || '');
   }
   function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    return String(s).replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+    );
   }
 
   // ---- 监听 tab 切换 ----
   function init() {
     // 表单
-    const fpw = $('#form-change-pw'); if (fpw) fpw.addEventListener('submit', submitChangePassword);
-    const fs = $('#form-totp-setup');  if (fs) fs.addEventListener('submit', submitTotpSetup);
-    const fv = $('#form-totp-verify'); if (fv) fv.addEventListener('submit', submitTotpVerify);
-    const fd = $('#form-totp-disable'); if (fd) fd.addEventListener('submit', submitTotpDisable);
-    const fr = $('#form-rotate-cert'); if (fr) fr.addEventListener('submit', submitRotateCert);
-    const cancel = $('#btn-totp-cancel'); if (cancel) cancel.addEventListener('click', cancelTotpSetup);
-    const btnAudit = $('#btn-load-audit'); if (btnAudit) btnAudit.addEventListener('click', loadAudit);
+    const fpw = $('#form-change-pw');
+    if (fpw) fpw.addEventListener('submit', submitChangePassword);
+    const fs = $('#form-totp-setup');
+    if (fs) fs.addEventListener('submit', submitTotpSetup);
+    const fv = $('#form-totp-verify');
+    if (fv) fv.addEventListener('submit', submitTotpVerify);
+    const fd = $('#form-totp-disable');
+    if (fd) fd.addEventListener('submit', submitTotpDisable);
+    const fr = $('#form-rotate-cert');
+    if (fr) fr.addEventListener('submit', submitRotateCert);
+    const cancel = $('#btn-totp-cancel');
+    if (cancel) cancel.addEventListener('click', cancelTotpSetup);
+    const btnAudit = $('#btn-load-audit');
+    if (btnAudit) btnAudit.addEventListener('click', loadAudit);
 
     // tab 切换 (监听 hashchange 或 button click)
     document.addEventListener('me-tab-opened', loadMe);

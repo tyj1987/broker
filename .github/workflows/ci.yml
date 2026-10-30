@@ -26,10 +26,10 @@ jobs:
     name: gitleaks scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -43,61 +43,41 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20.x]
+        node-version: [24.x]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Install sops + age
+      - name: Install verified sops + age
         run: |
-          curl -LO https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
-          sudo install -m 755 sops-v3.9.0.linux.amd64 /usr/local/bin/sops
-          curl -LO https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-linux-amd64.tar.gz
-          tar -xzf age-v1.2.0-linux-amd64.tar.gz
-          sudo install -m 755 age/age /usr/local/bin/age
-          sudo install -m 755 age/age-keygen /usr/local/bin/age-keygen
+          sudo env SOPS_VERSION=3.13.3 sh scripts/ci/install-sops.sh /usr/local/bin/sops
+          sudo env AGE_VERSION=1.3.2 sh scripts/ci/install-age.sh /usr/local/bin
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-          cache-dependency-path: broker/package.json
+          cache-dependency-path: broker/package-lock.json
+
+      - name: Setup Python for the SDK regression suite
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sdk/python/requirements-dev.txt
 
       - name: Install broker deps
         working-directory: broker
         run: npm ci
 
-      - name: Start broker with ephemeral CA + certs
-        run: |
-          # 端到端 smoke test：起 broker，验证 mTLS 鉴权
-          set -e
-          TEST_DIR=$(mktemp -d)
-          cd $TEST_DIR
-          cp -r $GITHUB_WORKSPACE/broker .
-          cp -r $GITHUB_WORKSPACE/pki .
-          cp -r $GITHUB_WORKSPACE/secrets .
-          cp -r $GITHUB_WORKSPACE/age .
-          chmod 600 age/key.txt
-          PKI_DIR=$TEST_DIR/pki \
-          CONFIG_PATH=$TEST_DIR/secrets/broker.yaml \
-          SECRETS_PATH=$TEST_DIR/secrets/common.env \
-          AGE_KEY_FILE=$TEST_DIR/age/key.txt \
-          AUDIT_DIR=$TEST_DIR/audit \
-          node broker/server.js &
-          BROKER_PID=$!
-          sleep 3
-          # 不带客户端证书应该 401
-          if curl -sk https://localhost:8443/health; then
-            echo "WARN: /health should not require auth but should at least not 5xx"
-          fi
-          kill $BROKER_PID 2>/dev/null || true
-          echo "broker smoke test passed"
-
-      - name: Lint broker
+      - name: Run the complete gate including hermetic broker startup
         working-directory: broker
+        # test:startup generates its own CA/clients and asserts real TLS and
+        # process exit behavior. It never copies repository/private host keys.
+        # Actual SOPS + Docker + Nginx acceptance is a separate preproduction gate.
         run: |
-          node -c server.js
-          node --check server.js
+          npm run quality:gate
+          npm audit --omit=dev --audit-level=high
 
   # ============================================================
   # 3. 客户端 CLI 语法检查
@@ -106,10 +86,10 @@ jobs:
     name: CLI syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20.x
+          node-version: 24.x
       - name: Check CLI
         run: |
           node --check cli/secret-broker.js
@@ -125,8 +105,8 @@ jobs:
       matrix:
         dir: [infra/aliyun, infra/tencent]
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.7.x
       - name: terraform init (no backend) + validate
@@ -144,14 +124,27 @@ jobs:
     runs-on: ubuntu-latest
     needs: [broker-test, secret-scan]
     steps:
-      - uses: actions/checkout@v4
-      - name: Build broker Docker image
+      - uses: actions/checkout@v7
+      - name: Build the release production image
         run: |
-          docker build -t sops-age-template/broker:${{ github.sha }} broker/
-          docker build -t sops-age-template/broker:latest broker/
+          docker build \
+            --target production \
+            -t sops-age-template/broker:${{ github.sha }} \
+            -t sops-age-template/broker:latest \
+            .
           echo "Built: sops-age-template/broker:${{ github.sha }}"
-      - name: Verify image layers
+
+      - name: Verify production runtime and secret-free image
         run: |
-          # 防止 .env/.key 误入镜像
-          docker run --rm sops-age-template/broker:latest sh -c "ls /opt/broker" || true
-          docker run --rm sops-age-template/broker:latest sh -c "test ! -f /opt/broker/.env && echo 'OK no .env in image'"
+          docker run --rm --entrypoint sh sops-age-template/broker:latest -ec '
+            test "$(id -u)" != "0"
+            test -f /app/server.js
+            test ! -e /app/.env
+            for bin in node sops openssl ssh ssh-keygen git; do
+              command -v "$bin" >/dev/null
+            done
+            if find /app -type f \( -name "*.key" -o -name "*.pem" -o -name "*.p12" -o -name "*.pfx" \) | grep -q .; then
+              echo "secret-like file found in production image" >&2
+              exit 1
+            fi
+          '

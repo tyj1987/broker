@@ -9,29 +9,56 @@ function ref(name) {
 function respRef(name) {
   return { $ref: '#/components/responses/' + name };
 }
-function desc(s) { return { description: s }; }
+function desc(s) {
+  return { description: s };
+}
 function jsonOK(schemaName) {
   return { description: 'OK', content: { 'application/json': { schema: ref(schemaName) } } };
 }
 function jsonOKList(schemaName) {
   return {
     description: 'OK',
-    content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: ref(schemaName) } } } } },
+    content: {
+      'application/json': {
+        schema: {
+          type: 'object',
+          properties: { items: { type: 'array', items: ref(schemaName) } },
+        },
+      },
+    },
   };
 }
 
 const p = {
   '/health': {
-    get: { tags: ['health'], summary: 'Public liveness (fingerprint-free)', security: [], responses: { 200: desc('{ status: ok }') } },
+    get: {
+      tags: ['health'],
+      summary: 'Public liveness (fingerprint-free)',
+      security: [],
+      responses: { 200: desc('{ status: ok }') },
+    },
   },
   '/api/v1/health': {
-    get: { tags: ['health'], summary: 'Authenticated ops health', responses: { 200: jsonOK('Health'), 401: respRef('Unauthorized') } },
+    get: {
+      tags: ['health'],
+      summary: 'Authenticated ops health',
+      responses: { 200: jsonOK('Health'), 401: respRef('Unauthorized') },
+    },
   },
   '/ready': {
-    get: { tags: ['health'], summary: 'Readiness (local health socket only)', security: [], responses: { 200: desc('Ready'), 503: desc('Not ready') } },
+    get: {
+      tags: ['health'],
+      summary: 'Readiness (local health socket only)',
+      security: [],
+      responses: { 200: desc('Ready'), 503: desc('Not ready') },
+    },
   },
   '/metrics': {
-    get: { tags: ['health'], summary: 'Prometheus metrics (local scrape or admin)', responses: { 200: { description: 'Text exposition' }, 401: respRef('Unauthorized') } },
+    get: {
+      tags: ['health'],
+      summary: 'Prometheus metrics (local scrape or admin)',
+      responses: { 200: { description: 'Text exposition' }, 401: respRef('Unauthorized') },
+    },
   },
   '/api/v1/login': {
     post: {
@@ -46,7 +73,19 @@ const p = {
       tags: ['auth'],
       summary: 'Submit MFA code (TOTP / WebAuthn / SMS)',
       requestBody: {
-        content: { 'application/json': { schema: { type: 'object', required: ['mfa_token', 'code'], properties: { mfa_token: { type: 'string' }, code: { type: 'string' }, factor: { type: 'string', enum: ['totp', 'webauthn', 'sms', 'recovery'] } } } } },
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['mfa_token', 'code'],
+              properties: {
+                mfa_token: { type: 'string' },
+                code: { type: 'string' },
+                factor: { type: 'string', enum: ['totp', 'webauthn', 'sms', 'recovery'] },
+              },
+            },
+          },
+        },
       },
       responses: { 200: jsonOK('LoginResponse'), 401: respRef('Unauthorized') },
     },
@@ -55,7 +94,17 @@ const p = {
     post: {
       tags: ['auth'],
       summary: 'Submit recovery code',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['client', 'code'], properties: { client: { type: 'string' }, code: { type: 'string' } } } } } },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['client', 'code'],
+              properties: { client: { type: 'string' }, code: { type: 'string' } },
+            },
+          },
+        },
+      },
       responses: { 200: desc('OK'), 401: respRef('Unauthorized') },
     },
   },
@@ -69,18 +118,45 @@ const p = {
     post: {
       tags: ['me'],
       summary: 'Change password',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['old_password', 'new_password'], properties: { old_password: { type: 'string', format: 'password' }, new_password: { type: 'string', format: 'password' } } } } } },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['old_password', 'new_password'],
+              properties: {
+                old_password: { type: 'string', format: 'password' },
+                new_password: { type: 'string', format: 'password' },
+              },
+            },
+          },
+        },
+      },
       responses: { 200: desc('OK'), 401: respRef('Unauthorized') },
     },
   },
   '/api/v1/me/totp/setup': {
-    post: { tags: ['me'], summary: 'Begin TOTP setup', responses: { 200: desc('OK, returns otpauth URL and secret') } },
+    post: {
+      tags: ['me'],
+      summary: 'Begin TOTP setup',
+      responses: { 200: desc('OK, returns otpauth URL and secret') },
+    },
   },
   '/api/v1/me/totp/verify': {
     post: {
       tags: ['me'],
       summary: 'Verify TOTP and enable',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['code'], properties: { code: { type: 'string' } } } } } },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['code'],
+              properties: { code: { type: 'string' } },
+            },
+          },
+        },
+      },
       responses: { 200: desc('Enabled'), 401: respRef('Unauthorized') },
     },
   },
@@ -88,25 +164,53 @@ const p = {
     post: { tags: ['me'], summary: 'Disable TOTP', responses: { 200: desc('OK') } },
   },
   '/api/v1/me/webauthn/register/begin': {
-    post: { tags: ['me'], summary: 'Begin WebAuthn registration', responses: { 200: desc('OK, returns challenge') } },
+    post: {
+      tags: ['me'],
+      summary: 'Begin WebAuthn registration',
+      responses: { 200: desc('OK, returns challenge') },
+    },
   },
   '/api/v1/me/webauthn/register/finish': {
-    post: { tags: ['me'], summary: 'Finish WebAuthn registration', requestBody: { content: { 'application/json': { schema: { type: 'object' } } } }, responses: { 200: desc('OK') } },
+    post: {
+      tags: ['me'],
+      summary: 'Finish WebAuthn registration',
+      requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/me/webauthn/credentials': {
     get: { tags: ['me'], summary: 'List WebAuthn credentials', responses: { 200: desc('OK') } },
   },
   '/api/v1/me/webauthn/credentials/{id}': {
-    delete: { tags: ['me'], summary: 'Delete a WebAuthn credential', parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }], responses: { 200: desc('OK') } },
+    delete: {
+      tags: ['me'],
+      summary: 'Delete a WebAuthn credential',
+      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }],
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/secrets': {
-    get: { tags: ['secrets'], summary: 'List visible secrets', responses: { 200: jsonOKList('Secret') } },
+    get: {
+      tags: ['secrets'],
+      summary: 'List visible secrets',
+      responses: { 200: jsonOKList('Secret') },
+    },
   },
   '/api/v1/secrets/resolve': {
     post: {
       tags: ['secrets'],
       summary: 'Resolve a secret to plaintext (audited)',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['name'],
+              properties: { name: { type: 'string' } },
+            },
+          },
+        },
+      },
       responses: { 200: desc('OK'), 403: respRef('Forbidden'), 404: respRef('NotFound') },
     },
   },
@@ -126,8 +230,14 @@ const p = {
         403: respRef('Forbidden'),
         404: respRef('NotFound'),
         429: respRef('RateLimited'),
-        502: { description: 'Upstream error', content: { 'application/json': { schema: ref('Error') } } },
-        503: { description: 'Service unavailable (e.g. secret expired)', content: { 'application/json': { schema: ref('Error') } } },
+        502: {
+          description: 'Upstream error',
+          content: { 'application/json': { schema: ref('Error') } },
+        },
+        503: {
+          description: 'Service unavailable (e.g. secret expired)',
+          content: { 'application/json': { schema: ref('Error') } },
+        },
       },
     },
   },
@@ -136,31 +246,79 @@ const p = {
     post: {
       tags: ['api-keys'],
       summary: 'Create API key',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, scopes: { type: 'array', items: { type: 'string' } }, ttl_seconds: { type: 'integer' } } } } } },
-      responses: { 200: { description: 'OK, returns key and secret' }, 401: respRef('Unauthorized') },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['name'],
+              properties: {
+                name: { type: 'string' },
+                scopes: { type: 'array', items: { type: 'string' } },
+                ttl_seconds: { type: 'integer' },
+              },
+            },
+          },
+        },
+      },
+      responses: {
+        200: { description: 'OK, returns key and secret' },
+        401: respRef('Unauthorized'),
+      },
     },
   },
   '/api/v1/api-keys/{id}': {
-    delete: { tags: ['api-keys'], summary: 'Revoke API key', parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }], responses: { 200: desc('OK') } },
+    delete: {
+      tags: ['api-keys'],
+      summary: 'Revoke API key',
+      parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }],
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/api-keys/master': {
-    post: { tags: ['api-keys'], summary: 'Create master key (30d TTL)', responses: { 200: desc('OK') } },
+    post: {
+      tags: ['api-keys'],
+      summary: 'Create master key (30d TTL)',
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/api-keys/issue-child': {
-    post: { tags: ['api-keys'], summary: 'Issue a child key (master key only)', responses: { 200: desc('OK, 1h TTL') } },
+    post: {
+      tags: ['api-keys'],
+      summary: 'Issue a child key (master key only)',
+      responses: { 200: desc('OK, 1h TTL') },
+    },
   },
   '/api/v1/admin/secrets': {
     get: { tags: ['admin'], summary: 'List all secrets (admin)', responses: { 200: desc('OK') } },
     post: {
       tags: ['admin'],
       summary: 'Create secret',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name', 'type'], properties: { name: { type: 'string' }, type: { type: 'string' }, fields: { type: 'object' } } } } } },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['name', 'type'],
+              properties: {
+                name: { type: 'string' },
+                type: { type: 'string' },
+                fields: { type: 'object' },
+              },
+            },
+          },
+        },
+      },
       responses: { 200: desc('OK') },
     },
   },
   '/api/v1/admin/services': {
     get: { tags: ['admin'], summary: 'List all services (admin)', responses: { 200: desc('OK') } },
-    post: { tags: ['admin'], summary: 'Create service from template', responses: { 200: desc('OK') } },
+    post: {
+      tags: ['admin'],
+      summary: 'Create service from template',
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/admin/clients': {
     get: { tags: ['admin'], summary: 'List all clients (admin)', responses: { 200: desc('OK') } },
@@ -180,19 +338,35 @@ const p = {
     },
   },
   '/api/v1/admin/audit/stream': {
-    get: { tags: ['admin'], summary: 'SSE stream of audit events', responses: { 200: { description: 'text/event-stream' } } },
+    get: {
+      tags: ['admin'],
+      summary: 'SSE stream of audit events',
+      responses: { 200: { description: 'text/event-stream' } },
+    },
   },
   '/api/v1/admin/reload': {
-    post: { tags: ['admin'], summary: 'Hot-reload broker.yaml (requires 2FA for admin)', responses: { 200: desc('OK') } },
+    post: {
+      tags: ['admin'],
+      summary: 'Hot-reload broker.yaml (requires 2FA for admin)',
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/healthcheck/status': {
-    get: { tags: ['healthcheck'], summary: 'Last healthcheck state', responses: { 200: desc('OK') } },
+    get: {
+      tags: ['healthcheck'],
+      summary: 'Last healthcheck state',
+      responses: { 200: desc('OK') },
+    },
   },
   '/api/v1/healthcheck/run': {
     post: { tags: ['healthcheck'], summary: 'Run healthcheck now', responses: { 200: desc('OK') } },
   },
   '/api/v1/healthcheck/stream': {
-    get: { tags: ['healthcheck'], summary: 'SSE stream of healthcheck events', responses: { 200: { description: 'text/event-stream' } } },
+    get: {
+      tags: ['healthcheck'],
+      summary: 'SSE stream of healthcheck events',
+      responses: { 200: { description: 'text/event-stream' } },
+    },
   },
   '/api/v1/alerts/history': {
     get: { tags: ['admin'], summary: 'Alert history', responses: { 200: desc('OK') } },
@@ -201,7 +375,21 @@ const p = {
     post: {
       tags: ['admin'],
       summary: 'OIDC to STS assume role (broker-side)',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['provider', 'role'], properties: { provider: { type: 'string', enum: ['aliyun', 'aws', 'gcp'] }, role: { type: 'string' }, oidc_token: { type: 'string' } } } } } },
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['provider', 'role'],
+              properties: {
+                provider: { type: 'string', enum: ['aliyun', 'aws', 'gcp'] },
+                role: { type: 'string' },
+                oidc_token: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
       responses: { 200: desc('OK') },
     },
   },
@@ -223,7 +411,10 @@ const s = {
     type: 'object',
     required: ['method', 'path'],
     properties: {
-      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] },
+      method: {
+        type: 'string',
+        enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
+      },
       path: { type: 'string', pattern: '^/', maxLength: 2048 },
       query: { type: 'object', additionalProperties: { type: 'string' } },
       headers: { type: 'object', additionalProperties: { type: 'string' } },
@@ -327,12 +518,27 @@ const s = {
 };
 
 const r = {
-  BadRequest: { description: 'Bad request', content: { 'application/json': { schema: ref('Error') } } },
-  Unauthorized: { description: 'Unauthenticated', content: { 'application/json': { schema: ref('Error') } } },
-  Forbidden: { description: 'Forbidden', content: { 'application/json': { schema: ref('Error') } } },
+  BadRequest: {
+    description: 'Bad request',
+    content: { 'application/json': { schema: ref('Error') } },
+  },
+  Unauthorized: {
+    description: 'Unauthenticated',
+    content: { 'application/json': { schema: ref('Error') } },
+  },
+  Forbidden: {
+    description: 'Forbidden',
+    content: { 'application/json': { schema: ref('Error') } },
+  },
   NotFound: { description: 'Not found', content: { 'application/json': { schema: ref('Error') } } },
-  RateLimited: { description: 'Rate limited', content: { 'application/json': { schema: ref('Error') } } },
-  InternalError: { description: 'Internal error', content: { 'application/json': { schema: ref('Error') } } },
+  RateLimited: {
+    description: 'Rate limited',
+    content: { 'application/json': { schema: ref('Error') } },
+  },
+  InternalError: {
+    description: 'Internal error',
+    content: { 'application/json': { schema: ref('Error') } },
+  },
 };
 
 export const OPENAPI_SPEC = {

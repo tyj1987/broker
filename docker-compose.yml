@@ -11,7 +11,10 @@
 #      - ./secrets/broker.yaml       (SOPS 加密)
 #      - ./secrets/secrets-detail.json (SOPS 加密)
 #   2. docker compose up -d broker
-#   3. 验证: docker compose exec broker wget -qO- https://localhost:8443/health
+#   3. 验证: docker compose ps (healthcheck verifies the configured CA and TLS name)
+#   4. 首次启动前准备 age/key.txt；node UID 1000 必须可读 CA/server/age，
+#      可写 secrets/ 和 pki/clients/。不要对生产私钥执行宽泛 chmod。
+#   5. 此文件只发布 loopback Origin；Nginx 转发身份边界需单独预发布验收。
 
 name: secret-broker
 
@@ -25,37 +28,74 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    image: ghcr.io/tyj1987/broker:4.1.1
+    # Local build tag only. A released deployment must set BROKER_IMAGE to its reviewed digest.
+    image: ${BROKER_IMAGE:-secret-broker:4.9.0-local}
     container_name: secret-broker
     restart: unless-stopped
     ports:
-      - "8443:8443"     # mTLS HTTPS - 客户端证书保证安全
+      - "127.0.0.1:8443:8443"
     volumes:
-      - ./secrets:/var/lib/broker/secrets:ro
-      - ./pki:/run/secrets/broker/pki:ro
+      # SOPS atomic replacement requires a writable directory, not a single file mount.
+      - type: bind
+        source: ./secrets
+        target: /var/lib/broker/secrets
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./pki/ca
+        target: /run/secrets/broker/pki/ca
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./pki/server
+        target: /run/secrets/broker/pki/server
+        read_only: true
+        bind:
+          create_host_path: false
+      # Only client certificates and serial state need writes for issuance/rotation.
+      - type: bind
+        source: ./pki/clients
+        target: /run/secrets/broker/pki/clients
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./age
+        target: /run/secrets/broker/age
+        read_only: true
+        bind:
+          create_host_path: false
       - broker-audit:/var/lib/broker/audit
-      - broker-tmp:/tmp:size=64M
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     environment:
-      - NODE_ENV=production
-      - BROKER_BIND=0.0.0.0
-      - BROKER_PORT=8443
-      - PKI_DIR=/run/secrets/broker/pki
-      - AUDIT_DIR=/var/lib/broker/audit
-      - SECRETS_DETAIL_PATH=/var/lib/broker/secrets/secrets-detail.json
-      - BROKER_CONFIG_PATH=/var/lib/broker/secrets/broker.yaml
+      NODE_ENV: production
+      BROKER_BIND: 0.0.0.0
+      PORT: "8443"
+      PKI_DIR: /run/secrets/broker/pki
+      TLS_CA: /run/secrets/broker/pki/ca/ca.crt
+      CA_KEY_PATH: /run/secrets/broker/pki/ca/ca.key
+      AUDIT_DIR: /var/lib/broker/audit
+      CONFIG_PATH: /var/lib/broker/secrets/broker.yaml
+      SECRETS_PATH: /var/lib/broker/secrets/common.env
+      SECRETS_DETAIL_PATH: /var/lib/broker/secrets/secrets-detail.json
+      SOPS_AGE_KEY_FILE: /run/secrets/broker/age/key.txt
+      BROKER_PUBLIC_ORIGIN: ${BROKER_PUBLIC_ORIGIN:-https://broker.52trz.com}
+      BROKER_TLS_SERVER_NAME: ${BROKER_TLS_SERVER_NAME:-broker.52trz.com}
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     healthcheck:
-      # distroless has no shell/curl — use node's https module directly
+      # Explicit CMD form; verify TLS rather than accepting any peer certificate.
       test:
+        - "CMD"
         - "node"
         - "-e"
-        - "require('node:https').get({host:'127.0.0.1',port:8443,rejectUnauthorized:false,requestCert:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        - "const q=require('node:https').get({host:'127.0.0.1',port:8443,path:'/health',ca:require('node:fs').readFileSync(process.env.TLS_CA),servername:process.env.BROKER_TLS_SERVER_NAME},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1));q.setTimeout(4000,()=>q.destroy(new Error('health timeout')));"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -75,7 +115,6 @@ services:
         reservations:
           cpus: '0.2'
           memory: 256M
-    restart: unless-stopped
 
   # ==========================================================
   # 可选: Prometheus (监控)
@@ -154,7 +193,6 @@ services:
 
 volumes:
   broker-audit:
-  broker-tmp:
   prometheus-data:
   grafana-data:
   loki-data:

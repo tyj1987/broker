@@ -33,8 +33,8 @@ function pickClientsDir() {
   return null;
 }
 
-const CA_CRT   = findFirst(process.env.CA_CERT_PATH, process.env.TLS_CA);
-const CA_KEY   = findFirst(process.env.CA_KEY_PATH, CA_CRT && CA_CRT.replace(/ca\.crt$/, 'ca.key'));
+const CA_CRT = findFirst(process.env.CA_CERT_PATH, process.env.TLS_CA);
+const CA_KEY = findFirst(process.env.CA_KEY_PATH, CA_CRT && CA_CRT.replace(/ca\.crt$/, 'ca.key'));
 const CLIENTS_DIR = pickClientsDir();
 if (!CA_CRT) throw new Error('CA cert not found: set CA_CERT_PATH or TLS_CA env');
 if (!CA_KEY) throw new Error('CA key not found: set CA_KEY_PATH or place ca.key next to ca.crt');
@@ -49,7 +49,10 @@ const OPENSSL_BIN = (() => {
   const isWin = process.platform === 'win32';
   const candidates = isWin ? ['openssl.exe', 'openssl'] : ['openssl'];
   for (const c of candidates) {
-    try { execFileSync(c, ['version'], { stdio: 'ignore' }); return c; } catch {}
+    try {
+      execFileSync(c, ['version'], { stdio: 'ignore' });
+      return c;
+    } catch {}
   }
   return candidates[0]; // best-effort; spawn will throw a clear ENOENT
 })();
@@ -62,11 +65,16 @@ function run(cmd, args, opts = {}) {
   const realCmd = cmd === 'openssl' ? OPENSSL_BIN : cmd;
   return new Promise((resolve, reject) => {
     const child = spawn(realCmd, args, { ...opts, windowsHide: true });
-    let err = '', out = '';
-    child.stdout.on('data', d => out += d.toString());
-    child.stderr.on('data', d => err += d.toString());
-    child.on('error', e => reject(new Error(`${cmd} spawn failed: ${e.message}`)));
-    child.on('close', code => {
+    let err = '',
+      out = '';
+    child.stdout.on('data', (d) => {
+      out += d.toString();
+    });
+    child.stderr.on('data', (d) => {
+      err += d.toString();
+    });
+    child.on('error', (e) => reject(new Error(`${cmd} spawn failed: ${e.message}`)));
+    child.on('close', (code) => {
       if (code !== 0) reject(new Error(`${cmd} exited ${code}: ${err.trim()}`));
       else resolve(out.trim());
     });
@@ -75,10 +83,10 @@ function run(cmd, args, opts = {}) {
 
 function clientPaths(cn) {
   return {
-    key:  join(CLIENTS_DIR, `${cn}.key`),
-    csr:  join(CLIENTS_DIR, `${cn}.csr`),
-    crt:  join(CLIENTS_DIR, `${cn}.crt`),
-    ext:  join(CLIENTS_DIR, `${cn}.ext`),
+    key: join(CLIENTS_DIR, `${cn}.key`),
+    csr: join(CLIENTS_DIR, `${cn}.csr`),
+    crt: join(CLIENTS_DIR, `${cn}.crt`),
+    ext: join(CLIENTS_DIR, `${cn}.ext`),
   };
 }
 
@@ -103,7 +111,9 @@ function ensureWritableSerial() {
   } else {
     writeFileSync(dest, '01\n');
   }
-  try { chmodSync(dest, 0o644); } catch {}
+  try {
+    chmodSync(dest, 0o644);
+  } catch {}
   return dest;
 }
 
@@ -122,23 +132,45 @@ export async function issueClientCert(cn, { days = DEFAULT_CERT_DAYS } = {}) {
   // 2. Build CSR
   await run('openssl', ['req', '-new', '-key', p.key, '-out', p.csr, '-subj', `/CN=${cn}`]);
   // 3. Build ext file
-  const ext = [
-    'authorityKeyIdentifier=keyid,issuer',
-    'basicConstraints=CA:FALSE',
-    'keyUsage = digitalSignature, keyEncipherment',
-    'extendedKeyUsage = clientAuth',
-  ].join('\n') + '\n';
+  const ext =
+    [
+      'authorityKeyIdentifier=keyid,issuer',
+      'basicConstraints=CA:FALSE',
+      'keyUsage = digitalSignature, keyEncipherment',
+      'extendedKeyUsage = clientAuth',
+    ].join('\n') + '\n';
   writeFileSync(p.ext, ext);
   // 4. Sign — serial file must be writable (not pki/ca/ca.srl on a RO mount).
   const serial = ensureWritableSerial();
-  await run('openssl', ['x509', '-req', '-in', p.csr,
-    '-CA', CA_CRT, '-CAkey', CA_KEY, '-CAserial', serial,
-    '-out', p.crt, '-days', String(days), '-sha256',
-    '-extfile', p.ext]);
+  await run('openssl', [
+    'x509',
+    '-req',
+    '-in',
+    p.csr,
+    '-CA',
+    CA_CRT,
+    '-CAkey',
+    CA_KEY,
+    '-CAserial',
+    serial,
+    '-out',
+    p.crt,
+    '-days',
+    String(days),
+    '-sha256',
+    '-extfile',
+    p.ext,
+  ]);
   // 5. Cleanup
-  try { unlinkSync(p.csr); } catch {}
-  try { unlinkSync(p.ext); } catch {}
-  try { chmodSync(p.key, 0o600); } catch {}
+  try {
+    unlinkSync(p.csr);
+  } catch {}
+  try {
+    unlinkSync(p.ext);
+  } catch {}
+  try {
+    chmodSync(p.key, 0o600);
+  } catch {}
   // 6. Read fingerprint
   const fpRaw = await run('openssl', ['x509', '-in', p.crt, '-noout', '-fingerprint', '-sha256']);
   const fingerprint = fpRaw.split('=')[1] || '';
@@ -172,11 +204,62 @@ export function readClientKeyPem(cn) {
   return readFileSync(p.key, 'utf8');
 }
 
-// Delete cert files for a client (used by revoke). Idempotent.
+/**
+ * Capture the current final client material before a rotation. Buffers are
+ * kept only in memory and let the caller roll back if durable config persistence
+ * fails after OpenSSL has already replaced the files.
+ */
+export function snapshotClientCertFiles(cn) {
+  const p = clientPaths(cn);
+  return {
+    cert: existsSync(p.crt) ? readFileSync(p.crt) : null,
+    key: existsSync(p.key) ? readFileSync(p.key) : null,
+  };
+}
+
+/** Restore final client material exactly, and remove transient CSR/ext files. */
+export function restoreClientCertFiles(cn, snapshot = {}) {
+  const p = clientPaths(cn);
+  const restore = (path, value, mode) => {
+    if (value == null) {
+      try {
+        unlinkSync(path);
+      } catch {}
+      return;
+    }
+    writeFileSync(path, value, { mode });
+    try {
+      chmodSync(path, mode);
+    } catch {}
+  };
+  restore(p.crt, snapshot.cert, 0o644);
+  restore(p.key, snapshot.key, 0o600);
+  for (const transient of [p.csr, p.ext]) {
+    try {
+      unlinkSync(transient);
+    } catch {}
+  }
+}
+
+export function deleteClientKeyFile(cn, { strict = false } = {}) {
+  const p = clientPaths(cn);
+  try {
+    unlinkSync(p.key);
+  } catch (error) {
+    if (strict && error?.code !== 'ENOENT') throw error;
+  }
+  const removed = !existsSync(p.key);
+  if (strict && !removed) throw new Error(`Client private key could not be removed: ${p.key}`);
+  return removed;
+}
+
+// Delete cert files for a client (used by revoke/delete). Idempotent.
 export function deleteClientCertFiles(cn) {
   const p = clientPaths(cn);
-  for (const f of [p.crt, p.key]) {
-    try { unlinkSync(f); } catch {}
+  for (const f of [p.crt, p.key, p.csr, p.ext]) {
+    try {
+      unlinkSync(f);
+    } catch {}
   }
 }
 

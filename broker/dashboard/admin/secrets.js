@@ -10,15 +10,16 @@
   let currentIdentity = null;
   let isAdmin = false;
   let typeSchemas = {}; // type_id -> { label, description, fields: [...] }
-  let secrets = [];     // [{ name, type, description, fields, ... }]
+  let secrets = []; // [{ name, type, description, fields, ... }]
   let editingName = null;
   let loadedTypesAt = 0;
 
   // ---- Bootstrap ----
   function init() {
-    const subscribe = typeof subscribeBrokerIdentity === 'function'
-      ? subscribeBrokerIdentity
-      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    const subscribe =
+      typeof subscribeBrokerIdentity === 'function'
+        ? subscribeBrokerIdentity
+        : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
     subscribe((ident) => {
       currentIdentity = ident;
       isAdmin = !!(ident && ident.role === 'admin');
@@ -32,7 +33,7 @@
   // ---- API ----
   async function loadTypeSchemas(force) {
     if (!isAdmin) return;
-    if (!force && Date.now() - loadedTypesAt < 60000) return;  // cache 60s
+    if (!force && Date.now() - loadedTypesAt < 60000) return; // cache 60s
     try {
       const r = await api('/api/v1/admin/types');
       typeSchemas = r.types || {};
@@ -59,7 +60,10 @@
   }
 
   async function updateSecret(name, payload) {
-    return api(`/api/v1/admin/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(payload) });
+    return api(`/api/v1/admin/secrets/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
   }
 
   async function deleteSecret(name) {
@@ -93,7 +97,8 @@
     if (!tbody) return;
     $('#admin-secrets-count').textContent = secrets.length ? `共 ${secrets.length} 个` : '';
     if (secrets.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">（还没有任何密钥）— 点右上角"+ 新增"添加第一个。</td></tr>';
+      tbody.innerHTML =
+        '<tr><td colspan="6" class="muted">（还没有任何密钥）— 点右上角"+ 新增"添加第一个。</td></tr>';
       updateBulkBar();
       return;
     }
@@ -101,31 +106,40 @@
     for (const s of secrets) {
       const tr = document.createElement('tr');
       const fieldCount = Object.keys(s.fields || {}).length;
-      const fieldSummary = fieldCount > 0
-        ? `${fieldCount} 字段: ${Object.keys(s.fields).slice(0, 4).join(', ')}${fieldCount > 4 ? '…' : ''}`
-        : '<span class="muted">(无字段)</span>';
+      const fieldSummary =
+        fieldCount > 0
+          ? `${fieldCount} 字段: ${Object.keys(s.fields).slice(0, 4).join(', ')}${fieldCount > 4 ? '…' : ''}`
+          : '<span class="muted">(无字段)</span>';
       // v3.1.1 M5.9: last_rotated_at + rotation_history
       const lastRotated = s.last_rotated_at || s.updated_at;
       const hist = Array.isArray(s.rotation_history) ? s.rotation_history : [];
       const histCount = hist.length;
-      const histHtml = histCount > 0
-        ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:0.75rem;color:#6e7781">📜 ${histCount} 次轮换历史</summary>
+      const histHtml =
+        histCount > 0
+          ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:0.75rem;color:#6e7781">📜 ${histCount} 次轮换历史</summary>
            <ul class="rotation-timeline">
-             ${hist.slice(0, 10).map(h => `
+             ${hist
+               .slice(0, 10)
+               .map(
+                 (h) => `
                <li>
                  <span class="ts">${formatTs(h.ts)}</span>
                  <span class="by">${escapeHtml(h.by || '?')}</span>
                  <span class="source">${escapeHtml(h.source || 'manual')}</span>
                  <span class="note">${escapeHtml(h.note || '')}</span>
-               </li>`).join('')}
+               </li>`,
+               )
+               .join('')}
            </ul></details>`
-        : '<div class="rotation-history-empty">无轮换历史</div>';
+          : '<div class="rotation-history-empty">无轮换历史</div>';
       const policyDays = s.rotation_policy_days;
       const policyHint = policyDays
         ? (() => {
             const days = Math.floor((Date.now() - new Date(lastRotated).getTime()) / 86400000);
-            if (days >= policyDays) return `<span class="status-error" style="font-size:0.75rem">已过 ${days}/${policyDays} 天</span>`;
-            if (days >= policyDays * 0.8) return `<span style="color:#f0c674;font-size:0.75rem">剩 ${policyDays - days}/${policyDays} 天</span>`;
+            if (days >= policyDays)
+              return `<span class="status-error" style="font-size:0.75rem">已过 ${days}/${policyDays} 天</span>`;
+            if (days >= policyDays * 0.8)
+              return `<span style="color:#f0c674;font-size:0.75rem">剩 ${policyDays - days}/${policyDays} 天</span>`;
             return `<span class="muted" style="font-size:0.75rem">${days}/${policyDays} 天</span>`;
           })()
         : '';
@@ -153,7 +167,7 @@
       tbody.appendChild(tr);
     }
     // Per-row checkbox
-    tbody.querySelectorAll('input.row-check').forEach(cb => {
+    tbody.querySelectorAll('input.row-check').forEach((cb) => {
       cb.addEventListener('change', () => {
         const n = cb.dataset.name;
         if (cb.checked) selectedNames.add(n);
@@ -161,7 +175,7 @@
         updateBulkBar();
       });
     });
-    tbody.querySelectorAll('button[data-act]').forEach(btn => {
+    tbody.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const act = btn.dataset.act;
         const name = btn.dataset.name;
@@ -175,8 +189,11 @@
 
   // v3.1.1 M5.9: 轮换记录
   async function confirmRotate(name) {
-    const note = prompt(`轮换 ${name}？\nRotate ${name}?\n\n可选：填备注（来源/原因）。\nOptional: note (source/reason).`, '');
-    if (note === null) return;  // 取消
+    const note = prompt(
+      `轮换 ${name}？\nRotate ${name}?\n\n可选：填备注（来源/原因）。\nOptional: note (source/reason).`,
+      '',
+    );
+    if (note === null) return; // 取消
     try {
       await api(`/api/v1/rotate/${encodeURIComponent(name)}`, {
         method: 'POST',
@@ -190,17 +207,24 @@
 
   function showTableError(msg) {
     const tbody = $('#admin-secrets-table tbody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="status-error">加载失败：${escapeHtml(msg)}</td></tr>`;
+    if (tbody)
+      tbody.innerHTML = `<tr><td colspan="5" class="status-error">加载失败：${escapeHtml(msg)}</td></tr>`;
   }
 
   function formatTs(ts) {
     if (!ts) return '-';
-    try { return new Date(ts).toISOString().replace('T', ' ').slice(0, 19); }
-    catch { return ts; }
+    try {
+      return new Date(ts).toISOString().replace('T', ' ').slice(0, 19);
+    } catch {
+      return ts;
+    }
   }
 
   function escapeHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    return String(s == null ? '' : s).replace(
+      /[&<>"']/g,
+      (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m],
+    );
   }
 
   // ---- Type dropdown ----
@@ -224,10 +248,22 @@
       const label = schema.label || id;
       let group = '其他 / Other';
       if (/github|gitlab|gitee|bitbucket|code/i.test(id + label)) group = '代码平台 / Code';
-      else if (/openai|anthropic|google.?ai|mistral|cohere|deepseek|zhipu|moonshot|qwen|gemini|claude/i.test(id + label)) group = 'AI 服务 / AI';
-      else if (/aliyun|tencent|aws|gcp|cloudflare|oss|cos|s3/i.test(id + label)) group = '云厂商 / Cloud';
-      else if (/ssh|database|redis|mongo|postgres|mysql|smtp|sendgrid|mailgun|slack|discord|feishu|dingtalk|telegram|webhook|github_pat|gitlab_pat|gitee_pat/i.test(id + label)) group = '基础设施 / Infra';
-      else if (/sentry|datadog|prometheus|grafana|datadog|newrelic/i.test(id + label)) group = '监控 / Observability';
+      else if (
+        /openai|anthropic|google.?ai|mistral|cohere|deepseek|zhipu|moonshot|qwen|gemini|claude/i.test(
+          id + label,
+        )
+      )
+        group = 'AI 服务 / AI';
+      else if (/aliyun|tencent|aws|gcp|cloudflare|oss|cos|s3/i.test(id + label))
+        group = '云厂商 / Cloud';
+      else if (
+        /ssh|database|redis|mongo|postgres|mysql|smtp|sendgrid|mailgun|slack|discord|feishu|dingtalk|telegram|webhook|github_pat|gitlab_pat|gitee_pat/i.test(
+          id + label,
+        )
+      )
+        group = '基础设施 / Infra';
+      else if (/sentry|datadog|prometheus|grafana|datadog|newrelic/i.test(id + label))
+        group = '监控 / Observability';
       else if (/stripe|pay|alipay|wechat_pay|微信/i.test(id + label)) group = '支付 / Payment';
       else if (/custom|jwt|oauth|random|jwt_secret/i.test(id)) group = '通用 / General';
       groups[group].push({ id, label });
@@ -294,7 +330,7 @@
       wrap.appendChild(buildFieldInput(f, initialValues[f.name], opts));
       container.appendChild(wrap);
     }
-    for (const f of schema.fields.filter(x => x.show_when)) {
+    for (const f of schema.fields.filter((x) => x.show_when)) {
       const triggerEl = container.querySelector(`[name="sf-f-${f.show_when.field}"]`);
       if (triggerEl) {
         triggerEl.addEventListener('change', () => {
@@ -321,11 +357,17 @@
     const helpText = f.help || '';
     let inputHtml = '';
     let afterHtml = '';
-    const val = currentValue !== undefined ? currentValue : (f.default !== undefined ? f.default : '');
+    const val =
+      currentValue !== undefined ? currentValue : f.default !== undefined ? f.default : '';
     const isSensitive = !!f.sensitive;
     const id = `sf-f-${f.name}`;
     if (f.kind === 'select') {
-      const optsHtml = (f.options || []).map(o => `<option value="${escapeHtml(o.value)}"${String(val) === String(o.value) ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+      const optsHtml = (f.options || [])
+        .map(
+          (o) =>
+            `<option value="${escapeHtml(o.value)}"${String(val) === String(o.value) ? ' selected' : ''}>${escapeHtml(o.label)}</option>`,
+        )
+        .join('');
       inputHtml = `<select id="${id}" name="${id}"${isRequired ? ' required' : ''}>${optsHtml}</select>`;
     } else if (f.kind === 'textarea') {
       const displayVal = isSensitive && val ? '••••••••' : val;
@@ -362,7 +404,9 @@
       inputHtml = `<input id="${id}" name="${id}" type="text" value="${escapeHtml(val || '')}"${isRequired ? ' required' : ''} placeholder="${escapeHtml(f.placeholder || '')}">`;
     }
     if (f.kind === 'checkbox') {
-      wrap.innerHTML = helpText ? `${inputHtml}<div class="hint" style="margin-top:4px">${escapeHtml(helpText)}</div>` : inputHtml;
+      wrap.innerHTML = helpText
+        ? `${inputHtml}<div class="hint" style="margin-top:4px">${escapeHtml(helpText)}</div>`
+        : inputHtml;
     } else {
       wrap.innerHTML = `<div class="sf-field-label-text">${escapeHtml(labelText)}</div>${inputHtml}${afterHtml}${helpText ? `<div class="hint">${escapeHtml(helpText)}</div>` : ''}`;
     }
@@ -399,16 +443,17 @@
       title.textContent = `编辑密钥 / Edit: ${editingName}`;
       nameEl.value = editingName;
       nameEl.disabled = true;
-      const s = secrets.find(x => x.name === editingName);
+      const s = secrets.find((x) => x.name === editingName);
       if (s) {
         $('#sf-type').value = s.type || 'custom';
-        $('#sf-type').disabled = true;  // type is identity — changing = delete+recreate
+        $('#sf-type').disabled = true; // type is identity — changing = delete+recreate
         $('#sf-description').value = s.description || '';
-        descEl.textContent = (typeSchemas[s.type]?.description || '') + ' (编辑模式下字段已脱敏显示为 •)';
+        descEl.textContent =
+          (typeSchemas[s.type]?.description || '') + ' (编辑模式下字段已脱敏显示为 •)';
         renderFieldsForType(s.type, s.fields || {}, { isEdit: true });
         // For sensitive fields, clear the masked value so user must type to change.
         // The HTML `required` attribute is already skipped for sensitive+edit in buildFieldInput.
-        for (const f of (typeSchemas[s.type]?.fields || [])) {
+        for (const f of typeSchemas[s.type]?.fields || []) {
           if (f.sensitive) {
             const el = $(`#sf-f-${f.name}`);
             if (el) el.value = '';
@@ -430,7 +475,9 @@
   function closeModal() {
     $('#secret-modal').hidden = true;
     // Security: clear all field values from DOM
-    $$('#sf-fields-container input, #sf-fields-container textarea').forEach(el => { el.value = ''; });
+    $$('#sf-fields-container input, #sf-fields-container textarea').forEach((el) => {
+      el.value = '';
+    });
     $('#sf-fields-container').innerHTML = '';
     $('#sf-name').disabled = false;
     $('#sf-type').disabled = false;
@@ -445,7 +492,12 @@
   }
 
   async function confirmDelete(name) {
-    if (!confirm(`确定删除密钥 ${name}？\n删除后引用它的 service 模板会立即调用失败。\nDelete secret ${name}? Services referencing it will fail immediately.`)) return;
+    if (
+      !confirm(
+        `确定删除密钥 ${name}？\n删除后引用它的 service 模板会立即调用失败。\nDelete secret ${name}? Services referencing it will fail immediately.`,
+      )
+    )
+      return;
     try {
       await deleteSecret(name);
       selectedNames.delete(name);
@@ -458,12 +510,19 @@
   async function confirmBulkDelete() {
     const names = Array.from(selectedNames);
     if (names.length === 0) return;
-    const sample = names.slice(0, 5).join(', ') + (names.length > 5 ? ` ... +${names.length - 5}` : '');
-    if (!confirm(`确定删除以下 ${names.length} 个密钥？\n${sample}\n\n删除后引用它们的 service 模板会立即调用失败。\n\nDelete ${names.length} secrets? Services referencing them will fail immediately.`)) return;
+    const sample =
+      names.slice(0, 5).join(', ') + (names.length > 5 ? ` ... +${names.length - 5}` : '');
+    if (
+      !confirm(
+        `确定删除以下 ${names.length} 个密钥？\n${sample}\n\n删除后引用它们的 service 模板会立即调用失败。\n\nDelete ${names.length} secrets? Services referencing them will fail immediately.`,
+      )
+    )
+      return;
     const bar = $('#bulk-action-bar');
     const origHtml = bar ? bar.innerHTML : '';
     if (bar) bar.innerHTML = `<span>删除中... 0/${names.length}</span>`;
-    let ok = 0, fail = 0;
+    let ok = 0,
+      fail = 0;
     const failed = [];
     for (let i = 0; i < names.length; i++) {
       const n = names[i];
@@ -475,7 +534,8 @@
         fail++;
         failed.push(`${n}: ${ex.message}`);
       }
-      if (bar) bar.innerHTML = `<span>删除中... ${i + 1}/${names.length} (成功 ${ok} 失败 ${fail})</span>`;
+      if (bar)
+        bar.innerHTML = `<span>删除中... ${i + 1}/${names.length} (成功 ${ok} 失败 ${fail})</span>`;
     }
     if (bar) bar.innerHTML = origHtml;
     if (failed.length) {
@@ -526,7 +586,7 @@
       if (!file) return;
       // Refuse huge files (>1 MB) — should never happen for keys/certs but protect anyway
       if (file.size > 1024 * 1024) {
-        alert(`文件过大 (${(file.size/1024).toFixed(0)} KB > 1024 KB)，请检查`);
+        alert(`文件过大 (${(file.size / 1024).toFixed(0)} KB > 1024 KB)，请检查`);
         input.value = '';
         return;
       }
@@ -559,12 +619,12 @@
       const fields = collectFieldValues();
       if (editingName) {
         // Only send fields that user actively filled (clear sensitive empty fields = keep existing)
-        const existing = secrets.find(s => s.name === editingName);
+        const existing = secrets.find((s) => s.name === editingName);
         const merged = { ...(existing?.fields || {}) };
         for (const [k, v] of Object.entries(fields)) {
           // If user left sensitive field empty, don't overwrite
           const schema = typeSchemas[$('#sf-type').value];
-          const fieldDef = schema?.fields.find(f => f.name === k);
+          const fieldDef = schema?.fields.find((f) => f.name === k);
           if (fieldDef?.sensitive && (v === '' || v === null || v === undefined)) continue;
           merged[k] = v;
         }
@@ -602,9 +662,10 @@
     const form = $('#secret-form');
     if (form) form.addEventListener('submit', submitForm);
     const modal = $('#secret-modal');
-    if (modal) modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeModal();
-    });
+    if (modal)
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+      });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !$('#secret-modal').hidden) closeModal();
     });
@@ -612,26 +673,31 @@
     const bulkDelete = $('#btn-bulk-delete');
     if (bulkDelete) bulkDelete.addEventListener('click', confirmBulkDelete);
     const bulkClear = $('#btn-bulk-clear');
-    if (bulkClear) bulkClear.addEventListener('click', () => {
-      selectedNames.clear();
-      renderTable();
-    });
-    const selectAll = $('#secrets-select-all');
-    if (selectAll) selectAll.addEventListener('change', () => {
-      if (selectAll.checked) {
-        for (const s of secrets) selectedNames.add(s.name);
-      } else {
+    if (bulkClear)
+      bulkClear.addEventListener('click', () => {
         selectedNames.clear();
-      }
-      renderTable();
-    });
+        renderTable();
+      });
+    const selectAll = $('#secrets-select-all');
+    if (selectAll)
+      selectAll.addEventListener('change', () => {
+        if (selectAll.checked) {
+          for (const s of secrets) selectedNames.add(s.name);
+        } else {
+          selectedNames.clear();
+        }
+        renderTable();
+      });
     // Eye toggle + file upload (event-delegated)
     wireEyeToggle();
     wireFileUpload();
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { wireEvents(); init(); });
+    document.addEventListener('DOMContentLoaded', () => {
+      wireEvents();
+      init();
+    });
   } else {
     wireEvents();
     init();

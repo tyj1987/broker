@@ -5,7 +5,7 @@
 #   ECS_HOST              hostname, e.g. 52trz.com
 #   ECS_SSH_KEY           OpenSSH private key (ed25519, no passphrase)
 #   ECS_SSH_USER          optional, default root
-#   ECS_SSH_KNOWN_HOSTS   optional ssh-keyscan line; if empty, keyscan at runtime
+#   ECS_SSH_KNOWN_HOSTS   required, independently verified SSH host-key pin
 
 name: Deploy ECS
 
@@ -17,34 +17,51 @@ on:
       - 'scripts/broker/nginx-broker.52trz.com.conf'
       - '.github/workflows/deploy-ecs.yml'
   workflow_dispatch:
+    inputs:
+      preprod_review_approved:
+        description: 'Human review and matching preproduction evidence have been approved'
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
   group: deploy-ecs
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    name: Test before deploy
+    name: Quality gate before deploy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
-      - name: npm install + modular tests
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: broker/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sdk/python/requirements-dev.txt
+      - name: Install dependencies and run the full quality gate
         working-directory: broker
         run: |
-          npm install --omit=dev --no-audit --no-fund
-          npm run test:modular
-          node ../broker-test/test-v4-modules.js
+          npm ci
+          npm run quality:gate
 
   deploy:
     name: SSH deploy to ECS
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    # The trusted-proxy migration is coordinated, never an automatic master push.
+    if: github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && inputs.preprod_review_approved
+    environment: production-ecs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Pack broker tree
         run: |
@@ -64,15 +81,13 @@ jobs:
           set -euo pipefail
           : "${ECS_HOST:?Set repository secret ECS_HOST}"
           : "${ECS_SSH_KEY:?Set repository secret ECS_SSH_KEY}"
+          : "${ECS_SSH_KNOWN_HOSTS:?Set independently verified ECS_SSH_KNOWN_HOSTS}"
           USER="${ECS_SSH_USER:-root}"
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$ECS_SSH_KEY" > "$HOME/.ssh/deploy"
           chmod 600 "$HOME/.ssh/deploy"
-          if [ -n "${ECS_SSH_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$ECS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          else
-            ssh-keyscan -H -t ed25519,rsa "$ECS_HOST" > "$HOME/.ssh/known_hosts"
-          fi
+          printf '%s\n' "$ECS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          trap 'rm -f "$HOME/.ssh/deploy"' EXIT
           chmod 644 "$HOME/.ssh/known_hosts"
           SSH=(ssh -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
           SCP=(scp -i "$HOME/.ssh/deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes)
@@ -85,15 +100,23 @@ jobs:
           mkdir -p /tmp/broker-new
           tar xzf /tmp/broker-payload.tgz -C /tmp/broker-new
           test -f /tmp/broker-new/server.js
+          node -e "const major=Number(process.versions.node.split('.')[0]); if (major < 22) { console.error('Node.js 22 or newer is required'); process.exit(1) }"
           node --check /tmp/broker-new/server.js
           cp -a /tmp/broker-new/. "$DST/"
-          if [ -f "$DST/package.json" ]; then
-            (cd "$DST" && npm install --omit=dev --no-audit --no-fund)
+          if [ -f "$DST/package-lock.json" ]; then
+            (cd "$DST" && npm ci --omit=dev --no-audit --no-fund)
+          else
+            echo "package-lock.json is required for deterministic deployment" >&2
+            exit 1
           fi
           systemctl restart secret-broker
           sleep 3
           systemctl is-active secret-broker
-          curl -sk https://127.0.0.1:8443/health
+          curl --fail --silent --show-error \
+            --cacert /opt/secret-broker/pki/ca/ca.crt \
+            --resolve broker.52trz.com:8443:127.0.0.1 \
+            https://broker.52trz.com:8443/health | \
+            node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{const v=JSON.parse(b);if(v.status!=="ok"||Object.keys(v).length!==1)process.exit(1)})'
           echo
           rm -rf /tmp/broker-new /tmp/broker-payload.tgz
           REMOTE

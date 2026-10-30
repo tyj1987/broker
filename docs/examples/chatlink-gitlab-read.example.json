@@ -1,0 +1,23 @@
+{
+  "candidate_only": true,
+  "import_authorized": false,
+  "status": "needs_review",
+  "service_fragment": {
+    "gitlab_rog_read": {
+      "type": "bearer",
+      "upstream": "https://gitlab.52trz.com",
+      "token_secret": "REQUIRES_EXISTING_BROKER_SECRET_BINDING",
+      "token_field": "token",
+      "allow_methods": ["GET"],
+      "allow_paths": ["(?!)"],
+      "inject_headers": {"Accept-Encoding": "identity"}
+    }
+  },
+  "client_fragment": {
+    "role": "readonly",
+    "allowed_resolve": [],
+    "allowed_proxy": [{"service": "gitlab_rog_read", "methods": ["GET"], "paths": ["(?!)"]}]
+  },
+  "verified_numeric_project_ids": [],
+  "note": "Fragments only, not a loadable production configuration. Deny-all regex remains until exact numeric project IDs and a non-admin mTLS identity are verified. Never substitute an empty path list."
+}

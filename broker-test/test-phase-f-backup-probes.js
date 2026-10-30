@@ -13,10 +13,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BROKER_VERSION } from '../broker/version.js';
 
-let passed = 0, failed = 0;
+let passed = 0,
+  failed = 0;
 function assert(c, m) {
-  if (c) { passed++; console.log('  OK  ', m); }
-  else { failed++; console.error('  FAIL', m); }
+  if (c) {
+    passed++;
+    console.log('  OK  ', m);
+  } else {
+    failed++;
+    console.error('  FAIL', m);
+  }
 }
 
 console.log('=== version ===');
@@ -43,8 +49,14 @@ console.log('=== buildBackupManifest ===');
     configPath: cfg,
     ageKeyPath: join(dir, 'missing.key'),
   });
-  assert(m.files.some((f) => f.present && f.name === 'config.yaml'), 'config present');
-  assert(m.missing_required.some((p) => p.includes('missing.key')), 'missing age');
+  assert(
+    m.files.some((f) => f.present && f.name === 'config.yaml'),
+    'config present',
+  );
+  assert(
+    m.missing_required.some((p) => p.includes('missing.key')),
+    'missing age',
+  );
   assert(m.checklist.length >= 5, 'checklist');
   const out = writeBackupManifest(dir, { configPath: cfg });
   assert(readFileSync(out, 'utf8').includes('generated_at'), 'write manifest');
@@ -74,32 +86,60 @@ console.log('=== runProbes non-critical fail still ok ===');
 console.log('=== handleOps admin ===');
 {
   const res = { status: 0, body: null };
-  const send = (r, s, b) => { r.status = s; r.body = b; };
-  const jsonError = (r, s, m) => { r.status = s; r.body = { error: m }; };
-  await handleOps({}, res, { method: 'GET', pathname: '/api/v1/ops/config-export' }, {
-    send, jsonError, ctx: { client: { role: 'developer' } }, config: {},
-  });
+  const send = (r, s, b) => {
+    r.status = s;
+    r.body = b;
+  };
+  const jsonError = (r, s, m) => {
+    r.status = s;
+    r.body = { error: m };
+  };
+  await handleOps(
+    {},
+    res,
+    { method: 'GET', pathname: '/api/v1/ops/config-export' },
+    {
+      send,
+      jsonError,
+      ctx: { client: { role: 'developer' } },
+      config: {},
+    },
+  );
   assert(res.status === 403, 'forbidden');
-  await handleOps({}, res, { method: 'GET', pathname: '/api/v1/ops/config-export' }, {
-    send, jsonError,
-    ctx: { client: { role: 'admin' } },
-    config: { clients: { a: { password: 'x' } } },
-  });
+  await handleOps(
+    {},
+    res,
+    { method: 'GET', pathname: '/api/v1/ops/config-export' },
+    {
+      send,
+      jsonError,
+      ctx: { client: { role: 'admin' } },
+      config: { clients: { a: { password: 'x' } } },
+    },
+  );
   assert(res.status === 200 && res.body.config.clients.a.password === '[REDACTED]', 'export');
 }
 
 console.log('=== ready with probes hook ===');
 {
   const res = { status: 0, body: null };
-  const send = (r, s, b) => { r.status = s; r.body = b; };
-  await handleHealth({}, res, { method: 'GET', pathname: '/ready' }, {
-    send,
-    secretCache: new Map([['k', 1]]),
-    config: {},
-    requireSops: true,
-    surface: 'local',
-    runReadyProbes: async () => ({ ok: true, probes: [{ name: 't', ok: true }] }),
-  });
+  const send = (r, s, b) => {
+    r.status = s;
+    r.body = b;
+  };
+  await handleHealth(
+    {},
+    res,
+    { method: 'GET', pathname: '/ready' },
+    {
+      send,
+      secretCache: new Map([['k', 1]]),
+      config: {},
+      requireSops: true,
+      surface: 'local',
+      runReadyProbes: async () => ({ ok: true, probes: [{ name: 't', ok: true }] }),
+    },
+  );
   assert(res.status === 200 && res.body.probes?.[0]?.ok === true, 'ready probes');
 }
 

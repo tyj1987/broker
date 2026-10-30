@@ -12,10 +12,11 @@
 //   1. /api/v1/login 调 verifyPassword() → 返 ok:false + mfa_token (若启用了 TOTP)
 //   2. /api/v1/login/mfa 调 verifyMfaCode() → 返 session
 
-import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { verify as verifyTotp, findRecoveryCode } from './totp.js';
+import { randomUUID, createHash } from 'node:crypto';
+import { verify as verifyTotp, findRecoveryCode, verifyPassword } from './totp.js';
 
-const MFA_TOKEN_TTL_MS = 5 * 60 * 1000;  // 5 分钟
+const MFA_TOKEN_TTL_MS = 5 * 60 * 1000; // 5 分钟
+const MAX_MFA_PENDING = 10_000;
 
 // 内存存活的 mfa_token 池
 // 形如: { token: { clientName, fp, createdAt, used } }
@@ -38,10 +39,25 @@ GC_INTERVAL.unref?.();
  * @param {string} fp 客户端 cert fingerprint（mTLS 走的话记录；密码登录可空）
  * @returns {string} mfa_token
  */
-function createMfaPending(clientName, fp = '') {
+function createMfaPending(clientName, fp = '', opts = {}) {
   gcMfaPending();
+  const maxEntries =
+    Number.isSafeInteger(opts.maxEntries) && opts.maxEntries > 0
+      ? opts.maxEntries
+      : MAX_MFA_PENDING;
+  while (MFA_PENDING.size >= maxEntries) {
+    const oldestToken = MFA_PENDING.keys().next().value;
+    if (!oldestToken) break;
+    MFA_PENDING.delete(oldestToken);
+  }
   const token = randomUUID();
-  MFA_PENDING.set(token, { clientName, fp, createdAt: Date.now(), used: false });
+  MFA_PENDING.set(token, {
+    clientName,
+    fp,
+    createdAt: Date.now(),
+    used: false,
+    securityBinding: opts.securityBinding || null,
+  });
   return token;
 }
 
@@ -92,13 +108,63 @@ function verifyMfaCode(clientConfig, code) {
   if (clientConfig.totp_recovery_codes_hash && clientConfig.totp_recovery_codes_hash.length > 0) {
     const idx = findRecoveryCode(code, clientConfig.totp_recovery_codes_hash);
     if (idx >= 0) {
-      // 用过的码立刻从列表删除
-      clientConfig.totp_recovery_codes_hash.splice(idx, 1);
-      return { ok: true, method: 'recovery' };
+      // Recoverable transaction metadata lets callers restore the hash when
+      // durable persistence fails. These underscored fields are internal only.
+      const [_recovery_hash] = clientConfig.totp_recovery_codes_hash.splice(idx, 1);
+      return { ok: true, method: 'recovery', _recovery_index: idx, _recovery_hash };
     }
   }
 
   return { ok: false };
+}
+
+function verifyStepUp(clientConfig, code, opts = {}) {
+  if (!clientConfig || !code || typeof code !== 'string') return { ok: false };
+  if (clientConfig.totp_secret || clientConfig.totp_recovery_codes_hash?.length) {
+    // Once MFA is configured, the first factor alone must never satisfy step-up.
+    return verifyMfaCode(clientConfig, code);
+  }
+  if (opts.allowPassword !== false && clientConfig.password) {
+    if (verifyPassword(code, clientConfig.password)) {
+      return { ok: true, method: 'password' };
+    }
+  }
+  return { ok: false };
+}
+
+export function mfaClientBinding(clientConfig) {
+  // Bind a pending first factor to security-relevant live state. No plaintext
+  // secret is exposed; old challenges die after password/role/certificate changes.
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        password: clientConfig?.password,
+        totp: clientConfig?.totp_secret,
+        role: clientConfig?.role,
+        fingerprint: clientConfig?.cert_fingerprint_sha256,
+        resolve: clientConfig?.allowed_resolve,
+        proxy: clientConfig?.allowed_proxy,
+        passwordLogin: clientConfig?.allow_password_login,
+      }),
+    )
+    .digest('hex');
+}
+
+function restoreConsumedRecoveryCode(clientConfig, verification) {
+  if (verification?.method !== 'recovery' || !verification._recovery_hash) return false;
+  if (!Array.isArray(clientConfig.totp_recovery_codes_hash)) {
+    clientConfig.totp_recovery_codes_hash = [];
+  }
+  const hashes = clientConfig.totp_recovery_codes_hash;
+  if (!hashes.includes(verification._recovery_hash)) {
+    const index = Number.isInteger(verification._recovery_index)
+      ? Math.max(0, Math.min(verification._recovery_index, hashes.length))
+      : hashes.length;
+    hashes.splice(index, 0, verification._recovery_hash);
+  }
+  delete verification._recovery_index;
+  delete verification._recovery_hash;
+  return true;
 }
 
 /**
@@ -127,12 +193,20 @@ function _dumpMfaPending() {
   }));
 }
 
+function _resetMfaPendingForTests() {
+  MFA_PENDING.clear();
+}
+
 export {
   createMfaPending,
   getMfaPending,
   consumeMfaPending,
   verifyMfaCode,
+  verifyStepUp,
+  restoreConsumedRecoveryCode,
   isMfaRequired,
   MFA_TOKEN_TTL_MS,
+  MAX_MFA_PENDING,
   _dumpMfaPending,
+  _resetMfaPendingForTests,
 };

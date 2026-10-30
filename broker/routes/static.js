@@ -30,14 +30,14 @@ const STATIC_MAP = {
 // without re-encoding.
 const metaCache = new Map(); // abs path -> { mtime, size, etag, body: Buffer|null }
 const MAX_BODY_CACHE_BYTES = 512 * 1024; // don't bother caching >512KB assets
-const BODY_CACHE_TTL_MS = 60_000;        // re-stat every minute in dev mode
+const BODY_CACHE_TTL_MS = 60_000; // re-stat every minute in dev mode
 let lastStatSweep = 0;
 
 function fileMeta(f) {
   // Throttle stat() to once per minute when not in dev — saves syscalls in prod.
   const now = Date.now();
   const cached = metaCache.get(f);
-  if (cached && (now - lastStatSweep) < BODY_CACHE_TTL_MS) return cached;
+  if (cached && now - lastStatSweep < BODY_CACHE_TTL_MS) return cached;
   lastStatSweep = now;
   const st = statSync(f);
   // File changed (size or mtime) → invalidate body
@@ -70,8 +70,8 @@ function clientHasEtag(inm, ourEtag) {
   if (!inm) return false;
   if (inm.trim() === '*') return true;
   // split on commas, trim quotes/whitespace
-  const candidates = inm.split(',').map(s => s.trim());
-  return candidates.some(c => c === ourEtag);
+  const candidates = inm.split(',').map((s) => s.trim());
+  return candidates.some((c) => c === ourEtag);
 }
 
 /**
@@ -88,7 +88,11 @@ export function handleStatic(req, res, route, deps) {
   const f = join(deps.dashboardDir, name);
   if (!existsSync(f)) {
     // Known dashboard path but the file is missing — do NOT fall through to mTLS 401.
-    const payload = JSON.stringify({ error: 'dashboard asset missing', path: route.pathname, status: 500 });
+    const payload = JSON.stringify({
+      error: 'dashboard asset missing',
+      path: route.pathname,
+      status: 500,
+    });
     res.writeHead(500, {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
@@ -100,14 +104,12 @@ export function handleStatic(req, res, route, deps) {
   }
   const meta = fileMeta(f);
   const html = isHtmlPath(route.pathname);
-  const cacheControl = html
-    ? 'no-cache, must-revalidate'
-    : 'public, max-age=300, must-revalidate';
+  const cacheControl = html ? 'no-cache, must-revalidate' : 'public, max-age=300, must-revalidate';
   const kind = html ? 'html' : 'static';
   const sec = securityHeaders({ kind });
   const headers = {
     ...sec,
-    'ETag': meta.etag,
+    ETag: meta.etag,
     'Cache-Control': cacheControl,
   };
   const inm = req?.headers?.['if-none-match'];
@@ -118,10 +120,13 @@ export function handleStatic(req, res, route, deps) {
     return true;
   }
   const body = loadBody(f, meta);
-  const ct = route.pathname.endsWith('.js') ? 'application/javascript; charset=utf-8'
-           : route.pathname.endsWith('.css') ? 'text/css; charset=utf-8'
-           : route.pathname.endsWith('.txt') ? 'text/plain; charset=utf-8'
-           : 'text/html; charset=utf-8';
+  const ct = route.pathname.endsWith('.js')
+    ? 'application/javascript; charset=utf-8'
+    : route.pathname.endsWith('.css')
+      ? 'text/css; charset=utf-8'
+      : route.pathname.endsWith('.txt')
+        ? 'text/plain; charset=utf-8'
+        : 'text/html; charset=utf-8';
   res.writeHead(200, {
     'Content-Type': ct,
     'Content-Length': body.length,

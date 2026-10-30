@@ -21,13 +21,19 @@
 //   "ca_key":      "C:/Users/.../ca.key"  // only needed for pki issue/revoke
 // }
 
-import { readFileSync, existsSync, writeFileSync, statSync, copyFileSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
+import { rootCertificates } from 'node:tls';
 import { URL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { sign } from 'node:crypto';
+
+const CLI_VERSION = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+).version;
 
 // ============================================================
 // Config
@@ -49,38 +55,59 @@ function loadConfig() {
 function mTLSRequest({ method = 'GET', path = '/', body = null, headers = {} }) {
   const cfg = loadConfig();
   const url = new URL(path, cfg.endpoint);
+  if (cfg.windows_cert_thumbprint) {
+    return windowsCertificateRequest(cfg, url, { method, body, headers });
+  }
   return new Promise((resolve, reject) => {
     // SNI: by default use the hostname from endpoint, but allow override
     // so the user can put the SSH-tunnel localhost:18443 in endpoint and
     // keep the real domain in servername without juggling hosts files.
     const sni = cfg.sni_hostname || url.hostname;
 
+    // Staged PoP: sign the canonical request message with the client key and
+    // send it as X-Broker-PoP. If the key cannot sign, send no header so the
+    // request still works (off/legacy brokers ignore it).
+    let popHeader = null;
+    try {
+      const popTs = Math.floor(Date.now() / 1000);
+      const popMessage = `v1\n${String(method).toUpperCase()}\n${url.pathname + url.search}\n${popTs}`;
+      const popSig = sign('sha256', Buffer.from(popMessage, 'utf8'), readFileSync(cfg.client_key));
+      popHeader = `v1:${popTs}:${popSig.toString('base64')}`;
+    } catch {
+      popHeader = null;
+    }
+
     const opts = {
       method,
       hostname: url.hostname,
-      port: url.port || 8443,
+      port: url.port || (url.protocol === 'https:' ? '443' : '80'),
       path: url.pathname + url.search,
       cert: readFileSync(cfg.client_cert),
-      key:  readFileSync(cfg.client_key),
-      ca:   readFileSync(cfg.ca_cert),
+      key: readFileSync(cfg.client_key),
+      // Keep Node's system/public trust store and optionally add the private Broker CA.
+      // Passing only cfg.ca_cert would replace the default roots and break public/Cloudflare certificates.
+      ca: cfg.ca_cert ? [...rootCertificates, readFileSync(cfg.ca_cert)] : undefined,
       servername: sni,
       rejectUnauthorized: true,
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'secret-broker-cli/2.0',
+        'User-Agent': `secret-broker-cli/${CLI_VERSION}`,
+        ...(popHeader ? { 'X-Broker-PoP': popHeader } : {}),
         ...headers,
       },
     };
     const req = httpsRequest(opts, (res) => {
       const chunks = [];
-      res.on('data', c => chunks.push(c));
+      res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
         const buf = Buffer.concat(chunks);
         const text = buf.toString('utf8');
         let parsed = text;
         const ct = res.headers['content-type'] || '';
         if (ct.includes('application/json')) {
-          try { parsed = JSON.parse(text); } catch {}
+          try {
+            parsed = JSON.parse(text);
+          } catch {}
         }
         resolve({ status: res.statusCode, headers: res.headers, body: parsed, raw: buf });
       });
@@ -98,18 +125,82 @@ function mTLSRequest({ method = 'GET', path = '/', body = null, headers = {} }) 
 // ============================================================
 // Helpers
 // ============================================================
-function die(msg, code = 1) { console.error('ERROR:', msg); process.exit(code); }
-function info(msg) { console.log('[broker]', msg); }
-
-function parseQuery(args, start) {
-  const out = {};
-  for (let i = start; i < args.length; i++) {
-    if (args[i] === '--query' && i + 1 < args.length) {
-      const [k, v] = args[++i].split('=');
-      out[k] = v;
-    }
+function windowsCertificateRequest(cfg, url, { method, body, headers }) {
+  if (platform() !== 'win32') {
+    return Promise.reject(new Error('Windows certificate store requires Windows'));
   }
-  return out;
+  if (url.protocol !== 'https:' || url.origin !== new URL(cfg.endpoint).origin) {
+    return Promise.reject(
+      new Error('Certificate authentication requires the configured HTTPS origin'),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'pwsh.exe',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-File',
+        fileURLToPath(new URL('./windows-mtls.ps1', import.meta.url)),
+      ],
+      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const chunks = [];
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Windows mTLS request timed out'));
+    }, 45000);
+    child.stdout.on('data', (c) => chunks.push(c));
+    child.stderr.resume(); // Do not surface response bodies or credentials through helper diagnostics.
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.stdin.on('error', () => {});
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        return reject(
+          new Error('Windows mTLS request failed; check certificate, network and server TLS trust'),
+        );
+      }
+      try {
+        const r = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const raw = Buffer.from(r.raw, 'base64');
+        let parsed = raw.toString('utf8');
+        if ((r.headers['content-type'] || '').includes('application/json')) {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch {}
+        }
+        resolve({ status: r.status, headers: r.headers, body: parsed, raw });
+      } catch (e) {
+        reject(e);
+      }
+    });
+    child.stdin.end(
+      JSON.stringify({
+        url: url.href,
+        method,
+        thumbprint: cfg.windows_cert_thumbprint,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': `secret-broker-cli/${CLI_VERSION}`,
+          ...headers,
+        },
+        body: body == null ? null : typeof body === 'string' ? body : JSON.stringify(body),
+      }),
+    );
+  });
+}
+
+function die(msg, code = 1) {
+  console.error('ERROR:', msg);
+  process.exit(code);
+}
+function info(msg) {
+  console.log('[broker]', msg);
 }
 
 // ============================================================
@@ -155,25 +246,41 @@ async function cmdGet(name) {
 }
 
 async function cmdProxy(args) {
-  if (args.length < 3) die('Usage: secret-broker proxy <service> <METHOD> <path> [--body <json>] [--query k=v ...] [--header K:V]');
+  if (args.length < 3) {
+    die(
+      'Usage: secret-broker proxy <service> <METHOD> <path> [--body <json>] [--query k=v ...] [--header K:V]',
+    );
+  }
   const [service, method, ...rest] = args;
   let path = '';
   for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === '--body')        { i++; continue; }
-    if (rest[i] === '--query')       { i++; continue; }
-    if (rest[i] === '--header')      { i++; continue; }
+    if (rest[i] === '--body') {
+      i++;
+      continue;
+    }
+    if (rest[i] === '--query') {
+      i++;
+      continue;
+    }
+    if (rest[i] === '--header') {
+      i++;
+      continue;
+    }
     path = rest.slice(i).join(' ');
     break;
   }
   if (!path) path = '/';
 
   let body = null;
-  let query = {};
-  let headers = {};
+  const query = {};
+  const headers = {};
   for (let i = 3; i < rest.length; i++) {
     if (rest[i] === '--body' && i + 1 < rest.length) {
-      try { body = JSON.parse(rest[++i]); }
-      catch { body = rest[++i]; }
+      try {
+        body = JSON.parse(rest[++i]);
+      } catch {
+        body = rest[++i];
+      }
     } else if (rest[i] === '--query' && i + 1 < rest.length) {
       const [k, v] = rest[++i].split('=');
       query[k] = v;
@@ -202,7 +309,10 @@ async function cmdExec(args) {
   let i = 0;
   while (i < args.length) {
     if (args[i] === '--env' && i + 1 < args.length) {
-      envVars = args[++i].split(',').map(s => s.trim()).filter(Boolean);
+      envVars = args[++i]
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       i++;
     } else if (args[i] === '--') {
       i++;
@@ -218,7 +328,11 @@ async function cmdExec(args) {
   // Resolve each requested secret and map to env var
   const env = { ...process.env };
   for (const v of envVars) {
-    const r = await mTLSRequest({ method: 'POST', path: '/api/v1/secrets/resolve', body: { name: v } });
+    const r = await mTLSRequest({
+      method: 'POST',
+      path: '/api/v1/secrets/resolve',
+      body: { name: v },
+    });
     if (r.status === 200) {
       env[v] = r.body.value;
       // Also support secret-broker.ssh.KEY style: if v is "GH_TOKEN" and there's "github.pat", use direct
@@ -238,17 +352,30 @@ async function cmdExec(args) {
 // ============================================================
 async function cmdSshExec(args) {
   // secret-broker ssh-exec --target user@host[:port] --command "cmd" [--secret <name>] [--timeout <ms>]
-  let target = null, command = null, secretName = 'ssh.connection', timeoutMs = null;
+  let target = null,
+    command = null,
+    secretName = 'ssh.connection',
+    timeoutMs = null;
   let i = 0;
   while (i < args.length) {
-    if (args[i] === '--target' && i + 1 < args.length) { target = args[++i]; i++; }
-    else if (args[i] === '--command' && i + 1 < args.length) { command = args[++i]; i++; }
-    else if (args[i] === '--secret' && i + 1 < args.length) { secretName = args[++i]; i++; }
-    else if (args[i] === '--timeout' && i + 1 < args.length) { timeoutMs = parseInt(args[++i], 10); i++; }
-    else die(`Unknown ssh-exec arg: ${args[i]}`);
+    if (args[i] === '--target' && i + 1 < args.length) {
+      target = args[++i];
+      i++;
+    } else if (args[i] === '--command' && i + 1 < args.length) {
+      command = args[++i];
+      i++;
+    } else if (args[i] === '--secret' && i + 1 < args.length) {
+      secretName = args[++i];
+      i++;
+    } else if (args[i] === '--timeout' && i + 1 < args.length) {
+      timeoutMs = parseInt(args[++i], 10);
+      i++;
+    } else die(`Unknown ssh-exec arg: ${args[i]}`);
   }
   if (!target || !command) {
-    die('Usage: secret-broker ssh-exec --target user@host[:port] --command "cmd" [--secret <name>] [--timeout <ms>]');
+    die(
+      'Usage: secret-broker ssh-exec --target user@host[:port] --command "cmd" [--secret <name>] [--timeout <ms>]',
+    );
   }
   const r = await mTLSRequest({
     method: 'POST',
@@ -263,26 +390,50 @@ async function cmdSshExec(args) {
 
 async function cmdSshTunnel(args) {
   // secret-broker ssh-tunnel --target user@host[:port] --local-port N --remote-host H --remote-port N [--secret <name>]
-  let target = null, localPort = null, remoteHost = null, remotePort = null, secretName = 'ssh.connection';
+  let target = null,
+    localPort = null,
+    remoteHost = null,
+    remotePort = null,
+    secretName = 'ssh.connection';
   let i = 0;
   while (i < args.length) {
-    if (args[i] === '--target' && i + 1 < args.length) { target = args[++i]; i++; }
-    else if (args[i] === '--local-port' && i + 1 < args.length) { localPort = parseInt(args[++i], 10); i++; }
-    else if (args[i] === '--remote-host' && i + 1 < args.length) { remoteHost = args[++i]; i++; }
-    else if (args[i] === '--remote-port' && i + 1 < args.length) { remotePort = parseInt(args[++i], 10); i++; }
-    else if (args[i] === '--secret' && i + 1 < args.length) { secretName = args[++i]; i++; }
-    else die(`Unknown ssh-tunnel arg: ${args[i]}`);
+    if (args[i] === '--target' && i + 1 < args.length) {
+      target = args[++i];
+      i++;
+    } else if (args[i] === '--local-port' && i + 1 < args.length) {
+      localPort = parseInt(args[++i], 10);
+      i++;
+    } else if (args[i] === '--remote-host' && i + 1 < args.length) {
+      remoteHost = args[++i];
+      i++;
+    } else if (args[i] === '--remote-port' && i + 1 < args.length) {
+      remotePort = parseInt(args[++i], 10);
+      i++;
+    } else if (args[i] === '--secret' && i + 1 < args.length) {
+      secretName = args[++i];
+      i++;
+    } else die(`Unknown ssh-tunnel arg: ${args[i]}`);
   }
   if (!target || !localPort || !remoteHost || !remotePort) {
-    die('Usage: secret-broker ssh-tunnel --target user@host[:port] --local-port N --remote-host H --remote-port N [--secret <name>]');
+    die(
+      'Usage: secret-broker ssh-tunnel --target user@host[:port] --local-port N --remote-host H --remote-port N [--secret <name>]',
+    );
   }
   const r = await mTLSRequest({
     method: 'POST',
     path: '/api/v1/ssh/tunnel',
-    body: { target, local_port: localPort, remote_host: remoteHost, remote_port: remotePort, secret_name: secretName },
+    body: {
+      target,
+      local_port: localPort,
+      remote_host: remoteHost,
+      remote_port: remotePort,
+      secret_name: secretName,
+    },
   });
   if (r.status !== 200) die(`ssh-tunnel failed: ${r.status} ${JSON.stringify(r.body)}`);
-  info(`Tunnel ${r.body.id} open: localhost:${r.body.localPort} -> ${r.body.remote} via ${r.body.target}`);
+  info(
+    `Tunnel ${r.body.id} open: localhost:${r.body.localPort} -> ${r.body.remote} via ${r.body.target}`,
+  );
   // 保持客户端活着直到 SIGINT
   process.on('SIGINT', async () => {
     info(`\nClosing tunnel ${r.body.id}...`);
@@ -316,8 +467,15 @@ function cmdPKI(args) {
     const ps1 = join(process.cwd(), 'scripts', 'broker', 'issue-client-cert.ps1');
     if (!existsSync(ps1)) die(`PKI script not found: ${ps1}. Run from the broker repo root.`);
     const psArgs = [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass',
-      '-File', ps1, '-CN', cn, '-Role', role,
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      ps1,
+      '-CN',
+      cn,
+      '-Role',
+      role,
     ];
     if (hasFlag('register')) psArgs.push('-RegisterToConfig');
     const r = spawnSync('powershell', psArgs, { stdio: 'inherit' });
@@ -329,7 +487,11 @@ function cmdPKI(args) {
     if (!fp) die('Usage: secret-broker pki revoke --fingerprint <sha256>');
     const ps1 = join(process.cwd(), 'scripts', 'broker', 'revoke-cert.ps1');
     if (!existsSync(ps1)) die(`PKI script not found: ${ps1}. Run from the broker repo root.`);
-    const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, '-Fingerprint', fp], { stdio: 'inherit' });
+    const r = spawnSync(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, '-Fingerprint', fp],
+      { stdio: 'inherit' },
+    );
     process.exit(r.status || 0);
   }
 
@@ -339,9 +501,13 @@ function cmdPKI(args) {
       console.log('(no clients directory)');
       return;
     }
-    for (const f of readdirSync(dir).filter(f => f.endsWith('.crt'))) {
+    for (const f of readdirSync(dir).filter((f) => f.endsWith('.crt'))) {
       const full = join(dir, f);
-      const out = spawnSync('openssl', ['x509', '-in', full, '-noout', '-subject', '-fingerprint', '-sha256', '-dates'], { encoding: 'utf8' });
+      const out = spawnSync(
+        'openssl',
+        ['x509', '-in', full, '-noout', '-subject', '-fingerprint', '-sha256', '-dates'],
+        { encoding: 'utf8' },
+      );
       console.log(`\n${f}`);
       console.log(out.stdout.trim());
     }
@@ -350,7 +516,21 @@ function cmdPKI(args) {
 
   if (sub === 'show-ca') {
     const cfg = loadConfig();
-    const out = spawnSync('openssl', ['x509', '-in', cfg.ca_cert, '-noout', '-subject', '-issuer', '-fingerprint', '-sha256', '-dates'], { encoding: 'utf8' });
+    const out = spawnSync(
+      'openssl',
+      [
+        'x509',
+        '-in',
+        cfg.ca_cert,
+        '-noout',
+        '-subject',
+        '-issuer',
+        '-fingerprint',
+        '-sha256',
+        '-dates',
+      ],
+      { encoding: 'utf8' },
+    );
     console.log(out.stdout);
     return;
   }
@@ -367,30 +547,30 @@ function main() {
   const rest = args.slice(1);
 
   const handlers = {
-    health:    cmdHealth,
-    identity:  cmdIdentity,
-    list:      cmdList,
-    ls:        cmdList,
-    get:       () => cmdGet(rest[0]),
-    proxy:     () => cmdProxy(rest),
-    exec:      () => cmdExec(rest),
-    pki:       () => cmdPKI(rest),
-    'ssh-exec':   () => cmdSshExec(rest),
+    health: cmdHealth,
+    identity: cmdIdentity,
+    list: cmdList,
+    ls: cmdList,
+    get: () => cmdGet(rest[0]),
+    proxy: () => cmdProxy(rest),
+    exec: () => cmdExec(rest),
+    pki: () => cmdPKI(rest),
+    'ssh-exec': () => cmdSshExec(rest),
     'ssh-tunnel': () => cmdSshTunnel(rest),
-    help:      () => printHelp(),
-    '--help':  () => printHelp(),
-    '-h':      () => printHelp(),
+    help: () => printHelp(),
+    '--help': () => printHelp(),
+    '-h': () => printHelp(),
   };
 
   if (!cmd || !handlers[cmd]) {
     printHelp();
     process.exit(cmd ? 1 : 0);
   }
-  Promise.resolve(handlers[cmd]()).catch(err => die(err.message || String(err)));
+  Promise.resolve(handlers[cmd]()).catch((err) => die(err.message || String(err)));
 }
 
 function printHelp() {
-  console.log(`Secret Broker CLI v2.0
+  console.log(`Secret Broker CLI v${CLI_VERSION}
 
 Usage:
   secret-broker <command> [args]
@@ -416,7 +596,7 @@ Config: ~/.broker/config.json
     "endpoint": "https://broker.example.com:8443",
     "client_cert": "C:/Users/.../client.laptop.crt",
     "client_key":  "C:/Users/.../client.laptop.key",
-    "ca_cert":     "C:/Users/.../ca.crt",
+    "ca_cert":     "C:/Users/.../ca.crt",  // optional extra private CA; system roots are always trusted
     "sni_hostname": "broker.example.com"
   }
 

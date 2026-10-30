@@ -10,7 +10,7 @@
 //   7. clearLastTests 清空内存 (下次 runAll 当首次)
 //   8. emit 'status_change' 事件 (HEALTHCHECK_BUS)
 
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, unlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -18,12 +18,20 @@ import { dirname } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(s) { console.log(`\n--- ${s} ---`); }
+function section(s) {
+  console.log(`\n--- ${s} ---`);
+}
 
 const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
 
@@ -46,11 +54,14 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
   {
     hc.clearLastChecks();
     const allOk = () => ({
-      'GH':   { type: 'github_pat',  fields: { token: 'good' } },
-      'OAI':  { type: 'openai_key',  fields: { api_key: 'sk-good' } },
-      'AWS':  { type: 'aws_access_key', fields: { access_key_id: 'AKIA-good', secret_access_key: 'sec' } },
-      'ALY':  { type: 'aliyun_ak',   fields: { access_key_id: 'LTAI-good', access_key_secret: 'sec' } },
-      'SSH':  { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 22 } },
+      GH: { type: 'github_pat', fields: { token: 'good' } },
+      OAI: { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      AWS: {
+        type: 'aws_access_key',
+        fields: { access_key_id: 'AKIA-good', secret_access_key: 'sec' },
+      },
+      ALY: { type: 'aliyun_ak', fields: { access_key_id: 'LTAI-good', access_key_secret: 'sec' } },
+      SSH: { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 22 } },
     });
     // 注: 跑真网络会失败 — 但 healthcheck 内部会 catch + 用 classifyError 分类
     // 我们要测的是"状态变化检测" — 不关心真 status, 关心 detectChanges 行为
@@ -70,14 +81,17 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
     hc.clearLastChecks();
     // mock SSH 127.0.0.1:1 → 必 ECONNREFUSED → misconfigured (稳定状态)
     const same = () => ({
-      'X': { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 1 } },
+      X: { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 1 } },
     });
     await hc.runAll(same);
     const histBefore = hc.getAlertHistory().length;
     await hc.runAll(same);
     const histAfter = hc.getAlertHistory().length;
-    ok('runAll 第二次同样 → 0 新 alert', histAfter === histBefore,
-       `before=${histBefore} after=${histAfter}`);
+    ok(
+      'runAll 第二次同样 → 0 新 alert',
+      histAfter === histBefore,
+      `before=${histBefore} after=${histAfter}`,
+    );
   }
 
   // ======== 4. runAll 第三次: 改一个 secret 的 fields, 让 healthcheck 行为变化 ========
@@ -87,11 +101,14 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
   {
     // 改 SSH secret 的 host, 让它从 unknown 变成 unreachable (127.0.0.1 不可达)
     const changedSecret = () => ({
-      'GH':   { type: 'github_pat',  fields: { token: 'good' } },
-      'OAI':  { type: 'openai_key',  fields: { api_key: 'sk-good' } },
-      'AWS':  { type: 'aws_access_key', fields: { access_key_id: 'AKIA-good', secret_access_key: 'sec' } },
-      'ALY':  { type: 'aliyun_ak',   fields: { access_key_id: 'LTAI-good', access_key_secret: 'sec' } },
-      'SSH':  { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 1 } },  // 改 port 到 1 → ECONNREFUSED → misconfigured
+      GH: { type: 'github_pat', fields: { token: 'good' } },
+      OAI: { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      AWS: {
+        type: 'aws_access_key',
+        fields: { access_key_id: 'AKIA-good', secret_access_key: 'sec' },
+      },
+      ALY: { type: 'aliyun_ak', fields: { access_key_id: 'LTAI-good', access_key_secret: 'sec' } },
+      SSH: { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 1 } }, // 改 port 到 1 → ECONNREFUSED → misconfigured
     });
     process.env.ALIYUN_HEALTHCHECK_HOST = '127.0.0.1';
     process.env.ALIYUN_HEALTHCHECK_PORT = '1';
@@ -100,11 +117,17 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
     const histAfter = hc.getAlertHistory().length;
     delete process.env.ALIYUN_HEALTHCHECK_HOST;
     delete process.env.ALIYUN_HEALTHCHECK_PORT;
-    ok('改 1 个 secret → 至少 1 新 alert', histAfter > histBefore,
-       `before=${histBefore} after=${histAfter}`);
+    ok(
+      '改 1 个 secret → 至少 1 新 alert',
+      histAfter > histBefore,
+      `before=${histBefore} after=${histAfter}`,
+    );
     if (histAfter > 0) {
       const last = hc.getAlertHistory().slice(-1)[0];
-      ok('alert entry 包含 changes 字段', typeof last.changes === 'object' && Object.keys(last.changes).length > 0);
+      ok(
+        'alert entry 包含 changes 字段',
+        typeof last.changes === 'object' && Object.keys(last.changes).length > 0,
+      );
       ok('alert entry 包含 summary 字段', typeof last.summary === 'object');
       ok('alert entry 包含 ts 字段', typeof last.ts === 'string');
     }
@@ -121,7 +144,11 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
       // 验证每行是合法 JSON
       let allJson = true;
       for (const l of lines) {
-        try { JSON.parse(l); } catch { allJson = false; }
+        try {
+          JSON.parse(l);
+        } catch {
+          allJson = false;
+        }
       }
       ok('每行是合法 JSON', allJson);
       // 验证字段
@@ -146,11 +173,13 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
   section('HEALTHCHECK_BUS emit status_change');
   {
     let received = null;
-    const onChange = (entry) => { received = entry; };
+    const onChange = (entry) => {
+      received = entry;
+    };
     hc.HEALTHCHECK_BUS.on('status_change', onChange);
     hc.clearLastChecks();
     // 跑 runAll 触发变化
-    const dummy = () => ({ 'X': { type: 'github_pat', fields: { token: 'good' } } });
+    const dummy = () => ({ X: { type: 'github_pat', fields: { token: 'good' } } });
     await hc.runAll(dummy);
     hc.HEALTHCHECK_BUS.off('status_change', onChange);
     // 第一次跑: from=unknown to=<real status>, 应该 emit
@@ -166,16 +195,22 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
     hc.clearLastChecks();
     // mock SSH 127.0.0.1:1 → 必 ECONNREFUSED → misconfigured
     let count = 0;
-    const onChange = () => { count++; };
+    const onChange = () => {
+      count++;
+    };
     hc.HEALTHCHECK_BUS.on('status_change', onChange);
-    const same = () => ({ 'X': { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 1 } } });
+    const same = () => ({ X: { type: 'ssh_connection', fields: { host: '127.0.0.1', port: 1 } } });
     // 第一次 (from unknown)
     await hc.runAll(same);
     const countAfterFirst = count;
     // 第二次 (from misconfigured 同样, 应该不 emit)
     await hc.runAll(same);
     hc.HEALTHCHECK_BUS.off('status_change', onChange);
-    ok('第一次 runAll 触发 1 次 status_change (unknown → misconfigured)', countAfterFirst === 1, `count=${countAfterFirst}`);
+    ok(
+      '第一次 runAll 触发 1 次 status_change (unknown → misconfigured)',
+      countAfterFirst === 1,
+      `count=${countAfterFirst}`,
+    );
     ok('第二次 runAll 同样状态 → 不 emit', count === countAfterFirst, `count=${count}`);
   }
 
@@ -186,14 +221,16 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
   {
     hc.clearLastChecks();
     let received = null;
-    const onChange = (e) => { received = e; };
+    const onChange = (e) => {
+      received = e;
+    };
     hc.HEALTHCHECK_BUS.on('status_change', onChange);
     // 跑 1 个 secret
-    await hc.runAll(() => ({ 'A': { type: 'github_pat', fields: { token: 'good' } } }));
+    await hc.runAll(() => ({ A: { type: 'github_pat', fields: { token: 'good' } } }));
     // 跑 2 个 secret (新增 B)
     await hc.runAll(() => ({
-      'A': { type: 'github_pat', fields: { token: 'good' } },
-      'B': { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      A: { type: 'github_pat', fields: { token: 'good' } },
+      B: { type: 'openai_key', fields: { api_key: 'sk-good' } },
     }));
     hc.HEALTHCHECK_BUS.off('status_change', onChange);
     // 第二次 emit 应该有 B 的变化 (从 unknown 到新 status)
@@ -208,15 +245,17 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
   {
     hc.clearLastChecks();
     let received = null;
-    const onChange = (e) => { received = e; };
+    const onChange = (e) => {
+      received = e;
+    };
     hc.HEALTHCHECK_BUS.on('status_change', onChange);
     // 跑 2 个 secret
     await hc.runAll(() => ({
-      'A': { type: 'github_pat', fields: { token: 'good' } },
-      'B': { type: 'openai_key', fields: { api_key: 'sk-good' } },
+      A: { type: 'github_pat', fields: { token: 'good' } },
+      B: { type: 'openai_key', fields: { api_key: 'sk-good' } },
     }));
     // 跑 1 个 (B 消失)
-    await hc.runAll(() => ({ 'A': { type: 'github_pat', fields: { token: 'good' } } }));
+    await hc.runAll(() => ({ A: { type: 'github_pat', fields: { token: 'good' } } }));
     hc.HEALTHCHECK_BUS.off('status_change', onChange);
     if (received && received.changes) {
       const bChange = received.changes.B;
@@ -236,7 +275,7 @@ const hc = await import('file:///C:/home/my-first-app/broker/healthcheck.js');
   console.log(`  test-alert-history: PASS=${pass} FAIL=${fail}`);
   console.log('========================================');
   process.exit(fail === 0 ? 0 : 1);
-})().catch(e => {
+})().catch((e) => {
   console.error('FATAL:', e);
   process.exit(1);
 });

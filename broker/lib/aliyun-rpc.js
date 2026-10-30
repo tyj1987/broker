@@ -16,7 +16,11 @@ export const ALIYUN_RPC_VERSION_BY_HOST = {
 };
 
 export function hostnameOf(upstream) {
-  try { return new URL(upstream).hostname.toLowerCase(); } catch { return ''; }
+  try {
+    return new URL(upstream).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -29,7 +33,9 @@ export function aliyunRpcVersion({ serviceCfg = {}, upstream, path, query } = {}
     const u = new URL(path || '/', 'http://x/');
     const v = u.searchParams.get('Version');
     if (v) return v;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   if (serviceCfg.api_version) return String(serviceCfg.api_version);
   if (serviceCfg.version && /^\d{4}-\d{2}-\d{2}$/.test(String(serviceCfg.version))) {
     return String(serviceCfg.version);
@@ -45,6 +51,8 @@ export function mergeAliyunQuery(path, query) {
   try {
     const u = new URL(path || '/', 'http://x/');
     for (const [k, v] of u.searchParams.entries()) fromPath[k] = v;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return { ...fromPath, ...(query || {}) };
 }

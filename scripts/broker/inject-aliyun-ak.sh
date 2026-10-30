@@ -1,56 +1,130 @@
-#!/bin/bash
-# scripts/broker/inject-aliyun-ak.sh
-# 在 ECS 上跑 — 把新的 aliyun 子用户 AK 注入到 broker（不经过任何 AI 工具对话）
+#!/usr/bin/env bash
+# Securely rotate the Aliyun RAM AccessKey used by the broker on ECS.
 #
-# 用法：
-#   1. 用户在阿里云 RAM 控制台创建/rotate 新的 ecsread 子用户 AK
-#   2. SSH 到 ECS
-#   3. 编辑此脚本的 AK 值（不粘贴到任何 AI 工具）
-#   4. 跑:  bash inject-aliyun-ak.sh
+# Preferred interactive usage:
+#   sudo bash scripts/broker/inject-aliyun-ak.sh
 #
-# 脚本做的事：
-#   1. 用 age 密钥 + sops 加密新的 common.env（替换占位）
-#   2. 重启 broker
+# Non-interactive automation may provide ALIYUN_ACCESS_KEY and
+# ALIYUN_ACCESS_SECRET as environment variables. Never edit this tracked file
+# to insert real credentials, pass the secret as a command-line argument, or
+# paste it into an AI/chat session.
 
-set -e
-cd /opt/secret-broker
+set -euo pipefail
+set +x
+umask 077
 
-# ===== 在这里填新 AK（直接编辑本文件）=====
-ALIYUN_ACCESS_KEY="LTAI5tXXXXXXXXXXXXXX"
-ALIYUN_ACCESS_SECRET="your_new_secret_here_XXXXX"
-# =========================================
+BROKER_ROOT="${BROKER_ROOT:-/opt/secret-broker}"
+cd "$BROKER_ROOT"
 
-# 1. 读现有 common.env，替换两个 aliyun 行
-export SOPS_AGE_KEY_FILE="/opt/secret-broker/age/key.txt"
-sops --decrypt secrets/common.env > /tmp/common.env.plain || {
-  echo "ERR: failed to decrypt existing common.env" >&2; exit 1;
+if [[ -z "${ALIYUN_ACCESS_KEY:-}" || -z "${ALIYUN_ACCESS_SECRET:-}" ]]; then
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: non-interactive use requires ALIYUN_ACCESS_KEY and ALIYUN_ACCESS_SECRET" >&2
+    exit 2
+  fi
+  if [[ -z "${ALIYUN_ACCESS_KEY:-}" ]]; then
+    read -r -p "Aliyun AccessKey ID: " ALIYUN_ACCESS_KEY
+  fi
+  if [[ -z "${ALIYUN_ACCESS_SECRET:-}" ]]; then
+    read -r -s -p "Aliyun AccessKey Secret: " ALIYUN_ACCESS_SECRET
+    printf '\n'
+  fi
+fi
+
+if [[ ! "$ALIYUN_ACCESS_KEY" =~ ^LTAI[A-Za-z0-9]{12,}$ ]]; then
+  echo "ERROR: ALIYUN_ACCESS_KEY does not match the expected LTAI format" >&2
+  exit 2
+fi
+if (( ${#ALIYUN_ACCESS_SECRET} < 16 )); then
+  echo "ERROR: ALIYUN_ACCESS_SECRET is unexpectedly short" >&2
+  exit 2
+fi
+
+export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$BROKER_ROOT/age/key.txt}"
+[[ -r "$SOPS_AGE_KEY_FILE" ]] || {
+  echo "ERROR: SOPS age key is not readable: $SOPS_AGE_KEY_FILE" >&2
+  exit 1
+}
+[[ -f secrets/common.env ]] || {
+  echo "ERROR: encrypted secrets/common.env does not exist" >&2
+  exit 1
 }
 
-# 2. 替换 ALIYUN_* 行（保留其他行如 GITHUB_PAT）
-awk -v ak="$ALIYUN_ACCESS_KEY" -v sk="$ALIYUN_ACCESS_SECRET" '
-  /^ALIYUN_ACCESS_KEY=/  { print "ALIYUN_ACCESS_KEY=" ak; next }
-  /^ALIYUN_ACCESS_SECRET=/ { print "ALIYUN_ACCESS_SECRET=" sk; next }
+TMP_DIR=$(mktemp -d "secrets/.inject-aliyun.XXXXXX")
+chmod 700 "$TMP_DIR"
+AK_FILE="$TMP_DIR/access-key-id"
+SECRET_FILE="$TMP_DIR/access-key-secret"
+PLAIN_FILE="$TMP_DIR/common.plain.env"
+NEW_FILE="$TMP_DIR/common.env"
+NEXT_FILE="secrets/.common.env.next.$$"
+
+secure_remove() {
+  local target
+  for target in "$AK_FILE" "$SECRET_FILE" "$PLAIN_FILE" "$NEW_FILE" "$NEXT_FILE"; do
+    [[ -e "$target" ]] || continue
+    if command -v shred >/dev/null 2>&1; then
+      shred -u -- "$target" 2>/dev/null || rm -f -- "$target"
+    else
+      rm -f -- "$target"
+    fi
+  done
+  rmdir "$TMP_DIR" 2>/dev/null || true
+  unset ALIYUN_ACCESS_SECRET ALIYUN_ACCESS_KEY
+}
+trap secure_remove EXIT HUP INT TERM
+
+printf '%s\n' "$ALIYUN_ACCESS_KEY" > "$AK_FILE"
+printf '%s\n' "$ALIYUN_ACCESS_SECRET" > "$SECRET_FILE"
+chmod 600 "$AK_FILE" "$SECRET_FILE"
+
+sops --decrypt secrets/common.env > "$PLAIN_FILE"
+chmod 600 "$PLAIN_FILE"
+
+# Read credential values from protected files rather than argv, then replace or
+# append the two fields while preserving all unrelated entries.
+awk -v ak_file="$AK_FILE" -v secret_file="$SECRET_FILE" '
+  BEGIN {
+    if ((getline ak < ak_file) <= 0) exit 20
+    close(ak_file)
+    if ((getline sk < secret_file) <= 0) exit 21
+    close(secret_file)
+    seen_ak = 0
+    seen_sk = 0
+  }
+  /^ALIYUN_ACCESS_KEY=/ {
+    print "ALIYUN_ACCESS_KEY=" ak
+    seen_ak = 1
+    next
+  }
+  /^ALIYUN_ACCESS_SECRET=/ {
+    print "ALIYUN_ACCESS_SECRET=" sk
+    seen_sk = 1
+    next
+  }
   { print }
-' /tmp/common.env.plain > /tmp/common.env.new
+  END {
+    if (!seen_ak) print "ALIYUN_ACCESS_KEY=" ak
+    if (!seen_sk) print "ALIYUN_ACCESS_SECRET=" sk
+  }
+' "$PLAIN_FILE" > "$NEW_FILE"
+chmod 600 "$NEW_FILE"
 
-# 3. 严格权限（避免 plain 在磁盘上保留太久）
-chmod 600 /tmp/common.env.new /tmp/common.env.plain
-shred -u /tmp/common.env.plain 2>/dev/null || mv /tmp/common.env.plain /tmp/common.env.plain.removed
+# Encrypt before moving into place. The final rename occurs inside secrets/ so
+# readers never observe a partially written credential file.
+sops --encrypt --in-place "$NEW_FILE"
+install -m 600 "$NEW_FILE" "$NEXT_FILE"
+mv -f -- "$NEXT_FILE" secrets/common.env
 
-# 4. SOPS 加密新文件
-sops --encrypt --in-place /tmp/common.env.new
-mv /tmp/common.env.new secrets/common.env
-chmod 600 secrets/common.env
-
-# 5. 重启 broker
 systemctl restart secret-broker
-sleep 2
-systemctl status secret-broker --no-pager | head -5
+systemctl is-active --quiet secret-broker
 
-echo
-echo "=== verify ==="
-sops --decrypt secrets/common.env | grep -E "ALIYUN"
-echo
-echo "=== test aliyun_v2 proxy (from your laptop, via SSH tunnel) ==="
-echo "  BROKER_CONFIG=~/.broker/config.json \\"
-echo "    node cli/secret-broker.js proxy aliyun_ecs GET /?Action=DescribeRegions"
+# Verify only field presence; never print decrypted values.
+if sops --decrypt secrets/common.env | awk -F= '
+  /^ALIYUN_ACCESS_KEY=.+/ { have_ak = 1 }
+  /^ALIYUN_ACCESS_SECRET=.+/ { have_secret = 1 }
+  END { exit !(have_ak && have_secret) }
+'; then
+  echo "Aliyun credentials rotated; encrypted fields are present and secret-broker is active."
+else
+  echo "ERROR: post-rotation verification failed" >&2
+  exit 1
+fi

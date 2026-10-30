@@ -29,16 +29,22 @@ export function signWechatPayV3(args) {
   const ts = args.timestamp || Math.floor(Date.now() / 1000);
   const nonce = args.nonce_str || randomBytes(16).toString('hex');
   const body = args.body || '';
-  const msg = buildMessage({ method: args.method.toUpperCase(), path: args.path, body, timestamp: ts, nonce_str: nonce });
+  const msg = buildMessage({
+    method: args.method.toUpperCase(),
+    path: args.path,
+    body,
+    timestamp: ts,
+    nonce_str: nonce,
+  });
 
   const signer = createSign('RSA-SHA256');
   signer.update(msg, 'utf8');
   const signature = signer.sign(args.secret.private_key, 'base64');
 
   return {
-    'Authorization': `WECHATPAY2-SHA256-RSA2048 mchid="${args.secret.mch_id}",nonce_str="${nonce}",timestamp="${ts}",serial_no="${args.secret.cert_serial}",signature="${signature}"`,
+    Authorization: `WECHATPAY2-SHA256-RSA2048 mchid="${args.secret.mch_id}",nonce_str="${nonce}",timestamp="${ts}",serial_no="${args.secret.cert_serial}",signature="${signature}"`,
     'Content-Type': 'application/json',
-    'Accept': 'application/json',
+    Accept: 'application/json',
     'User-Agent': 'secret-broker/4.0',
   };
 }

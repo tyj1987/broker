@@ -1,115 +1,91 @@
-// broker/lib/audit-hash-chain.js — V4.1.1 tamper-evident audit log.
-//
-// Each audit event includes `prev_hash` (the hash of the previous event)
-// and `hash` (SHA-256 of this event). The chain is verifiable by walking
-// from the most recent event back to genesis; any modification to a past
-// event invalidates all subsequent hashes.
-//
-// Format:
-//   {
-//     ...eventFields,
-//     prev_hash: "abc...",  // hex SHA-256 of previous event's canonical JSON (or '0'*64 for genesis)
-//     hash:      "def...",  // hex SHA-256 of canonical JSON of this event WITHOUT hash field
-//   }
-//
-// Verification walks backward: for each event e[i], check that e[i].hash ==
-// sha256(canonicalize({...e[i], hash: undefined})). Also check that
-// e[i].prev_hash == e[i-1].hash.
-
+// Hash-chain primitives. Hash exactly the JSON value written to disk (including
+// JSON's treatment of undefined, Dates and array holes), not an in-memory object.
+// A local hash chain is NOT a signature: independently retain checkpoints to
+// detect an attacker who can replace both the journal and its local checkpoint.
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
 
-const GENESIS_HASH = '0'.repeat(64);
-export { GENESIS_HASH };
+export const GENESIS_HASH = '0'.repeat(64);
+export const HASH_RE = /^[a-f0-9]{64}$/;
 
-function canonicalize(obj) {
-  // Stable JSON: sorted keys, no whitespace.
-  if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
-  if (Array.isArray(obj)) return '[' + obj.map(canonicalize).join(',') + ']';
-  const keys = Object.keys(obj).sort();
-  return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalize(obj[k])).join(',') + '}';
+function canonicalize(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(canonicalize).join(',') + ']';
+  return (
+    '{' +
+    Object.keys(value)
+      .sort()
+      .map((key) => JSON.stringify(key) + ':' + canonicalize(value[key]))
+      .join(',') +
+    '}'
+  );
+}
+
+export function jsonValue(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 export function computeHash(eventWithoutHash) {
-  return createHash('sha256').update(canonicalize(eventWithoutHash)).digest('hex');
+  return createHash('sha256')
+    .update(canonicalize(jsonValue(eventWithoutHash)))
+    .digest('hex');
 }
 
-/**
- * Wrap a base audit event with prev_hash + hash fields.
- * @param {object} event
- * @param {string} prevHash  - previous event's hash (or GENESIS)
- * @returns {object} event with { prev_hash, hash }
- */
-export function sealEvent(event, prevHash) {
-  const withPrev = { ...event, prev_hash: prevHash || GENESIS_HASH };
-  // hash is computed over the event WITHOUT the hash field
-  const hash = computeHash(withPrev);
-  return { ...withPrev, hash };
+export function sealEvent(event, prevHash = GENESIS_HASH) {
+  if (!event || typeof event !== 'object' || Array.isArray(event))
+    throw new TypeError('Audit event must be an object');
+  const previous = prevHash || GENESIS_HASH;
+  if (!HASH_RE.test(previous)) throw new TypeError('Invalid previous audit hash');
+  const clean = jsonValue(event);
+  delete clean.hash;
+  const withPrev = { ...clean, prev_hash: previous };
+  return { ...withPrev, hash: computeHash(withPrev) };
 }
 
-/**
- * Verify the chain integrity of an array of events.
- * Returns { ok: boolean, broken_at?: number, reason?: string }.
- * Events should be in chronological order (oldest first).
- */
-export function verifyChain(events) {
-  let prevHash = GENESIS_HASH;
+export function verifyChain(events, { initialHash = GENESIS_HASH } = {}) {
+  if (!Array.isArray(events) || !HASH_RE.test(initialHash))
+    return { ok: false, reason: 'Invalid chain input' };
+  let prevHash = initialHash;
   for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    if (e.prev_hash !== prevHash) {
-      return { ok: false, broken_at: i, reason: `prev_hash mismatch at index ${i}: expected ${prevHash.slice(0, 12)}, got ${e.prev_hash?.slice(0, 12)}` };
-    }
-    // Recompute hash from event WITHOUT hash field
-    const { hash: stored, ...rest } = e;
-    const computed = computeHash(rest);
-    if (computed !== stored) {
-      return { ok: false, broken_at: i, reason: `hash mismatch at index ${i}: expected ${computed.slice(0, 12)}, got ${stored?.slice(0, 12)}` };
-    }
+    const event = events[i];
+    if (!event || typeof event !== 'object' || Array.isArray(event))
+      return { ok: false, broken_at: i, reason: 'Invalid event object' };
+    if (event.prev_hash !== prevHash)
+      return { ok: false, broken_at: i, reason: `prev_hash mismatch at index ${i}` };
+    const { hash: stored, ...rest } = event;
+    if (typeof stored !== 'string' || !HASH_RE.test(stored) || computeHash(rest) !== stored)
+      return { ok: false, broken_at: i, reason: `hash mismatch at index ${i}` };
     prevHash = stored;
   }
-  return { ok: true, count: events.length };
+  return { ok: true, count: events.length, last_hash: prevHash };
 }
 
-/**
- * Read all audit files in a directory and verify the chain.
- * @param {string} auditDir
- * @returns {Promise<{ ok: boolean, count: number, broken_at?: number, reason?: string, files: number }>}
- */
-export async function verifyAuditDir(auditDir) {
-  const files = readdirSync(auditDir)
-    .filter(f => f.startsWith('audit-') && f.endsWith('.jsonl'))
-    .sort(); // oldest first
-  const all = [];
-  for (const f of files) {
-    const content = await readFile(join(auditDir, f), 'utf8');
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      try { all.push(JSON.parse(line)); } catch { continue; }
-    }
-  }
-  const result = verifyChain(all);
-  return { ...result, files: files.length };
+// Lazy import avoids a static dependency cycle with the durable ledger writer.
+export async function verifyAuditDir(auditDir, options = {}) {
+  const { verifyAuditDirectory } = await import('./audit-ledger.js');
+  return verifyAuditDirectory(auditDir, options);
 }
 
-/**
- * Build a chainable audit writer that holds the prev_hash in memory.
- * Returns a function `write(event)` that seals and emits.
- */
+// For in-memory/unit-test consumers. The production writer is createAuditLedger.
 export function createChainWriter(opts = {}) {
   const onEvent = opts.onEvent || (() => {});
-  let prevHash = GENESIS_HASH;
+  let prevHash = opts.initialHash || GENESIS_HASH;
   let count = 0;
   return {
     write(event) {
       const sealed = sealEvent(event, prevHash);
-      prevHash = sealed.hash;
+      const nextHash = sealed.hash;
+      const result = onEvent(sealed);
+      if (result && typeof result.then === 'function')
+        throw new TypeError('Chain writer requires a synchronous sink');
+      prevHash = nextHash;
       count++;
-      onEvent(sealed);
       return sealed;
     },
-    get prevHash() { return prevHash; },
-    get count() { return count; },
+    get prevHash() {
+      return prevHash;
+    },
+    get count() {
+      return count;
+    },
   };
 }

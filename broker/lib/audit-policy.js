@@ -3,6 +3,7 @@
 
 import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { LEDGER_STATE, pruneAuditLedger } from './audit-ledger.js';
 
 /**
  * Should this event be written?
@@ -15,10 +16,18 @@ export function shouldSampleAudit(event, policy = {}) {
   const drop = (policy.dropActions || []).map((a) => a.toLowerCase());
   if (drop.includes(action)) return false;
 
-  const always = (policy.alwaysActions || [
-    'login', 'login_mfa', 'logout', 'secret_get', 'secret_put', 'secret_delete',
-    'proxy', 'connect',
-  ]).map((a) => a.toLowerCase());
+  const always = (
+    policy.alwaysActions || [
+      'login',
+      'login_mfa',
+      'logout',
+      'secret_get',
+      'secret_put',
+      'secret_delete',
+      'proxy',
+      'connect',
+    ]
+  ).map((a) => a.toLowerCase());
   if (always.includes(action)) return true;
   if (event?.status === 'denied' || event?.status === 'error') return true;
 
@@ -49,9 +58,15 @@ export function withAuditSampling(auditFn, policy = {}) {
  * @returns {{ deleted: string[], kept: string[] }}
  */
 export function pruneAuditFiles(auditDir, retainDays = 30) {
+  if (!Number.isFinite(retainDays) || retainDays <= 0)
+    throw new TypeError('retainDays must be positive');
+  if (existsSync(join(auditDir, LEDGER_STATE))) return pruneAuditLedger(auditDir, retainDays);
   const deleted = [];
   const kept = [];
   if (!existsSync(auditDir)) return { deleted, kept };
+  if (readdirSync(auditDir).some((name) => /^audit-chain-\d{12}\.jsonl$/.test(name))) {
+    throw new Error('Managed audit checkpoint is missing; refusing legacy pruning');
+  }
   const cutoff = Date.now() - retainDays * 24 * 60 * 60 * 1000;
   const files = readdirSync(auditDir).filter(
     (f) => f.startsWith('audit-') && (f.endsWith('.jsonl') || f.endsWith('.jsonl.1')),
@@ -97,12 +112,8 @@ export function pruneAuditFiles(auditDir, retainDays = 30) {
  *   AUDIT_RETAIN_DAYS=30
  */
 export function auditPolicyFromEnv(env = process.env) {
-  const sampleRate = env.AUDIT_SAMPLE_RATE != null
-    ? Number(env.AUDIT_SAMPLE_RATE)
-    : 1;
-  const retainDays = env.AUDIT_RETAIN_DAYS != null
-    ? Number(env.AUDIT_RETAIN_DAYS)
-    : 30;
+  const sampleRate = env.AUDIT_SAMPLE_RATE != null ? Number(env.AUDIT_SAMPLE_RATE) : 1;
+  const retainDays = env.AUDIT_RETAIN_DAYS != null ? Number(env.AUDIT_RETAIN_DAYS) : 30;
   return {
     sampleRate: Number.isFinite(sampleRate) ? sampleRate : 1,
     retainDays: Number.isFinite(retainDays) ? retainDays : 30,

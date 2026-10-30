@@ -14,6 +14,7 @@
 //   - verify 容忍 ±1 个 30s 窗口 (RFC 6238 推荐)
 
 import crypto from 'node:crypto';
+import { randomString } from './lib/random.js';
 
 // ============================================================
 // Base32 编解码 (RFC 4648)
@@ -22,7 +23,9 @@ import crypto from 'node:crypto';
 const B32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 function base32Encode(buf) {
-  let bits = 0, value = 0, output = '';
+  let bits = 0,
+    value = 0,
+    output = '';
   for (let i = 0; i < buf.length; i++) {
     value = (value << 8) | buf[i];
     bits += 8;
@@ -39,7 +42,9 @@ function base32Encode(buf) {
 
 function base32Decode(str) {
   const s = str.toUpperCase().replace(/=+$/, '').replace(/\s+/g, '');
-  let bits = 0, value = 0, output = [];
+  let bits = 0,
+    value = 0;
+  const output = [];
   for (let i = 0; i < s.length; i++) {
     const idx = B32_ALPHABET.indexOf(s[i]);
     if (idx === -1) throw new Error('Invalid base32 char: ' + s[i]);
@@ -83,11 +88,12 @@ function computeCode(secret, timestamp = Date.now() / 1000, period = 30, digits 
   const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
   // 动态截断 (RFC 4226 §5.3)
   const offset = hmac[hmac.length - 1] & 0x0f;
-  const binary = ((hmac[offset] & 0x7f) << 24)
-               | ((hmac[offset + 1] & 0xff) << 16)
-               | ((hmac[offset + 2] & 0xff) << 8)
-               | (hmac[offset + 3] & 0xff);
-  const otp = (binary % (10 ** digits)).toString().padStart(digits, '0');
+  const binary =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  const otp = (binary % 10 ** digits).toString().padStart(digits, '0');
   return otp;
 }
 
@@ -145,11 +151,7 @@ const RECOVERY_CODE_COUNT = 10;
 function generateRecoveryCodes() {
   const codes = [];
   for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
-    let s = '';
-    const buf = crypto.randomBytes(RECOVERY_CODE_LEN);
-    for (let j = 0; j < RECOVERY_CODE_LEN; j++) {
-      s += RECOVERY_CODE_ALPHABET[buf[j] % RECOVERY_CODE_ALPHABET.length];
-    }
+    const s = randomString(RECOVERY_CODE_ALPHABET, RECOVERY_CODE_LEN);
     // 格式化成 "XXXX-XXXX" 易读
     codes.push(`${s.slice(0, 4)}-${s.slice(4)}`);
   }
@@ -190,7 +192,10 @@ function findRecoveryCode(code, hashList) {
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
   // N=16384, r=8, p=1 (与 OpenSSL 默认一致，约 100ms)
-  const N = 16384, r = 8, p = 1, keylen = 64;
+  const N = 16384,
+    r = 8,
+    p = 1,
+    keylen = 64;
   const hash = crypto.scryptSync(password, salt, keylen, { N, r, p });
   return `scrypt$${N}$${r}$${p}$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
@@ -213,9 +218,26 @@ function verifyPassword(password, stored) {
   try {
     const actual = crypto.scryptSync(password, salt, expected.length, { N, r, p });
     return crypto.timingSafeEqual(actual, expected);
-  } catch (e) {
+  } catch {
     return false;
   }
+}
+
+/**
+ * Verify either the current scrypt format or the legacy plaintext format.
+ *
+ * Legacy plaintext support is intentionally kept only for migration/backward
+ * compatibility. Compare SHA-256 digests with crypto.timingSafeEqual so every
+ * call returns a synchronous boolean and sensitive callers cannot accidentally
+ * treat a Promise as successful authentication.
+ */
+function verifyPasswordCompat(password, stored) {
+  if (typeof password !== 'string' || typeof stored !== 'string' || !stored) return false;
+  if (stored.startsWith('scrypt$')) return verifyPassword(password, stored);
+
+  const actual = crypto.createHash('sha256').update(password, 'utf8').digest();
+  const expected = crypto.createHash('sha256').update(stored, 'utf8').digest();
+  return crypto.timingSafeEqual(actual, expected);
 }
 
 // ============================================================
@@ -235,6 +257,7 @@ export {
   // Password hashing
   hashPassword,
   verifyPassword,
+  verifyPasswordCompat,
   // Base32 (导出供测试用)
   base32Encode,
   base32Decode,

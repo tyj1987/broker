@@ -1,6 +1,6 @@
 {
   "name": "secret-broker-cli",
-  "version": "2.0.0",
+  "version": "4.9.0",
   "type": "module",
   "description": "Client CLI for Secret Broker (proxy/exec/get/pki)",
   "bin": {

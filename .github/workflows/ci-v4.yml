@@ -1,5 +1,5 @@
 # .github/workflows/ci-v4.yml
-# V4 跨平台 CI: Windows / Linux / macOS, Node 20.x
+# V4 跨平台 CI: Windows / Linux / macOS, Node 24.x LTS
 # Includes V4 test suite (redact / mfa-policy / sms-provider / api-keys / signing)
 
 name: CI-V4
@@ -23,10 +23,10 @@ jobs:
     name: gitleaks scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -41,45 +41,42 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [20.x]
+        node: [24.x]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: 'npm'
-          cache-dependency-path: broker/package.json
+          cache-dependency-path: broker/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sdk/python/requirements-dev.txt
 
       - name: Install broker deps
         working-directory: broker
         run: npm ci
 
-      - name: Run V4 unit tests
+      - name: Run cross-platform quality gate
         working-directory: broker
-        run: npm run test:v4 2>&1 | tee test-v4-output.log
-        continue-on-error: false
-
-      - name: Upload V4 test log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-v4-log-${{ matrix.os }}
-          path: broker/test-v4-output.log
-          retention-days: 7
-
-      - name: Run V3 backward-compat tests
-        working-directory: broker
+        shell: bash
         run: |
-          npm run test:lib
-          npm run test:ip
-          npm run test:routes
-          npm run test:obs
-          npm run test:trace
-          npm run test:ops
-          npm run test:backup
-          npm run test:ssh
+          set -o pipefail
+          npm run quality:gate 2>&1 | tee quality-gate-output.log
+
+      - name: Upload quality-gate log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-gate-log-${{ matrix.os }}
+          path: broker/quality-gate-output.log
+          retention-days: 7
 
   # ============================================================
   # 3. NPM 依赖审计
@@ -88,9 +85,9 @@ jobs:
     name: npm audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20.x }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.x }
       - working-directory: broker
         # Retry 3x with 30s backoff + reset lockfile between attempts.
         # npm audit can mutate package-lock.json on failure; subsequent runs
@@ -117,9 +114,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20.x, cache: 'npm', cache-dependency-path: broker/package.json }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.x, cache: 'npm', cache-dependency-path: broker/package-lock.json }
       - working-directory: broker
         run: npm ci
       - working-directory: broker
@@ -132,9 +129,9 @@ jobs:
     name: OpenAPI lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20.x, cache: 'npm', cache-dependency-path: broker/package.json }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.x, cache: 'npm', cache-dependency-path: broker/package-lock.json }
       - working-directory: broker
         run: npm ci
       - name: Generate openapi.yaml

@@ -6,7 +6,7 @@
 // counts reset to zero, which is acceptable since the cap protects against
 // a single client opening many simultaneous connections during one session.
 
-const SSE_ADMIN_CONN_COUNT = new Map();  // adminKey → count
+const SSE_ADMIN_CONN_COUNT = new Map(); // adminKey → count
 const SSE_MAX_CONCURRENT_PER_ADMIN = 3;
 
 /**

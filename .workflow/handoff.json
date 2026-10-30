@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "project_id": "broker",
+  "checkout_role": "repo",
+  "authoritative": false,
+  "updated_at": "2026-09-23T02:26:21.994954+00:00",
+  "task": "project-control-governance-20260923",
+  "base_head": "cee3e4cbea87b6011d61d618309528bdd96bbd33",
+  "base_branch": "codex/security-audit-hardening",
+  "protocol": "E:/Workspaces/PROJECT-CONTROL-PROTOCOL.md",
+  "technical_evidence_entrypoints": [],
+  "remote_task_refs": [],
+  "completed_local": [
+    "只读核对工作区与远端绑定",
+    "合并治理配置并通过 JSON/跨文件一致性和原内容保留检查"
+  ],
+  "next_actions": [
+    {
+      "code": "gitlab_api_binding_unverified",
+      "action": "经 Broker 确认数字 project ID、只读 API 权限与工程对象引用。"
+    },
+    {
+      "code": "mirror_automation_unverified",
+      "action": "已指定 GitHub 镜像职责；尚未配置或核验自动镜像任务。"
+    },
+    {
+      "code": "gitlab_ci_config_absent",
+      "action": "未发现根 .gitlab-ci.yml；远端 CI 设置未读取，不推断没有 CI。"
+    },
+    {
+      "code": "engineering_objects_not_read",
+      "action": "本轮没有读取 Issue/Milestone/MR/Release/Deployment，缓存不含这些状态。"
+    }
+  ],
+  "constraints": [
+    "保留既有 WIP/index/历史",
+    "GitLab 工程事实源；本地文件仅证据缓存",
+    "本次不做远端写入、CI 触发、部署、提交或推送"
+  ],
+  "verification_evidence": "E:/Workspaces/_control/project-control-v1/validation.json",
+  "latest_broker_selfcheck_observation": {
+    "task": "broker-gitlab-selfcheck-20260925",
+    "observed_at": "2026-09-24T21:09:04.908358+00:00",
+    "authoritative": false,
+    "scope": "live_metadata_and_local_candidate",
+    "runtime_version": "4.2.0",
+    "backend_revision_verified": false,
+    "gitlab_project_id": 4,
+    "gitlab_project_api_verified": true,
+    "audit_chain_verified": {
+      "ok": true,
+      "count": 4880,
+      "files": 15
+    },
+    "remote_refs_equal": false,
+    "branch_and_tag_differences": [
+      {
+        "ref": "refs/heads/agent/release-mainline-r5-20260923",
+        "gitlab": "af7c0dafbee9c8a8ac34ed0bb13858a5a9a5fc80",
+        "github": "dabd90f7a29855ffb6736dc87abc2b170370eb8a"
+      },
+      {
+        "ref": "refs/tags/release-2026.09.23-af7c0da",
+        "gitlab": "04114a85a994c1eb3d5c60a9023016f786ce8d40",
+        "github": null
+      },
+      {
+        "ref": "refs/tags/release-2026.09.23-af7c0da^{}",
+        "gitlab": "af7c0dafbee9c8a8ac34ed0bb13858a5a9a5fc80",
+        "github": null
+      }
+    ],
+    "candidate": {
+      "recorded_at": "2026-09-24T21:09:04.838002+00:00",
+      "branch": "fix/gitlab-healthcheck-20260925",
+      "commit": "8751ee8a4434e51e5809e6e2b8f09c3514cf7877",
+      "base_commit": "af7c0dafbee9c8a8ac34ed0bb13858a5a9a5fc80",
+      "worktree": "E:\\Workspaces\\_worktrees\\broker-healthcheck-20260925",
+      "files_in_commit": 15,
+      "application_deployed": false,
+      "pushed": false,
+      "local_runtime": "Node v24.18.0",
+      "required_runtime": ">=24.20.0 <25",
+      "commands": [
+        {
+          "command": "npm run test:verify",
+          "exit_code": 0
+        },
+        {
+          "command": "npm run test:coverage",
+          "exit_code": 0,
+          "declared_gate_passed": true
+        },
+        {
+          "command": "npm run lint",
+          "exit_code": 0,
+          "errors": 0,
+          "warnings": 100
+        },
+        {
+          "command": "git diff --check",
+          "exit_code": 0
+        }
+      ],
+      "targeted_tests": {
+        "healthcheck": {
+          "pass": 110,
+          "fail": 0
+        },
+        "proxy_guard": {
+          "pass": 34,
+          "fail": 0
+        },
+        "gitlab_healthcheck": "PASS",
+        "outbound_policy": {
+          "pass": 56,
+          "fail": 0
+        },
+        "pinned_https": "PASS",
+        "compatibility_runtime": {
+          "pass": 33,
+          "fail": 0
+        }
+      },
+      "independent_security_review": {
+        "selected_model": "gpt-6-astra",
+        "remaining_actionable_findings": 0,
+        "resolved_finding": "Reject MCP results whose credential version, type or timestamp cannot be verified",
+        "tests_run_by_reviewer": false
+      },
+      "division_of_work": [
+        {
+          "role": "root",
+          "work": "Edge and production diagnosis, integration review, full tests, local state reconciliation"
+        },
+        {
+          "selected_model": "gpt-6-sol",
+          "work": "Isolated implementation and targeted regression tests"
+        },
+        {
+          "selected_model": "gpt-6-luna",
+          "work": "Read-only development and service inventory"
+        },
+        {
+          "selected_model": "gpt-6-astra",
+          "work": "Independent credential and permission boundary review"
+        }
+      ],
+      "preserved_changes": [
+        "Original active repository WIP",
+        "Existing clients/android/gradlew.bat line-ending change outside candidate commit"
+      ],
+      "limitations": [
+        "Exact candidate GitLab CI has not run",
+        "Local runtime is below the declared minimum",
+        "Production application and instance binding have not been updated",
+        "Full corrected production selfcheck and Edge acceptance remain pending"
+      ],
+      "logs": {
+        "test-verify.log": {
+          "sha256": "6c27463739fae180275d51040424bca620740bcde0089871cb85b1c9ada956f3",
+          "bytes": 94782
+        },
+        "test-coverage.log": {
+          "sha256": "e739791b1db4e762c6c20d077566c066e890161eb7ec3264711440cf27becce5",
+          "bytes": 102424
+        },
+        "lint-final.log": {
+          "sha256": "6d1dd6f840723182b8cfe5e5ff7907356a621e83b04f780d7e9d6ad9919ccc58",
+          "bytes": 12717
+        },
+        "healthcheck.log": {
+          "sha256": "f3bbb199667e24b20a66d76ec6647a960723c3694506f15927709d802b7c4989",
+          "bytes": 8899
+        }
+      }
+    },
+    "application_update_live_verified": false,
+    "evidence_file": "C:\\Users\\Administrator\\Documents\\Codex\\2026-09-25\\zai\\outputs\\broker-evidence.json",
+    "report_file": "C:\\Users\\Administrator\\Documents\\Codex\\2026-09-25\\zai\\outputs\\Broker-自检与状态核对.md",
+    "next_actions": [
+      "Approve the concrete candidate publication scope through the project gate",
+      "Run exact-candidate CI on the declared runtime and retain signed release and rollback evidence",
+      "Apply the verified GitLab instance binding without reading or replacing the token",
+      "Run the corrected checker and verify the result in Edge and the audit log",
+      "Review R5/master and GitHub mirror divergence before any merge or synchronization"
+    ]
+  }
+}

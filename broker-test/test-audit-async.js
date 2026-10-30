@@ -12,22 +12,42 @@
 //   9. Redaction works
 //  10. readFiltered returns recent events from disk
 
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readdirSync,
+  readFileSync,
+  chmodSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditAsync } from '../broker/lib/audit-async.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ---------- setup ----------
 
 const WORK = mkdtempSync(join(tmpdir(), 'broker-audit-async-'));
-process.on('exit', () => { try { rmSync(WORK, { recursive: true, force: true }); } catch {} });
+process.on('exit', () => {
+  try {
+    rmSync(WORK, { recursive: true, force: true });
+  } catch {}
+});
 
 // ---------- tests ----------
 
@@ -40,10 +60,19 @@ section('1. Write + persist');
   ok('event has id', typeof ev.id === 'string' && ev.id.length > 0);
   ok('event has ts', typeof ev.ts === 'string');
   // Wait a tick for fs.appendFile to flush
-  await new Promise(r => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
   const files = readdirSync(WORK);
-  ok('audit file created', files.some(f => f.startsWith('audit-')));
-  const content = readFileSync(join(WORK, files.find(f => f.startsWith('audit-'))), 'utf8');
+  ok(
+    'audit file created',
+    files.some((f) => f.startsWith('audit-')),
+  );
+  const content = readFileSync(
+    join(
+      WORK,
+      files.find((f) => f.startsWith('audit-')),
+    ),
+    'utf8',
+  );
   ok('file contains the event', content.includes('"action":"login"'));
 }
 
@@ -76,7 +105,6 @@ section('3. Mandatory audit throws on FS failure');
   // Actually simpler: write to a file path we can't create a dir at.
   // Skip the mkdir-block trick; use the fact that appendFile on an unwritable
   // file fails.
-  const audit = createAuditAsync({ auditDir: WORK });
   // Make the audit file unreadable/unwritable to current user
   // (won't work as root, so just check behavior matches when there's a write error)
   // Instead, simulate by passing a deliberately bad onWriteError trigger.
@@ -109,7 +137,7 @@ section('4. Non-mandatory audit does NOT throw on FS failure');
   let threw = false;
   try {
     await audit.write({ action: 'best-effort' });
-  } catch (e) {
+  } catch {
     threw = true;
   }
   ok('non-mandatory did NOT throw', !threw);
@@ -124,7 +152,7 @@ section('5. Bus emits event for every write');
   audit.bus.on('event', (e) => events.push(e));
   await audit.write({ action: 'test1' });
   await audit.write({ action: 'test2' });
-  await new Promise(r => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
   ok('2 events received', events.length === 2);
 }
 
@@ -137,7 +165,10 @@ section('6. Redaction works');
     cn: 'client.alice',
     token: 'ghp_FAKEFAKEFAKEFAKEFAKEFAKE', // synthetic, <36 chars, won't match gitleaks
   });
-  ok('ghp_ value not present in event', !('ghp_FAKEFAKEFAKE' in ev) && !JSON.stringify(ev).includes('ghp_FAKEFAKEFAKE'));
+  ok(
+    'ghp_ value not present in event',
+    !('ghp_FAKEFAKEFAKE' in ev) && !JSON.stringify(ev).includes('ghp_FAKEFAKEFAKE'),
+  );
   ok('redacted placeholder present', JSON.stringify(ev).includes('ghp_***'));
 }
 
@@ -157,10 +188,13 @@ section('8. readFiltered pulls from disk');
   // Force a rotation by writing a bunch
   const audit = createAuditAsync({ auditDir: WORK });
   for (let i = 0; i < 5; i++) await audit.write({ action: 'disk-test', n: i });
-  await new Promise(r => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
   const r = await audit.readFiltered({ action: 'disk-test', limit: 10 });
   ok('found events from disk', r.length >= 5);
-  ok('all match action filter', r.every(e => e.action === 'disk-test'));
+  ok(
+    'all match action filter',
+    r.every((e) => e.action === 'disk-test'),
+  );
 }
 
 // ---------- summary ----------

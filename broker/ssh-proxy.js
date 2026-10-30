@@ -27,10 +27,28 @@ import { randomUUID } from 'node:crypto';
 // ============================================================
 // 常量
 // ============================================================
-const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;  // 10MB 防止恶意命令返回天量数据
-const DEFAULT_TIMEOUT_MS = 5 * 60_000;       // 5 分钟
+const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10MB 防止恶意命令返回天量数据
+const DEFAULT_TIMEOUT_MS = 5 * 60_000; // 5 分钟
 const KEY_DIR_PREFIX = 'broker-ssh-';
-const ACTIVE_TUNNELS = new Map();  // id -> { process, target, startedAt, secretName }
+const ACTIVE_TUNNELS = new Map(); // id -> { process, target, startedAt, secretName }
+
+export class SshInputError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SshInputError';
+    this.code = 'SSH_INPUT_INVALID';
+    this.statusCode = 400;
+  }
+}
+
+export class SshConfigurationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SshConfigurationError';
+    this.code = 'SSH_CONFIGURATION_INVALID';
+    this.statusCode = 422;
+  }
+}
 
 // ============================================================
 // 验证 + 净化
@@ -46,18 +64,18 @@ const USER_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
  */
 export function parseSshTarget(target) {
   if (!target || typeof target !== 'string') {
-    throw new Error('ssh target required (format: user@host[:port])');
+    throw new SshInputError('ssh target required (format: user@host[:port])');
   }
-  if (target.length > 256) throw new Error('ssh target too long');
+  if (target.length > 256) throw new SshInputError('ssh target too long');
   if (/[\s;&|<>`$'"\\]/.test(target)) {
-    throw new Error('ssh target contains shell metacharacters');
+    throw new SshInputError('ssh target contains shell metacharacters');
   }
   const m = /^([^@]+)@([^:]+)(?::(\d+))?$/.exec(target);
-  if (!m) throw new Error('ssh target must be user@host[:port]');
+  if (!m) throw new SshInputError('ssh target must be user@host[:port]');
   const [, user, host, portStr] = m;
-  if (!USER_RE.test(user)) throw new Error(`invalid ssh username: ${user.slice(0, 20)}`);
-  if (!HOST_RE.test(host)) throw new Error(`invalid ssh host: ${host.slice(0, 50)}`);
-  if (portStr && !PORT_RE.test(portStr)) throw new Error(`invalid ssh port: ${portStr}`);
+  if (!USER_RE.test(user)) throw new SshInputError(`invalid ssh username: ${user.slice(0, 20)}`);
+  if (!HOST_RE.test(host)) throw new SshInputError(`invalid ssh host: ${host.slice(0, 50)}`);
+  if (portStr && !PORT_RE.test(portStr)) throw new SshInputError(`invalid ssh port: ${portStr}`);
   return { user, host, port: portStr ? parseInt(portStr, 10) : 22 };
 }
 
@@ -73,12 +91,12 @@ export function parseSshTarget(target) {
  */
 export function validateCommand(command) {
   if (!command || typeof command !== 'string') {
-    throw new Error('command required');
+    throw new SshInputError('command required');
   }
-  if (command.length > 4096) throw new Error('command too long (>4KB)');
+  if (command.length > 4096) throw new SshInputError('command too long (>4KB)');
   // Disallow newline / CR / NUL only (see docstring).
   if (/[\n\r\0]/.test(command)) {
-    throw new Error('command contains newline/null');
+    throw new SshInputError('command contains newline/null');
   }
   return command;
 }
@@ -88,32 +106,44 @@ export function validateCommand(command) {
 // ============================================================
 function validateKnownHosts(value) {
   if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('ssh secret with verified known_hosts required');
+    throw new SshConfigurationError('ssh secret with verified known_hosts required');
   }
   if (value.length > 16 * 1024 || /[\r\0]/.test(value)) {
-    throw new Error('known_hosts is invalid or too large');
+    throw new SshConfigurationError('known_hosts is invalid or too large');
   }
   const lines = value.trim().split('\n').filter(Boolean);
-  const valid = lines.every(line => {
+  const valid = lines.every((line) => {
     const fields = line.trim().split(/\s+/);
     const offset = fields[0]?.startsWith('@') ? 1 : 0;
-    return fields.length >= offset + 3
-      && /^(ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521))$/.test(fields[offset + 1] || '')
-      && /^[A-Za-z0-9+/]+={0,2}$/.test(fields[offset + 2] || '');
+    return (
+      fields.length >= offset + 3 &&
+      /^(ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521))$/.test(fields[offset + 1] || '') &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(fields[offset + 2] || '')
+    );
   });
-  if (!lines.length || !valid) throw new Error('known_hosts must contain OpenSSH host key entries');
+  if (!lines.length || !valid) {
+    throw new SshConfigurationError('known_hosts must contain OpenSSH host key entries');
+  }
   return value.trim() + '\n';
 }
 
 function configuredTarget(secret, requestedTarget) {
-  if (!secret || !secret.private_key) throw new Error('ssh secret with private_key required');
-  if (!secret.host || !secret.username) throw new Error('ssh secret host and username required');
+  if (!secret || !secret.private_key) {
+    throw new SshConfigurationError('ssh secret with private_key required');
+  }
+  if (!secret.host || !secret.username) {
+    throw new SshConfigurationError('ssh secret host and username required');
+  }
   const port = secret.port || 22;
   const configured = parseSshTarget(`${secret.username}@${secret.host}:${port}`);
   if (requestedTarget) {
     const requested = parseSshTarget(requestedTarget);
-    if (requested.user !== configured.user || requested.host !== configured.host || requested.port !== configured.port) {
-      throw new Error('requested target does not match ssh secret target');
+    if (
+      requested.user !== configured.user ||
+      requested.host !== configured.host ||
+      requested.port !== configured.port
+    ) {
+      throw new SshInputError('requested target does not match ssh secret target');
     }
   }
   return configured;
@@ -137,13 +167,13 @@ function writeSshMaterial(fsImpl, secret) {
  * @param {string} passphrase  用户提供的私钥密码（sensitive:true，永不记录）
  * @param {object} deps        { keygen } —— keygen(args, opts) -> Promise;测试可注入
  */
-async function decryptSshKeyIfNeeded({ fsImpl, keyPath, passphrase, deps }) {
+async function decryptSshKeyIfNeeded({ fsImpl: _fsImpl, keyPath, passphrase, deps }) {
   if (!passphrase) return;
   if (typeof passphrase !== 'string') {
-    throw new Error('passphrase must be a string');
+    throw new SshConfigurationError('passphrase must be a string');
   }
   if (passphrase.length > 1024) {
-    throw new Error('passphrase too long (>1KB)');
+    throw new SshConfigurationError('passphrase too long (>1KB)');
   }
   const keygen = deps.keygen || defaultKeygen;
   // ssh-keygen -p  -f <key>  -P <current>  -N <new>
@@ -168,12 +198,18 @@ function defaultKeygen(args, opts = {}) {
         shell: false,
         windowsHide: true,
       });
-    } catch (e) { return reject(new Error(`ssh-keygen spawn failed: ${e.message}`)); }
+    } catch (e) {
+      return reject(new Error(`ssh-keygen spawn failed: ${e.message}`));
+    }
     let stderr = '';
     let timer = null;
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch (_e) { /* */ }
+        try {
+          child.kill('SIGKILL');
+        } catch (_e) {
+          /* */
+        }
         reject(new Error(`ssh-keygen timeout after ${opts.timeoutMs}ms`));
       }, opts.timeoutMs);
     }
@@ -195,7 +231,9 @@ function defaultKeygen(args, opts = {}) {
 function cleanupKeyDir(fsImpl, dir) {
   try {
     if (fsImpl.existsSync(dir)) fsImpl.rmSync(dir, { recursive: true, force: true });
-  } catch (_e) { /* swallow; tmpfs 会自己清 */ }
+  } catch (_e) {
+    /* swallow; tmpfs 会自己清 */
+  }
 }
 
 // ============================================================
@@ -232,13 +270,20 @@ export async function sshExec(opts, deps = {}) {
     throw e;
   }
   const args = [
-    '-i', keyPath,
-    '-o', 'StrictHostKeyChecking=yes',
-    '-o', 'BatchMode=yes',
-    '-o', 'LogLevel=ERROR',
-    '-o', `UserKnownHostsFile=${knownHostsPath}`,
-    '-o', 'GlobalKnownHostsFile=/dev/null',
-    '-p', String(target.port),
+    '-i',
+    keyPath,
+    '-o',
+    'StrictHostKeyChecking=yes',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'LogLevel=ERROR',
+    '-o',
+    `UserKnownHostsFile=${knownHostsPath}`,
+    '-o',
+    'GlobalKnownHostsFile=/dev/null',
+    '-p',
+    String(target.port),
     `${target.user}@${target.host}`,
     '--',
     command,
@@ -282,15 +327,26 @@ function defaultExecutor(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
-    } catch (e) { return reject(new Error(`spawn failed: ${e.message}`)); }
-    let stdout = '', stderr = '';
+      child = spawn(cmd, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        windowsHide: true,
+      });
+    } catch (e) {
+      return reject(new Error(`spawn failed: ${e.message}`));
+    }
+    let stdout = '',
+      stderr = '';
     let killed = false;
     let timer = null;
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
         killed = true;
-        try { child.kill('SIGKILL'); } catch (_e) { /* */ }
+        try {
+          child.kill('SIGKILL');
+        } catch (_e) {
+          /* */
+        }
         reject(new Error(`ssh timeout after ${opts.timeoutMs}ms`));
       }, opts.timeoutMs);
     }
@@ -306,7 +362,7 @@ function defaultExecutor(cmd, args, opts = {}) {
     });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
-      if (killed) return;  // already rejected
+      if (killed) return; // already rejected
       resolve({ exitCode: code, stdout, stderr });
     });
   });
@@ -332,24 +388,32 @@ function defaultExecutor(cmd, args, opts = {}) {
 export async function sshTunnel(opts, deps = {}) {
   const target = configuredTarget(opts.secret, opts.target);
   if (!opts.localPort || !PORT_RE.test(String(opts.localPort))) {
-    throw new Error('localPort must be 1-65535');
+    throw new SshInputError('localPort must be 1-65535');
   }
   if (!opts.remoteHost || !HOST_RE.test(opts.remoteHost)) {
-    throw new Error('remoteHost invalid');
+    throw new SshInputError('remoteHost invalid');
   }
   if (!opts.remotePort || !PORT_RE.test(String(opts.remotePort))) {
-    throw new Error('remotePort must be 1-65535');
+    throw new SshInputError('remotePort must be 1-65535');
   }
   const fsImpl = deps.fsImpl || { writeFileSync, chmodSync, rmSync, existsSync, mkdtempSync };
-  const executor = deps.executor || ((cmd, args) => {
-    // 不通过 defaultExecutor (它有 timeout),tunnel 是 long-running
-    return new Promise((resolve, reject) => {
-      try {
-        const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
-        resolve({ child });
-      } catch (e) { reject(e); }
+  const executor =
+    deps.executor ||
+    ((cmd, args) => {
+      // 不通过 defaultExecutor (它有 timeout),tunnel 是 long-running
+      return new Promise((resolve, reject) => {
+        try {
+          const child = spawn(cmd, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            shell: false,
+            windowsHide: true,
+          });
+          resolve({ child });
+        } catch (e) {
+          reject(e);
+        }
+      });
     });
-  });
   const { dir, keyPath, knownHostsPath } = writeSshMaterial(fsImpl, opts.secret);
   try {
     // v4.1.9: 同 sshExec,先解密 passphrase-protected 的私钥
@@ -359,16 +423,25 @@ export async function sshTunnel(opts, deps = {}) {
     throw e;
   }
   const args = [
-    '-i', keyPath,
-    '-o', 'StrictHostKeyChecking=yes',
-    '-o', 'BatchMode=yes',
-    '-o', 'LogLevel=ERROR',
-    '-o', `UserKnownHostsFile=${knownHostsPath}`,
-    '-o', 'GlobalKnownHostsFile=/dev/null',
-    '-o', 'ExitOnForwardFailure=yes',
-    '-N',                  // no command, just forward
-    '-L', `${opts.localPort}:${opts.remoteHost}:${opts.remotePort}`,
-    '-p', String(target.port),
+    '-i',
+    keyPath,
+    '-o',
+    'StrictHostKeyChecking=yes',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'LogLevel=ERROR',
+    '-o',
+    `UserKnownHostsFile=${knownHostsPath}`,
+    '-o',
+    'GlobalKnownHostsFile=/dev/null',
+    '-o',
+    'ExitOnForwardFailure=yes',
+    '-N', // no command, just forward
+    '-L',
+    `${opts.localPort}:${opts.remoteHost}:${opts.remotePort}`,
+    '-p',
+    String(target.port),
     `${target.user}@${target.host}`,
   ];
   const id = randomUUID();
@@ -411,10 +484,18 @@ export async function sshTunnel(opts, deps = {}) {
 export async function stopTunnel(id, audit) {
   const t = ACTIVE_TUNNELS.get(id);
   if (!t) return false;
-  try { t.child.kill('SIGTERM'); } catch (_e) { /* */ }
+  try {
+    t.child.kill('SIGTERM');
+  } catch (_e) {
+    /* */
+  }
   // 给 1s 让它优雅退出,否则 SIGKILL
   setTimeout(() => {
-    try { t.child.kill('SIGKILL'); } catch (_e) { /* */ }
+    try {
+      t.child.kill('SIGKILL');
+    } catch (_e) {
+      /* */
+    }
   }, 1000);
   ACTIVE_TUNNELS.delete(id);
   audit?.({ action: 'ssh_tunnel_close', status: 'ok', tunnel_id: id });
@@ -423,7 +504,7 @@ export async function stopTunnel(id, audit) {
 
 export function listTunnels() {
   // 元数据,绝不含凭据
-  return Array.from(ACTIVE_TUNNELS.values()).map(t => ({
+  return Array.from(ACTIVE_TUNNELS.values()).map((t) => ({
     id: t.id,
     target: t.target,
     localPort: t.localPort,
@@ -432,4 +513,13 @@ export function listTunnels() {
   }));
 }
 
-export default { sshExec, sshTunnel, stopTunnel, listTunnels, parseSshTarget, validateCommand };
+export default {
+  sshExec,
+  sshTunnel,
+  stopTunnel,
+  listTunnels,
+  parseSshTarget,
+  validateCommand,
+  SshInputError,
+  SshConfigurationError,
+};

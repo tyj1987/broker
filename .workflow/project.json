@@ -1,0 +1,104 @@
+{
+  "protocol_version": "1.0",
+  "project_id": "broker",
+  "checkout_role": "repo",
+  "project_type": "self_developed",
+  "management_mode": "local_governance",
+  "source_of_truth": "gitlab",
+  "desired_source_of_truth": "gitlab",
+  "repository": "https://gitlab.52trz.com/52trz/broker",
+  "primary_remote": {
+    "name": "gitlab",
+    "url": "https://gitlab.52trz.com/52trz/broker.git"
+  },
+  "mirror": "git@github.com:tyj1987/broker",
+  "mirror_remote": {
+    "name": "origin",
+    "url": "git@github.com:tyj1987/broker.git"
+  },
+  "github_role": "mirror",
+  "remote_role_basis": "user_governance_decision_plus_observed_remotes",
+  "observed_remotes": [
+    {
+      "name": "gitlab",
+      "url": "https://gitlab.52trz.com/52trz/broker.git"
+    },
+    {
+      "name": "origin",
+      "url": "git@github.com:tyj1987/broker.git"
+    }
+  ],
+  "gitlab": {
+    "project_id": 4,
+    "binding_status": "api_verified",
+    "web_url": "https://gitlab.52trz.com/52trz/broker",
+    "observed_default_branch": "master",
+    "verified_at": "2026-09-23T02:56:59.161Z"
+  },
+  "execution": {
+    "system": "ChatLink",
+    "mode": "existing_local_permissions"
+  },
+  "credentials": {
+    "system": "Broker",
+    "mode": "server_side_injection",
+    "service_ref": "gitlab-pc-4",
+    "binding_status": "enabled_verified",
+    "expires_at": "2026-12-22"
+  },
+  "docs": {
+    "system": "git",
+    "path": "docs/",
+    "scope": "technical",
+    "existing_evidence_entrypoints": []
+  },
+  "knowledge": {
+    "system": "Notion",
+    "scope": "cross_project_business_only",
+    "binding": null,
+    "optional": true,
+    "engineering_state": false
+  },
+  "design": {
+    "system": "Figma",
+    "scope": "design_only",
+    "binding": null,
+    "optional": true,
+    "engineering_state": false
+  },
+  "status": "enabled_read_only",
+  "pending_items": [
+    {
+      "code": "mirror_automation_unverified",
+      "action": "已指定 GitHub 镜像职责；尚未配置或核验自动镜像任务。"
+    },
+    {
+      "code": "gitlab_ci_config_absent",
+      "action": "未发现根 .gitlab-ci.yml；远端 CI 设置未读取，不推断没有 CI。"
+    },
+    {
+      "code": "engineering_objects_not_read",
+      "action": "本轮没有读取 Issue/Milestone/MR/Release/Deployment，缓存不含这些状态。"
+    },
+    {
+      "code": "mirror_ref_diverged",
+      "action": "Review agent/release-mainline-r5-20260923: GitLab eca6e700c328030197a0aad8194778f7e496d64c differs from GitHub dabd90f7a29855ffb6736dc87abc2b170370eb8a; do not force-sync.",
+      "observed_at": "2026-09-23T03:20:40.669509+00:00"
+    }
+  ],
+  "external_messaging": false,
+  "authorization": {
+    "production_mutations": false,
+    "remote_migration": false,
+    "issue_mr_writes": false,
+    "pipeline_trigger": false,
+    "commit_push": false
+  },
+  "schema_version": 1,
+  "adapter": {
+    "enabled": true,
+    "entrypoint": "E:\\Workspaces\\Project-Control.ps1",
+    "mode": "read_only",
+    "project_key": "broker"
+  }
+}

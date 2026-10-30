@@ -12,9 +12,10 @@ export function handleMetrics(req, res, route, deps) {
   if (p !== '/metrics' && p !== '/metrics.json') return false;
 
   // Default: local scrape or admin. METRICS_PUBLIC=1 restores the old anonymous scrape.
-  const publicOk = process.env.METRICS_PUBLIC === '1'
-    || process.env.METRICS_REQUIRE_AUTH === '0'
-    || process.env.METRICS_REQUIRE_AUTH === 'false';
+  const publicOk =
+    process.env.METRICS_PUBLIC === '1' ||
+    process.env.METRICS_REQUIRE_AUTH === '0' ||
+    process.env.METRICS_REQUIRE_AUTH === 'false';
   const fromLocal = deps.isLocal === true;
   const isAdmin = deps.ctx?.client?.role === 'admin';
   if (!publicOk && !fromLocal && !isAdmin) {

@@ -1,15 +1,16 @@
 # Frequently Asked Questions
 
 > Common questions about deploying, operating, and integrating with
-> [Secret Broker V4.1](https://github.com/tyj1987/broker).
+> [Secret Broker v4.9](https://github.com/tyj1987/broker).
 > If your question is not here, open a [GitHub Discussion](https://github.com/tyj1987/broker/discussions).
 
 ## Install & Deploy
 
 ### Q: What's the minimum deployment footprint?
 
-**Single container.** The broker is a Node 20 process listening on a single
-port (8443 by default). For dev: `cd broker && npm start` works after
+**Single container.** The broker requires Node.js 22 or newer; CI and the
+production image use Node.js 24. It listens on a single port (8443 by default).
+For development, `cd broker && npm ci && npm start` works after
 `bootstrap.ps1` (Windows) or `scripts/broker/init-ca.sh` (Linux).
 
 For production, use the [Helm chart](../deploy/helm/broker/) (2-replica HA on
@@ -18,7 +19,7 @@ monitoring` for Prometheus + Grafana).
 
 ### Q: Does it run on Windows?
 
-Yes. Tested on Windows 10/11 with Node 20.11+ and Windows Server 2022.
+Yes. The current baseline is Windows 10/11 or Windows Server 2022 with Node.js 22+ (Node.js 24 recommended).
 The broker is platform-agnostic — all paths in the source use
 `path.join()`, no Unix-only syscalls.
 
@@ -158,26 +159,24 @@ Follow the pattern of `sdk/python/` or `sdk/go/`:
    For Node, only `ws` is allowed.
 5. Add a `README.md` with the 8-surface table.
 6. Add tests using stdlib HTTP mocks.
-7. Add the SDK to the [VERIFICATION matrix](VERIFY.md) and
-   `npm run test:verify-all`.
+7. Add the SDK to the [verification guide](../VERIFY.md) and
+   the appropriate CI/quality-gate command.
 
-### Q: Why is the test:verify count different from what I expect?
+### Q: Why is the test count different from an older release note?
 
-The `npm run test:verify` script runs:
+The test suite is intentionally cumulative, so fixed counts in historical
+release notes become stale. Use the current commands and their exit codes:
 
-- `test:modular` — 10 v3.8 test files, 282 tests
-- `test:v4-modules` — 1 V4 integration file, 201 tests
-- `test:workload` — 56 tests
-- `test:ssh` — 53 tests
-- `test:ws` — 27 tests
+```bash
+cd broker
+npm run quality:gate
+```
 
-Total: **619 broker tests**. Add `npm run test:python-sdk` for 28 more
-(= **647** with `test:verify-all`).
-
-The Go SDK (15 cases) and VS Code extension (11 cases) tests are not
-automated in the broker test suite because they require Go and tsc
-toolchains. They are validated separately per
-[VERIFICATION matrix](VERIFY.md) §5-6.
+`quality:gate` runs lint, formatting, the complete Node.js regression suite,
+MCP/SSH/WebSocket/Workload Identity tests, and the Python SDK tests. A release
+is acceptable only when the final exit code is 0. Go and VS Code SDK checks
+remain separate because they require their own toolchains; see the current
+[verification guide](../VERIFY.md).
 
 ## Troubleshooting
 
@@ -227,17 +226,19 @@ The proxy failed to reach the upstream. Check:
    didn't find your secret as "expired" — verify the
    `rotate_recommendation_days` is set correctly.
 
-### Q: My test:verify runs 619 tests but my fork runs 612. Why?
+### Q: My fork runs fewer tests than the current branch. Why?
 
-This usually means a test was deleted or renamed. Run with verbose output:
+Compare `broker/package.json` scripts and the files under `broker-test/`, then
+run the complete gate rather than relying on a numeric total:
 
 ```bash
 cd broker
-npm run test:v4-modules 2>&1 | grep -E "FAIL|Section"
+npm run quality:gate
 ```
 
-to find the regression. Then check the [CHANGELOG](../CHANGELOG.md) for
-recent removals.
+A missing suite is a regression even when all remaining tests pass. Check the
+[CHANGELOG](../CHANGELOG.md) and [verification guide](../VERIFY.md) for the
+current release requirements.
 
 ## Contributing
 

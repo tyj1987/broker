@@ -158,15 +158,25 @@ Default 5 minutes. Configurable per-request via `timeout_ms`.
 ### Private key lifecycle
 
 ```
-1. mkdtempSync('/tmp/broker-ssh-XXXXXX')     # 0700
+1. mkdtempSync(<tmpdir>/broker-ssh-XXXXXX)   # 0700
+   Linux/macOS: /tmp/broker-ssh-XXXXXXXX
+   Windows:     %TEMP%\broker-ssh-XXXXXXXX  (typically C:\Users\<user>\AppData\Local\Temp\)
 2. writeFileSync('id_key', privateKey)        # 0600
 3. writeFileSync('known_hosts', verifiedKey)  # 0600
 4. spawn('ssh', ['-i', 'id_key', ...])        # strict host-key checking
 5. wait for command to finish
-6. rm -rf('/tmp/broker-ssh-XXXXXX')          # finally block
+6. rmSync(<tmpdir>/broker-ssh-XXXXXX, recursive)   # finally block
 ```
 
-If broker process crashes, tmpfs is wiped on next boot (or by cron).
+The temporary directory is the OS-native per-process temp dir (`os.tmpdir()`).
+On Linux/macOS this is `/tmp`; on Windows it is `%TEMP%` (typically
+`C:\Users\<user>\AppData\Local\Temp`). On Linux production deploys, prefer
+mounting `/tmp` as tmpfs so the wipe-on-boot guarantee holds. On Windows,
+tmpfs semantics do not apply — broker uses the user-profile temp dir and
+relies on the OS cleanup scheduler.
+
+If the broker process crashes, the orphaned temp dir is left behind and must
+be cleaned by an external cron / scheduled task.
 
 ## Secret type
 

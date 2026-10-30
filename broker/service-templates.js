@@ -15,7 +15,7 @@ export const SERVICE_TEMPLATES = {
     type: 'github_token',
     upstream: 'https://api.github.com',
     inject_headers: {
-      'Accept': 'application/vnd.github+json',
+      Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2026-03-10',
       'User-Agent': 'secret-broker/4.1.2 (proxy)',
     },
@@ -63,7 +63,11 @@ export const SERVICE_TEMPLATES = {
     secret_placeholder: 'aliyun_ak (含 access_key_id + access_key_secret 字段)',
     secret_help: '必须用 aliyun_ak 类型 (含 access_key_id + access_key_secret + region)',
     dashboard_actions: [
-      { label: '列 ECS 实例', method: 'GET', path: '/?Action=DescribeInstances&RegionId=cn-beijing' },
+      {
+        label: '列 ECS 实例',
+        method: 'GET',
+        path: '/?Action=DescribeInstances&RegionId=cn-beijing',
+      },
       { label: '列云盘', method: 'GET', path: '/?Action=DescribeDisks&RegionId=cn-beijing' },
       { label: '列 EIP', method: 'GET', path: '/?Action=DescribeEipAddresses&RegionId=cn-beijing' },
     ],
@@ -79,11 +83,16 @@ export const SERVICE_TEMPLATES = {
     region: 'cn-beijing',
     inject_headers: {},
     secret_placeholder: 'aliyun_ak (含 access_key_id + access_key_secret 字段)',
-    secret_help: '必须用 aliyun_ak 类型。Alidns OpenAPI Version=2015-01-09（不是 ECS 的 2014-05-26）',
+    secret_help:
+      '必须用 aliyun_ak 类型。Alidns OpenAPI Version=2015-01-09（不是 ECS 的 2014-05-26）',
     official_docs_url: 'https://help.aliyun.com/document_detail/29739.html',
     dashboard_actions: [
       { label: '列域名', method: 'GET', path: '/?Action=DescribeDomains' },
-      { label: '列解析记录', method: 'GET', path: '/?Action=DescribeDomainRecords&DomainName=example.com' },
+      {
+        label: '列解析记录',
+        method: 'GET',
+        path: '/?Action=DescribeDomainRecords&DomainName=example.com',
+      },
     ],
   },
 
@@ -100,9 +109,7 @@ export const SERVICE_TEMPLATES = {
     header_value_template: 'Bearer {{secret.<TOKEN_SECRET>.value}}',
     secret_placeholder: '任意 secret (value 字段会替换占位符)',
     secret_help: 'headers 模板里写 {{secret.<名字>.<字段>}} 占位符',
-    dashboard_actions: [
-      { label: 'GET /', method: 'GET', path: '/' },
-    ],
+    dashboard_actions: [{ label: 'GET /', method: 'GET', path: '/' }],
   },
 
   ssh_proxy: {
@@ -165,7 +172,12 @@ export const SERVICE_TEMPLATES = {
     healthcheck: { method: 'GET', path: '/user', expect_status: 200 },
     default_actions: [
       { label: '当前用户', method: 'GET', path: '/user' },
-      { label: '我的项目', method: 'GET', path: '/projects', query: { membership: 'true', per_page: '5' } },
+      {
+        label: '我的项目',
+        method: 'GET',
+        path: '/projects',
+        query: { membership: 'true', per_page: '5' },
+      },
     ],
     official_docs_url: 'https://docs.gitlab.com/ee/api/',
     template_version: '2025-Q3',
@@ -224,7 +236,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'private_key',
     upstream: 'https://api.github.com',
     inject_headers: {
-      'Accept': 'application/vnd.github+json',
+      Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2026-03-10',
     },
     healthcheck: { method: 'GET', path: '/installation/repositories', expect_status: 200 },
@@ -254,7 +266,11 @@ export const SERVICE_TEMPLATES = {
     header_value_template: '{{secret}}',
     default_actions: [
       { label: '列出模型', method: 'GET', path: '/v1beta/models' },
-      { label: '生成文本', method: 'POST', path: '/v1beta/models/gemini-2.5-flash:generateContent' },
+      {
+        label: '生成文本',
+        method: 'POST',
+        path: '/v1beta/models/gemini-2.5-flash:generateContent',
+      },
     ],
     official_docs_url: 'https://ai.google.dev/gemini-api/docs',
     template_version: '2026-Q3',
@@ -392,14 +408,20 @@ export const SERVICE_TEMPLATES = {
     auth_type: 'aws_sigv4',
     default_secret_type: 'aws_access_key_v2',
     default_secret_field: 'access_key_id',
-    upstream: 'https://ec2.amazonaws.com',  // 默认 endpoint,具体服务按 service 字段路由
+    upstream: 'https://ec2.amazonaws.com', // 默认 endpoint,具体服务按 service 字段路由
     allow_methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     default_actions: [
-      { label: 'STS GetCallerIdentity', method: 'POST', path: '/', body: { Action: 'GetCallerIdentity', Version: '2011-06-15' } },
+      {
+        label: 'STS GetCallerIdentity',
+        method: 'POST',
+        path: '/',
+        body: { Action: 'GetCallerIdentity', Version: '2011-06-15' },
+      },
     ],
     official_docs_url: 'https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html',
     template_version: '2025-Q3',
-    notes: '所有 AWS 服务共享此模板,service 字段决定签名。secret 含 STS session_token 时按 STS 凭证签名。',
+    notes:
+      '所有 AWS 服务共享此模板,service 字段决定签名。secret 含 STS session_token 时按 STS 凭证签名。',
   },
   gcp: {
     id: 'gcp',
@@ -432,10 +454,9 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'azure_tenant',
     default_secret_field: 'client_secret',
     upstream: 'https://graph.microsoft.com',
-    default_actions: [
-      { label: '当前用户', method: 'GET', path: '/v1.0/me' },
-    ],
-    official_docs_url: 'https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow',
+    default_actions: [{ label: '当前用户', method: 'GET', path: '/v1.0/me' }],
+    official_docs_url:
+      'https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow',
     template_version: '2025-Q3',
   },
   digitalocean: {
@@ -471,9 +492,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'private_key',
     upstream: 'https://identity.oraclecloud.com',
     healthcheck: { method: 'GET', path: '/v1/users/me', expect_status: 200 },
-    default_actions: [
-      { label: '当前用户', method: 'GET', path: '/v1/users/me' },
-    ],
+    default_actions: [{ label: '当前用户', method: 'GET', path: '/v1/users/me' }],
     official_docs_url: 'https://docs.oracle.com/iaas/Content/API/Concepts/apisigningkey.htm',
     template_version: '2025-Q3',
   },
@@ -490,11 +509,9 @@ export const SERVICE_TEMPLATES = {
     auth_type: 'aliyun_v2',
     default_secret_type: 'aliyun_oss',
     default_secret_field: 'access_key_secret',
-    upstream: 'https://oss-cn-hangzhou.aliyuncs.com',  // 由 secret.endpoint 覆盖
+    upstream: 'https://oss-cn-hangzhou.aliyuncs.com', // 由 secret.endpoint 覆盖
     healthcheck: { method: 'GET', path: '/?list-type=2&max-keys=1', expect_status: 200 },
-    default_actions: [
-      { label: '列出 Bucket', method: 'GET', path: '/?list-type=2' },
-    ],
+    default_actions: [{ label: '列出 Bucket', method: 'GET', path: '/?list-type=2' }],
     official_docs_url: 'https://help.aliyun.com/document_detail/31947.html',
     template_version: '2025-Q3',
   },
@@ -514,7 +531,11 @@ export const SERVICE_TEMPLATES = {
     healthcheck: { method: 'GET', path: '/?Action=DescribeDomains', expect_status: 200 },
     default_actions: [
       { label: '列域名', method: 'GET', path: '/?Action=DescribeDomains' },
-      { label: '列解析记录', method: 'GET', path: '/?Action=DescribeDomainRecords&DomainName=example.com' },
+      {
+        label: '列解析记录',
+        method: 'GET',
+        path: '/?Action=DescribeDomainRecords&DomainName=example.com',
+      },
     ],
     official_docs_url: 'https://help.aliyun.com/document_detail/29739.html',
     template_version: '2025-Q3',
@@ -532,9 +553,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'secret_key',
     upstream: 'https://cos.ap-guangzhou.myqcloud.com',
     healthcheck: { method: 'GET', path: '/', expect_status: 200 },
-    default_actions: [
-      { label: '列出 Bucket', method: 'GET', path: '/' },
-    ],
+    default_actions: [{ label: '列出 Bucket', method: 'GET', path: '/' }],
     official_docs_url: 'https://cloud.tencent.com/document/product/436',
     template_version: '2025-Q3',
   },
@@ -550,9 +569,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'tencent_sk',
     default_secret_field: 'secret_key',
     upstream: 'https://tcr.tencentcloudapi.com',
-    default_actions: [
-      { label: '列出实例', method: 'GET', path: '/' },
-    ],
+    default_actions: [{ label: '列出实例', method: 'GET', path: '/' }],
     official_docs_url: 'https://cloud.tencent.com/document/product/1141',
     template_version: '2025-Q3',
   },
@@ -570,10 +587,8 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'docker_hub_pat',
     default_secret_field: 'pat',
     upstream: 'https://registry-1.docker.io',
-    healthcheck: { method: 'GET', path: '/v2/', expect_status: 401 },  // 401 表示服务在
-    default_actions: [
-      { label: '验证 Token', method: 'GET', path: '/v2/' },
-    ],
+    healthcheck: { method: 'GET', path: '/v2/', expect_status: 401 }, // 401 表示服务在
+    default_actions: [{ label: '验证 Token', method: 'GET', path: '/v2/' }],
     official_docs_url: 'https://docs.docker.com/reference/api/registry/',
     template_version: '2025-Q3',
   },
@@ -605,9 +620,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'client_secret',
     upstream: 'https://quay.io',
     healthcheck: { method: 'GET', path: '/api/v1/discovery', expect_status: 200 },
-    default_actions: [
-      { label: '列出 repositories', method: 'GET', path: '/api/v1/repository' },
-    ],
+    default_actions: [{ label: '列出 repositories', method: 'GET', path: '/api/v1/repository' }],
     official_docs_url: 'https://docs.quay.io/api/',
     template_version: '2025-Q3',
   },
@@ -693,7 +706,7 @@ export const SERVICE_TEMPLATES = {
     category: 'communication',
     icon: '🎮',
     description: 'Discord REST API v10',
-    auth_type: 'bot',  // Bot token prefix
+    auth_type: 'bot', // Bot token prefix
     default_secret_type: 'discord_webhook',
     default_secret_field: 'url',
     upstream: 'https://discord.com/api/v10',
@@ -711,9 +724,17 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'feishu_app',
     default_secret_field: 'app_secret',
     upstream: 'https://open.feishu.cn/open-apis',
-    healthcheck: { method: 'POST', path: '/auth/v3/tenant_access_token/internal/', body: { app_id: 'PLACEHOLDER', app_secret: 'PLACEHOLDER' } },
+    healthcheck: {
+      method: 'POST',
+      path: '/auth/v3/tenant_access_token/internal/',
+      body: { app_id: 'PLACEHOLDER', app_secret: 'PLACEHOLDER' },
+    },
     default_actions: [
-      { label: '获取 tenant_access_token', method: 'POST', path: '/auth/v3/tenant_access_token/internal/' },
+      {
+        label: '获取 tenant_access_token',
+        method: 'POST',
+        path: '/auth/v3/tenant_access_token/internal/',
+      },
     ],
     official_docs_url: 'https://open.feishu.cn/document/server-docs/api-call-guide/server-api-list',
     template_version: '2025-Q3',
@@ -744,9 +765,17 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'telegram_bot_token',
     default_secret_field: 'bot_token',
     upstream: 'https://api.telegram.org',
-    healthcheck: { method: 'GET', path: '/bot{{secret.telegram_bot_token.bot_token}}/getMe', expect_status: 200 },
+    healthcheck: {
+      method: 'GET',
+      path: '/bot{{secret.telegram_bot_token.bot_token}}/getMe',
+      expect_status: 200,
+    },
     default_actions: [
-      { label: 'bot info', method: 'GET', path: '/bot{{secret.telegram_bot_token.bot_token}}/getMe' },
+      {
+        label: 'bot info',
+        method: 'GET',
+        path: '/bot{{secret.telegram_bot_token.bot_token}}/getMe',
+      },
     ],
     official_docs_url: 'https://core.telegram.org/bots/api',
     template_version: '2025-Q3',
@@ -763,9 +792,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_type: 'sendgrid_key',
     default_secret_field: 'api_key',
     upstream: 'https://api.sendgrid.com',
-    default_actions: [
-      { label: '发送邮件', method: 'POST', path: '/v3/mail/send' },
-    ],
+    default_actions: [{ label: '发送邮件', method: 'POST', path: '/v3/mail/send' }],
     official_docs_url: 'https://docs.sendgrid.com/api-reference',
     template_version: '2025-Q3',
   },
@@ -845,9 +872,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'dsn',
     upstream: 'https://sentry.io',
     healthcheck: { method: 'GET', path: '/api/0/projects/', expect_status: 200 },
-    default_actions: [
-      { label: '列出项目', method: 'GET', path: '/api/0/projects/' },
-    ],
+    default_actions: [{ label: '列出项目', method: 'GET', path: '/api/0/projects/' }],
     official_docs_url: 'https://docs.sentry.io/api/',
     template_version: '2025-Q3',
   },
@@ -864,9 +889,7 @@ export const SERVICE_TEMPLATES = {
     default_secret_field: 'api_key',
     upstream: 'https://api.datadoghq.com',
     healthcheck: { method: 'GET', path: '/api/v1/validate', expect_status: 200 },
-    default_actions: [
-      { label: '验证 API key', method: 'GET', path: '/api/v1/validate' },
-    ],
+    default_actions: [{ label: '验证 API key', method: 'GET', path: '/api/v1/validate' }],
     official_docs_url: 'https://docs.datadoghq.com/api/latest/',
     template_version: '2025-Q3',
   },
@@ -879,7 +902,7 @@ export const SERVICE_TEMPLATES = {
     icon: '🟢',
     description: 'New Relic REST API v2',
     auth_type: 'bearer',
-    default_secret_type: 'random_string',  // V4: add new_relic_key type
+    default_secret_type: 'random_string', // V4: add new_relic_key type
     default_secret_field: 'value',
     upstream: 'https://api.newrelic.com',
     template_version: '2025-Q3',
@@ -897,9 +920,7 @@ export const SERVICE_TEMPLATES = {
     auth_type: 'ssh_proxy',
     default_secret_type: 'ssh_connection',
     proxy_listen_port: 7222,
-    default_actions: [
-      { label: '执行命令', method: 'SSH', path: 'user@host' },
-    ],
+    default_actions: [{ label: '执行命令', method: 'SSH', path: 'user@host' }],
     notes: 'V4 新增:ssh -J broker user@host,broker 用 secret 私钥连目标',
     template_version: '2025-Q3',
   },
@@ -961,7 +982,6 @@ function headerDefaults(t, type) {
     };
   }
   if (type !== 'header') return {};
-  const field = t.default_secret_field || 'value';
   if (t.auth_type === 'query' || t.id === 'gemini') {
     return { header_name: 'x-goog-api-key', header_value_template: '{{secret}}' };
   }

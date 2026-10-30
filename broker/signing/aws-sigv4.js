@@ -11,7 +11,9 @@
 import { createHmac, createHash } from 'node:crypto';
 
 function sha256Hex(s) {
-  return createHash('sha256').update(s || '').digest('hex');
+  return createHash('sha256')
+    .update(s || '')
+    .digest('hex');
 }
 function hmac(key, data) {
   return createHmac('sha256', key).update(data).digest();
@@ -20,16 +22,31 @@ function hmac(key, data) {
 function uriEscape(path) {
   // AWS path encoding: unreserved set is ALPHA / DIGIT / '-' / '.' / '_' / '~'
   // Path segments must be normalized. We do best-effort: percent-encode everything else.
-  return String(path || '/').split('/').map(seg => encodeURIComponent(seg).replace(/%2F/g, '/').replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())).join('/');
+  return String(path || '/')
+    .split('/')
+    .map((seg) =>
+      encodeURIComponent(seg)
+        .replace(/%2F/g, '/')
+        .replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()),
+    )
+    .join('/');
 }
 
 function canonicalQueryString(query) {
   if (!query) return '';
   return Object.entries(query)
     .filter(([, v]) => v !== undefined && v !== null)
-    .map(([k, v]) => [encodeURIComponent(k).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()),
-                      encodeURIComponent(String(v)).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())])
-    .sort(([a1, a2], [b1, b2]) => a1 < b1 ? -1 : a1 > b1 ? 1 : (a2 < b2 ? -1 : a2 > b2 ? 1 : 0))
+    .map(([k, v]) => [
+      encodeURIComponent(k).replace(
+        /[!'()*]/g,
+        (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+      ),
+      encodeURIComponent(String(v)).replace(
+        /[!'()*]/g,
+        (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+      ),
+    ])
+    .sort(([a1, a2], [b1, b2]) => (a1 < b1 ? -1 : a1 > b1 ? 1 : a2 < b2 ? -1 : a2 > b2 ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join('&');
 }
@@ -38,14 +55,14 @@ function canonicalHeaders(headers) {
   return Object.entries(headers)
     .filter(([, v]) => v != null && v !== '')
     .map(([k, v]) => [k.toLowerCase().trim(), String(v).trim().replace(/\s+/g, ' ')])
-    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${k}:${v}\n`)
     .join('');
 }
 
 function signedHeaders(headers) {
   return Object.keys(headers)
-    .map(k => k.toLowerCase().trim())
+    .map((k) => k.toLowerCase().trim())
     .filter(Boolean)
     .sort()
     .join(';');
@@ -86,11 +103,22 @@ function shortDate(d) {
  * }} args
  * @returns {object} headers
  */
-export function signAwsSigV4({ method, host, path, query, headers = {}, body, service, region, now, secret }) {
+export function signAwsSigV4({
+  method,
+  host,
+  path,
+  query,
+  headers = {},
+  body,
+  service,
+  region,
+  now,
+  secret,
+}) {
   const t = now || new Date();
   const amzDate = amzDateFormat(t);
   const date = shortDate(t);
-  const bodyStr = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
+  const bodyStr = body == null ? '' : typeof body === 'string' ? body : JSON.stringify(body);
   const payloadHash = sha256Hex(bodyStr);
 
   const allHeaders = {
@@ -98,7 +126,9 @@ export function signAwsSigV4({ method, host, path, query, headers = {}, body, se
     'x-amz-date': amzDate,
     'x-amz-content-sha256': payloadHash,
     ...Object.fromEntries(
-      Object.entries(headers).filter(([k]) => !['host', 'authorization', 'x-amz-date'].includes(k.toLowerCase()))
+      Object.entries(headers).filter(
+        ([k]) => !['host', 'authorization', 'x-amz-date'].includes(k.toLowerCase()),
+      ),
     ),
   };
   if (secret.session_token) {
@@ -136,7 +166,7 @@ export function signAwsSigV4({ method, host, path, query, headers = {}, body, se
 
   return {
     ...headers,
-    'Authorization': authz,
+    Authorization: authz,
     'X-Amz-Date': amzDate,
     'X-Amz-Content-Sha256': payloadHash,
     ...(secret.session_token ? { 'X-Amz-Security-Token': secret.session_token } : {}),

@@ -11,22 +11,57 @@
 // Zero npm deps. Uses global fetch (Node 18+).
 
 import { writeFileSync } from 'node:fs';
-import { parse as parseYaml } from 'yaml';
-import { parseOpenAPI, extractAuthFromDocs, extractUpstreamFromDocs } from '../lib/template-parser.js';
+import {
+  parseOpenAPI,
+  extractAuthFromDocs,
+  extractUpstreamFromDocs,
+} from '../lib/template-parser.js';
 
 // Sources are intentionally conservative — these are public, stable URLs.
 // When a source URL changes, the user gets a "stale" report.
 const SOURCES = [
-  { id: 'github',         type: 'openapi', url: 'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json' },
-  { id: 'openai',         type: 'openapi', url: 'https://app.stainless.com/api/v0/specs/openai/openapi.yml' },
-  { id: 'anthropic',      type: 'docs',    url: 'https://docs.anthropic.com/en/api/getting-started' },
-  { id: 'cloudflare',     type: 'openapi', url: 'https://github.com/cloudflare/api-schemas/raw/main/openapi.json' },
-  { id: 'stripe',         type: 'openapi', url: 'https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json' },
-  { id: 'github_docker',  type: 'docs',    url: 'https://docs.docker.com/reference/api/registry/auth/' },
-  { id: 'aliyun_ecs',     type: 'docs',    url: 'https://help.aliyun.com/document_detail/25484.html' },
-  { id: 'tencent_cvm',    type: 'docs',    url: 'https://www.tencentcloud.com/zh/document/api/213/11654' },
-  { id: 'aws',            type: 'docs',    url: 'https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html' },
-  { id: 'gcp',            type: 'docs',    url: 'https://cloud.google.com/iam/docs/workload-identity-federation' },
+  {
+    id: 'github',
+    type: 'openapi',
+    url: 'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json',
+  },
+  {
+    id: 'openai',
+    type: 'openapi',
+    url: 'https://app.stainless.com/api/v0/specs/openai/openapi.yml',
+  },
+  { id: 'anthropic', type: 'docs', url: 'https://docs.anthropic.com/en/api/getting-started' },
+  {
+    id: 'cloudflare',
+    type: 'openapi',
+    url: 'https://github.com/cloudflare/api-schemas/raw/main/openapi.json',
+  },
+  {
+    id: 'stripe',
+    type: 'openapi',
+    url: 'https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json',
+  },
+  {
+    id: 'github_docker',
+    type: 'docs',
+    url: 'https://docs.docker.com/reference/api/registry/auth/',
+  },
+  { id: 'aliyun_ecs', type: 'docs', url: 'https://help.aliyun.com/document_detail/25484.html' },
+  {
+    id: 'tencent_cvm',
+    type: 'docs',
+    url: 'https://www.tencentcloud.com/zh/document/api/213/11654',
+  },
+  {
+    id: 'aws',
+    type: 'docs',
+    url: 'https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html',
+  },
+  {
+    id: 'gcp',
+    type: 'docs',
+    url: 'https://cloud.google.com/iam/docs/workload-identity-federation',
+  },
 ];
 
 async function fetchWithTimeout(url, timeoutMs = 15000) {
@@ -82,8 +117,8 @@ function generateReport(results) {
   lines.push('');
   lines.push(`Generated: ${new Date().toISOString()}`);
   lines.push('');
-  const ok = results.filter(r => r.status === 'ok').length;
-  const fail = results.filter(r => r.status !== 'ok').length;
+  const ok = results.filter((r) => r.status === 'ok').length;
+  const fail = results.filter((r) => r.status !== 'ok').length;
   lines.push(`Total: ${results.length}  OK: ${ok}  Failed: ${fail}`);
   lines.push('');
   lines.push('## Results');
@@ -99,7 +134,7 @@ function generateReport(results) {
   lines.push('');
   lines.push('## Failed');
   lines.push('');
-  for (const r of results.filter(r => r.status !== 'ok')) {
+  for (const r of results.filter((r) => r.status !== 'ok')) {
     lines.push(`- **${r.id}**: ${r.error || r.status}`);
   }
   lines.push('');
@@ -127,11 +162,11 @@ async function main() {
     console.log('--- dry-run, would write ---');
   }
   console.log(report);
-  const failed = flat.filter(r => r.status !== 'ok').length;
+  const failed = flat.filter((r) => r.status !== 'ok').length;
   process.exit(failed > 0 ? 1 : 0);
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error('[sync-templates] fatal:', e);
   process.exit(2);
 });

@@ -8,14 +8,14 @@
 import { request as httpsRequest } from 'node:https';
 import { URL } from 'node:url';
 
-const REFRESH_SKEW_MS = 10 * 60_000;  // 提前 10 分钟 refresh
+const REFRESH_SKEW_MS = 10 * 60_000; // 提前 10 分钟 refresh
 const DEFAULT_TIMEOUT_MS = 10_000;
 export { REFRESH_SKEW_MS };
 
 export const PROVIDER_NAMES = ['aliyun', 'aws', 'gcp'];
 
-const TOKEN_CACHE = new Map();  // key -> { creds, expires_at_ms }
-const IN_FLIGHT = new Map();    // key -> Promise
+const TOKEN_CACHE = new Map(); // key -> { creds, expires_at_ms }
+const IN_FLIGHT = new Map(); // key -> Promise
 
 /**
  * Default HTTP client — uses Node https. Test code can inject a mock.
@@ -26,7 +26,11 @@ const IN_FLIGHT = new Map();    // key -> Promise
 export function defaultHttpClient(url, opts = {}) {
   return new Promise((resolve, reject) => {
     let u;
-    try { u = new URL(url); } catch (e) { return reject(new Error(`bad url: ${url}`)); }
+    try {
+      u = new URL(url);
+    } catch {
+      return reject(new Error(`bad url: ${url}`));
+    }
     const reqOpts = {
       method: opts.method || 'POST',
       hostname: u.hostname,
@@ -36,7 +40,9 @@ export function defaultHttpClient(url, opts = {}) {
     };
     const req = httpsRequest(reqOpts, (res) => {
       let body = '';
-      res.on('data', (d) => { body += d; });
+      res.on('data', (d) => {
+        body += d;
+      });
       res.on('end', () => resolve({ status: res.statusCode || 0, body, headers: res.headers }));
     });
     req.setTimeout(opts.timeoutMs || DEFAULT_TIMEOUT_MS, () => {
@@ -151,10 +157,10 @@ async function assumeGcp(oidcToken, opts, http) {
     throw new Error(`gcp sts: no access_token: ${res.body.slice(0, 200)}`);
   }
   // Google token 响应给 expires_in (秒),换算为 ISO
-  const expiresAtMs = Date.now() + (parsed.expires_in * 1000);
+  const expiresAtMs = Date.now() + parsed.expires_in * 1000;
   return {
-    access_key_id: parsed.access_token,  // GCP 习惯用 access_token 作 id
-    access_key_secret: '',                // GCP IAM 不需要 secret
+    access_key_id: parsed.access_token, // GCP 习惯用 access_token 作 id
+    access_key_secret: '', // GCP IAM 不需要 secret
     security_token: parsed.token_type || 'Bearer',
     expiration: new Date(expiresAtMs).toISOString(),
     expires_at_ms: expiresAtMs,
@@ -199,7 +205,9 @@ function cacheKey(provider, opts) {
  */
 export async function getCredentials(provider, oidcToken, opts = {}, deps = {}) {
   if (!PROVIDER_NAMES.includes(provider)) {
-    throw new Error(`unknown workload identity provider: ${provider}; must be one of ${PROVIDER_NAMES.join(', ')}`);
+    throw new Error(
+      `unknown workload identity provider: ${provider}; must be one of ${PROVIDER_NAMES.join(', ')}`,
+    );
   }
   if (!oidcToken || typeof oidcToken !== 'string') {
     throw new Error('oidcToken must be a non-empty string');

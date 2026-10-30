@@ -13,20 +13,15 @@
 import { createHmac, createHash } from 'node:crypto';
 
 function sha256Hex(s) {
-  return createHash('sha256').update(s || '').digest('hex');
+  return createHash('sha256')
+    .update(s || '')
+    .digest('hex');
 }
-function hmacSha256(key, data) {
-  return createHmac('sha256', key).update(data).digest();
-}
-
 function canonicalQueryString(query) {
   if (!query) return '';
   const entries = Object.entries(query)
     .filter(([, v]) => v !== undefined && v !== null)
-    .map(([k, v]) => [
-      encodeURIComponent(k),
-      encodeURIComponent(String(v)),
-    ])
+    .map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(String(v))])
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return entries.map(([k, v]) => `${k}=${v}`).join('&');
 }
@@ -41,7 +36,7 @@ function canonicalHeaders(headers) {
 
 function signedHeaders(headers) {
   return Object.keys(headers)
-    .map(k => k.toLowerCase().trim())
+    .map((k) => k.toLowerCase().trim())
     .filter(Boolean)
     .sort()
     .join(';');
@@ -64,7 +59,7 @@ function signedHeaders(headers) {
 export function signAliyunV3({ method, host, path, query, headers = {}, body, secret, now }) {
   const date = now || new Date();
   const rfcDate = date.toUTCString();
-  const bodyStr = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
+  const bodyStr = body == null ? '' : typeof body === 'string' ? body : JSON.stringify(body);
   const payloadHash = sha256Hex(bodyStr);
 
   // Always required headers
@@ -96,8 +91,8 @@ export function signAliyunV3({ method, host, path, query, headers = {}, body, se
 
   return {
     ...headers,
-    'host': host,
-    'Authorization': `ACS3-HMAC-SHA256 Credential=${secret.access_key_id},SignedHeaders=${signed},Signature=${signature}`,
+    host: host,
+    Authorization: `ACS3-HMAC-SHA256 Credential=${secret.access_key_id},SignedHeaders=${signed},Signature=${signature}`,
     'x-acs-date': rfcDate,
     'x-acs-content-sha256': payloadHash,
   };

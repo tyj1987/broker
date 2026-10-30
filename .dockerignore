@@ -38,8 +38,9 @@ sdk/python/.tox/
 .DS_Store
 Thumbs.db
 
-# Node
+# Node (including dependencies inside broker/ and other subprojects)
 node_modules/
+**/node_modules/
 npm-debug.log*
 .npm/
 .pnpm-store/
@@ -61,8 +62,18 @@ dist/
 # TypeScript
 *.tsbuildinfo
 
-# Secrets (NEVER include in image — runtime mount only)
+# Secrets (NEVER include in image or upload in the build context — runtime mounts only)
+age/
+pki/
 secrets/
+**/secrets/
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+**/*.pfx
+**/.env
+**/.env.*
 secrets-*.yaml
 .env
 .env.*
@@ -73,7 +84,10 @@ secrets-*.yaml
 *.pfx
 audit/
 
-# Broker runtime scratch
+# Broker runtime scratch, review snapshots and other Git worktrees
+.tmp/
+.worktrees/
+.chatlink-trash/
 tmp/
 *.log
 *.pid

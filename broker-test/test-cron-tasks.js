@@ -3,15 +3,27 @@
 // 注:shouldRun / tick 是内部函数,无法直接测试;通过 fireNow 间接覆盖
 
 import {
-  registerCron, listCron, startCronLoop, stopCronLoop, fireNow,
+  registerCron,
+  listCron,
+  startCronLoop,
+  stopCronLoop,
+  fireNow,
 } from '../broker/cron-tasks.js';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}${detail ? '  -- ' + detail : ''}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ============================================================
 // registerCron + listCron
@@ -24,9 +36,18 @@ section('registerCron + listCron');
   ok('returns cron-2', id2 === 'cron-2');
   const list = listCron();
   ok('listCron returns array', Array.isArray(list));
-  ok('list contains cron-1', list.some(t => t.id === 'cron-1' && t.schedule === '04:00'));
-  ok('list contains cron-2', list.some(t => t.id === 'cron-2' && t.schedule === 'monday 09:00'));
-  ok('list items have last_run field', list.every(t => 'last_run' in t));
+  ok(
+    'list contains cron-1',
+    list.some((t) => t.id === 'cron-1' && t.schedule === '04:00'),
+  );
+  ok(
+    'list contains cron-2',
+    list.some((t) => t.id === 'cron-2' && t.schedule === 'monday 09:00'),
+  );
+  ok(
+    'list items have last_run field',
+    list.every((t) => 'last_run' in t),
+  );
 }
 
 // ============================================================
@@ -34,25 +55,39 @@ section('registerCron + listCron');
 // ============================================================
 section('fireNow');
 {
-  const id = registerCron('never', async () => { /* dummy */ });
+  registerCron('never', async () => {
+    /* dummy */
+  });
   let fired = 0;
-  const idWithFn = registerCron('also_never', async () => { fired++; });
+  const idWithFn = registerCron('also_never', async () => {
+    fired++;
+  });
   await fireNow(idWithFn);
   ok('fireNow invokes the registered fn', fired === 1);
 
   // fn throws → fireNow rejects
-  const failingId = registerCron('throws', async () => { throw new Error('boom'); });
+  const failingId = registerCron('throws', async () => {
+    throw new Error('boom');
+  });
   let threw = false;
-  try { await fireNow(failingId); } catch (e) { threw = e.message === 'boom'; }
+  try {
+    await fireNow(failingId);
+  } catch (e) {
+    threw = e.message === 'boom';
+  }
   ok('fireNow propagates fn errors', threw);
 
   // unknown id → throws
   let threwUnknown = false;
-  try { await fireNow('does-not-exist'); } catch { threwUnknown = true; }
+  try {
+    await fireNow('does-not-exist');
+  } catch {
+    threwUnknown = true;
+  }
   ok('fireNow on unknown id throws', threwUnknown);
 
   // lastRun is set after fireNow
-  const after = listCron().find(t => t.id === idWithFn);
+  const after = listCron().find((t) => t.id === idWithFn);
   ok('last_run updated after fireNow', after && after.last_run !== null);
 }
 

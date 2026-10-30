@@ -13,16 +13,17 @@
 
   let currentIdentity = null;
   let isAdmin = false;
-  let events = [];   // newest first
+  let events = []; // newest first
   let sseSource = null;
   // Anomaly tracking: cn -> consecutive denied count (rolling).
   const deniedByCn = new Map();
 
   // ---- Bootstrap ----
   function init() {
-    const subscribe = typeof subscribeBrokerIdentity === 'function'
-      ? subscribeBrokerIdentity
-      : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
+    const subscribe =
+      typeof subscribeBrokerIdentity === 'function'
+        ? subscribeBrokerIdentity
+        : (handler) => document.addEventListener('broker:identity', (e) => handler(e.detail));
     subscribe((ident) => {
       currentIdentity = ident;
       isAdmin = !!(ident && ident.role === 'admin');
@@ -46,7 +47,7 @@
       opt.textContent = v;
       sel.appendChild(opt);
     }
-    if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+    if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
   }
 
   async function loadFacets() {
@@ -64,15 +65,15 @@
 
   // ---- Filters ----
   function readFilters() {
-    const dt = (s) => s ? new Date(s).toISOString() : null;
+    const dt = (s) => (s ? new Date(s).toISOString() : null);
     return {
-      client:  $('#af-client')?.value.trim() || '',
+      client: $('#af-client')?.value.trim() || '',
       service: $('#af-service')?.value.trim() || '',
-      action:  $('#af-action')?.value.trim() || '',
-      status:  $('#af-status')?.value.trim() || '',
-      since:   dt($('#af-since')?.value),
-      until:   dt($('#af-until')?.value),
-      limit:   parseInt($('#af-limit')?.value || '200', 10),
+      action: $('#af-action')?.value.trim() || '',
+      status: $('#af-status')?.value.trim() || '',
+      since: dt($('#af-since')?.value),
+      until: dt($('#af-until')?.value),
+      limit: parseInt($('#af-limit')?.value || '200', 10),
     };
   }
   function filtersToQuery(f) {
@@ -129,7 +130,9 @@
   }
   function teardownSse() {
     if (sseSource) {
-      try { sseSource.close(); } catch {}
+      try {
+        sseSource.close();
+      } catch {}
       sseSource = null;
     }
     const el = $('#audit-stream-status');
@@ -140,10 +143,10 @@
     // Apply current filters client-side too: the SSE stream is unfiltered
     // (server emits all events). Cheap check on the same fields.
     const f = readFilters();
-    if (f.client  && !(ev.cn  || '').toLowerCase().includes(f.client.toLowerCase()))  return;
+    if (f.client && !(ev.cn || '').toLowerCase().includes(f.client.toLowerCase())) return;
     if (f.service && !(ev.service || '').toLowerCase().includes(f.service.toLowerCase())) return;
-    if (f.action  && !(ev.action  || '').toLowerCase().includes(f.action.toLowerCase()))  return;
-    if (f.status  && !(ev.status  || '').toLowerCase().includes(f.status.toLowerCase()))  return;
+    if (f.action && !(ev.action || '').toLowerCase().includes(f.action.toLowerCase())) return;
+    if (f.status && !(ev.status || '').toLowerCase().includes(f.status.toLowerCase())) return;
     if (f.since && ev.ts < f.since) return;
     if (f.until && ev.ts > f.until) return;
     events.unshift(ev);
@@ -189,13 +192,13 @@
 
   function targetFor(e) {
     if (e.service) return `${e.method || ''} ${e.service}${e.path || ''}`.trim();
-    if (e.name)   return e.name + (e.field ? '.' + e.field : '');
+    if (e.name) return e.name + (e.field ? '.' + e.field : '');
     if (e.action === 'login') return e.client || '?';
     if (e.action === 'reload') return 'broker.yaml';
     return e.reason || '';
   }
   function statusClassFor(s) {
-    if (s === 'ok')     return 'status-ok';
+    if (s === 'ok') return 'status-ok';
     if (s === 'error' || s === 'denied') return 'status-error';
     if (s === 'not_found') return 'status-denied';
     return 'muted-cell';
@@ -207,8 +210,11 @@
   }
   function esc(s) {
     return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // ---- Anomaly detection ----
@@ -223,13 +229,16 @@
     }
   }
   function computeAnomalies() {
-    const out = new Map();  // event.id -> reason
+    const out = new Map(); // event.id -> reason
     if (events.length === 0) return out;
     // 1) 5+ consecutive denied from same cn (from newest backwards)
     let runCn = events[0].cn;
     let runCount = 0;
     for (const e of events) {
-      if (e.cn !== runCn) { runCn = e.cn; runCount = 0; }
+      if (e.cn !== runCn) {
+        runCn = e.cn;
+        runCount = 0;
+      }
       if (e.status === 'error' || e.status === 'denied') {
         runCount++;
         if (runCount >= 5) {
@@ -264,12 +273,16 @@
     const apply = $('#btn-audit-apply');
     if (apply) apply.addEventListener('click', loadAudit);
     const reset = $('#btn-audit-reset');
-    if (reset) reset.addEventListener('click', () => {
-      ['af-client','af-service','af-action','af-status','af-since','af-until'].forEach(id => {
-        const el = $('#' + id); if (el) el.value = '';
+    if (reset)
+      reset.addEventListener('click', () => {
+        ['af-client', 'af-service', 'af-action', 'af-status', 'af-since', 'af-until'].forEach(
+          (id) => {
+            const el = $('#' + id);
+            if (el) el.value = '';
+          },
+        );
+        loadAudit();
       });
-      loadAudit();
-    });
     const refresh = $('#btn-audit-refresh');
     if (refresh) refresh.addEventListener('click', loadAudit);
     const exj = $('#btn-audit-export-json');
@@ -282,7 +295,12 @@
 
   async function clearAuditLogs() {
     if (!isAdmin) return;
-    if (!confirm('确定清除全部审计日志？此操作不可恢复。\nClear ALL audit logs? This cannot be undone.')) return;
+    if (
+      !confirm(
+        '确定清除全部审计日志？此操作不可恢复。\nClear ALL audit logs? This cannot be undone.',
+      )
+    )
+      return;
     try {
       await api('/api/v1/admin/audit', { method: 'DELETE', body: { confirm: true } });
       events = [];
@@ -298,11 +316,11 @@
     const url = buildExportUrl(fmt);
     // Need to include admin session cookie. Simplest: use fetch → blob.
     fetch(url, { credentials: 'include' })
-      .then(r => {
+      .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.blob();
       })
-      .then(blob => {
+      .then((blob) => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `audit.${fmt}`;
@@ -311,7 +329,7 @@
         document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
       })
-      .catch(e => alert('导出失败 / Export failed: ' + e.message));
+      .catch((e) => alert('导出失败 / Export failed: ' + e.message));
   }
 
   // Override default loadAudit from app.js for admin users (which gives

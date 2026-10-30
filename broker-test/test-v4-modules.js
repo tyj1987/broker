@@ -1,27 +1,61 @@
 // broker-test/test-v4-modules.js — V4 P1 阶段新模块单元测试
 // 覆盖:auto-rotate / alerting / openapi / type-schemas / service-templates / webauthn / template-parser
 
-import { runRotationCheck, checkRotationState, tryRotate, rollbackRotation, ROTATION_RULES } from '../broker/lib/auto-rotate.js';
+import {
+  runRotationCheck,
+  checkRotationState,
+  tryRotate,
+  rollbackRotation,
+  ROTATION_RULES,
+} from '../broker/lib/auto-rotate.js';
 import { routeEvent, dispatchAlert, alert } from '../broker/lib/alerting.js';
 import OPENAPI_SPEC from '../broker/lib/openapi-spec.js';
 import { TYPE_SCHEMAS, getTypeSchema, validateFields } from '../broker/type-schemas.js';
 import { SERVICE_TEMPLATES, publicTemplateList } from '../broker/service-templates.js';
-import { configureWebAuthn, beginRegistration, beginAuthentication, finishRegistration, finishAuthentication, ensureWebAuthnFactors, listCredentials, parseAuthenticatorData, noopVerifier } from '../broker/webauthn.js';
-import { parseOpenAPI, extractAuthFromDocs, extractUpstreamFromDocs } from '../broker/lib/template-parser.js';
+import {
+  configureWebAuthn,
+  beginRegistration,
+  beginAuthentication,
+  finishRegistration,
+  finishAuthentication,
+  ensureWebAuthnFactors,
+  listCredentials,
+  parseAuthenticatorData,
+  noopVerifier,
+} from '../broker/webauthn.js';
+import {
+  parseOpenAPI,
+  extractAuthFromDocs,
+  extractUpstreamFromDocs,
+} from '../broker/lib/template-parser.js';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 function ok(name, cond) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.error(`  FAIL  ${name}`); }
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    fail++;
+    console.error(`  FAIL  ${name}`);
+  }
 }
-function section(t) { console.log(`\n[${t}]`); }
+function section(t) {
+  console.log(`\n[${t}]`);
+}
 
 // ============================================================
 // auto-rotate
 // ============================================================
 section('auto-rotate');
 {
-  const fresh = checkRotationState({ name: 's1', type: 'github_pat', created_at: new Date().toISOString() }, {});
+  const fresh = checkRotationState(
+    { name: 's1', type: 'github_pat', created_at: new Date().toISOString() },
+    {},
+  );
   ok('fresh secret has state=fresh', fresh.state === 'fresh' && fresh.days_until_rotation > 0);
 }
 {
@@ -36,13 +70,23 @@ section('auto-rotate');
 }
 {
   ok('ROTATION_RULES has github_pat', !!ROTATION_RULES.github_pat);
-  ok('ROTATION_RULES.github_pat canAutoRotate=false', ROTATION_RULES.github_pat.canAutoRotate === false);
-  ok('ROTATION_RULES.github_pat has hint', typeof ROTATION_RULES.github_pat.hint === 'string' && ROTATION_RULES.github_pat.hint.length > 0);
+  ok(
+    'ROTATION_RULES.github_pat canAutoRotate=false',
+    ROTATION_RULES.github_pat.canAutoRotate === false,
+  );
+  ok(
+    'ROTATION_RULES.github_pat has hint',
+    typeof ROTATION_RULES.github_pat.hint === 'string' && ROTATION_RULES.github_pat.hint.length > 0,
+  );
 }
 {
   // Custom rotate_recommendation_days
   const r = checkRotationState(
-    { name: 's4', type: 'openai_key', created_at: new Date(Date.now() - 200 * 86400_000).toISOString() },
+    {
+      name: 's4',
+      type: 'openai_key',
+      created_at: new Date(Date.now() - 200 * 86400_000).toISOString(),
+    },
     {},
   );
   // openai_key uses default 90 days threshold, so 200 days is expired
@@ -52,7 +96,12 @@ section('auto-rotate');
 {
   // Custom 30-day threshold via secret.rotate_recommendation_days
   const r = checkRotationState(
-    { name: 's5', type: 'github_pat', created_at: new Date(Date.now() - 40 * 86400_000).toISOString(), rotate_recommendation_days: 30 },
+    {
+      name: 's5',
+      type: 'github_pat',
+      created_at: new Date(Date.now() - 40 * 86400_000).toISOString(),
+      rotate_recommendation_days: 30,
+    },
     {},
   );
   ok('custom threshold 30d applied', r.state === 'expired' && r.threshold_days === 30);
@@ -64,15 +113,66 @@ section('auto-rotate');
   // tryRotate with auto_rotate=true but no rule
   const ok2 = await tryRotate({ name: 's', type: 'github_pat', auto_rotate: true }, {}, {});
   ok('tryRotate returns false when no rule for type', ok2 === false);
-  // tryRotate with auto_rotate=true and explicit rotate_command
-  let ran = false;
-  const ok3 = await tryRotate(
-    { name: 's', type: 'github_pat', auto_rotate: true },
-    {},
-    { runRotate: async () => { ran = true; return { ok: true, value: 'new-token' }; } },
-  );
-  ok('tryRotate calls runRotate', ok3 === true && ran === true);
-  // tryRotate fails
+  // tryRotate with auto_rotate=true and explicit rotate implementation.
+  // Persist into a temp fixture through an injected encryptor so the test proves
+  // success means the new value was actually stored.
+  const work = mkdtempSync(join(tmpdir(), 'broker-rotate-'));
+  const secretsPath = join(work, 'secrets-detail.json');
+  try {
+    writeFileSync(
+      secretsPath,
+      JSON.stringify({ secrets: [{ name: 's', value: 'old-token' }] }),
+      'utf8',
+    );
+    let ran = false;
+    const ok3 = await tryRotate(
+      { name: 's', type: 'github_pat', auto_rotate: true },
+      {},
+      {
+        runRotate: async () => {
+          ran = true;
+          return { ok: true, value: 'new-token' };
+        },
+        secretsPath,
+        sopsEncryptAtomic: async (path, plaintext) => writeFileSync(path, plaintext, 'utf8'),
+      },
+    );
+    const persisted = JSON.parse(readFileSync(secretsPath, 'utf8'));
+    ok('tryRotate calls runRotate', ok3 === true && ran === true);
+    ok(
+      'tryRotate persists new value before reporting success',
+      persisted.secrets[0].value === 'new-token',
+    );
+
+    // Encryption/persistence failure must fail closed and leave the previous file untouched.
+    writeFileSync(
+      secretsPath,
+      JSON.stringify({ secrets: [{ name: 's', value: 'old-token' }] }),
+      'utf8',
+    );
+    const persistFailed = await tryRotate(
+      { name: 's', type: 'github_pat', auto_rotate: true },
+      {},
+      {
+        runRotate: async () => ({ ok: true, value: 'must-not-be-plaintext' }),
+        secretsPath,
+        sopsEncryptAtomic: async () => {
+          throw new Error('encrypt unavailable');
+        },
+        log: { info() {}, warn() {}, error() {} },
+      },
+    );
+    const unchanged = JSON.parse(readFileSync(secretsPath, 'utf8'));
+    ok('persist failure makes rotation fail closed', persistFailed === false);
+    ok(
+      'persist failure does not write plaintext secret',
+      unchanged.secrets[0].value === 'old-token',
+    );
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+
+  // tryRotate fails when provider rotation fails
   const ok4 = await tryRotate(
     { name: 's', type: 'github_pat', auto_rotate: true },
     {},
@@ -82,18 +182,42 @@ section('auto-rotate');
 }
 {
   // runRotationCheck with mix of states
-  const r = await runRotationCheck(
-    [
-      { name: 'fresh', type: 'github_pat', created_at: new Date().toISOString() },
-      { name: 'warn', type: 'github_pat', created_at: new Date(Date.now() - 80 * 86400_000).toISOString() },
-      { name: 'expired', type: 'github_pat', created_at: new Date(Date.now() - 100 * 86400_000).toISOString(), auto_rotate: true },
-    ],
-    {},
-    { runRotate: async () => ({ ok: true, value: 'new-value' }) },
-  );
-  ok('checked = 3', r.checked === 3);
-  ok('warned >= 2', r.warned >= 2);
-  ok('rotated >= 1', r.rotated >= 1);
+  const work = mkdtempSync(join(tmpdir(), 'broker-rotation-check-'));
+  const secretsPath = join(work, 'secrets-detail.json');
+  try {
+    writeFileSync(
+      secretsPath,
+      JSON.stringify({ secrets: [{ name: 'expired', value: 'old-value' }] }),
+      'utf8',
+    );
+    const r = await runRotationCheck(
+      [
+        { name: 'fresh', type: 'github_pat', created_at: new Date().toISOString() },
+        {
+          name: 'warn',
+          type: 'github_pat',
+          created_at: new Date(Date.now() - 80 * 86400_000).toISOString(),
+        },
+        {
+          name: 'expired',
+          type: 'github_pat',
+          created_at: new Date(Date.now() - 100 * 86400_000).toISOString(),
+          auto_rotate: true,
+        },
+      ],
+      {},
+      {
+        runRotate: async () => ({ ok: true, value: 'new-value' }),
+        secretsPath,
+        sopsEncryptAtomic: async (path, plaintext) => writeFileSync(path, plaintext, 'utf8'),
+      },
+    );
+    ok('checked = 3', r.checked === 3);
+    ok('warned >= 2', r.warned >= 2);
+    ok('rotated >= 1', r.rotated >= 1);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 // ============================================================
@@ -108,23 +232,37 @@ section('alerting');
 {
   // routeEvent with config
   const r2 = routeEvent(
-    { alerting: { channels: [
-      { type: 'slack_webhook', url: 'https://hooks.slack.com/xxx', events: ['secret.expired'] },
-      { type: 'console', events: ['*'] },
-    ] } },
+    {
+      alerting: {
+        channels: [
+          { type: 'slack_webhook', url: 'https://hooks.slack.com/xxx', events: ['secret.expired'] },
+          { type: 'console', events: ['*'] },
+        ],
+      },
+    },
     { severity: 'critical', title: 'secret.expired', detail: 'github.pat is expired' },
   );
   ok('routeEvent matched 2 channels', r2.length === 2);
-  ok('slack channel targeted', r2.some(r => r.type === 'slack_webhook' && r.target === 'https://hooks.slack.com/xxx'));
-  ok('console channel targeted', r2.some(r => r.type === 'console'));
+  ok(
+    'slack channel targeted',
+    r2.some((r) => r.type === 'slack_webhook' && r.target === 'https://hooks.slack.com/xxx'),
+  );
+  ok(
+    'console channel targeted',
+    r2.some((r) => r.type === 'console'),
+  );
 }
 {
   // filter by event match
   const r3 = routeEvent(
-    { alerting: { channels: [
-      { type: 'slack_webhook', url: 'x', events: ['cert.expiring'] },
-      { type: 'console', events: ['*'] },
-    ] } },
+    {
+      alerting: {
+        channels: [
+          { type: 'slack_webhook', url: 'x', events: ['cert.expiring'] },
+          { type: 'console', events: ['*'] },
+        ],
+      },
+    },
     { severity: 'info', title: 'unrelated' },
   );
   ok('unrelated event hits only wildcard channel', r3.length === 1 && r3[0].type === 'console');
@@ -133,14 +271,24 @@ section('alerting');
   // dispatchAlert to console
   const logs = [];
   const sink = { consoleImpl: { info: (m) => logs.push(m), warn: () => {}, error: () => {} } };
-  const r4 = await dispatchAlert({ type: 'console', target: null, payload: { severity: 'info', title: 't', detail: 'd' } }, sink);
+  const r4 = await dispatchAlert(
+    { type: 'console', target: null, payload: { severity: 'info', title: 't', detail: 'd' } },
+    sink,
+  );
   ok('console dispatch ok', r4.ok);
   ok('console log captured', logs.length === 1 && logs[0].includes('t'));
 }
 {
   // dispatchAlert to mock webhook
   const sink = { fetchImpl: async (url, opts) => ({ ok: true, status: 200 }) };
-  const r5 = await dispatchAlert({ type: 'slack_webhook', target: 'https://x', payload: { severity: 'info', title: 't', text: 'hi' } }, sink);
+  const r5 = await dispatchAlert(
+    {
+      type: 'slack_webhook',
+      target: 'https://x',
+      payload: { severity: 'info', title: 't', text: 'hi' },
+    },
+    sink,
+  );
   ok('webhook dispatch ok', r5.ok === true);
 }
 {
@@ -150,15 +298,26 @@ section('alerting');
 }
 {
   // secret value must be redacted in payload
-  const sink = { fetchImpl: async (url, opts) => {
-    const body = JSON.parse(opts.body);
-    if (body.detail && body.detail.includes('ghp_xxx')) throw new Error('leak!');
-    return { ok: true, status: 200 };
-  } };
-  const r7 = await dispatchAlert({
-    type: 'slack_webhook', target: 'https://x',
-    payload: { severity: 'critical', title: 'leak test', detail: 'token=ghp_xxxxABCDEFGHIJabcdefghij', text: 't' },
-  }, sink);
+  const sink = {
+    fetchImpl: async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (body.detail && body.detail.includes('ghp_xxx')) throw new Error('leak!');
+      return { ok: true, status: 200 };
+    },
+  };
+  const r7 = await dispatchAlert(
+    {
+      type: 'slack_webhook',
+      target: 'https://x',
+      payload: {
+        severity: 'critical',
+        title: 'leak test',
+        detail: 'token=ghp_xxxxABCDEFGHIJabcdefghij',
+        text: 't',
+      },
+    },
+    sink,
+  );
   ok('detail got redacted', r7.ok === true);
 }
 
@@ -175,7 +334,11 @@ section('OpenAPI');
   ok('has LoginResponse schema', !!OPENAPI_SPEC.components.schemas.LoginResponse);
   ok('has mTLS security scheme', !!OPENAPI_SPEC.components.securitySchemes.mtls);
   ok('has bearerAuth', !!OPENAPI_SPEC.components.securitySchemes.bearerAuth);
-  ok('proxy endpoint has 502/503 responses', OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['502'] && OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['503']);
+  ok(
+    'proxy endpoint has 502/503 responses',
+    OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['502'] &&
+      OPENAPI_SPEC.paths['/api/v1/proxy/{service}'].post.responses['503'],
+  );
 }
 
 // ============================================================
@@ -183,10 +346,27 @@ section('OpenAPI');
 // ============================================================
 section('type-schemas (V4 additions)');
 {
-  const v4Types = ['docker_hub_pat', 'ghcr_pat', 'aws_access_key_v2', 'azure_tenant', 'gcp_service_account_v2',
-    'digitalocean', 'oracle_cloud', 'github_app', 'gitlab_pat', 'gitee_pat',
-    'feishu_app', 'dingtalk_app', 'wechat_miniprogram', 'alipay_key', 'datadog_v2',
-    'npm_token', 'pypi_token', 'ssh_jump_host', 'azure_storage'];
+  const v4Types = [
+    'docker_hub_pat',
+    'ghcr_pat',
+    'aws_access_key_v2',
+    'azure_tenant',
+    'gcp_service_account_v2',
+    'digitalocean',
+    'oracle_cloud',
+    'github_app',
+    'gitlab_pat',
+    'gitee_pat',
+    'feishu_app',
+    'dingtalk_app',
+    'wechat_miniprogram',
+    'alipay_key',
+    'datadog_v2',
+    'npm_token',
+    'pypi_token',
+    'ssh_jump_host',
+    'azure_storage',
+  ];
   for (const t of v4Types) {
     const schema = getTypeSchema(t);
     ok(`${t} schema exists`, !!schema && Array.isArray(schema.fields) && schema.fields.length > 0);
@@ -194,14 +374,20 @@ section('type-schemas (V4 additions)');
 }
 {
   // rotate_recommendation_days
-  ok('github_pat has rotate_recommendation_days', getTypeSchema('github_pat').rotate_recommendation_days === 90);
+  ok(
+    'github_pat has rotate_recommendation_days',
+    getTypeSchema('github_pat').rotate_recommendation_days === 90,
+  );
   ok('ssh_jump_host has 180d', getTypeSchema('ssh_jump_host').rotate_recommendation_days === 180);
-  ok('wechat_miniprogram has 365d', getTypeSchema('wechat_miniprogram').rotate_recommendation_days === 365);
+  ok(
+    'wechat_miniprogram has 365d',
+    getTypeSchema('wechat_miniprogram').rotate_recommendation_days === 365,
+  );
 }
 {
   // validation_regex on AWS access key
   const awsSchema = getTypeSchema('aws_access_key_v2');
-  const reField = awsSchema.fields.find(f => f.name === 'access_key_id');
+  const reField = awsSchema.fields.find((f) => f.name === 'access_key_id');
   ok('aws_access_key_id has validation_regex', !!reField.validation_regex);
   ok('regex matches AKIA...', reField.validation_regex.test('AKIAIOSFODNN7EXAMPLE'));
   ok('regex matches ASIA...', reField.validation_regex.test('ASIAJBBLPLV4ABCDEFG'));
@@ -211,10 +397,20 @@ section('type-schemas (V4 additions)');
   // validateFields
   const e1 = validateFields('aws_access_key_v2', {});
   ok('empty fields -> error', e1.length > 0);
-  const e2 = validateFields('aws_access_key_v2', { access_key_id: 'AKIAIOSFODNN7EXAMPLE', secret_access_key: 'x' });
+  const e2 = validateFields('aws_access_key_v2', {
+    access_key_id: 'AKIAIOSFODNN7EXAMPLE',
+    secret_access_key: 'x',
+  });
   ok('complete fields -> no error', e2.length === 0);
-  const e3 = validateFields('aws_access_key_v2', { access_key_id: 'AKIAIOSFODNN7EXAMPLE', secret_access_key: 'x', unknown_field: 'y' });
-  ok('unknown field -> error', e3.some(m => m.includes('未知字段')));
+  const e3 = validateFields('aws_access_key_v2', {
+    access_key_id: 'AKIAIOSFODNN7EXAMPLE',
+    secret_access_key: 'x',
+    unknown_field: 'y',
+  });
+  ok(
+    'unknown field -> error',
+    e3.some((m) => m.includes('未知字段')),
+  );
 }
 
 // ============================================================
@@ -222,13 +418,49 @@ section('type-schemas (V4 additions)');
 // ============================================================
 section('service-templates (V4 additions)');
 {
-  const v4Templates = ['gitlab', 'gitee', 'github_app', 'gemini', 'deepseek', 'zhipu', 'mistral', 'cohere', 'moonshot', 'qwen',
-    'aws', 'gcp', 'azure', 'digitalocean', 'oracle_cloud',
-    'aliyun_oss', 'aliyun_dns', 'tencent_cos', 'tencent_tcr',
-    'docker_hub', 'ghcr', 'quay', 'stripe', 'wechat_pay', 'alipay',
-    'slack', 'discord', 'feishu', 'dingtalk', 'telegram', 'sendgrid',
-    'postgresql_proxy', 'mysql_proxy', 'redis_proxy', 'mongodb_proxy',
-    'sentry', 'datadog', 'new_relic', 'ssh_proxy', 'npm_registry', 'pypi'];
+  const v4Templates = [
+    'gitlab',
+    'gitee',
+    'github_app',
+    'gemini',
+    'deepseek',
+    'zhipu',
+    'mistral',
+    'cohere',
+    'moonshot',
+    'qwen',
+    'aws',
+    'gcp',
+    'azure',
+    'digitalocean',
+    'oracle_cloud',
+    'aliyun_oss',
+    'aliyun_dns',
+    'tencent_cos',
+    'tencent_tcr',
+    'docker_hub',
+    'ghcr',
+    'quay',
+    'stripe',
+    'wechat_pay',
+    'alipay',
+    'slack',
+    'discord',
+    'feishu',
+    'dingtalk',
+    'telegram',
+    'sendgrid',
+    'postgresql_proxy',
+    'mysql_proxy',
+    'redis_proxy',
+    'mongodb_proxy',
+    'sentry',
+    'datadog',
+    'new_relic',
+    'ssh_proxy',
+    'npm_registry',
+    'pypi',
+  ];
   for (const t of v4Templates) {
     const s = SERVICE_TEMPLATES[t];
     ok(`${t} template exists`, !!s);
@@ -248,11 +480,26 @@ section('service-templates (V4 additions)');
   const git = list.github;
   ok('public view has label/description', git.label && git.description);
   ok('admin skeleton includes github upstream', git.upstream === 'https://api.github.com');
-  ok('admin skeleton includes dashboard actions', Array.isArray(git.dashboard_actions) && git.dashboard_actions.length > 0);
-  ok('github api version is current', git.inject_headers && git.inject_headers['X-GitHub-Api-Version'] === '2026-03-10');
-  ok('cloudflare verify path', (list.cloudflare.dashboard_actions || []).some(a => a.path === '/user/tokens/verify'));
-  ok('cloudflare first useful action is zones', (list.cloudflare.dashboard_actions || [])[0]?.path === '/zones');
-  ok('gemini uses 2.5 flash', (list.gemini.dashboard_actions || []).some(a => String(a.path).includes('gemini-2.5-flash')));
+  ok(
+    'admin skeleton includes dashboard actions',
+    Array.isArray(git.dashboard_actions) && git.dashboard_actions.length > 0,
+  );
+  ok(
+    'github api version is current',
+    git.inject_headers && git.inject_headers['X-GitHub-Api-Version'] === '2026-03-10',
+  );
+  ok(
+    'cloudflare verify path',
+    (list.cloudflare.dashboard_actions || []).some((a) => a.path === '/user/tokens/verify'),
+  );
+  ok(
+    'cloudflare first useful action is zones',
+    (list.cloudflare.dashboard_actions || [])[0]?.path === '/zones',
+  );
+  ok(
+    'gemini uses 2.5 flash',
+    (list.gemini.dashboard_actions || []).some((a) => String(a.path).includes('gemini-2.5-flash')),
+  );
   ok('ssh_proxy is enabled', list.ssh_proxy && !list.ssh_proxy.disabled);
 }
 
@@ -266,11 +513,17 @@ section('webauthn');
   ok('begin registration returns publicKey options', !!begin.publicKey);
   ok('rp.id = test.local', begin.publicKey.rp.id === 'test.local');
   ok('rp.name = Secret Broker', begin.publicKey.rp.name === 'Secret Broker');
-  ok('user.id is buffer of name', Buffer.isBuffer(begin.publicKey.user.id) && begin.publicKey.user.id.toString() === 'tyj');
+  ok(
+    'user.id is buffer of name',
+    Buffer.isBuffer(begin.publicKey.user.id) && begin.publicKey.user.id.toString() === 'tyj',
+  );
   ok('user.displayName = 脱永军', begin.publicKey.user.displayName === '脱永军');
   ok('has 2 algorithms (ES256+RS256)', begin.publicKey.pubKeyCredParams.length === 2);
   ok('attestation = none', begin.publicKey.attestation === 'none');
-  ok('userVerification = preferred', begin.publicKey.authenticatorSelection.userVerification === 'preferred');
+  ok(
+    'userVerification = preferred',
+    begin.publicKey.authenticatorSelection.userVerification === 'preferred',
+  );
 }
 {
   // begin authentication
@@ -293,7 +546,7 @@ section('webauthn');
     rawId: 'abc',
     response: {
       clientDataJSON: Buffer.from(JSON.stringify(cdata)).toString('base64url'),
-      attestationObject: 'aGVsbG8=',  // base64 "hello"
+      attestationObject: 'aGVsbG8=', // base64 "hello"
       transports: ['usb'],
     },
   };
@@ -332,13 +585,16 @@ section('webauthn');
   // finish registration wrong type
   const begin = beginRegistration('tyj');
   const cdata = {
-    type: 'webauthn.get',  // wrong type
+    type: 'webauthn.get', // wrong type
     challenge: begin.publicKey.challenge.toString('base64url'),
     origin: 'http://localhost:8443',
   };
   const credential = {
     id: 'cred-x',
-    response: { clientDataJSON: Buffer.from(JSON.stringify(cdata)).toString('base64url'), attestationObject: 'x' },
+    response: {
+      clientDataJSON: Buffer.from(JSON.stringify(cdata)).toString('base64url'),
+      attestationObject: 'x',
+    },
   };
   const r = finishRegistration('tyj', credential, () => ({ verified: true }));
   ok('wrong ceremony type rejected', r.ok === false && /ceremony/i.test(r.error));
@@ -355,7 +611,7 @@ section('webauthn');
 {
   // parseAuthenticatorData
   const fake = Buffer.alloc(37);
-  fake.writeUInt32BE(42, 33);  // signCount = 42
+  fake.writeUInt32BE(42, 33); // signCount = 42
   const parsed = parseAuthenticatorData(fake);
   ok('signCount read correctly', parsed.signCount === 42);
   ok('flags byte 0', parsed.flags === 0);
@@ -364,7 +620,11 @@ section('webauthn');
 {
   // too short
   let threw = false;
-  try { parseAuthenticatorData(Buffer.alloc(10)); } catch (_e) { threw = true; }
+  try {
+    parseAuthenticatorData(Buffer.alloc(10));
+  } catch (_e) {
+    threw = true;
+  }
   ok('too short throws', threw);
 }
 
@@ -385,8 +645,8 @@ section('template-parser');
     },
     paths: {
       '/user': { get: { summary: 'Get user' } },
-      '/repos/{id}': { get: { summary: 'Get repo' } },  // has param, skip
-      '/items': { get: {} },  // no summary
+      '/repos/{id}': { get: { summary: 'Get repo' } }, // has param, skip
+      '/items': { get: {} }, // no summary
     },
   });
   const r = parseOpenAPI(openapi);
@@ -396,8 +656,12 @@ section('template-parser');
   ok('template_version=2025-09', r.template_version === '2025-09');
   ok('source=openapi', r.source === 'openapi');
   ok('default_actions has 2', r.default_actions.length === 2);
-  ok('action labels', r.default_actions.some(a => a.label === 'Get user') && r.default_actions.some(a => a.label === 'GET /items'));
-  ok('skipped path with {param}', !r.default_actions.some(a => a.path === '/repos/{id}'));
+  ok(
+    'action labels',
+    r.default_actions.some((a) => a.label === 'Get user') &&
+      r.default_actions.some((a) => a.label === 'GET /items'),
+  );
+  ok('skipped path with {param}', !r.default_actions.some((a) => a.path === '/repos/{id}'));
 }
 {
   // OpenAPI YAML
@@ -423,12 +687,20 @@ paths:
 {
   // Invalid input
   let threw = false;
-  try { parseOpenAPI('not json or yaml at all: {{'); } catch (_e) { threw = true; }
+  try {
+    parseOpenAPI('not json or yaml at all: {{');
+  } catch (_e) {
+    threw = true;
+  }
   ok('invalid spec throws', threw);
 }
 {
   let threw = false;
-  try { parseOpenAPI(''); } catch (_e) { threw = true; }
+  try {
+    parseOpenAPI('');
+  } catch (_e) {
+    threw = true;
+  }
   ok('empty string throws', threw);
 }
 {
